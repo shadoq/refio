@@ -179,8 +179,19 @@ export const WASTE_RATIO_LIMIT = 0.3;
 // agent used to collect: a run that read nothing, wrote nothing and exited zero scored
 // the same as one that did the work, and the only criterion meant to judge the loop
 // was scored honestly for Refio alone.
-export function agentLogicFromTrace(ev: LoopEvidence, expectsArtifact: boolean): DetScore {
-  const wroteNothing = expectsArtifact && ev.writes === 0;
+//
+// `deliverableFound`, when known, overrides the write count: a self-recovery sequence
+// (delete a truncated file, retry via a shell script) can call a write-class tool and
+// still leave nothing behind, and the directory scan that produced deliverableText is
+// stronger evidence than the trace saying a write was merely attempted. Left undefined
+// for tasks with no single deliverable to check (e.g. a multi-file, build-scored
+// task), where the write count remains the only signal.
+export function agentLogicFromTrace(
+  ev: LoopEvidence,
+  expectsArtifact: boolean,
+  deliverableFound?: boolean,
+): DetScore {
+  const wroteNothing = expectsArtifact && (ev.writes === 0 || deliverableFound === false);
   const faults: string[] = [];
   if (wroteNothing) faults.push("wrote no file");
   if (ev.toolErrors > 0 && ev.recoveredFromError === false) {
@@ -239,6 +250,9 @@ export function agentLogicFromRun(opts: {
   classOrder?: ToolClass[];
   loop?: LoopEvidence | null;
   expectsArtifact?: boolean;
+  // Whether a directory scan actually found the expected deliverable. See
+  // agentLogicFromTrace for why this overrides the trace's write count.
+  deliverableFound?: boolean;
   // The case declared that checking the work is part of the task.
   expectsSelfVerification?: boolean;
 }): DetScore | null {
@@ -250,7 +264,7 @@ export function agentLogicFromRun(opts: {
     parts.push(agentLogicFromToolOrder({ classOrder: opts.classOrder, expected }));
   }
   if (opts.loop) {
-    parts.push(agentLogicFromTrace(opts.loop, opts.expectsArtifact ?? true));
+    parts.push(agentLogicFromTrace(opts.loop, opts.expectsArtifact ?? true, opts.deliverableFound));
     const verified = agentLogicFromVerification(
       opts.loop.selfVerified,
       opts.expectsSelfVerification ?? false,
@@ -338,6 +352,13 @@ export function buildDeterministicJudge(input: DeterministicInput): JudgeScoreSe
     ...(input.classOrder !== undefined ? { classOrder: input.classOrder } : {}),
     loop: input.loop ?? null,
     expectsArtifact: input.mode === "AGENT",
+    // A build-scored (multi-file) task has no single deliverable to check, so the
+    // write count stays its only evidence; a render-scored task's deliverable was
+    // either actually found on disk or it was not, which beats trusting that a
+    // write-class tool was merely called.
+    ...(input.mode === "AGENT" && !input.build
+      ? { deliverableFound: input.deliverableText !== null }
+      : {}),
     ...(input.expectsSelfVerification !== undefined
       ? { expectsSelfVerification: input.expectsSelfVerification }
       : {}),

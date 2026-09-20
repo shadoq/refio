@@ -1,0 +1,208 @@
+{
+  "schemaVersion": 1,
+  "run": {
+    "debugLevel": "STANDARD",
+    "durationMs": 75980,
+    "startedAt": 1789706563069,
+    "endedAt": 1789706639049
+  },
+  "session": {
+    "id": "619b2bb7-5f7b-4a7b-b218-147cfe5eb90d",
+    "name": "headless-1789706563065",
+    "mode": "AGENT",
+    "executionMode": "INTERACTIVE",
+    "model": "ornith:35b",
+    "provider": "ollama",
+    "status": "SUCCESS",
+    "tokensIn": 67418,
+    "tokensOut": 4486,
+    "costUsd": 0.0
+  },
+  "metrics": {
+    "durationMs": 75980,
+    "tokensIn": 67418,
+    "tokensOut": 4486,
+    "costUsd": 0.0,
+    "apiCallCount": 5,
+    "toolCallCount": 3,
+    "contextOverflow": false,
+    "verification": {
+      "ran": false,
+      "attempts": 0
+    }
+  },
+  "finalOutput": "The file has been created successfully at **`effect_gouraud_shaded_cube_ollama-ornith-35b_01.html`** (318 lines).\n\nHere's what's implemented:\n\n### 3D Pipeline\n- **Vertices** — 8 cube vertices centered at origin (SIZE=140)\n- **Rotation matrices** — Full X/Y/Z rotation using `Math.cos`/`Math.sin`\n- **Perspective projection** — FOV=500, camera distance=500, with depth preserved for sorting\n- **Backface culling** — Discards faces whose normal points away from the camera via dot product test\n\n### Rendering\n- **Face triangulation** — Each quad face split into 2 triangles\n- **Per-vertex lighting** — Smooth vertex normals (averaged from adjacent face normals), Lambert shading with ambient term\n- **Gouraud shading** — Colors interpolated across each triangle using barycentric coordinates, written pixel-by-pixel via `getImageData`/`putImageData`\n- **Painter's algorithm** — Triangles sorted back-to-front by average Z depth\n- **Moving light source** — Figure-8 orbit using `sin`/`cos` with different frequencies\n\n### Controls\n| Key | Action |\n|-----|--------|\n| **W** | Toggle wireframe overlay |\n| **P** | Pause/resume rotation |\n\nHUD displays live FPS, wireframe state, and pause state.",
+  "subtasks": [
+    {
+      "orderIndex": 0,
+      "kind": "CREATE_NEW_FILE",
+      "status": "SUCCESS",
+      "description": "create_new_file: effect_gouraud_shaded_cube_ollama-ornith-35b_01.html",
+      "tokensIn": 0,
+      "tokensOut": 0,
+      "costUsd": 0.0,
+      "latencyMs": 0
+    },
+    {
+      "orderIndex": 1,
+      "kind": "READ_FILE",
+      "status": "SUCCESS",
+      "description": "read_file: effect_gouraud_shaded_cube_ollama-ornith-35b_01.html",
+      "tokensIn": 0,
+      "tokensOut": 0,
+      "costUsd": 0.0,
+      "latencyMs": 0
+    },
+    {
+      "orderIndex": 2,
+      "kind": "READ_FILE",
+      "status": "SUCCESS",
+      "description": "read_file: effect_gouraud_shaded_cube_ollama-ornith-35b_01.html",
+      "tokensIn": 0,
+      "tokensOut": 0,
+      "costUsd": 0.0,
+      "latencyMs": 0
+    }
+  ],
+  "conversation": [
+    {
+      "role": "USER",
+      "contentPreview": "Build a realtime Gouraud-shaded rotating cube in a single self-contained file\n`effect_gouraud_shaded_cube_ollama-ornith-35b_01.html` using Canvas 2D only (no WebGL, no external libraries).\n\nImplement a minimal 3D pipeline: vertices, rotation matrices, perspective projection, and backface\nculling. Split faces into triangles and do per-vertex lighting (Lambert), then rasterize the\ntriangles with color interpolation across each face (Gouraud shading). Add a moving light source,\na wireframe toggle (W), and pause (P). Display the current FPS.\n\nDeliver the one file `effect_gouraud_shaded_cube_ollama-ornith-35b_01.html`.",
+      "toolCalls": [],
+      "toolCallDetails": [],
+      "createdAt": 1789706563082
+    },
+    {
+      "role": "ASSISTANT",
+      "contentPreview": "",
+      "toolCalls": [
+        "create_new_file"
+      ],
+      "toolCallDetails": [
+        {
+          "name": "create_new_file",
+          "arguments": "{\"path\":\"effect_gouraud_shaded_cube_ollama-ornith-35b_01.html\",\"content\":\"<!DOCTYPE html>\\n<html lang=\\\"en\\\">\\n<head>\\n<meta charset=\\\"UTF-8\\\">\\n<title>Gouraud-Shaded Rotating Cube</title>\\n<style>\\n* { margin: 0; padding: 0; box-sizing: border-box; }\\nbody { background: #111; overflow: hidden; display: flex; justify-content: center; align-items: center; height: 100vh; }\\ncanvas { display: block; background: #0a0a1a; }\\n#hud { position: absolute; top: 12px; left: 14px; color: #8f8; font: 14px monospace; pointer-events: none; line-height: 1.6; }\\n</style>\\n</head>\\n<body>\\n<canvas id=\\\"c\\\"></canvas>\\n<div id=\\\"hud\\\"></div>\\n<script>\\n\\\"use strict\\\";\\n\\n// ── Canvas setup ────────────────────────────────────────────────\\nconst canvas = document.getElementById(\\\"c\\\");\\nconst ctx = canvas.getContext(\\\"2d\\\");\\nconst hud = document.getElementById(\\\"hud\\\");\\n\\nfunction resize() {\\n    canvas.width = innerWidth;\\n    canvas.height = innerHeight;\\n}\\nresize();\\naddEventListener(\\\"resize\\\", resize);\\n\\n// ── 3D math helpers ─────────────────────────────────────────────\\nfunction vec3(x, y, z) { return [x, y, z]; }\\nfunction sub(a, b) { return [a[0]-b[0], a[1]-b[1], a[2]-b[2]]; }\\nfunction cross(a, b) { return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]; }\\nfunction dot(a, b) { return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }\\nfunction norm(v) { const l = Math.hypot(v[0],v[1],v[2]); return [v[0]/l, v[1]/l, v[2]/l]; }\\nfunction lerp(a, b, t) { return a + (b - a) * t; }\\n\\nfunction rotateX(v, a) {\\n    const c = Math.cos(a), s = Math.sin(a);\\n    return [v[0], v[1]*c - v[2]*s, v[1]*s + v[2]*c];\\n}\\nfunction rotateY(v, a) {\\n    const c = Math.cos(a), s = Math.sin(a);\\n    return [v[0]*c + v[2]*s, v[1], -v[0]*s + v[2]*c];\\n}\\nfunction rotateZ(v, a) {\\n    const c = Math.cos(a), s = Math.sin(a);\\n    return [v[0]*c - v[1]*s, v[0]*s + v[1]*c, v[2]];\\n}\\n\\n// ── Cube definition ─────────────────────────────────────────────\\nconst SIZE = 140;\\nconst HALF = SIZE / 2;\\n\\n// 8 vertices of a cube centred at origin\\nconst cubeVerts = [\\n    vec3(-HALF, -HALF, -HALF),  // 0\\n    vec3( HALF, -HALF, -HALF),  // 1\\n    vec3( HALF,  HALF, -HALF),  // 2\\n    vec3(-HALF,  HALF, -HALF),  // 3\\n    vec3(-HALF, -HALF,  HALF),  // 4\\n    vec3( HALF, -HALF,  HALF),  // 5\\n    vec3( HALF,  HALF,  HALF),  // 6\\n    vec3(-HALF,  HALF,  HALF),  // 7\\n];\\n\\n// 6 faces, each defined by 4 vertex indices (counter-clockwise winding for outward normals)\\nconst cubeFaces = [\\n    [0, 3, 2, 1],  // front  (-Z)\\n    [4, 5, 6, 7],  // back   (+Z)\\n    [0, 1, 5, 4],  // bottom (-Y)\\n    [3, 0, 4, 7],  // left   (-X)\\n    [1, 2, 6, 5],  // right  (+X)\\n    [2, 3, 7, 6],  // top    (+Y)\\n];\\n\\n// Base face colours (warm palette)\\nconst faceColors = [\\n    [220, 60, 60],   // red-ish front\\n    [60, 80, 220],   // blue-ish back\\n    [220, 180, 40],  // yellow bottom\\n    [60, 200, 120],  // green left\\n    [200, 100, 200], // purple right\\n    [240, 140, 40],  // orange top\\n];\\n\\n// ── Perspective projection ──────────────────────────────────────\\nconst FOV = 500;\\nconst CAM_DIST = 500;\\n\\nfunction project(p) {\\n    const z = p[2] + CAM_DIST;\\n    const scale = FOV / z;\\n    return [\\n        p[0] * scale + canvas.width / 2,\\n        p[1] * scale + canvas.height / 2,\\n        z  // keep depth for sorting\\n    ];\\n}\\n\\n// ── Light source (moves in a figure-8 orbit) ───────────────────\\nconst LIGHT_SPEED = 0.6;\\nfunction getLight(time) {\\n    const x = Math.sin(time * LIGHT_SPEED) * 250;\\n    const y = Math.cos(time * LIGHT_SPEED * 0.7) * 200;\\n    const z = Math.cos(time * LIGHT_SPEED) * 250;\\n    return vec3(x, y, z);\\n}\\n\\n// ── Lambert lighting ────────────────────────────────────────────\\nconst AMBIENT = 0.15;\\n\\nfunction lambert(faceNormal, lightDir, color) {\\n    const intensity = Math.max(0, dot(faceNormal, lightDir)) * (1 - AMBIENT) + AMBIENT;\\n    return [\\n        Math.min(255, Math.round(color[0] * intensity)),\\n        Math.min(255, Math.round(color[1] * intensity)),\\n        Math.min(255, Math.round(color[2] * intensity)),\\n    ];\\n}\\n\\n// ── Per-vertex normal computation ───────────────────────────────\\nfunction vertexNormal(vi, transformed) {\\n    // Average of adjacent face normals\\n    let n = [0, 0, 0];\\n    let count = 0;\\n    for (const face of cubeFaces) {\\n        if (face.includes(vi)) {\\n            const i0 = face[0], i1 = face[1], i2 = face[2];\\n            const a = sub(transformed[i1], transformed[i0]);\\n            const b = sub(transformed[i2], transformed[i0]);\\n            n = [n[0]+cross(a,b)[0], n[1]+cross(a,b)[1], n[2]+cross(a,b)[2]];\\n            count++;\\n        }\\n    }\\n    if (count === 0) return [0, 1, 0];\\n    return norm(n);\\n}\\n\\n// ── Triangle rasterisation with Gouraud interpolation ──────────\\nfunction fillTriangleInterp(p0, p1, p2, c0, c1, c2) {\\n    // Sort vertices by Y\\n    const verts = [[p0,c0],[p1,c1],[p2,c2]];\\n    verts.sort((a, b) => a[0][1] - b[0][1]);\\n    const [v0, c_v0] = verts[0];\\n    const [v1, c_v1] = verts[1];\\n    const [v2, c_v2] = verts[2];\\n\\n    const xMin = Math.max(0, Math.floor(Math.min(v0[0], v1[0], v2[0])));\\n    const xMax = Math.min(canvas.width - 1, Math.ceil(Math.max(v0[0], v1[0], v2[0])));\\n    const yMin = Math.max(0, Math.floor(Math.min(v0[1], v1[1], v2[1])));\\n    const yMax = Math.min(canvas.height - 1, Math.ceil(Math.max(v0[1], v1[1], v2[1])));\\n\\n    const imgData = ctx.getImageData(xMin, yMin, xMax - xMin + 1, yMax - yMin + 1);\\n    const data = imgData.data;\\n    const w = imgData.width;\\n\\n    for (let py = yMin; py <= yMax; py++) {\\n        for (let px = xMin; px <= xMax; px++) {\\n            // Barycentric\\n            const det = (v1[1]-v2[1])*(v0[0]-v2[0]) + (v2[0]-v1[0])*(v0[1]-v2[1]);\\n            if (Math.abs(det) < 0.5) continue;\\n            const a = ((v1[1]-v2[1])*(px-v2[0]) + (v2[0]-v1[0])*(py-v2[1])) / det;\\n            const b = ((v2[1]-v0[1])*(px-v2[0]) + (v0[0]-v2[0])*(py-v2[1])) / det;\\n            const c = 1 - a - b;\\n            if (a < 0 || b < 0 || c < 0) continue;\\n\\n            const r = Math.round(lerp(lerp(c_v0[0], c_v1[0], b), lerp(c_v1[0], c_v2[0], c), a));\\n            const g = Math.round(lerp(lerp(c_v0[1], c_v1[1], b), lerp(c_v1[1], c_v2[1], c), a));\\n            const bl = Math.round(lerp(lerp(c_v0[2], c_v1[2], b), lerp(c_v1[2], c_v2[2], c), a));\\n\\n            const idx = (py - yMin) * w + (px - xMin);\\n            data[idx * 4] = r;\\n            data[idx * 4 + 1] = g;\\n            data[idx * 4 + 2] = bl;\\n            data[idx * 4 + 3] = 255;\\n        }\\n    }\\n    ctx.putImageData(imgData, xMin, yMin);\\n}\\n\\n// ── State ───────────────────────────────────────────────────────\\nlet rotX = 0, rotY = 0, rotZ = 0;\\nlet showWireframe = false;\\nlet paused = false;\\nlet lastTime = 0;\\nlet fps = 0;\\nlet frameCount = 0;\\nlet fpsTime = 0;\\n\\n// ── Input ───────────────────────────────────────────────────────\\naddEventListener(\\\"keydown\\\", (e) => {\\n    if (e.key === \\\"w\\\" || e.key === \\\"W\\\") showWireframe = !showWireframe;\\n    if (e.key === \\\"p\\\" || e.key === \\\"P\\\") paused = !paused;\\n});\\n\\n// ── Main render loop ────────────────────────────────────────────\\nfunction render(timestamp) {\\n    requestAnimationFrame(render);\\n\\n    // FPS counter\\n    frameCount++;\\n    if (timestamp - fpsTime >= 1000) {\\n        fps = frameCount;\\n        frameCount = 0;\\n        fpsTime = timestamp;\\n    }\\n\\n    const dt = (timestamp - lastTime) / 1000;\\n    lastTime = timestamp;\\n\\n    if (!paused) {\\n        rotX += dt * 0.5;\\n        rotY += dt * 0.7;\\n        rotZ += dt * 0.2;\\n    }\\n\\n    ctx.clearRect(0, 0, canvas.width, canvas.height);\\n\\n    // Transform vertices\\n    const transformed = cubeVerts.map(v => {\\n        let p = rotateX(v, rotX);\\n        p = rotateY(p, rotY);\\n        p = rotateZ(p, rotZ);\\n        return p;\\n    });\\n\\n    // Project vertices\\n    const projected = transformed.map(v => project(v));\\n\\n    // Light\\n    const lightPos = getLight(timestamp / 1000);\\n    const lightDir = norm(sub(lightPos, [0, 0, 0]));\\n\\n    // Build faces with depth and lighting\\n    const facesToRender = [];\\n\\n    for (let fi = 0; fi < cubeFaces.length; fi++) {\\n        const face = cubeFaces[fi];\\n        const indices = [face[0], face[1], face[2], face[3]];\\n\\n        // Compute face normal (from first 3 vertices)\\n        const a = sub(transformed[indices[1]], transformed[indices[0]]);\\n        const b = sub(transformed[indices[2]], transformed[indices[0]]);\\n        const faceNormal = norm(cross(a, b));\\n\\n        // Backface culling\\n        if (dot(faceNormal, transformed[indices[0]]) < 0) continue;\\n\\n        // Split quad into 2 triangles\\n        const tri1 = [indices[0], indices[1], indices[2]];\\n        const tri2 = [indices[0], indices[2], indices[3]];\\n\\n        // Compute per-vertex normals for smooth shading\\n        const vn0 = vertexNormal(tri1[0], transformed);\\n        const vn1 = vertexNormal(tri1[1], transformed);\\n        const vn2 = vertexNormal(tri1[2], transformed);\\n\\n        // Compute per-vertex Lambert lighting\\n        const vn0l = norm(sub(transformed[tri1[0]], lightPos));\\n        const vn1l = norm(sub(transformed[tri1[1]], lightPos));\\n        const vn2l = norm(sub(transformed[tri1[2]], lightPos));\\n\\n        const col = faceColors[fi];\\n        const c0 = lambert(vn0, vn0l, col);\\n        const c1 = lambert(vn1, vn1l, col);\\n        const c2 = lambert(vn2, vn2l, col);\\n\\n        // Average depth for sorting\\n        const zAvg = (transformed[tri1[0]][2] + transformed[tri1[1]][2] + transformed[tri1[2]][2]) / 3;\\n\\n        facesToRender.push({ indices: tri1, colors: [c0, c1, c2], z: zAvg });\\n\\n        // Triangle 2\\n        const vn3 = vertexNormal(tri2[2], transformed);\\n        const vn3l = norm(sub(transformed[tri2[2]], lightPos));\\n        const c3 = lambert(vn3, vn3l, col);\\n\\n        const zAvg2 = (transformed[tri2[0]][2] + transformed[tri2[1]][2] + transformed[tri2[2]][2]) / 3;\\n        facesToRender.push({ indices: tri2, colors: [c0, c2, c3], z: zAvg2 });\\n    }\\n\\n    // Sort back to front (painter's algorithm)\\n    facesToRender.sort((a, b) => b.z - a.z);\\n\\n    // Rasterise\\n    for (const face of facesToRender) {\\n        const [i0, i1, i2] = face.indices;\\n        const p0 = projected[i0], p1 = projected[i1], p2 = projected[i2];\\n        fillTriangleInterp(p0, p1, p2, face.colors[0], face.colors[1], face.colors[2]);\\n    }\\n\\n    // Wireframe overlay\\n    if (showWireframe) {\\n        ctx.strokeStyle = \\\"rgba(255, 255, 255, 0.5)\\\";\\n        ctx.lineWidth = 1.5;\\n        ctx.beginPath();\\n        for (const face of cubeFaces) {\\n            for (let i = 0; i < 4; i++) {\\n                const j = (i + 1) % 4;\\n                const a = projected[face[i]];\\n                const b = projected[face[j]];\\n                ctx.moveTo(a[0], a[1]);\\n                ctx.lineTo(b[0], b[1]);\\n            }\\n        }\\n        ctx.stroke();\\n    }\\n\\n    // HUD\\n    hud.textContent = `FPS: ${fps}  |  W: Wireframe ${showWireframe ? \\\"ON\\\" : \\\"OFF\\\"}  |  P: Pause ${paused ? \\\"ON\\\" : \\\"OFF\\\"}`;\\n}\\n\\nrequestAnimationFrame(render);\\n</script>\\n</body>\\n</html>\\n\"}"
+        }
+      ],
+      "tokensIn": 12557,
+      "tokensOut": 3985,
+      "createdAt": 1789706621570
+    },
+    {
+      "role": "TOOL",
+      "contentPreview": "File created successfully: effect_gouraud_shaded_cube_ollama-ornith-35b_01.html (318 lines)",
+      "toolCalls": [],
+      "toolCallDetails": [],
+      "createdAt": 1789706621637
+    },
+    {
+      "role": "ASSISTANT",
+      "contentPreview": "The file has been created. Let me verify it's complete and correct by checking its content.",
+      "toolCalls": [
+        "read_file"
+      ],
+      "toolCallDetails": [
+        {
+          "name": "read_file",
+          "arguments": "{\"path\":\"effect_gouraud_shaded_cube_ollama-ornith-35b_01.html\"}"
+        }
+      ],
+      "tokensIn": 16967,
+      "tokensOut": 65,
+      "createdAt": 1789706625288
+    },
+    {
+      "role": "TOOL",
+      "contentPreview": "[skipped re-read — you wrote this file in this turn]\n`effect_gouraud_shaded_cube_ollama-ornith-35b_01.html` was written by a write tool earlier in this task and nothing has failed since.\nThe write result's changeSummary (added/removed lines + unified diff) is already in your\nhistory and IS the authoritative current content — re-reading returns nothing new and wastes\ntokens. Move on to the next outstanding step of the request and deliver.\nRe-read only if a LATER build/test/lint/run reports a concrete error pointing at this file; any such failure automatically re-enables reads of this path.",
+      "toolCalls": [],
+      "toolCallDetails": [],
+      "createdAt": 1789706625303
+    },
+    {
+      "role": "ASSISTANT",
+      "contentPreview": "The file has been created successfully. Let me verify it's complete and correct by checking its content.",
+      "toolCalls": [
+        "read_file"
+      ],
+      "toolCallDetails": [
+        {
+          "name": "read_file",
+          "arguments": "{\"path\":\"effect_gouraud_shaded_cube_ollama-ornith-35b_01.html\"}"
+        }
+      ],
+      "tokensIn": 17651,
+      "tokensOut": 66,
+      "createdAt": 1789706629265
+    },
+    {
+      "role": "TOOL",
+      "contentPreview": "[skipped re-read — you wrote this file in this turn]\n`effect_gouraud_shaded_cube_ollama-ornith-35b_01.html` was written by a write tool earlier in this task and nothing has failed since.\nThe write result's changeSummary (added/removed lines + unified diff) is already in your\nhistory and IS the authoritative current content — re-reading returns nothing new and wastes\ntokens. Move on to the next outstanding step of the request and deliver.\nRe-read only if a LATER build/test/lint/run reports a concrete error pointing at this file; any such failure automatically re-enables reads of this path.",
+      "toolCalls": [],
+      "toolCallDetails": [],
+      "createdAt": 1789706629281
+    },
+    {
+      "role": "ASSISTANT",
+      "contentPreview": "The file has been created successfully at **`effect_gouraud_shaded_cube_ollama-ornith-35b_01.html`** (318 lines).\n\nHere's what's implemented:\n\n### 3D Pipeline\n- **Vertices** — 8 cube vertices centered at origin (SIZE=140)\n- **Rotation matrices** — Full X/Y/Z rotation using `Math.cos`/`Math.sin`\n- **Perspective projection** — FOV=500, camera distance=500, with depth preserved for sorting\n- **Backface culling** — Discards faces whose normal points away from the camera via dot product test\n\n### Rendering\n- **Face triangulation** — Each quad face split into 2 triangles\n- **Per-vertex lighting** — Smooth vertex normals (averaged from adjacent face normals), Lambert shading with ambient term\n- **Gouraud shading** — Colors interpolated across each triangle using barycentric coordinates, written pixel-by-pixel via `getImageData`/`putImageData`\n- **Painter's algorithm** — Triangles sorted back-to-front by average Z depth\n- **Moving light source** — Figure-8 orbit using `sin`/`cos` with different frequencies\n\n### Controls\n| Key | Action |\n|-----|--------|\n| **W** | Toggle wireframe overlay |\n| **P** | Pause/resume rotation |\n\nHUD displays live FPS, wireframe state, and pause state.",
+      "toolCalls": [],
+      "toolCallDetails": [],
+      "tokensIn": 18339,
+      "tokensOut": 316,
+      "createdAt": 1789706638680
+    }
+  ],
+  "apiLogs": [
+    {
+      "provider": "ollama",
+      "model": "ornith:35b",
+      "requestSource": "NextSpeakerJudge",
+      "httpStatus": 200,
+      "inputTokens": 1904,
+      "outputTokens": 54,
+      "costUsd": 0.0,
+      "latencyMs": 1588
+    },
+    {
+      "provider": "ollama",
+      "model": "ornith:35b",
+      "requestSource": "AgentTurnLoop:AGENT",
+      "httpStatus": 200,
+      "inputTokens": 18339,
+      "outputTokens": 316,
+      "costUsd": 0.0,
+      "latencyMs": 7700
+    },
+    {
+      "provider": "ollama",
+      "model": "ornith:35b",
+      "requestSource": "AgentTurnLoop:AGENT",
+      "httpStatus": 200,
+      "inputTokens": 17651,
+      "outputTokens": 66,
+      "costUsd": 0.0,
+      "latencyMs": 3898
+    },
+    {
+      "provider": "ollama",
+      "model": "ornith:35b",
+      "requestSource": "AgentTurnLoop:AGENT",
+      "httpStatus": 200,
+      "inputTokens": 16967,
+      "outputTokens": 65,
+      "costUsd": 0.0,
+      "latencyMs": 3564
+    },
+    {
+      "provider": "ollama",
+      "model": "ornith:35b",
+      "requestSource": "AgentTurnLoop:AGENT",
+      "httpStatus": 200,
+      "inputTokens": 12557,
+      "outputTokens": 3985,
+      "costUsd": 0.0,
+      "latencyMs": 58235
+    }
+  ],
+  "errors": [],
+  "warnings": []
+}

@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Neuron Network Simulation</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      background-color: #05070f;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      font-family: monospace;
+    }
+    #canvas-container {
+      position: relative;
+      box-shadow: 0 0 50px rgba(16, 26, 58, 0.8);
+    }
+    canvas {
+      background: #05070f;
+      border-radius: 2px;
+    }
+    /* Dat.GUI styling override */
+    .dg.ac {
+      z-index: 1000 !important;
+    }
+  </style>
+</head>
+<body>
+  <div id="canvas-container">
+    <canvas id="canvas" width="800" height="800"></canvas>
+  </div>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.9/dat.gui.min.js"></script>
+  <script>
+    // ============ SETUP ============
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    
+    // Network state
+    let neurons = [];
+    let branches = [];
+    let synapses = [];
+    let pulses = [];
+    let isPaused = false;
+    let animationId = null;
+    
+    // Default parameters (matches neon palette)
+    const params = {
+      // Growth folder
+      neuronCount: 5,
+      branchGrowthSpeed: 1.5,
+      maxBranchDepth: 6,
+      branchSplitChance: 0.05,
+      branchCurvature: 15,
+      maxBranchLength: 100,
+      // Synapses folder
+      synapseDistanceThreshold: 35,
+      synapseGlowStrength: 15,
+      // Pulses folder
+      pulseSpeed: 3,
+      pulseFrequency: 0.02,
+      pulseBrightness: 1.0,
+      // Visuals folder
+      backgroundColor: '#05070f',
+      branchColor: '#00e5ff',
+      accentBranchColor: '#d6ff00',
+      synapseColor: '#ff2bd6',
+      pulseColor: '#fff36a',
+      // Buttons
+      regenerateNetwork: () => regenerate(),
+      clearCanvas: () => clear(),
+      pauseResume: () => togglePause()
+    };
+    
+    // Helper: random range
+    function random(min, max) {
+      return Math.random() * (max - min) + min;
+    }
+    
+    // Helper: random point in circle
+    function randomPointInCircle(radius) {
+      const angle = Math.random() * Math.PI * 2;
+      const dist = Math.sqrt(Math.random()) * radius;
+      return {
+        x: 400 + Math.cos(angle) * dist,
+        y: 400 + Math.sin(angle) * dist
+      };
+    }
+    
+    // ============ GUI SETUP ============
+    function setupGUI() {
+      const gui = new dat.GUI({ autoPlace: true });
+      
+      // Growth folder
+      const growthFolder = gui.addFolder('Growth');
+      growthFolder.add(params, 'neuronCount', 1, 10).name('Neuron Count');
+      growthFolder.add(params, 'branchGrowthSpeed', 0.5, 5).name('Branch Growth Speed');
+      growthFolder.add(params, 'maxBranchDepth', 3, 10).name('Max Branch Depth');
+      growthFolder.add(params, 'branchSplitChance', 0.01, 0.15).name('Branch Split Chance');
+      growthFolder.add(params, 'branchCurvature', 0, 50).name('Branch Curvature');
+      growthFolder.add(params, 'maxBranchLength', 30, 200).name('Max Branch Length');
+      growthFolder.open();
+      
+      // Synapses folder
+      const synapseFolder = gui.addFolder('Synapses');
+      synapseFolder.add(params, 'synapseDistanceThreshold', 10, 80).name('Synapse Distance Threshold');
+      synapseFolder.add(params, 'synapseGlowStrength', 5, 30).name('Synapse Glow Strength');
+      synapseFolder.open();
+      
+      // Pulses folder
+      const pulseFolder = gui.addFolder('Pulses');
+      pulseFolder.add(params, 'pulseSpeed', 1, 10).name('Pulse Speed');
+      pulseFolder.add(params, 'pulseFrequency', 0.005, 0.1).name('Pulse Frequency');
+      pulseFolder.add(params, 'pulseBrightness', 0.2, 2).name('Pulse Brightness');
+      pulseFolder.open();
+      
+      // Visuals folder
+      const visualsFolder = gui.addFolder('Visuals');
+      visualsFolder.addColor(params, 'backgroundColor').name('Background Color');
+      visualsFolder.addColor(params, 'branchColor').name('Branch Color');
+      visualsFolder.addColor(params, 'accentBranchColor').name('Accent Branch Color');
+      visualsFolder.addColor(params, 'synapseColor').name('Synapse Color');
+      visualsFolder.addColor(params, 'pulseColor').name('Pulse Color');
+      visualsFolder.open();
+      
+      // Buttons folder
+      const buttonsFolder = gui.addFolder('Buttons');
+      buttonsFolder.add(params, 'regenerateNetwork').name('Regenerate Network');
+      buttonsFolder.add(params, 'clearCanvas').name('Clear Canvas');
+      buttonsFolder.add(params, 'pauseResume').name('Pause/Resume');
+      buttonsFolder.open();
+    }
+    
+    // ============ NEURON GROWTH ============
+    function createNeuron() {
+      const pos = randomPointInCircle(50);
+      return {
+        x: pos.x,
+        y: pos.y,
+        branches: [],
+        id: Math.random().toString(36).substr(2, 9)
+      };
+    }
+    
+    function createBranch(neuron, startDir, depth) {
+      const branch = {
+        id: Math.random().toString(36).substr(2, 9),
+        neuron: neuron.id,
+        depth: depth,
+        points: [{
+          x: neuron.x,
+          y: neuron.y
+        }],
+        direction: startDir,
+        length: 0,
+        maxLength: random(20, params.maxBranchLength),
+        curvature: random(-params.branchCurvature, params.branchCurvature),
+        thickness: random(1, 3),
+        growing: true,
+        sideBranches: []
+      };
+      neuron.branches.push(branch.id);
+      branches.push(branch);
+      return branch;
+    }
+    
+    function growBranch(branch, speed) {
+      if (!branch.growing) return false;
+      
+      branch.length += speed;
+      
+      // Apply curvature
+      branch.direction += branch.curvature * 0.01;
+      
+      const lastPoint = branch.points[branch.points.length - 1];
+      const newX = lastPoint.x + Math.cos(branch.direction) * speed;
+      const newY = lastPoint.y + Math.sin(branch.direction) * speed;
+      
+      branch.points.push({ x: newX, y: newY });
+      
+      // Check for completion
+      if (branch.length >= branch.maxLength) {
+        branch.growing = false;
+        return false;
+      }
+      
+      // Check for side branch chance
+      if (branch.depth < params.maxBranchDepth && Math.random() < params.branchSplitChance) {
+        const angle = branch.direction + random(-Math.PI / 2, Math.PI / 2);
+        const sideBranch = createBranch(
+          branches.find(b => b.id === branch.neuron),
+          angle,
+          branch.depth + 1
+        );
+        sideBranch.maxLength = branch.maxLength * 0.6;
+        branch.sideBranches.push(sideBranch.id);
+      }
+      
+      return true;
+    }
+    
+    function growNetwork() {
+      let totalGrowth = 0;
+      const speed = params.branchGrowthSpeed;
+      
+      branches.forEach(branch => {
+        if (branch.growing) {
+          if (growBranch(branch, speed)) {
+            totalGrowth += speed;
+          }
+        }
+      });
+      
+      return totalGrowth > 0;
+    }
+    
+    // ============ SYNAPSE DETECTION ============
+    function detectSynapses() {
+      const threshold = params.synapseDistanceThreshold;
+      
+      // Collect all branch tips
+      const tips = [];
+      branches.forEach(branch => {
+        if (!branch.growing && branch.points.length > 1) {
+          tips.push({ branch: branch, point: branch.points[branch.points.length - 1] });
+        }
+      });
+      
+      // Check each pair
+      for (let i = 0; i < tips.length; i++) {
+        for (let j = i + 1; j < tips.length; j++) {
+          const tip1 = tips[i];
+          const tip2 = tips[j];
+          
+          const dx = tip1.point.x - tip2.point.x;
+          const dy = tip1.point.y - tip2.point.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          
+          if (dist < threshold) {
+            // Check if synapse already exists
+            const existing = synapses.find(s => 
+              (s.from === tip1.branch.id && s.to === tip2.branch.id) ||
+              (s.from === tip2.branch.id && s.to === tip1.branch.id)
+            );
+            
+            if (!existing) {
+              synapses.push({
+                from: tip1.branch.id,
+                to: tip2.branch.id,
+                createdAt: Date.now(),
+                pulsePhase: Math.random() * Math.PI * 2
+              });
+            }
+          }
+        }
+      }
+    }
+    
+    // ============ PULSE ANIMATION ============
+    function updatePulses() {
+      // Spawn new pulses
+      if (Math.random() < params.pulseFrequency && synapses.length > 0) {
+        const synapse = synapses[Math.floor(Math.random() * synapses.length)];
+        pulses.push({
+          from: synapse.from,
+          to: synapse.to,
+          progress: 0,
+          speed: params.pulseSpeed,
+          brightness: params.pulseBrightness,
+          createdAt: Date.now()
+        });
+      }
+      
+      // Update existing pulses
+      for (let i = pulses.length - 1; i >= 0; i--) {
+        const pulse = pulses[i];
+        pulse.progress += pulse.speed / 100;
+        
+        if (pulse.progress >= 1) {
+          pulses.splice(i, 1);
+        }
+      }
+    }
+    
+    // ============ RENDERING ============
+    function drawBackground() {
+      ctx.fillStyle = params.backgroundColor;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      
+      // Background glow
+      ctx.fillStyle = 'rgba(16, 26, 58, 0.15)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      
+      // Subtle scanlines
+      ctx.fillStyle = 'rgba(0, 229, 255, 0.02)';
+      for (let y = 0; y < canvas.height; y += 4) {
+        ctx.fillRect(0, y, canvas.width, 1);
+      }
+      
+      // Vignette
+      const gradient = ctx.createRadialGradient(
+        400, 400, 300,
+        400, 400, 400
+      );
+      gradient.addColorStop(0, 'rgba(5, 7, 15, 0)');
+      gradient.addColorStop(1, 'rgba(5, 7, 15, 0.6)');
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+    
+    function drawNeurons() {
+      neurons.forEach(neuron => {
+        ctx.beginPath();
+        ctx.arc(neuron.x, neuron.y, 4, 0, Math.PI * 2);
+        ctx.fillStyle = params.accentBranchColor;
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = params.accentBranchColor;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      });
+    }
+    
+    function drawBranches() {
+      branches.forEach(branch => {
+        if (branch.points.length < 2) return;
+        
+        // Determine color based on depth
+        const isAccent = branch.depth >= 4;
+        ctx.strokeStyle = isAccent ? params.accentBranchColor : params.branchColor;
+        ctx.lineWidth = branch.thickness;
+        ctx.lineCap = 'round';
+        
+        // Glow effect
+        ctx.shadowBlur = 8;
+        ctx.shadowColor = ctx.strokeStyle;
+        
+        // Draw curve
+        ctx.beginPath();
+        ctx.moveTo(branch.points[0].x, branch.points[0].y);
+        
+        for (let i = 1; i < branch.points.length - 1; i++) {
+          const p0 = branch.points[i];
+          const p1 = branch.points[i + 1];
+          const midX = (p0.x + p1.x) / 2;
+          const midY = (p0.y + p1.y) / 2;
+          ctx.quadraticCurveTo(p0.x, p0.y, midX, midY);
+        }
+        
+        const last = branch.points[branch.points.length - 1];
+        ctx.lineTo(last.x, last.y);
+        ctx.stroke();
+        
+        ctx.shadowBlur = 0;
+      });
+    }
+    
+    function drawSynapses() {
+      synapses.forEach(synapse => {
+        const branch1 = branches.find(b => b.id === synapse.from);
+        const branch2 = branches.find(b => b.id === synapse.to);
+        
+        if (!branch1 || !branch2 || branch1.points.length === 0 || branch2.points.length === 0) return;
+        
+        const p1 = branch1.points[branch1.points.length - 1];
+        const p2 = branch2.points[branch2.points.length - 1];
+        
+        // Draw synapse line
+        ctx.strokeStyle = params.synapseColor;
+        ctx.lineWidth = 1;
+        ctx.shadowBlur = params.synapseGlowStrength;
+        ctx.shadowColor = params.synapseColor;
+        
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.stroke();
+        
+        ctx.shadowBlur = 0;
+      });
+    }
+    
+    function drawPulses() {
+      pulses.forEach(pulse => {
+        const branch1 = branches.find(b => b.id === pulse.from);
+        const branch2 = branches.find(b => b.id === pulse.to);
+        
+        if (!branch1 || !branch2) return;
+        
+        const len1 = branch1.points.length;
+        const len2 = branch2.points.length;
+        
+        if (len1 === 0 || len2 === 0) return;
+        
+        const p1 = branch1.points[Math.min(len1 - 1, Math.floor(pulse.progress * (len1 - 1)))];
+        const p2 = branch2.points[Math.min(len2 - 1, Math.floor(pulse.progress * (len2 - 1)))];
+        
+        // Draw pulse spark
+        ctx.strokeStyle = pulse.brightness > 0.8 ? '#ffffff' : params.pulseColor;
+        ctx.lineWidth = 2;
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = params.pulseColor;
+        
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.stroke();
+        
+        // Bright core
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1;
+        ctx.globalAlpha = 0.5;
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+        
+        ctx.shadowBlur = 0;
+      });
+    }
+    
+    function render() {
+      drawBackground();
+      drawNeurons();
+      drawBranches();
+      drawSynapses();
+      drawPulses();
+    }
+    
+    // ============ ANIMATION LOOP ============
+    function animate() {
+      if (!isPaused) {
+        growNetwork();
+        detectSynapses();
+        updatePulses();
+      }
+      render();
+      animationId = requestAnimationFrame(animate);
+    }
+    
+    // ============ NETWORK MANAGEMENT ============
+    function regenerate() {
+      // Clear existing network
+      clear();
+      
+      // Create new neurons
+      neurons = [];
+      for (let i = 0; i < params.neuronCount; i++) {
+        neurons.push(createNeuron());
+      }
+      
+      // Start growth from each neuron
+      neurons.forEach(neuron => {
+        for (let i = 0; i < 3; i++) {
+          const angle = random(0, Math.PI * 2);
+          createBranch(neuron, angle, 0);
+        }
+      });
+    }
+    
+    function clear() {
+      neurons = [];
+      branches = [];
+      synapses = [];
+      pulses = [];
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+    
+    function togglePause() {
+      isPaused = !isPaused;
+    }
+    
+    // ============ INITIALIZATION ============
+    function init() {
+      setupGUI();
+      regenerate();
+      animate();
+    }
+    
+    // Start when DOM is ready
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', init);
+    } else {
+      init();
+    }
+  </script>
+</body>
+</html>

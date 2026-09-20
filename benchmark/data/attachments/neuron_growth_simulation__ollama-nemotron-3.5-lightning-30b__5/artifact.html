@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Neuron Growth Simulation</title>
+<style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+  
+    body {
+      overflow: hidden;
+      background: #05070f;
+      font-family: 'Segoe UI', Tahoma, Arial, sans-serif;
+    }
+  
+    #canvas-container {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+    }
+  
+    canvas {
+      display: block;
+      margin: auto;
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+    }
+  
+    #gui-panel {
+      position: fixed;
+      top: 20px;
+      left: 20px;
+      background: rgba(16, 26, 58, 0.85);
+      border: 1px solid rgba(0, 229, 255, 0.3);
+      border-radius: 8px;
+      padding: 20px;
+      backdrop-filter: blur(5px);
+      z-index: 100;
+      max-height: 85%;
+      overflow-y: auto;
+      width: 320px;
+    }
+  
+    #gui-panel h2 {
+      color: #00e5ff;
+      margin-bottom: 15px;
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      border-bottom: 1px solid rgba(0, 229, 255, 0.2);
+      padding-bottom: 8px;
+      margin-bottom: 12px;
+    }
+  
+    #gui-panel .dat-gui-control {
+      margin-bottom: 10px;
+    }
+  
+    #gui-panel label {
+      color: #ffd400;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      display: block;
+      margin-bottom: 4px;
+    }
+  
+    #gui-panel input {
+      width: 100%;
+      padding: 6px 10px;
+      background: #05070f;
+      border: 1px solid rgba(0, 229, 255, 0.3);
+      border-radius: 4px;
+      color: #fff;
+      font-size: 12px;
+      outline: none;
+      transition: border-color 0.3s;
+    }
+  
+    #gui-panel input:focus {
+      border-color: #00e5ff;
+    }
+  
+    #gui-panel select {
+      width: 100%;
+      padding: 6px 10px;
+      background: #05070f;
+      border: 1px solid rgba(0, 229, 255, 0.3);
+      border-radius: 4px;
+      color: #fff;
+      font-size: 12px;
+      outline: none;
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='4' viewBox='0 0 8 4'%3E%3Cpath fill='%23fff36a' d='M2 0L4 4L6 0'/%3E%3C/svg");
+      background-repeat: no-repeat;
+      background-position: right 8px top 50%;
+      cursor: pointer;
+    }
+  
+    #gui-panel select:focus {
+      border-color: #00e5ff;
+      padding-right: 30px;
+    }
+  
+    #gui-panel .button {
+      width: 100%;
+      padding: 8px;
+      background: #d6ff00;
+      color: #05070f;
+      border: none;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: bold;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      cursor: pointer;
+      margin-top: 5px;
+      transition: background 0.3s, transform 0.1s;
+    }
+  
+    #gui-panel .button:hover {
+      background: #b3e800;
+      transform: translateY(-1px);
+    }
+  
+    #gui-panel .button:active {
+      transform: translateY(1px);
+    }
+  
+    #gui-panel .button.pause {
+      background: #ff2bd6;
+      color: #fff;
+    }
+  
+    #gui-panel .button.pause:hover {
+      background: #e61dd9;
+    }
+  
+    #gui-panel .button:active.pause {
+      transform: translateY(1px);
+    }
+  
+    #regenerate-btn, #clear-btn, #pause-btn {
+      margin-top: 10px;
+      padding: 8px;
+    }
+  
+    #status {
+      position: fixed;
+      bottom: 20px;
+      left: 20px;
+      color: #fff36a;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+  </style>
+</head>
+<body>
+<div id="canvas-container">
+    <canvas id="canvas" width="800" height="800"></canvas>
+  </div>
+  
+  <div id="gui-panel">
+    <h2>Growth</h2>
+    <div id="growth-controls"></div>
+  
+    <h2>Synapses</h2>
+    <div id="synapse-controls"></div>
+  
+    <h2>Pulses</h2>
+    <div id="pulse-controls"></div>
+  
+    <h2>Visuals</h2>
+    <div id="visuals-controls"></div>
+  
+    <button id="regenerate-btn" class="button">Regenerate Network</button>
+    <button id="clear-btn" class="button">Clear Canvas</button>
+    <button id="pause-btn" class="button pause">Pause</button>
+  
+    <div id="status">Initializing...</div>
+  </div>
+  
+  <script type="importmap">
+  {
+    "imports": {
+      "dat.gui": "https://cdn.jsdelivr.net/npm/dat.gui@0.7.9/build/dat.gui.module.js"
+    }
+  }
+  </script>
+  
+  <script type="module">
+  import * as dat from 'https://cdn.jsdelivr.net/npm/dat.gui@0.7.9/build/dat.gui.module.js';
+  
+  const CANVAS_WIDTH = 800;
+  const CANVAS_HEIGHT = 800;
+  
+  const colors = {
+    background: '#05070f',
+    backgroundGlow: '#101a3a',
+    mainBranch: '#00e5ff',
+    secondaryBranch: '#d6ff00',
+    synapse: '#ff2bd6',
+    pulse: '#fff36a',
+    accent: '#ffd400',
+    darkGrid: 'rgba(0, 229, 255, 0.08)'
+  };
+  
+  let isPaused = false;
+  let animationId = null;
+  let simulator = null;
+  
+  function init() {
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = CANVAS_WIDTH;
+    canvas.height = CANVAS_HEIGHT;
+  
+    function resizeCanvas() {
+      const container = document.getElementById('canvas-container');
+      const width = container.clientWidth || CANVAS_WIDTH;
+      const height = container.clientHeight || CANVAS_HEIGHT;
+      canvas.width = width;
+      canvas.height = height;
+    }
+    window.addEventListener('resize', resizeCanvas);
+  
+    function animate() {
+      animationId = requestAnimationFrame(animate);
+  
+      if (isPaused) return;
+  
+      // Clear with background glow
+      ctx.fillStyle = colors.backgroundGlow;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+  
+      // Draw vignette
+      const vignetteGradient = ctx.createRadialGradient(
+        canvas.width / 2, canvas.height / 2, 0,
+        canvas.width / 2, canvas.height / 2, Math.max(canvas.width, canvas.height) / 2
+      );
+      vignetteGradient.addColorStop(0, 'rgba(16, 26, 58, 0.4)');
+      vignetteGradient.addColorStop(1, 'rgba(5, 7, 15, 1)');
+      ctx.fillStyle = vignetteGradient;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+  
+      // Draw subtle scanlines
+      ctx.strokeStyle = colors.darkGrid;
+      ctx.lineWidth = 1;
+      const gridSize = 40;
+      for (let x = 0; x < canvas.width; x += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, canvas.height);
+        ctx.stroke();
+      }
+      for (let y = 0; y < canvas.height; y += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(canvas.width, y);
+        ctx.stroke();
+      }
+  
+      if (simulator) {
+        simulator.update();
+        simulator.draw();
+        simulator.drawConnections();
+      }
+    }
+  
+    // Initialize simulator
+    simulator = new NeuronNetwork(ctx, colors);
+  
+    // GUI setup
+    const gui = new dat.GUI({ autoPlace: false, container: document.getElementById('gui-panel') });
+  
+    // Growth folder
+    const growthFolder = gui.addFolder('Growth');
+    const neuronCountCtrl = growthFolder.add(simulator, 'neuronCount', 1, 6, 1).name('Neuron Count');
+    const branchSpeedCtrl = growthFolder.add(simulator, 'branchSpeed', 0.1, 5, 0.1).name('Branch Growth Speed');
+    const maxDepthCtrl = growthFolder.add(simulator, 'maxDepth', 3, 10, 1).name('Max Branch Depth');
+    const splitChanceCtrl = growthFolder.add(simulator, 'splitChance', 0, 1, 0.01).name('Branch Split Chance');
+    const curvatureCtrl = growthFolder.add(simulator, 'curvature', 0, 0.1, 0.001).name('Branch Curvature');
+    const maxLengthCtrl = growthFolder.add(simulator, 'maxLength', 50, 200, 1).name('Max Branch Length');
+    growthFolder.open();
+  
+    // Synapses folder
+    const synapseFolder = gui.addFolder('Synapses');
+    const synapseThresholdCtrl = synapseFolder.add(simulator, 'synapseThreshold', 20, 150, 1).name('Synapse Distance Threshold');
+    const glowStrengthCtrl = synapseFolder.add(simulator, 'glowStrength', 0, 1, 0.01).name('Synapse Glow Strength');
+    synapseFolder.open();
+  
+    // Pulses folder
+    const pulseFolder = gui.addFolder('Pulses');
+    const pulseSpeedCtrl = pulseFolder.add(simulator, 'pulseSpeed', 0.1, 10, 0.1).name('Pulse Speed');
+    const pulseFrequencyCtrl = pulseFolder.add(simulator, 'pulseFrequency', 0.1, 5, 0.1).name('Pulse Frequency');
+    const pulseBrightnessCtrl = pulseFolder.add(simulator, 'pulseBrightness', 0, 1, 0.01).name('Pulse Brightness');
+    pulseFolder.open();
+  
+    // Visuals folder
+    const visualsFolder = gui.addFolder('Visuals');
+    visualsFolder.addColor(simulator, 'backgroundColor').name('Background Color');
+    visualsFolder.addColor(simulator, 'mainBranchColor').name('Branch Color');
+    visualsFolder.addColor(simulator, 'accentBranchColor').name('Accent Branch Color');
+    visualsFolder.addColor(simulator, 'synapseColor').name('Synapse Color');
+    visualsFolder.addColor(simulator, 'pulseColor').name('Pulse Color');
+    visualsFolder.open();
+  
+    // Buttons
+    document.getElementById('regenerate-btn').addEventListener('click', () => {
+      simulator.regenerateNetwork();
+    });
+  
+    document.getElementById('clear-btn').addEventListener('click', () => {
+      simulator.clearCanvas();
+    });
+  
+    document.getElementById('pause-btn').addEventListener('click', () => {
+      isPaused = !isPaused;
+      document.getElementById('pause-btn').textContent = isPaused ? 'Resume' : 'Pause';
+      if (!isPaused && !animationId) {
+        animate();
+      }
+    });
+  
+    // Initialize with first frame
+    animate();
+  }
+  
+  init();
+  </script>
+</body>
+</html>

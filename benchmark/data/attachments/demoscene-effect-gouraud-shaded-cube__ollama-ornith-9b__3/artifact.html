@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Gouraud-Shaded Rotating Cube</title>
+<style>
+  body { margin: 0; background: #111; overflow: hidden; }
+  canvas { display: block; }
+  #info {
+    position: absolute; top: 10px; left: 10px;
+    color: #0f0; font-family: monospace; font-size: 14px;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="info">FPS: <span id="fps">0</span></div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const fpsEl = document.getElementById('fps');
+
+let W, H;
+function resize() { W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; }
+resize();
+window.addEventListener('resize', resize);
+
+// ── 3D constants ──
+const V = 1.0;           // cube half-size
+const FOV = Math.PI / 4;
+const NEAR = 0.1, FAR = 100;
+
+// ── cube vertices (8 corners) ──
+const cubeVerts = [
+  [-V,-V,-V],[ V,-V,-V],[-V, V,-V],[ V, V,-V],
+  [-V,-V, V],[ V,-V, V],[-V, V, V],[ V, V, V],
+];
+
+// ── faces: each is 3 triangle indices ──
+// order: +X, -X, +Y, -Y, +Z, -Z
+const faces = [
+  [4,0,1, 4,1,5, 4,5,0],   // -Z
+  [5,1,6, 5,6,2, 5,2,1],   // +Z
+  [3,2,6, 3,6,7, 3,7,2],   // +Y
+  [7,2,3, 7,3,1, 7,1,2],   // -Y
+  [0,4,7, 0,7,3, 0,3,1],   // +X
+  [1,3,7, 1,7,4, 1,4,0],   // -X
+];
+
+// ── state ──
+let lightDir = { x: 0.5, y: 0.5, z: 0.5 };
+let lightSpeed = 0.005;
+let rotX = 0, rotY = 0, rotZ = 0;
+let rotSpeed = 0.01;
+let paused = false;
+let wireframe = false;
+let lastTime = 0;
+let frameCount = 0;
+let fps = 0;
+
+// ── helpers ──
+function matMul(m, v) {
+  return [
+    m[0]*v[0]+m[1]*v[1]+m[2]*v[2]+m[3]*v[3],
+    m[4]*v[0]+m[5]*v[1]+m[6]*v[2]+m[7]*v[3],
+    m[8]*v[0]+m[9]*v[1]+m[10]*v[2]+m[11]*v[3],
+  ];
+}
+function matMul3(m, v) {
+  return [
+    m[0]*v[0]+m[1]*v[1]+m[2]*v[2],
+    m[3]*v[0]+m[4]*v[1]+m[5]*v[2],
+    m[6]*v[0]+m[7]*v[1]+m[8]*v[2],
+  ];
+}
+function matMul33(m, v) {
+  return [
+    m[0]*v[0]+m[1]*v[1]+m[2]*v[2],
+    m[3]*v[0]+m[4]*v[1]+m[5]*v[2],
+    m[6]*v[0]+m[7]*v[1]+m[8]*v[2],
+  ];
+}
+
+// ── rotation matrices ──
+function rotX(angle) {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  return [
+    1, 0, 0, 0,
+    0, c, s, 0,
+    0, -s, c, 0,
+    0, 0, 0, 1,
+  ];
+}
+function rotY(angle) {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  return [
+    c, 0, -s, 0,
+    0, 1, 0, 0,
+    s, 0, c, 0,
+    0, 0, 0, 1,
+  ];
+}
+function rotZ(angle) {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  return [
+    c, s, 0, 0,
+    -s, c, 0, 0,
+    0, 0, 1, 0,
+    0, 0, 0, 1,
+  ];
+}
+
+// ── perspective projection ──
+function project(x, y, z) {
+  const f = 1.0 / Math.tan(FOV / 2);
+  const w = f * x / (FAR - z);
+  const h = f * y / (FAR - z);
+  return { x: w, y: h, z, w: FAR - z };
+}
+
+// ── lighting ──
+function getLightDir() {
+  const t = Date.now() * lightSpeed;
+  return {
+    x: Math.cos(t) * 0.7 + 0.3,
+    y: Math.sin(t) * 0.7 + 0.3,
+    z: Math.sin(t * 0.5) * 0.5 + 0.5,
+  };
+}
+
+// ── main render ──
+function render() {
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 0, W, H);
+
+  const light = getLightDir();
+
+  // rotate cube
+  const rx = rotX(rotX);
+  const ry = rotY(rotY);
+  const rz = rotZ(rotZ);
+
+  // project all vertices
+  const projected = [];
+  for (let i = 0; i < 8; i++) {
+    const v = cubeVerts[i];
+    const x = v[0], y = v[1], z = v[2];
+    const rxv = [
+      rx[0]*x+rx[1]*y+rx[2]*z+rx[3],
+      rx[4]*x+rx[5]*y+rx[6]*z+rx[7],
+      rx[8]*x+rx[9]*y+rx[10]*z+rx[11],
+    ];
+    const ryv = [
+      ry[0]*rxv[0]+ry[1]*rxv[1]+ry[2]*rxv[2]+ry[3],
+      ry[4]*rxv[0]+ry[5]*rxv[1]+ry[6]*rxv[2]+ry[7],
+      ry[8]*rxv[0]+ry[9]*rxv[1]+ry[10]*rxv[2]+ry[11],
+    ];
+    const rzv = [
+      rz[0]*ryv[0]+rz[1]*ryv[1]+rz[2]*ryv[2]+rz[3],
+      rz[4]*ryv[0]+rz[5]*ryv[1]+rz[6]*ryv[2]+rz[7],
+      rz[8]*ryv[0]+rz[9]*ryv[1]+rz[10]*ryv[2]+rz[11],
+    ];
+    const p = project(rzv[0], rzv[1], rzv[2]);
+    projected.push(p);
+  }
+
+  // rasterize faces
+  const drawOrder = [];
+  for (let fi = 0; fi < faces.length; fi++) {
+    const face = faces[fi];
+    for (let ti = 0; ti < 3; ti++) {
+      const tri = [
+        projected[face[fi*3+0]],
+        projected[face[fi*3+1]],
+        projected[face[fi*3+2]],
+      ];
+      drawOrder.push(tri);
+    }
+  }
+
+  // sort by z for painter's algorithm
+  drawOrder.sort((a, b) => a[2].z - b[2].z);
+
+  // draw each triangle
+  for (const tri of drawOrder) {
+    const [v0, v1, v2] = tri;
+    const dx0 = v0.x - v1.x;
+    const dy0 = v0.y - v1.y;
+    const dx1 = v2.x - v1.x;
+    const dy1 = v2.y - v1.y;
+    const invDet = 1.0 / (dx0 * dy1 - dy0 * dx1);
+    const u0 = (v0.x - v1.x) * invDet;
+    const v0y = (v0.y - v1.y) * invDet;
+    const u1 = (v2.x - v1.x) * invDet;
+    const v1y = (v2.y - v1.y) * invDet;
+
+    const xMin = Math.min(v0.x, v1.x, v2.x);
+    const xMax = Math.max(v0.x, v1.x, v2.x);
+    const yMin = Math.min(v0.y, v1.y, v2.y);
+    const yMax = Math.max(v0.y, v1.y, v2.y);
+
+    for (let y = Math.floor(yMin); y <= Math.ceil(yMax); y++) {
+      for (let x = Math.floor(xMin); x <= Math.ceil(xMax); x++) {
+        const u = (x - v1.x) * invDet;
+        const v = (y - v1.y) * invDet;
+        if (u >= 0 && u <= 1 && v >= 0 && v <= 1) {
+          const color = interpolateColor(u, v, v0, v1, v2);
+          ctx.fillStyle = color;
+          ctx.fillRect(x, y, 1, 1);
+        }
+      }
+    }
+  }
+
+  // wireframe overlay
+  if (wireframe) {
+    ctx.strokeStyle = '#0f0';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 0; i < 8; i++) {
+      const j = (i + 1) % 8;
+      ctx.moveTo(projected[i].x, projected[i].y);
+      ctx.lineTo(projected[j].x, projected[j].y);
+    }
+    ctx.stroke();
+  }
+
+  // FPS
+  const now = performance.now();
+  if (now - lastTime >= 1000) {
+    fps = frameCount;
+    fpsEl.textContent = fps;
+    frameCount = 0;
+    lastTime = now;
+  }
+  frameCount++;
+}
+
+function interpolateColor(u, v, v0, v1, v2) {
+  const c0 = lambert(v0, light);
+  const c1 = lambert(v1, light);
+  const c2 = lambert(v2, light);
+  const r = c0.r + (c1.r - c0.r) * u + (c2.r - c1.r) * v;
+  const g = c0.g + (c1.g - c0.g) * u + (c2.g - c1.g) * v;
+  const b = c0.b + (c1.b - c0.b) * u + (c2.b - c1.b) * v;
+  return `rgb(${Math.round(r)},${Math.round(g)},${Math.round(b)})`;
+}
+
+function lambert(v, light) {
+  const nx = v[0], ny = v[1], nz = v[2];
+  const lx = light.x, ly = light.y, lz = light.z;
+  const dot = nx * lx + ny * ly + nz * lz;
+  const intensity = Math.max(0, dot);
+  return {
+    r: intensity * 0.8,
+    g: intensity * 0.8,
+    b: intensity * 0.8,
+  };
+}
+
+// ── keyboard ──
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'w' || e.key === 'W') wireframe = !wireframe;
+  if (e.key === 'p' || e.key === 'P') paused = !paused;
+});
+
+// ── animation loop ──
+function loop() {
+  if (!paused) {
+    rotX += rotSpeed;
+    rotY += rotSpeed;
+    rotZ += rotSpeed;
+  }
+  render();
+  requestAnimationFrame(loop);
+}
+
+loop();
+</script>
+</body>
+</html>

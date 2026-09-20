@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gouraud Shaded Cube - Canvas 2D</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #111;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: monospace;
+            color: #eee;
+        }
+        canvas {
+            border: 1px solid #333;
+            background: #000;
+        }
+        .controls {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            border-radius: 5px;
+            font-size: 12px;
+            line-height: 1.8;
+        }
+        .controls span {
+            color: #0f0;
+        }
+        .fps {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            color: #ff0;
+            font-size: 16px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="controls">
+        <div><span>W</span> - Toggle wireframe</div>
+        <div><span>P</span> - Pause/Resume</div>
+        <div><span>←→</span> - Rotate around Y axis</div>
+        <div><span>↑↓</span> - Rotate around X axis</div>
+    </div>
+    <div class="fps" id="fps">FPS: 0</div>
+    <canvas id="canvas" width="800" height="600"></canvas>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const fpsElem = document.getElementById('fps');
+
+        // Cube vertices (centered at origin)
+        const vertices = [
+            {x: -1, y: -1, z: -1}, {x: 1, y: -1, z: -1}, {x: 1, y: 1, z: -1}, {x: -1, y: 1, z: -1},
+            {x: -1, y: -1, z: 1},  {x: 1, y: -1, z: 1},  {x: 1, y: 1, z: 1},  {x: -1, y: 1, z: 1}
+        ];
+
+        // Face definitions (vertex indices)
+        const faces = [
+            [0, 1, 2, 3], // back
+            [4, 5, 6, 7], // front
+            [0, 1, 5, 4], // bottom
+            [2, 3, 7, 6], // top
+            [0, 3, 7, 4], // left
+            [1, 2, 6, 5]  // right
+        ];
+
+        // Face colors (base colors for each face)
+        const faceColors = [
+            {r: 255, g: 0, b: 0},    // back - red
+            {r: 0, g: 255, b: 0},    // front - green
+            {r: 0, g: 0, b: 255},    // bottom - blue
+            {r: 255, g: 255, b: 0},  // top - yellow
+            {r: 255, g: 0, b: 255},  // left - magenta
+            {r: 0, g: 255, b: 255}   // right - cyan
+        ];
+
+        // Camera/view parameters
+        const fov = 500;
+        const cameraZ = 5;
+        const nearPlane = 0.1;
+        const farPlane = 100;
+
+        // Rotation angles
+        let angleX = 0;
+        let angleY = 0;
+
+        // Light source position (moving in a circle)
+        let lightAngle = 0;
+        const lightRadius = 3;
+        let lightPos = {x: 0, y: 0, z: 0};
+
+        // State
+        let wireframe = false;
+        let paused = false;
+        let lastTime = performance.now();
+        let frameCount = 0;
+        let fps = 0;
+
+        // Rotation matrices
+        function rotateX(x, y, z, angle) {
+            const cos = Math.cos(angle);
+            const sin = Math.sin(angle);
+            return {
+                x: x,
+                y: y * cos - z * sin,
+                z: y * sin + z * cos
+            };
+        }
+
+        function rotateY(x, y, z, angle) {
+            const cos = Math.cos(angle);
+            const sin = Math.sin(angle);
+            return {
+                x: x * cos + z * sin,
+                y: y,
+                z: -x * sin + z * cos
+            };
+        }
+
+        function rotateZ(x, y, z, angle) {
+            const cos = Math.cos(angle);
+            const sin = Math.sin(angle);
+            return {
+                x: x * cos - y * sin,
+                y: x * sin + y * cos,
+                z: z
+            };
+        }
+
+        // Perspective projection
+        function project(x, y, z) {
+            const denom = cameraZ - z;
+            if (denom <= 0) return null;
+            const scale = fov / denom;
+            return {
+                x: x * scale + canvas.width / 2,
+                y: y * scale + canvas.height / 2,
+                z: z,
+                scale: scale
+            };
+        }
+
+        // Backface culling test (dot product of face normal and camera direction)
+        function isBackface(faceVertices, cameraZ) {
+            // Calculate face normal using cross product
+            const v0 = faceVertices[2];
+            const v1 = faceVertices[1];
+            const v2 = faceVertices[0];
+            
+            const edge1 = {x: v1.x - v0.x, y: v1.y - v0.y, z: v1.z - v0.z};
+            const edge2 = {x: v2.x - v0.x, y: v2.y - v0.y, z: v2.z - v0.z};
+            
+            const normal = {
+                x: edge1.y * edge2.z - edge1.z * edge2.y,
+                y: edge1.z * edge2.x - edge1.x * edge2.z,
+                z: edge1.x * edge2.y - edge1.y * edge2.x
+            };
+            
+            // Dot product with camera direction (0, 0, 1)
+            return normal.z < 0;
+        }
+
+        // Lambert lighting (per vertex)
+        function calculateLighting(vertex, normal, lightPos, baseColor) {
+            // Normalize vectors
+            const len = Math.sqrt(normal.x * normal.x + normal.y * normal.y + normal.z * normal.z);
+            const nx = normal.x / len;
+            const ny = normal.y / len;
+            const nz = normal.z / len;
+            
+            // Light direction (from vertex to light)
+            const lx = lightPos.x - vertex.x;
+            const ly = lightPos.y - vertex.y;
+            const lz = lightPos.z - vertex.z;
+            
+            const lLen = Math.sqrt(lx * lx + ly * ly + lz * lz);
+            const ldx = lx / lLen;
+            const ldy = ly / lLen;
+            const ldz = lz / lLen;
+            
+            // Diffuse lighting (Lambert)
+            const diffuse = Math.max(0, nx * ldx + ny * ldy + nz * ldz);
+            
+            // Ambient component
+            const ambient = 0.3;
+            
+            // Final color with lighting
+            const r = Math.min(255, baseColor.r * (diffuse + ambient));
+            const g = Math.min(255, baseColor.g * (diffuse + ambient));
+            const b = Math.min(255, baseColor.b * (diffuse + ambient));
+            
+            return {r, g, b};
+        }
+
+        // Rasterize triangle with Gouraud shading
+        function rasterizeTriangle(p0, p1, p2, color0, color1, color2) {
+            // Bounding box
+            let minX = Math.min(p0.x, p1.x, p2.x);
+            let maxX = Math.max(p0.x, p1.x, p2.x);
+            let minY = Math.min(p0.y, p1.y, p2.y);
+            let maxY = Math.max(p0.y, p1.y, p2.y);
+
+            // Clamp to canvas bounds
+            minX = Math.max(0, minX);
+            maxX = Math.min(canvas.width, maxX);
+            minY = Math.max(0, minY);
+            maxY = Math.min(canvas.height, maxY);
+
+            // Gouraud shading - interpolate colors across the face
+            for (let y = minY; y < maxY; y++) {
+                for (let x = minX; x < maxX; x++) {
+                    // Barycentric coordinates for point (x, y)
+                    const area = 2 * (p0.x * (p1.y - p2.y) + p1.x * (p2.y - p0.y) + p2.x * (p0.y - p1.y));
+                    if (area === 0) continue;
+                    
+                    const w0 = ((p1.y - p2.y) * (x - p2.x) + (p2.x - p1.x) * (y - p2.y)) / area;
+                    const w1 = ((p2.y - p0.y) * (x - p2.x) + (p0.x - p2.x) * (y - p2.y)) / area;
+                    const w2 = 1 - w0 - w1;
+
+                    // Check if point is inside triangle
+                    if (w0 >= -0.001 && w1 >= -0.001 && w2 >= -0.001) {
+                        // Interpolate colors
+                        const r = Math.round(w0 * color0.r + w1 * color1.r + w2 * color2.r);
+                        const g = Math.round(w0 * color0.g + w1 * color1.g + w2 * color2.g);
+                        const b = Math.round(w0 * color0.b + w1 * color1.b + w2 * color2.b);
+                        
+                        ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+                        ctx.fillRect(x, y, 1, 1);
+                    }
+                }
+            }
+        }
+
+        // Draw the cube
+        function drawCube() {
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Update light position
+            lightAngle += 0.01;
+            lightPos = {
+                x: Math.cos(lightAngle) * lightRadius,
+                y: Math.sin(lightAngle * 0.7) * lightRadius * 0.7,
+                z: Math.sin(lightAngle) * lightRadius
+            };
+
+            // Transform vertices and project
+            const transformedVertices = vertices.map(v => {
+                let rotated = rotateX(v.x, v.y, v.z, angleX);
+                rotated = rotateY(rotated.x, rotated.y, rotated.z, angleY);
+                return project(rotated.x, rotated.y, rotated.z);
+            });
+
+            // Draw each face
+            for (let i = 0; i < faces.length; i++) {
+                const face = faces[i];
+                const faceVerts = face.map(idx => transformedVertices[idx]);
+                const baseColor = faceColors[i];
+
+                // Backface culling
+                if (isBackface(faceVerts, cameraZ)) continue;
+
+                if (wireframe) {
+                    // Wireframe mode
+                    ctx.strokeStyle = `rgb(${baseColor.r}, ${baseColor.g}, ${baseColor.b})`;
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    for (let j = 0; j < face.length; j++) {
+                        const v = faceVerts[j];
+                        if (j === 0) ctx.moveTo(v.x, v.y);
+                        else ctx.lineTo(v.x, v.y);
+                    }
+                    ctx.closePath();
+                    ctx.stroke();
+                } else {
+                    // Gouraud shading mode
+                    // Calculate lighting for each vertex
+                    const p0 = faceVerts[0];
+                    const p1 = faceVerts[1];
+                    const p2 = faceVerts[2];
+                    const p3 = faceVerts[3];
+
+                    // Calculate face normal at each vertex
+                    const v0 = {x: p1.x - p0.x, y: p1.y - p0.y, z: p1.z - p0.z};
+                    const v1 = {x: p3.x - p0.x, y: p3.y - p0.y, z: p3.z - p0.z};
+                    const n0 = {
+                        x: v0.y * v1.z - v0.z * v1.y,
+                        y: v0.z * v1.x - v0.x * v1.z,
+                        z: v0.x * v1.y - v0.y * v1.x
+                    };
+
+                    const v2 = {x: p2.x - p1.x, y: p2.y - p1.y, z: p2.z - p1.z};
+                    const v3 = {x: p3.x - p1.x, y: p3.y - p1.y, z: p3.z - p1.z};
+                    const n1 = {
+                        x: v2.y * v3.z - v2.z * v3.y,
+                        y: v2.z * v3.x - v2.x * v3.z,
+                        z: v2.x * v3.y - v2.y * v3.x
+                    };
+
+                    const v4 = {x: p0.x - p2.x, y: p0.y - p2.y, z: p0.z - p2.z};
+                    const v5 = {x: p3.x - p2.x, y: p3.y - p2.y, z: p3.z - p2.z};
+                    const n2 = {
+                        x: v4.y * v5.z - v4.z * v5.y,
+                        y: v4.z * v5.x - v4.x * v5.z,
+                        z: v4.x * v5.y - v4.y * v5.x
+                    };
+
+                    const v6 = {x: p0.x - p3.x, y: p0.y - p3.y, z: p0.z - p3.z};
+                    const v7 = {x: p1.x - p3.x, y: p1.y - p3.y, z: p1.z - p3.z};
+                    const n3 = {
+                        x: v6.y * v7.z - v6.z * v7.y,
+                        y: v6.z * v7.x - v6.x * v7.z,
+                        z: v6.x * v7.y - v6.y * v7.x
+                    };
+
+                    // Calculate colors at each vertex
+                    const color0 = calculateLighting(p0, n0, lightPos, baseColor);
+                    const color1 = calculateLighting(p1, n1, lightPos, baseColor);
+                    const color2 = calculateLighting(p2, n2, baseColor);
+                    const color3 = calculateLighting(p3, n3, baseColor);
+
+                    // Rasterize each triangle of the quad face
+                    rasterizeTriangle(p0, p1, p2, color0, color1, color2);
+                    rasterizeTriangle(p0, p2, p3, color0, color2, color3);
+                }
+            }
+        }
+
+        // Animation loop
+        function animate() {
+            if (!paused) {
+                angleX += 0.005;
+                angleY += 0.01;
+            }
+            
+            drawCube();
+
+            // FPS calculation
+            frameCount++;
+            const now = performance.now();
+            if (now - lastTime >= 1000) {
+                fps = frameCount;
+                frameCount = 0;
+                lastTime = now;
+                fpsElem.textContent = `FPS: ${fps}`;
+            }
+
+            requestAnimationFrame(animate);
+        }
+
+        // Keyboard controls
+        document.addEventListener('keydown', (e) => {
+            switch(e.key.toLowerCase()) {
+                case 'w':
+                    wireframe = !wireframe;
+                    break;
+                case 'p':
+                    paused = !paused;
+                    break;
+                case 'arrowleft':
+                    angleY -= 0.1;
+                    break;
+                case 'arrowright':
+                    angleY += 0.1;
+                    break;
+                case 'arrowup':
+                    angleX -= 0.1;
+                    animationStopped = false;
+                    break;
+                case 'arrowdown':
+                    angleX += 0.1;
+                    animationStopped = false;
+                    break;
+            }
+        });
+
+        // Start animation
+        animate();
+    </script>
+</body>
+</html>

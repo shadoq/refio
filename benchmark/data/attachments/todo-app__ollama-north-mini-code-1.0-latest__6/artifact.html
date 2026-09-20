@@ -1,0 +1,743 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Todo App</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary-color: #6366f1;
+            --primary-hover: #4f46e5;
+            --bg-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            --card-bg: #ffffff;
+            --text-primary: #1f2937;
+            --text-secondary: #6b7280;
+            --border-color: #e5e7eb;
+            --completed-color: #9ca3af;
+            --danger-color: #ef4444;
+            --danger-hover: #dc2626;
+            --success-color: #10b981;
+            --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+            --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.1);
+            --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.2);
+            --transition: all 0.3s ease;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: var(--bg-gradient);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .todo-container {
+            background: var(--card-bg);
+            border-radius: 16px;
+            box-shadow: var(--shadow-lg);
+            width: 100%;
+            max-width: 500px;
+            overflow: hidden;
+            animation: slideUp 0.5s ease-out;
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .todo-header {
+            padding: 24px;
+            background: linear-gradient(135deg, var(--primary-color), #8b5cf6);
+            color: white;
+            text-align: center;
+        }
+
+        .todo-header h1 {
+            font-size: 28px;
+            margin-bottom: 8px;
+            font-weight: 700;
+        }
+
+        .todo-header p {
+            opacity: 0.9;
+            font-size: 14px;
+        }
+
+        .todo-input-section {
+            padding: 24px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .input-wrapper {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .todo-input {
+            flex: 1;
+            padding: 12px 16px;
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            font-size: 16px;
+            transition: var(--transition);
+            outline: none;
+        }
+
+        .todo-input:focus {
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+        }
+
+        .todo-input::placeholder {
+            color: var(--text-secondary);
+        }
+
+        .add-btn {
+            padding: 12px 24px;
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: var(--transition);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .add-btn:hover {
+            background: var(--primary-hover);
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+        }
+
+        .add-btn:active {
+            transform: translateY(0);
+        }
+
+        .todo-filters {
+            display: flex;
+            justify-content: center;
+            gap: 8px;
+            padding: 16px 24px;
+            background: #f9fafb;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .filter-btn {
+            padding: 8px 16px;
+            background: transparent;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: var(--transition);
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .filter-btn:hover {
+            background: #f3f4f6;
+            color: var(--text-primary);
+        }
+
+        .filter-btn.active {
+            background: var(--primary-color);
+            color: white;
+            border-color: var(--primary-color);
+        }
+
+        .todo-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .todo-item {
+            display: flex;
+            align-items: center;
+            padding: 16px 24px;
+            border-bottom: 1px solid var(--border-color);
+            transition: var(--transition);
+            animation: fadeIn 0.3s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateX(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        .todo-item:hover {
+            background: #f9fafb;
+        }
+
+        .todo-item:last-child {
+            border-bottom: none;
+        }
+
+        .todo-item.completed {
+            opacity: 0.7;
+        }
+
+        .todo-item.completed .todo-text {
+            text-decoration: line-through;
+            color: var(--completed-color);
+        }
+
+        .todo-content {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex: 1;
+        }
+
+        .todo-checkbox {
+            width: 20px;
+            height: 20px;
+            border: 2px solid var(--border-color);
+            border-radius: 4px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: var(--transition);
+        }
+
+        .todo-checkbox.checked {
+            background: var(--success-color);
+            border-color: var(--success-color);
+        }
+
+        .todo-checkbox.checked::after {
+            content: '✓';
+            color: white;
+            font-size: 12px;
+            font-weight: bold;
+        }
+
+        .todo-text {
+            font-size: 16px;
+            color: var(--text-primary);
+            word-break: break-word;
+            transition: var(--transition);
+        }
+
+        .todo-delete {
+            padding: 8px;
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            border-radius: 4px;
+            transition: var(--transition);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+        }
+
+        .todo-item:hover .todo-delete {
+            opacity: 1;
+        }
+
+        .todo-delete:hover {
+            background: var(--danger-color);
+            color: white;
+        }
+
+        .todo-footer {
+            padding: 16px 24px;
+            background: #f9fafb;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .items-count {
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+
+        .clear-completed {
+            padding: 8px 16px;
+            background: transparent;
+            border: 1px solid var(--danger-color);
+            border-radius: 6px;
+            color: var(--danger-color);
+            cursor: pointer;
+            transition: var(--transition);
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .clear-completed:hover {
+            background: var(--danger-color);
+            color: white;
+        }
+
+        .empty-state {
+            padding: 40px 24px;
+            text-align: center;
+            color: var(--text-secondary);
+        }
+
+        .empty-state-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #10b981;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 8px;
+            box-shadow: var(--shadow-lg);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            z-index: 1000;
+        }
+
+        .toast.show {
+            opacity: 1;
+        }
+
+        .toast.error {
+            background: var(--danger-color);
+        }
+
+        /* Responsive design */
+        @media (max-width: 480px) {
+            .todo-container {
+                margin: 10px;
+            }
+
+            .todo-header {
+                padding: 20px;
+            }
+
+            .todo-header h1 {
+                font-size: 24px;
+            }
+
+            .todo-input-section {
+                padding: 20px;
+            }
+
+            .input-wrapper {
+                flex-direction: column;
+            }
+
+            .add-btn {
+                justify-content: center;
+            }
+
+            .todo-filters {
+                flex-wrap: wrap;
+            }
+
+            .todo-item {
+                padding: 14px 20px;
+            }
+
+            .todo-footer {
+                flex-direction: column;
+                gap: 12px;
+                align-items: stretch;
+            }
+        }
+
+        /* Focus styles for accessibility */
+        .todo-input:focus,
+        .add-btn:focus,
+        .filter-btn:focus,
+        .clear-completed:focus,
+        .todo-delete:focus {
+            outline: 2px solid var(--primary-color);
+            outline-offset: 2px;
+        }
+
+        /* Screen reader only text */
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border: 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="todo-container" role="main">
+        <header class="todo-header">
+            <h1>Todo App</h1>
+            <p>Organize your tasks efficiently</p>
+        </header>
+
+        <div class="todo-input-section">
+            <div class="input-wrapper">
+                <input 
+                    type="text" 
+                    class="todo-input" 
+                    id="todoInput" 
+                    placeholder="Add a new todo..."
+                    aria-label="Add a new todo"
+                    maxlength="100"
+                >
+                <button 
+                    class="add-btn" 
+                    id="addBtn"
+                    aria-label="Add todo"
+                >
+                    <span>Add</span>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="12" y1="5" x2="12" y2="19"></line>
+                        <line x1="5" y1="12" x2="19" y2="12"></line>
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <div class="todo-filters" role="tablist">
+            <button 
+                class="filter-btn active" 
+                data-filter="all"
+                role="tab"
+                aria-selected="true"
+                aria-controls="all-todos"
+                id="filter-all"
+            >
+                All
+            </button>
+            <button 
+                class="filter-btn" 
+                data-filter="active"
+                role="tab"
+                aria-selected="false"
+                aria-controls="active-todos"
+                id="filter-active"
+            >
+                Active
+            </button>
+            <button 
+                class="filter-btn" 
+                data-filter="completed"
+                role="tab"
+                aria-selected="false"
+                aria-controls="completed-todos"
+                id="filter-completed"
+            >
+                Completed
+            </button>
+        </div>
+
+        <div class="todo-list" id="todoList" role="list">
+            <!-- Todos will be dynamically added here -->
+            <div class="empty-state">
+                <div class="empty-state-icon">📝</div>
+                <p>No todos yet. Add one to get started!</p>
+            </div>
+        </div>
+
+        <div class="todo-footer">
+            <div class="items-count">
+                <span id="itemsCount">0</span> items remaining
+            </div>
+            <button 
+                class="clear-completed" 
+                id="clearCompleted"
+                aria-label="Clear completed todos"
+            >
+                Clear Completed
+            </button>
+        </div>
+    </div>
+
+    <div class="toast" id="toast" role="alert" aria-live="polite"></div>
+
+    <script>
+        // Todo App Class
+        class TodoApp {
+            constructor() {
+                this.todos = [];
+                this.filter = 'all';
+                this.input = document.getElementById('todoInput');
+                this.addBtn = document.getElementById('addBtn');
+                this.todoList = document.getElementById('todoList');
+                this.filterBtns = document.querySelectorAll('.filter-btn');
+                this.itemsCount = document.getElementById('itemsCount');
+                this.clearCompletedBtn = document.getElementById('clearCompleted');
+                this.toast = document.getElementById('toast');
+                
+                this.init();
+            }
+
+            init() {
+                // Load todos from localStorage
+                this.loadTodos();
+                
+                // Event listeners
+                this.addBtn.addEventListener('click', () => this.addTodo());
+                this.input.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') {
+                        this.addTodo();
+                    }
+                });
+                
+                // Filter buttons
+                this.filterBtns.forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        this.setFilter(btn.dataset.filter);
+                    });
+                });
+                
+                // Clear completed button
+                this.clearCompletedBtn.addEventListener('click', () => {
+                    this.clearCompleted();
+                });
+                
+                // Update UI
+                this.render();
+            }
+
+            addTodo() {
+                const text = this.input.value.trim();
+                
+                if (!text) {
+                    this.showToast('Please enter a todo', 'error');
+                    return;
+                }
+                
+                if (text.length > 100) {
+                    this.showToast('Todo text is too long (max 100 characters)', 'error');
+                    return;
+                }
+                
+                const todo = {
+                    id: Date.now(),
+                    text: text,
+                    completed: false,
+                    createdAt: new Date().toISOString()
+                };
+                
+                this.todos.unshift(todo);
+                this.input.value = '';
+                this.saveTodos();
+                this.render();
+                this.showToast('Todo added successfully!');
+            }
+
+            deleteTodo(id) {
+                this.todos = this.todos.filter(todo => todo.id !== id);
+                this.saveTodos();
+                this.render();
+                this.showToast('Todo deleted');
+            }
+
+            toggleTodo(id) {
+                this.todos = this.todos.map(todo => 
+                    todo.id === id ? { ...todo, completed: !todo.completed } : todo
+                );
+                this.saveTodos();
+                this.render();
+            }
+
+            clearCompleted() {
+                const completedCount = this.todos.filter(todo => todo.completed).length;
+                if (completedCount === 0) {
+                    this.showToast('No completed todos to clear');
+                    return;
+                }
+                
+                this.todos = this.todos.filter(todo => !todo.completed);
+                this.saveTodos();
+                this.render();
+                this.showToast(`Cleared ${completedCount} completed todo${completedCount > 1 ? 's' : ''}`);
+            }
+
+            setFilter(filter) {
+                this.filter = filter;
+                
+                // Update filter buttons
+                this.filterBtns.forEach(btn => {
+                    if (btn.dataset.filter === filter) {
+                        btn.classList.add('active');
+                        btn.setAttribute('aria-selected', 'true');
+                    } else {
+                        btn.classList.remove('active');
+                        btn.setAttribute('aria-selected', 'false');
+                    }
+                });
+                
+                this.render();
+            }
+
+            getFilteredTodos() {
+                switch (this.filter) {
+                    case 'active':
+                        return this.todos.filter(todo => !todo.completed);
+                    case 'completed':
+                        return this.todos.filter(todo => todo.completed);
+                    default:
+                        return this.todos;
+                }
+            }
+
+            getRemainingCount() {
+                return this.todos.filter(todo => !todo.completed).length;
+            }
+
+            saveTodos() {
+                try {
+                    localStorage.setItem('todoApp', JSON.stringify(this.todos));
+                } catch (error) {
+                    console.error('Error saving to localStorage:', error);
+                    this.showToast('Error saving todos', 'error');
+                }
+            }
+
+            loadTodos() {
+                try {
+                    const saved = localStorage.getItem('todoApp');
+                    if (saved) {
+                        this.todos = JSON.parse(saved);
+                    }
+                } catch (error) {
+                    console.error('Error loading from localStorage:', error);
+                    this.todos = [];
+                }
+            }
+
+            showToast(message, type = 'success') {
+                this.toast.textContent = message;
+                this.toast.className = `toast ${type === 'error' ? 'error' : ''}`;
+                this.toast.classList.add('show');
+                
+                setTimeout(() => {
+                    this.toast.classList.remove('show');
+                }, 3000);
+            }
+
+            render() {
+                const filteredTodos = this.getFilteredTodos();
+                const remainingCount = this.getRemainingCount();
+                
+                // Update items count
+                this.itemsCount.textContent = remainingCount;
+                
+                // Render todos
+                if (filteredTodos.length === 0) {
+                    this.todoList.innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-state-icon">📝</div>
+                            <p>No ${this.filter === 'active' ? 'active' : this.filter === 'completed' ? 'completed' : ''} todos found.</p>
+                        </div>
+                    `;
+                    return;
+                }
+                
+                this.todoList.innerHTML = filteredTodos.map(todo => `
+                    <div class="todo-item ${todo.completed ? 'completed' : ''}" role="listitem">
+                        <div class="todo-content">
+                            <button 
+                                class="todo-checkbox ${todo.completed ? 'checked' : ''}"
+                                onclick="app.toggleTodo(${todo.id})"
+                                aria-label="${todo.completed ? 'Mark as active' : 'Mark as completed'}"
+                                aria-pressed="${todo.completed}"
+                            >
+                            </button>
+                            <span class="todo-text">${this.escapeHtml(todo.text)}</span>
+                        </div>
+                        <button 
+                            class="todo-delete"
+                            onclick="app.deleteTodo(${todo.id})"
+                            aria-label="Delete todo"
+                        >
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="3,6 5,6 21,6"></polyline>
+                                <line x1="19" y1="6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></line>
+                                <line x1="10" y1="11" x2="10" y2="17"></line>
+                                <line x1="14" y1="11" x2="14" y2="17"></line>
+                            </svg>
+                        </button>
+                    </div>
+                `).join('');
+            }
+
+            escapeHtml(text) {
+                const div = document.createElement('div');
+                div.textContent = text;
+                return div.innerHTML;
+            }
+        }
+
+        // Initialize app
+        const app = new TodoApp();
+        
+        // Add some sample todos if no todos exist
+        if (app.todos.length === 0) {
+            setTimeout(() => {
+                app.todos = [
+                    {
+                        id: 1,
+                        text: 'Welcome to your Todo App!',
+                        completed: false,
+                        createdAt: new Date().toISOString()
+                    },
+                    {
+                        id: 2,
+                        text: 'Add new todos using the input field',
+                        completed: false,
+                        createdAt: new Date().toISOString()
+                    },
+                    {
+                        id: 3,
+                        text: 'Mark todos as complete by clicking the checkbox',
+                        completed: false,
+                        createdAt: new Date().toISOString()
+                    },
+                    {
+                        id: 4,
+                        text: 'Delete todos with the delete button',
+                        completed: false,
+                        createdAt: new Date().toISOString()
+                    }
+                ];
+                app.saveTodos();
+                app.render();
+            }, 100);
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Gouraud Shaded Cube - Canvas 2D</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #1a1a2e; }
+    canvas { display: block; }
+    #ui {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      color: #fff;
+      font-family: monospace;
+      font-size: 14px;
+      background: rgba(0, 0, 0, 0.6);
+      padding: 10px;
+      border-radius: 6px;
+    }
+    #ui div { margin: 4px 0; }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <div>FPS: <span id="fps">0</span></div>
+    <div>Light: <span id="light-pos">0, 0, 0</span></div>
+    <div>Controls: W = wireframe, P = pause</div>
+  </div>
+  <canvas id="canvas"></canvas>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const fpsEl = document.getElementById('fps');
+    const lightEl = document.getElementById('light-pos');
+
+    // Full-screen canvas sizing
+    function resize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    // Cube vertices (centered at origin)
+    const vertices = [
+      {x: -1, y: -1, z: -1}, {x: 1, y: -1, z: -1}, {x: 1, y: 1, z: -1}, {x: -1, y: 1, z: -1},
+      {x: -1, y: -1, z: 1},  {x: 1, y: -1, z: 1},  {x: 1, y: 1, z: 1},  {x: -1, y: 1, z: 1}
+    ];
+
+    // Face indices (each face is two triangles)
+    const faces = [
+      // Back face
+      [0, 1, 2, 0, 2, 3],
+      // Bottom face
+      [0, 1, 5, 0, 5, 4],
+      // Top face
+      [3, 2, 6, 3, 6, 7],
+      // Front face
+      [4, 5, 6, 4, 6, 7],
+      // Left face
+      [0, 4, 7, 0, 7, 3],
+      // Right face
+      [1, 5, 6, 1, 6, 2]
+    ];
+
+    // Rotation matrices
+    function rotateX(angle) {
+      const c = Math.cos(angle);
+      const s = Math.sin(angle);
+      return [
+        [1, 0, 0, 0],
+        [0, c, -s, 0],
+        [0, s, c, 0],
+        [0, 0, 0, 1]
+      ];
+    }
+
+    function rotateY(angle) {
+      const c = Math.cos(angle);
+      const s = Math.sin(angle);
+      return [
+        [c, 0, s, 0],
+        [0, 1, 0, 0],
+        [-s, 0, c, 0],
+        [0, 0, 0, 1]
+      ];
+    }
+
+    function rotateZ(angle) {
+      const c = Math.cos(angle);
+      const s = Math.sin(angle);
+      return [
+        [c, -s, 0, 0],
+        [s, c, 0, 0],
+        [0, 0, 1, 0],
+        [0, 0, 0, 1]
+      ];
+    }
+
+    // Perspective projection
+    function project(v, fov, aspect, near, far) {
+      const f = 1 / Math.tan((fov * Math.PI / 360));
+      const depth = far - near;
+      const z = far - (v.z * depth);
+      if (z <= near) return null;
+      return {
+        x: v.x * f * aspect / (v.z + 1) * 0.8 + canvas.width / 2,
+        y: -v.y * f / (v.z + 1) * 0.8 + canvas.height / 2,
+        z: z
+      };
+    }
+
+    // Backface culling test
+    function isFrontFacing(v0, v1, v2) {
+      const cross = (v1.x - v0.x) * (v2.y - v0.y) - (v1.y - v0.y) * (v2.x - v0.x);
+      return cross >= 0;
+    }
+
+    // Lambert lighting - returns 0..1 intensity
+    function lambertLight(v, normal, lightPos) {
+      const lightDir = {x: lightPos.x - v.x, y: lightPos.y - v.y, z: lightPos.z - v.z};
+      const len = Math.sqrt(lightDir.x * lightDir.x + lightDir.y * lightDir.y + lightDir.z * lightDir.z);
+      if (len < 0.0001) return 1;
+      lightDir.x /= len; lightDir.y /= len; lightDir.z /= len;
+      const dot = normal.x * lightDir.x + normal.y * lightDir.y + normal.z * lightDir.z;
+      return Math.max(0, dot);
+    }
+
+    // Triangle rasterization with Gouraud shading
+    function rasterizeTriangle(a, b, c, colorA, colorB, colorC) {
+      // Bounding box
+      let minX = Math.min(a.x, b.x, c.x);
+      let maxX = Math.max(a.x, b.x, c.x);
+      let minY = Math.min(a.y, b.y, c.y);
+      let maxY = Math.max(a.y, b.y, c.y);
+
+      // Clip to canvas
+      minX = Math.max(0, Math.floor(minX));
+      maxX = Math.min(canvas.width - 1, Math.ceil(maxX));
+      minY = Math.max(0, Math.floor(minY));
+      maxY = Math.min(canvas.height - 1, Math.ceil(maxY));
+
+      for (let y = minY; y <= maxY; y++) {
+        for (let x = minX; x <= maxX; x++) {
+          // Barycentric coordinates
+          const w0 = ((b.y - c.y) * (x - c.x) + (c.x - b.x) * (y - c.y)) /
+                     ((b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y));
+          const w1 = ((c.y - a.y) * (x - c.x) + (a.x - c.x) * (y - c.y)) /
+                     ((b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y));
+          const w2 = 1 - w0 - w1;
+
+          if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
+            // Interpolate color
+            const r = Math.round(255 * (w0 * colorA.r + w1 * colorB.r + w2 * colorC.r));
+            const g = Math.round(255 * (w0 * colorA.g + w1 * colorB.g + w2 * colorC.g));
+            const b = Math.round(255 * (w0 * colorA.b + w1 * colorB.b + w2 * colorC.b));
+            ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+            ctx.fillRect(x, y, 1, 1);
+          }
+        }
+      }
+    }
+
+    // State
+    let angleX = 0, angleY = 0, angleZ = 0;
+    let wireframe = false;
+    let paused = false;
+    let lastTime = performance.now();
+    let frameCount = 0;
+    let fps = 0;
+    let lightAngle = 0;
+
+    // Update light position (circle motion)
+    function updateLight() {
+      const radius = 4;
+      const lightX = Math.sin(lightAngle) * radius;
+      const lightY = Math.cos(lightAngle) * radius * 0.6;
+      const lightZ = Math.sin(lightAngle * 0.7) * radius * 0.8;
+      return {x: lightX, y: lightY, z: lightZ};
+    }
+
+    // Render frame
+    function render() {
+      if (paused) return;
+
+      // Clear
+      ctx.fillStyle = '#1a1a2e';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Update rotation
+      angleX += 0.01;
+      angleY += 0.015;
+      angleZ += 0.005;
+      lightAngle += 0.02;
+
+      const lightPos = updateLight();
+      lightEl.textContent = `${lightPos.x.toFixed(1)}, ${lightPos.y.toFixed(1)}, ${lightPos.z.toFixed(1)}`;
+
+      // Build rotation matrix
+      const matX = rotateX(angleX);
+      const matY = rotateY(angleY);
+      const matZ = rotateZ(angleZ);
+
+      // Multiply matrices (3x3 for rotation only)
+      let mat = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+      for (let i = 0; i < 3; i++) {
+        for (let j = 0; j < 3; j++) {
+          mat[i][j] = matX[i][j] * matY[j][0] + matX[i][j + 1] * matY[j + 1] + matX[i][j + 2] * matY[j + 2];
+        }
+      }
+      mat = matX;
+      for (let k = 0; k < 3; k++) {
+        for (let i = 0; i < 3; i++) {
+          mat[i][k] = matX[i][0] * matY[0][k] + matX[i][1] * matY[1][k] + matX[i][2] * matY[2][k];
+        }
+      }
+
+      // Apply rotation and project
+      const projected = vertices.map(v => {
+        const rx = mat[0][0] * v.x + mat[0][1] * v.y + mat[0][2] * v.z;
+        const ry = mat[1][0] * v.x + mat[1][1] * v.y + mat[1][2] * v.z;
+        const rz = mat[2][0] * v.x + mat[2][1] * v.y + mat[2][2] * v.z;
+        return project({x: rx, y: ry, z: rz}, 75, canvas.width / canvas.height, 0.1, 100);
+      });
+
+      // Face normals (unit vectors)
+      const normals = [
+        {x: 0, y: 0, z: -1}, {x: 0, y: 1, z: 0}, {x: 0, y: -1, z: 0}, {x: 0, y: 0, z: 1},
+        {x: -1, y: 0, z: 0}, {x: 1, y: 0, z: 0}
+      ];
+
+      const baseColors = [
+        {r: 255, g: 100, b: 100},
+        {r: 100, g: 255, b: 100},
+        {r: 100, g: 100, b: 255},
+        {r: 255, g: 255, b: 100},
+        {r: 100, g: 255, b: 255},
+        {r: 255, g: 100, b: 255}
+      ];
+
+      // Render each face
+      for (let i = 0; i < faces.length; i++) {
+        const f = faces[i];
+        const v0 = projected[f[0]], v1 = projected[f[1]], v2 = projected[f[2]];
+        if (!v0 || !v1 || !v2) continue;
+
+        // Backface culling
+        if (!isFrontFacing(v0, v1, v2)) continue;
+
+        // Rasterize
+        if (wireframe) {
+          ctx.strokeStyle = `hsl(${i * 60}, 70%, 60%)`;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(v0.x, v0.y);
+          ctx.lineTo(v1.x, v1.y);
+          ctx.lineTo(v2.x, v2.y);
+          ctx.closePath();
+          ctx.stroke();
+        } else {
+          // Per-vertex lighting
+          const normal = normals[i];
+          const intensity = lambertLight(v0, normal, lightPos);
+          const colorA = {
+            r: Math.round(baseColors[i].r * intensity),
+            g: Math.round(baseColors[i].g * intensity),
+            b: Math.round(baseColors[i].b * intensity)
+          };
+          const intensityB = lambertLight(v1, normal, lightPos);
+          const colorB = {
+            r: Math.round(baseColors[i].r * intensityB),
+            g: Math.round(baseColors[i].g * intensityB),
+            b: Math.round(baseColors[i].b * intensityB)
+          };
+          const intensityC = lambertLight(v2, normal, lightPos);
+          const colorC = {
+            r: Math.round(baseColors[i].r * intensityC),
+            g: Math.round(baseColors[i].g * intensityC),
+            b: Math.round(baseColors[i].b * intensityC)
+          };
+          rasterizeTriangle(v0, v1, v2, colorA, colorB, colorC);
+        }
+      }
+
+      // FPS calc
+      frameCount++;
+      const now = performance.now();
+      if (now - lastTime >= 1000) {
+        fps = Math.round(frameCount * 1000 / (now - lastTime));
+        fpsEl.textContent = fps;
+        frameCount = 0;
+        lastTime = now;
+      }
+
+      requestAnimationFrame(render);
+    }
+
+    // Keyboard controls
+    window.addEventListener('keydown', e => {
+      if (e.key.toLowerCase() === 'w') wireframe = !wireframe;
+      if (e.key.toLowerCase() === 'p') paused = !paused;
+    });
+
+    // Start
+    render();
+  </script>
+</body>
+</html>

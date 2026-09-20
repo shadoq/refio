@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Neural Growth Visualization</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      overflow: hidden;
+      background: #05070f;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+
+    #canvas-container {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+    }
+
+    canvas {
+      display: block;
+      background: #05070f;
+    }
+
+    .gui-panel {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      width: 320px;
+      max-height: 80vh;
+      background: rgba(16, 26, 58, 0.92);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(0, 229, 255, 0.3);
+      border-radius: 8px;
+      padding: 20px;
+      color: #fff;
+      font-size: 12px;
+    }
+
+    .gui-panel h2 {
+      margin-top: 0;
+      margin-bottom: 15px;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #00e5ff;
+      border-bottom: 1px solid rgba(0, 229, 255, 0.3);
+      padding-bottom: 8px;
+    }
+
+    .folder {
+      margin-top: 12px;
+    }
+
+    .folder .title {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: #ffd400;
+      margin-bottom: 6px;
+      padding: 4px 0;
+    }
+
+    input {
+      width: 100%;
+      padding: 6px 8px;
+      margin-bottom: 6px;
+      background: #05070f;
+      border: 1px solid rgba(0, 229, 255, 0.3);
+      border-radius: 4px;
+      color: #00e5ff;
+      font-size: 11px;
+    }
+
+    input:focus {
+      outline: none;
+      border-color: #00e5ff;
+      box-shadow: 0 0 10px rgba(0, 229, 255, 0.3);
+    }
+
+    button.gui-btn {
+      width: 100%;
+      padding: 8px;
+      background: #ffd400;
+      border: none;
+      border-radius: 4px;
+      color: #05070f;
+      font-weight: bold;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-top: 8px;
+      cursor: pointer;
+      transition: background 0.3s;
+    }
+
+    button.gui-btn:hover {
+      background: #e6c700;
+    }
+
+    button.gui-btn:active {
+      background: #d6b800;
+    }
+
+    .stat {
+      margin-top: 15px;
+      padding-top: 15px;
+      border-top: 1px solid rgba(0, 229, 255, 0.2);
+      font-size: 10px;
+      color: #888;
+    }
+  </style>
+</head>
+<body>
+  <div id="canvas-container">
+    <canvas id="canvas" width="800" height="800"></canvas>
+  </div>
+  
+  <div class="gui-panel" id="gui-panel">
+    <h2>Neural Growth</h2>
+    
+    <div class="folder">
+      <div class="title">Growth</div>
+      <input type="range" id="neuron-count" min="1" max="10" step="1" value="4">
+      <input type="range" id="growth-speed" min="0.1" max="5" step="0.1" value="1">
+      <input type="range" id="max-depth" min="3" max="10" step="1" value="6">
+      <input type="range" id="split-chance" min="0" max="1" step="0.1" value="0.3">
+      <input type="range" id="branch-curvature" min="0" max="1" step="0.1" value="0.3">
+      <input type="range" id="max-branch-length" min="20" max="100" step="1" value="60">
+    </div>
+    
+    <div class="folder">
+      <div class="title">Synapses</div>
+      <input type="range" id="synapse-threshold" min="20" max="100" step="1" value="40">
+      <input type="range" id="synapse-glow" min="0" max="5" step="0.1" value="2">
+    </div>
+    
+    <div class="folder">
+      <div class="title">Pulses</div>
+      <input type="range" id="pulse-speed" min="0.5" max="3" step="0.1" value="1">
+      <input type="range" id="pulse-frequency" min="0.01" max="0.5" step="0.01" value="0.02">
+      <input type="range" id="pulse-brightness" min="0.1" max="1" step="0.05" value="0.7">
+    </div>
+    
+    <div class="folder">
+      <div class="title">Visuals</div>
+      <input type="color" id="bg-color" value="#05070f">
+      <input type="color" id="branch-color" value="#00e5ff">
+      <input type="color" id="accent-color" value="#d6ff00">
+      <input type="color" id="synapse-color" value="#ff2bd6">
+      <input type="color" id="pulse-color" value="#fff36a">
+    </div>
+    
+    <button class="gui-btn" id="regenerate-btn">Regenerate Network</button>
+    <button class="gui-btn" id="clear-btn">Clear Canvas</button>
+    <button class="gui-btn" id="pause-btn">Pause</button>
+    <div class="stat" id="stat">Network: 0 neurons, 0 synapses</div>
+  </div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "dat.gui": "https://cdn.jsdelivr.net/npm/dat.gui@0.7.9/build/dat.gui.min.js"
+    }
+  }
+  </script>
+
+  <script type="module">
+    import GUI from 'dat.gui';
+    
+    // Wait for dat.gui to load
+    let gui;
+    
+    document.addEventListener('DOMContentLoaded', async () => {
+      // Load dat.gui from CDN
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/dat.gui@0.7.9/build/dat.gui.min.js';
+      script.onload = init;
+      document.head.appendChild(script);
+    });
+    
+    function init() {
+      gui = new GUI({ autoPlace: false });
+      document.getElementById('gui-panel').appendChild(gui.domElement);
+      
+      // Override the GUI folder titles
+      const originalClose = gui.close;
+      
+      // We'll manually add folders with our styling
+      // The dat.gui dom is already styled, we just need to add controls
+      
+      initScene();
+    }
+    
+    // Actually, let's use a different approach - embed the GUI setup properly
+    let createdGUI = false;
+    
+    function initScene() {
+      // ... rest of initialization
+    }
+  </script>
+</body>
+</html>

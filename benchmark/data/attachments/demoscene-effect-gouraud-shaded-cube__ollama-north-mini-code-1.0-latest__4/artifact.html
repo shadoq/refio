@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gouraud-Shaded Rotating Cube</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+        canvas {
+            border: 1px solid #333;
+        }
+        #fps {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: #fff;
+            font-family: monospace;
+            font-size: 14px;
+        }
+        #controls {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            color: #fff;
+            font-family: monospace;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <div id="fps">FPS: 0</div>
+    <div id="controls">W: Wireframe Toggle | P: Pause | Light moves automatically</div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Set canvas size to window size
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        
+        // State variables
+        let angleX = 0, angleY = 0;
+        let lightAngle = 0;
+        let isWireframe = false;
+        let isPaused = false;
+        let lastTime = performance.now();
+        let frameCount = 0;
+        let fps = 0;
+        
+        // Cube vertices (3D coordinates)
+        const vertices = [
+            { x: -1, y: -1, z: -1 }, // 0
+            { x: 1, y: -1, z: -1 },  // 1
+            { x: 1, y: 1, z: -1 },   // 2
+            { x: -1, y: 1, z: -1 },  // 3
+            { x: -1, y: -1, z: 1 },  // 4
+            { x: 1, y: -1, z: 1 },   // 5
+            { x: 1, y: 1, z: 1 },    // 6
+            { x: -1, y: 1, z: 1 }    // 7
+        ];
+        
+        // Cube faces (indices into vertices array)
+        const faces = [
+            [0, 1, 2, 3], // front
+            [4, 5, 6, 7], // back
+            [0, 1, 5, 4], // bottom
+            [1, 2, 6, 5], // right
+            [2, 3, 7, 6], // top
+            [3, 0, 4, 7]  // left
+        ];
+        
+        // Split each face into two triangles
+        const triangles = [];
+        for (const face of faces) {
+            triangles.push([face[0], face[1], face[2]]);
+            triangles.push([face[0], face[2], face[3]]);
+        }
+        
+        // Light position (moving)
+        const light = { x: 5, y: 5, z: 5 };
+        
+        // Camera settings
+        const fov = 250;
+        const aspect = canvas.width / canvas.height;
+        const near = 0.1;
+        const far = 1000;
+        
+        // Rotation matrices
+        function rotateX(point, angle) {
+            const cos = Math.cos(angle);
+            const sin = Math.sin(angle);
+            const y = point.y * cos - point.z * sin;
+            const z = point.y * sin + point.z * cos;
+            return { x: point.x, y, z };
+        }
+        
+        function rotateY(point, angle) {
+            const cos = Math.cos(angle);
+            const sin = Math.sin(angle);
+            const x = point.x * cos + point.z * sin;
+            const z = point.x * sin + point.z * cos;
+            return { x, y: point.y, z };
+        }
+        
+        // Perspective projection
+        function project(point) {
+            const z = point.z + 5; // Offset to avoid division by zero
+            const scale = fov / z;
+            return {
+                x: point.x * scale + canvas.width / 2,
+                y: point.y * scale + canvas.height / 2,
+                z: z
+            };
+        }
+        
+        // Backface culling
+        function dot(v1, v2) {
+            return v1.x * v2.x + v1.y * v2.y + v1.z * v2.z;
+        }
+        
+        function getNormal(p1, p2, p3) {
+            const v1 = { x: p2.x - p1.x, y: p2.y - p1.y, z: p2.z - p1.z };
+            const v2 = { x: p3.x - p1.x, y: p3.y - p1.y, z: p3.z - p1.z };
+            return {
+                x: v1.y * v2.z - v1.z * v2.y,
+                y: v1.z * v2.x - v1.x * v2.z,
+                z: v1.x * v2.y - v1.y * v2.x
+            };
+        }
+        
+        // Lambert lighting
+        function computeLighting(vertex, normal) {
+            const lightDir = {
+                x: light.x - vertex.x,
+                y: light.y - vertex.y,
+                z: light.z - vertex.z
+            };
+            
+            const len = Math.sqrt(lightDir.x * lightDir.x + lightDir.y * lightDir.y + lightDir.z * lightDir.z);
+            lightDir.x /= len;
+            lightDir.y /= len;
+            lightDir.z /= len;
+            
+            const intensity = Math.max(0, dot(normal, lightDir));
+            return intensity;
+        }
+        
+        // Main render loop
+        function render(timestamp) {
+            if (!isPaused) {
+                // Update animation
+                angleX += 0.01;
+                angleY += 0.01;
+                lightAngle += 0.005;
+                light.x = 5 * Math.cos(lightAngle);
+                light.y = 5 * Math.sin(lightAngle);
+                light.z = 5 * Math.cos(lightAngle * 0.7);
+            }
+            
+            // Clear canvas
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Transform and project vertices
+            const projected = [];
+            for (const vertex of vertices) {
+                let rotated = rotateX(vertex, angleX);
+                rotated = rotateY(rotated, angleY);
+                projected.push(project(rotated));
+            }
+            
+            // Draw triangles
+            for (let i = 0; i < triangles.length; i++) {
+                const tri = triangles[i];
+                const p1 = projected[tri[0]];
+                const p2 = projected[tri[1]];
+                const p3 = projected[tri[2]];
+                
+                // Compute normal for backface culling
+                const normal = getNormal(
+                    { x: vertices[tri[0]].x, y: vertices[tri[0]].y, z: vertices[tri[0]].z },
+                    { x: vertices[tri[1]].x, y: vertices[tri[1]].y, z: vertices[tri[1]].z },
+                    { x: vertices[tri[2]].x, y: vertices[tri[2]].y, z: vertices[tri[2]].z }
+                );
+                
+                // Rotate normal
+                const rotatedNormal = rotateX(normal, angleX);
+                const finalNormal = rotateY(rotatedNormal, angleY);
+                
+                // Backface culling (if normal points away from camera)
+                if (finalNormal.z < 0) continue;
+                
+                if (isWireframe) {
+                    // Draw wireframe
+                    ctx.beginPath();
+                    ctx.moveTo(p1.x, p1.y);
+                    ctx.lineTo(p2.x, p2.y);
+                    ctx.lineTo(p3.x, p3.y);
+                    ctx.closePath();
+                    ctx.strokeStyle = '#fff';
+                    ctx.lineWidth = 1;
+                    ctx.stroke();
+                } else {
+                    // Compute lighting for each vertex
+                    const light1 = computeLighting(vertices[tri[0]], finalNormal);
+                    const light2 = computeLighting(vertices[tri[1]], finalNormal);
+                    const light3 = computeLighting(vertices[tri[2]], finalNormal);
+                    
+                    // Gouraud shading: interpolate lighting across triangle
+                    // Draw filled triangle with interpolated colors
+                    ctx.beginPath();
+                    ctx.moveTo(p1.x, p1.y);
+                    
+                    // Interpolate between vertices
+                    for (let j = 1; j <= 10; j++) {
+                        const t = j / 10;
+                        const x = p1.x + (p2.x - p1.x) * t;
+                        const y = p1.y + (p2.y - p1.y) * t;
+                        const z = p1.z + (p2.z - p1.z) * t;
+                        const intensity = light1 + (light2 - light1) * t;
+                        const color = Math.floor(intensity * 255);
+                        ctx.fillStyle = `rgb(${color}, ${color}, ${color})`;
+                        ctx.lineTo(x, y);
+                    }
+                    
+                    ctx.lineTo(p3.x, p3.y);
+                    for (let j = 1; j <= 10; j++) {
+                        const t = j / 10;
+                        const x = p3.x + (p1.x - p3.x) * t;
+                        const y = p3.y + (p1.y - p3.y) * t;
+                        const z = p3.z + (p1.z - p3.z) * t;
+                        const intensity = light3 + (light1 - light3) * t;
+                        const color = Math.floor(intensity * 255);
+                        ctx.fillStyle = `rgb(${color}, ${color}, ${color})`;
+                        ctx.lineTo(x, y);
+                    }
+                    
+                    ctx.closePath();
+                    ctx.fill();
+                }
+            }
+            
+            // Update FPS
+            frameCount++;
+            const currentTime = performance.now();
+            const elapsed = currentTime - lastTime;
+            if (elapsed >= 1000) {
+                fps = Math.round((frameCount * 1000) / elapsed);
+                document.getElementById('fps').textContent = `FPS: ${fps}`;
+                frameCount = 0;
+                lastTime = currentTime;
+            }
+            
+            requestAnimationFrame(render);
+        }
+        
+        // Keyboard controls
+        document.addEventListener('keydown', (e) => {
+            switch (e.key.toLowerCase()) {
+                case 'w':
+                    isWireframe = !isWireframe;
+                    break;
+                case 'p':
+                    isPaused = !isPaused;
+                    break;
+            }
+        });
+        
+        // Resize canvas when window is resized
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+        
+        // Start rendering
+        requestAnimationFrame(render);
+    </script>
+</body>
+</html>

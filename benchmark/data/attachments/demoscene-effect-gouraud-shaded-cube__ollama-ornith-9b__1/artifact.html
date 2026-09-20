@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Gouraud-Shaded Rotating Cube</title>
+<style>
+  body { margin: 0; background: #111; overflow: hidden; display: flex; align-items: center; justify-content: center; height: 100vh; }
+  canvas { image-rendering: pixelated; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+
+// ---- 3D pipeline primitives ----
+const V3 = (x, y, z) => ({ x, y, z });
+const dot = (a, b) => a.x*b.x + a.y*b.y + a.z*b.z;
+const sub = (a, b) => ({ x: a.x-b.x, y: a.y-b.y, z: a.z-b.z });
+const normalize = (v) => { const l = Math.sqrt(v.x*v.x+v.y*v.y+v.z*v.z); return l===0 ? v : { x: v.x/l, y: v.y/l, z: v.z/l }; };
+
+// ---- Cube vertices (center) ----
+const cubeVerts = [
+  V3(-1,-1,-1), V3( 1,-1,-1), V3( 1, 1,-1), V3(-1, 1,-1), // back
+  V3(-1,-1, 1), V3( 1,-1, 1), V3( 1, 1, 1), V3(-1, 1, 1),  // front
+];
+
+// ---- Face triangles (indices) ----
+const faces = [
+  [0,1,2],[0,2,3], // back
+  [4,6,5],[4,7,6], // front
+  [0,4,5],[0,5,1], // bottom
+  [2,6,7],[2,7,3], // top
+  [1,5,6],[1,6,2], // right
+  [4,0,3],[4,3,7], // left
+];
+
+// ---- Light source (moves around) ----
+let light = V3(0.7, -0.6, 0.3);
+let lightSpeed = 0.012;
+
+// ---- Camera ----
+const FOV = 1.0;
+let rotX = 0.5, rotY = 0.3;
+
+// ---- Animation state ----
+let paused = false, wireframe = false;
+let lastTime = performance.now();
+let frameCount = 0;
+let fps = 0;
+let fpsTimer = 0;
+
+// ---- Key handlers ----
+document.addEventListener('keydown', e => {
+  if (e.key === 'p' || e.key === 'P') paused = !paused;
+  if (e.key === 'w' || e.key === 'W') wireframe = !wireframe;
+});
+
+function updateLight(t) {
+  light.x = Math.sin(t * lightSpeed) * 0.8 + 0.2;
+  light.y = Math.cos(t * lightSpeed) * 0.8 - 0.6;
+  light.z = Math.sin(t * lightSpeed * 0.7) * 0.8 + 0.3;
+}
+
+function project(v) {
+  const x = v.x * FOV / (v.z + FOV);
+  const y = v.y * FOV / (v.z + FOV);
+  return { x, y };
+}
+
+function render() {
+  // update FPS
+  const now = performance.now();
+  frameCount++;
+  if (now - fpsTimer >= 1000) {
+    fps = frameCount;
+    frameCount = 0;
+    fpsTimer = now;
+  }
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // light direction for Lambert
+  const lightDir = normalize(light);
+
+  // rotate cube
+  const R = {
+    rotX(v) { return V3(v.x, v.y*Math.cos(rotX)-v.z*Math.sin(rotX), v.y*Math.sin(rotX)+v.z*Math.cos(rotX)); },
+    rotY(v) { return V3(v.x*Math.cos(rotY)+v.z*Math.sin(rotY), v.y, -v.x*Math.sin(rotY)+v.z*Math.cos(rotY)); },
+  };
+  const rot = v => R.rotY(R.rotX(v));
+
+  // project
+  const P = v => project(rot(v));
+
+  // Gouraud: per-vertex lighting then interpolate
+  const coloredVerts = cubeVerts.map(v => {
+    // transform normal by rotation
+    const n = V3(v.x, v.y, v.z);
+    const lightD = normalize(sub(light, V3(0,0,0)));
+    // Lambert I = max(0, dot(n, l))
+    const lambert = Math.max(0, dot(n, lightD)) * 0.55;
+    // diffuse color
+    const R = lambert * 0.9 + 0.05;
+    const G = lambert * 0.4 + 0.05;
+    const B = lambert * 0.1 + 0.05;
+    return { ...v, r: R, g: G, b: B };
+  });
+
+  // rasterize triangles
+  for (const face of faces) {
+    const v0 = coloredVerts[face[0]];
+    const v1 = coloredVerts[face[1]];
+    const v2 = coloredVerts[face[2]];
+    const p0 = P(v0);
+    const p1 = P(v1);
+    const p2 = P(v2);
+    const area = (p1.x-p0.x)*(p2.y-p0.y)-(p1.y-p0.y)*(p2.x-p0.x);
+
+    if (wireframe) {
+      ctx.strokeStyle = '#333';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y); ctx.closePath();
+      ctx.stroke();
+      continue;
+    }
+
+    // backface culling
+    if (area < 0) continue;
+
+    // interpolate color across triangle
+    const color = (x, y) => {
+      // barycentric
+      const f1x = p1.x - p0.x, f1y = p1.y - p0.y;
+      const f2x = p2.x - p1.x, f2y = p2.y - p1.y;
+      const f3x = p0.x - p2.x, f3y = p0.y - p2.y;
+      const inv = 1.0 / (f1x*(f2y-f3y) + f1y*(f3x-f2x));
+      const v = ((p2.y-p1.y)*(x-p1.x) + (p1.x-p2.x)*(y-p1.y)) * inv;
+      const w = ((p2.y-p0.y)*(x-p0.x) + (p0.x-p2.x)*(y-p0.y)) * inv;
+      const u = 1.0 - v - w;
+      return {
+        r: u*v0.r + v*v1.r + w*v2.r,
+        g: u*v0.g + v*v1.g + w*v2.g,
+        b: u*v0.b + v*v1.b + w*v2.b,
+      };
+    };
+
+    const gradient = ctx.createLinearGradient(p0.x, p0.y, p2.x, p2.y);
+    gradient.addColorStop(0, `rgb(${v0.r*255},${v0.g*255},${v0.b*255})`);
+    gradient.addColorStop(1, `rgb(${v2.r*255},${v2.g*255},${v2.b*255})`);
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y);
+    ctx.lineTo(p2.x, p2.y); ctx.closePath();
+    ctx.fill();
+  }
+
+  // FPS
+  ctx.fillStyle = '#fff';
+  ctx.font = '14px monospace';
+  ctx.fillText(`FPS: ${fps} | Paused: ${paused} | Wireframe: ${wireframe}`, 10, 20);
+
+  // pause message
+  if (paused) {
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#fff';
+    ctx.font = '36px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Paused', canvas.width/2, canvas.height/2);
+    ctx.textAlign = 'left';
+  }
+}
+
+function loop(t) {
+  if (!paused) {
+    updateLight(t);
+    render();
+  }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

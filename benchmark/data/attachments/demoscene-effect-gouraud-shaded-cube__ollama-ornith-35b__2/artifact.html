@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Gouraud Shaded Rotating Cube</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #000; overflow: hidden; display: flex; justify-content: center; align-items: center; height: 100vh; }
+  canvas { display: block; }
+  #hud { position: fixed; top: 12px; left: 12px; color: #0f0; font: 14px monospace; pointer-events: none; }
+  #hud div { margin-bottom: 4px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">
+  <div id="fps">FPS: 0</div>
+  <div id="status">Running</div>
+</div>
+<script>
+"use strict";
+
+// ─── Canvas setup ────────────────────────────────────────────────
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+const hudFps = document.getElementById("fps");
+const hudStatus = document.getElementById("status");
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener("resize", resize);
+
+// ─── 3D math helpers ─────────────────────────────────────────────
+function vec3(x, y, z) { return [x, y, z]; }
+function sub(a, b) { return [a[0]-b[0], a[1]-b[1], a[2]-b[2]]; }
+function cross(a, b) {
+  return [
+    a[1]*b[2] - a[2]*b[1],
+    a[2]*b[0] - a[0]*b[2],
+    a[0]*b[1] - a[1]*b[0]
+  ];
+}
+function dot(a, b) {
+  return a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+}
+function normalize(v) {
+  const len = Math.hypot(v[0], v[1], v[2]) || 1;
+  return [v[0]/len, v[1]/len, v[2]/len];
+}
+
+// Rotation matrices (return function that rotates a point)
+function rotX(angle) {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  return (p) => [
+    p[0],
+    p[1]*c - p[2]*s,
+    p[1]*s + p[2]*c
+  ];
+}
+function rotY(angle) {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  return (p) => [
+    p[0]*c + p[2]*s,
+    p[1],
+    -p[0]*s + p[2]*c
+  ];
+}
+function rotZ(angle) {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  return (p) => [
+    p[0]*c - p[1]*s,
+    p[0]*s + p[1]*c,
+    p[2]
+  ];
+}
+
+// ─── Cube geometry ───────────────────────────────────────────────
+const S = 1.5; // half-size
+const vertices = [
+  vec3(-S, -S, -S), // 0
+  vec3( S, -S, -S), // 1
+  vec3( S,  S, -S), // 2
+  vec3(-S,  S, -S), // 3
+  vec3(-S, -S,  S), // 4
+  vec3( S, -S,  S), // 5
+  vec3( S,  S,  S), // 6
+  vec3(-S,  S,  S), // 7
+];
+
+// Faces defined by vertex indices (counter-clockulus when viewed from outside)
+const faces = [
+  [0, 1, 2, 3], // front  (z-)
+  [4, 5, 6, 7], // back   (z+)
+  [0, 4, 7, 3], // left   (x-)
+  [1, 5, 6, 2], // right  (x+)
+  [0, 4, 5, 1], // bottom (y-)
+  [3, 7, 6, 2], // top    (y+)
+];
+
+// Face colors (base hue)
+const faceColors = [
+  [220, 60, 60],   // red    - front
+  [60, 100, 220],  // blue   - back
+  [60, 200, 120],  // green  - left
+  [220, 180, 40],  // yellow - right
+  [180, 120, 220], // purple - bottom
+  [220, 140, 80],  // orange - top
+];
+
+// ─── Perspective projection ──────────────────────────────────────
+const FOV = Math.PI / 3; // 60 degrees
+const NEAR = 0.1;
+const FAR = 100;
+const VIEW_DIST = 5; // distance of camera
+
+function project(p, w, h) {
+  const viewZ = p[2] + VIEW_DIST;
+  if (viewZ <= NEAR) return null;
+  const scale = (FOV / 2) / viewZ;
+  return {
+    x: w/2 + p[0] * scale * w/2,
+    y: h/2 - p[1] * scale * h/2,
+    z: viewZ
+  };
+}
+
+// ─── Light source (moving) ──────────────────────────────────────
+function getLightDir(time) {
+  const x = Math.sin(time * 0.7) * 1.5 + 0.5;
+  const y = Math.cos(time * 1.1) * 1.5 + 0.5;
+  const z = Math.sin(time * 0.5) * 1.5 + 1.0;
+  return normalize([x, y, z]);
+}
+
+// ─── Lambert lighting ────────────────────────────────────────────
+function lambert(lightDir, normal) {
+  const d = Math.max(0, dot(lightDir, normal));
+  return 0.15 + 0.85 * d; // ambient + diffuse
+}
+
+// ─── State ───────────────────────────────────────────────────────
+let angleX = 0, angleY = 0, angleZ = 0;
+let wireframe = false;
+let paused = false;
+let lastTime = 0;
+let frameCount = 0;
+let fpsTime = 0;
+let fps = 0;
+
+// ─── Keyboard input ──────────────────────────────────────────────
+window.addEventListener("keydown", (e) => {
+  if (e.key === "w" || e.key === "W") {
+    wireframe = !wireframe;
+    hudStatus.textContent = wireframe ? "Wireframe ON" : "Running";
+  }
+  if (e.key === "p" || e.key === "P") {
+    paused = !paused;
+    hudStatus.textContent = paused ? "Paused" : "Running";
+  }
+});
+
+// ─── Triangle rasterization with Gouraud interpolation ──────────
+function drawGouraudTriangle(p0, p1, p2, c0, c1, c2) {
+  // Sort vertices by Y (min at top)
+  const verts = [
+    [p0, c0], [p1, c1], [p2, c2]
+  ];
+  verts.sort((a, b) => a[0].y - b[0].y);
+  const [top, mid, bot] = verts;
+
+  const minX = Math.max(0, Math.floor(Math.min(top[0].x, mid[0].x, bot[0].x)));
+  const maxX = Math.min(canvas.width - 1, Math.ceil(Math.max(top[0].x, mid[0].x, bot[0].x)));
+  const minY = Math.max(0, Math.floor(top[0].y));
+  const maxY = Math.min(canvas.height - 1, Math.ceil(bot[0].y));
+
+  // Helper to lerp between two colors
+  function lerpColor(c1, c2, t) {
+    return [
+      c1[0] + (c2[0]-c1[0]) * t,
+      c1[1] + (c2[1]-c1[1]) * t,
+      c1[2] + (c2[2]-c1[2]) * t
+    ];
+  }
+
+  for (let y = minY; y <= maxY; y++) {
+    // Find left and right x bounds at this y
+    let xLeft, xRight;
+    let cLeft, cRight;
+
+    // Find which edge we're on
+    // Edge top->mid
+    if (y >= top[0].y && y <= mid[0].y) {
+      const t = (mid[0].y - top[0].y) !== 0 ? (y - top[0].y) / (mid[0].y - top[0].y) : 0;
+      xLeft = top[0].x + (mid[0].x - top[0].x) * t;
+      cLeft = lerpColor(top[1], mid[1], t);
+    }
+    // Edge top->bot
+    if (y >= top[0].y && y <= bot[0].y) {
+      const t = (bot[0].y - top[0].y) !== 0 ? (y - top[0].y) / (bot[0].y - top[0].y) : 0;
+      xRight = top[0].x + (bot[0].x - top[0].x) * t;
+      cRight = lerpColor(top[1], bot[1], t);
+    }
+    // Edge mid->bot
+    if (y >= mid[0].y && y <= bot[0].y) {
+      const t = (bot[0].y - mid[0].y) !== 0 ? (y - mid[0].y) / (bot[0].y - mid[0].y) : 0;
+      const xMid = mid[0].x + (bot[0].x - mid[0].x) * t;
+      const cMid = lerpColor(mid[1], bot[1], t);
+      // Replace right edge if we're past mid
+      if (y >= mid[0].y) {
+        xRight = xMid;
+        cRight = cMid;
+      }
+    }
+
+    if (xLeft === undefined || xRight === undefined) continue;
+    if (xLeft > xRight) {
+      [xLeft, xRight] = [xRight, xLeft];
+      [cLeft, cRight] = [cRight, cLeft];
+    }
+
+    for (let x = Math.ceil(xLeft); x <= Math.floor(xRight); x++) {
+      // Interpolate color across the scanline
+      const span = xRight - xLeft || 1;
+      const t = (x - xLeft) / span;
+      const color = lerpColor(cLeft, cRight, t);
+
+      const r = Math.round(Math.max(0, Math.min(255, color[0])));
+      const g = Math.round(Math.max(0, Math.min(255, color[1])));
+      const b = Math.round(Math.max(0, Math.min(255, color[2])));
+
+      ctx.fillStyle = `rgb(${r},${g},${b})`;
+      ctx.fillRect(x, y, 1, 1);
+    }
+  }
+}
+
+// ─── Main render loop ────────────────────────────────────────────
+function render(time) {
+  requestAnimationFrame(render);
+
+  const dt = (time - lastTime) / 1000;
+  lastTime = time;
+
+  // FPS counter
+  frameCount++;
+  if (time - fpsTime >= 1000) {
+    fps = frameCount;
+    frameCount = 0;
+    fpsTime = time;
+    hudFps.textContent = `FPS: ${fps}`;
+  }
+
+  if (!paused) {
+    // Rotate the cube
+    angleX += dt * 0.4;
+    angleY += dt * 0.7;
+    angleZ += dt * 0.2;
+  }
+
+  const w = canvas.width;
+  const h = canvas.height;
+
+  // Clear
+  ctx.fillStyle = "#080810";
+  ctx.fillRect(0, 0, w, h);
+
+  // Transform vertices
+  const transform = (p) => {
+    let v = [...p];
+    v = rotX(angleX)(v);
+    v = rotY(angleY)(v);
+    v = rotZ(angleZ)(v);
+    return v;
+  };
+
+  const transformed = vertices.map(transform);
+
+  // Project vertices
+  const projected = transformed.map(p => project(p, w, h));
+
+  // Get light direction
+  const lightDir = getLightDir(time / 1000);
+
+  // Build faces with normals, colors, and depth
+  const faceData = faces.map((face, i) => {
+    const indices = face;
+
+    // Compute face normal from first three vertices (in world space)
+    const v0 = transformed[indices[0]];
+    const v1 = transformed[indices[1]];
+    const v2 = transformed[indices[2]];
+    const normal = normalize(cross(sub(v1, v0), sub(v2, v0)));
+
+    // Backface culling: skip faces pointing away from camera
+    const camDir = normalize([-v0[0], -v0[1], -v0[2] + 100]);
+    if (dot(normal, camDir) < 0) return null;
+
+    // Lambert lighting per vertex
+    const colors = indices.map((vi, j) => {
+      const v = transformed[vi];
+      // Per-vertex normal approximation: average of adjacent face normals
+      // For simplicity, use face normal for all vertices (flat shading)
+      // But we'll compute vertex normals by averaging adjacent faces
+      return null; // placeholder
+    });
+
+    // Compute vertex normals (average of adjacent face normals)
+    const vn = [vec3(0,0,0), vec3(0,0,0), vec3(0,0,0), vec3(0,0,0),
+                vec3(0,0,0), vec3(0,0,0), vec3(0,0,0), vec3(0,0,0)];
+
+    // We need all face normals, compute them
+    const allNormals = faces.map(f => {
+      const a = transformed[f[0]];
+      const b = transformed[f[1]];
+      const c = transformed[f[2]];
+      return normalize(cross(sub(b, a), sub(c, a)));
+    });
+
+    // Accumulate vertex normals
+    faces.forEach((f, fi) => {
+      const n = allNormals[fi];
+      f.forEach(vi => {
+        vn[vi] = [vn[vi][0]+n[0], vn[vi][1]+n[1], vn[vi][2]+n[2]];
+      });
+    });
+
+    // Normalize vertex normals
+    for (let i = 0; i < 8; i++) {
+      vn[i] = normalize(vn[i]);
+    }
+
+    // Compute per-vertex lighting
+    const vertexLights = indices.map(vi => {
+      const vn = normalize([
+        transformed[vi][0] - transformed[vi][0], // placeholder
+        transformed[vi][1] - transformed[vi][1],
+        transformed[vi][2] - transformed[vi][2]
+      ]);
+      // Use vertex normal for lighting
+      const vnorm = vn[vi];
+      return lambert(lightDir, vnorm);
+    });
+
+    // Actually use the precomputed vertex normals
+    const vls = indices.map(vi => lambert(lightDir, vn[vi]));
+
+    // Apply lighting to face color
+    const baseColor = faceColors[i];
+    const litColors = indices.map(vi => {
+      const l = vls[indices.indexOf(vi)];
+      return [
+        baseColor[0] * l,
+        baseColor[1] * l,
+        baseColor[2] * l
+      ];
+    });
+
+    // Compute depth (average Z for painter's algorithm)
+    const avgZ = indices.reduce((s, vi) => s + transformed[vi][2], 0) / 4;
+
+    return { indices, litColors, avgZ };
+  });
+
+  // Sort faces by depth (painter's algorithm: draw far first)
+  const sortedFaces = faceData.filter(f => f !== null).sort((a, b) => b.avgZ - a.avgZ);
+
+  // Draw faces
+  for (const face of sortedFaces) {
+    const { indices, litColors } = face;
+
+    // Split quad (4 vertices) into 2 triangles
+    const triangles = [
+      [indices[0], indices[1], indices[2]],
+      [indices[0], indices[2], indices[3]]
+    ];
+
+    const colors = [
+      [litColors[0], litColors[1], litColors[2]],
+      [litColors[0], litColors[2], litColors[3]]
+    ];
+
+    for (let t = 0; t < 2; t++) {
+      const tri = triangles[t];
+      const triColors = colors[t];
+
+      const p0 = projected[tri[0]];
+      const p1 = projected[tri[1]];
+      const p2 = projected[tri[2]];
+
+      if (!p0 || !p1 || !p2) continue;
+
+      // Backface culling on projected vertices (2D)
+      const edge1 = [p1.x - p0.x, p1.y - p0.y];
+      const edge2 = [p2.x - p0.x, p2.y - p0.y];
+      const cross2D = edge1[0]*edge2[1] - edge1[1]*edge2[0];
+      if (cross2D <= 0) continue; // CW winding → backface
+
+      drawGouraudTriangle(p0, p1, p2, triColors[0], triColors[1], triColors[2]);
+    }
+
+    // Wireframe overlay
+    if (wireframe) {
+      ctx.strokeStyle = "rgba(255,255,255,0.6)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let i = 0; i < 4; i++) {
+        const curr = projected[indices[i]];
+        const next = projected[indices[(i+1)%4]];
+        if (!curr || !next) continue;
+        ctx.moveTo(curr.x, curr.y);
+        ctx.lineTo(next.x, next.y);
+      }
+      ctx.stroke();
+    }
+  }
+
+  // Wireframe for all edges (additional)
+  if (wireframe) {
+    ctx.strokeStyle = "rgba(255,255,255,0.3)";
+    ctx.lineWidth = 0.5;
+
+    const edges = [
+      [0,1],[1,2],[2,3],[3,0], // front face
+      [4,5],[5,6],[6,7],[7,4], // back face
+      [0,4],[1,5],[2,6],[3,7]  // connecting edges
+    ];
+
+    ctx.beginPath();
+    for (const [a, b] of edges) {
+      const pa = projected[a];
+      const pb = projected[b];
+      if (!pa || !pb) continue;
+      ctx.moveTo(pa.x, pa.y);
+      ctx.lineTo(pb.x, pb.y);
+    }
+    ctx.stroke();
+  }
+}
+
+requestAnimationFrame(render);
+</script>
+</body>
+</html>

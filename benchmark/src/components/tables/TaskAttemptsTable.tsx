@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Table, Tag, Modal, Typography, Space, Button } from "antd";
+import { Table, Tag, Typography, Button } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import type { Result } from "@/schema/results";
 import type { TasksFile, Criterion } from "@/schema/tasks";
@@ -12,7 +12,7 @@ import {
   formatTokensPerSecond,
 } from "@/lib/format";
 import { estimateTokenProcessing } from "@/lib/tokenSpeed";
-import { AttachmentViewer } from "@/components/attachments/AttachmentViewer";
+import { ResultDetailModal } from "@/components/results/ResultDetailModal";
 
 const { Text } = Typography;
 
@@ -271,34 +271,15 @@ export function TaskAttemptsTable({
         })}
       />
 
-      <Modal
-        title={`Result detail — ${modelNames[detailResult?.modelId ?? ""] ?? ""} attempt #${detailResult?.attemptNumber}`}
-        open={!!detailResult}
-        onCancel={() => setDetailResult(null)}
-        footer={null}
-        width={700}
-      >
-        {detailResult && (
-          <div>
-            {detailResult.notes && (
-              <p style={{ marginBottom: 16, color: "#555" }}>{detailResult.notes}</p>
-            )}
-            {detailResult.attachments.length === 0 && (
-              <p style={{ color: "#999" }}>No attachments.</p>
-            )}
-            <Space direction="vertical" style={{ width: "100%" }}>
-              {detailResult.attachments.map((att, idx) => (
-                <div key={idx}>
-                  {att.caption && (
-                    <div style={{ marginBottom: 4, fontWeight: 500 }}>{att.caption}</div>
-                  )}
-                  <AttachmentViewer attachment={att} />
-                </div>
-              ))}
-            </Space>
-          </div>
-        )}
-      </Modal>
+      <ResultDetailModal
+        key={detailResult?.id ?? "none"}
+        detailResult={detailResult}
+        tasksFile={tasksFile}
+        task={tasksFile.tasks.find((t) => t.id === detailResult?.taskId)}
+        modelName={detailResult ? (modelNames[detailResult.modelId] ?? detailResult.modelId) : undefined}
+        environmentName={detailResult ? environmentNames[detailResult.environmentId] : undefined}
+        onClose={() => setDetailResult(null)}
+      />
     </>
   );
 }

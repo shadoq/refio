@@ -352,6 +352,11 @@ export default defineConfig({
       zod: resolve(__dirname, "node_modules", "zod"),
     },
   },
+  // Without explicit entries Vite scans every *.html under the root, including the
+  // model-generated artifacts in data/attachments; one invalid artifact aborts the scan.
+  optimizeDeps: {
+    entries: ["index.html"],
+  },
   // The dev server must be allowed to read the shared e2e schema outside benchmark/.
   server: {
     fs: { allow: [resolve(__dirname), resolve(__dirname, "..", "tools", "e2e")] },

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Button, Image, Space, Tooltip, Typography } from "antd";
 import { HtmlSandbox } from "./HtmlSandbox";
+import { HtmlSource } from "./HtmlSource";
 import { dataUrl, ideaOpenHref, repoPath } from "@/lib/adminArtifacts";
 
 const { Text } = Typography;
@@ -18,6 +19,7 @@ interface ArtifactPreviewProps {
 // sandbox only to interact with it, and hiding it unmounts the iframe (stops the loop).
 export function ArtifactPreview({ htmlSrc, screenshots, height = 360 }: ArtifactPreviewProps) {
   const [live, setLive] = useState(false);
+  const [source, setSource] = useState(false);
   const dataRoot = import.meta.env.VITE_DATA_ROOT;
 
   return (
@@ -48,6 +50,12 @@ export function ArtifactPreview({ htmlSrc, screenshots, height = 360 }: Artifact
             >
               {live ? "Hide live preview" : "Run live preview"}
             </Button>
+            <Button size="small" onClick={() => setSource((v) => !v)}>
+              {source ? "Hide source" : "Show source"}
+            </Button>
+            <Button size="small" href={dataUrl(htmlSrc)} target="_blank" rel="noopener noreferrer">
+              Run in new tab
+            </Button>
             <Tooltip title={repoPath(htmlSrc)}>
               <a href={ideaOpenHref(htmlSrc, dataRoot)}>Open in IntelliJ</a>
             </Tooltip>
@@ -70,6 +78,7 @@ export function ArtifactPreview({ htmlSrc, screenshots, height = 360 }: Artifact
               </Text>
             )
           )}
+          {source && <HtmlSource src={htmlSrc} height={height} />}
         </>
       )}
     </Space>

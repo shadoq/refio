@@ -1,0 +1,1704 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ARTIFACT: Museum Night - Premium Event Landing Page</title>
+  <style>
+    /* ===== CSS VARIABLES ===== */
+    :root {
+      --bg: #070506;
+      --velvet: #1a0710;
+      --burgundy: #3a0f1d;
+      --midnight: #07111f;
+      --gold: #d6ad60;
+      --soft-gold: #f3d79b;
+      --ivory: #f8efe2;
+      --muted: #b9a999;
+      --panel: rgba(255, 244, 220, 0.06);
+      --border: rgba(214, 173, 96, 0.28);
+      --transition-speed: 0.4s ease;
+    }
+
+    /* ===== BASE RESET ===== */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Inter', system-ui, Segoe UI, sans-serif;
+      background: var(--bg);
+      color: var(--ivory);
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    /* ===== GRAIN OVERLAY ===== */
+    .grain-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+      z-index: 100;
+      opacity: 1;
+    }
+
+    /* ===== SCROLLBAR ===== */
+    ::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: var(--bg);
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 4px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--gold);
+    }
+
+    /* ===== NAVBAR ===== */
+    .navbar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 200;
+      background: rgba(7, 5, 6, 0.8);
+      backdrop-filter: blur(20px);
+      border-bottom: 1px solid var(--border);
+      transition: var(--transition-speed);
+    }
+
+    .navbar.scrolled {
+      background: rgba(7, 5, 6, 0.95);
+    }
+
+    .navbar-container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 1rem 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .navbar-logo {
+      font-family: Georgia, Times New Roman, serif;
+      font-size: 1.8rem;
+      font-weight: 400;
+      letter-spacing: 0.3em;
+      color: var(--gold);
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .navbar-logo span {
+      color: var(--soft-gold);
+      font-size: 0.7em;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+    }
+
+    .navbar-links {
+      display: flex;
+      gap: 2rem;
+      list-style: none;
+      align-items: center;
+    }
+
+    .navbar-links a {
+      font-family: Georgia, Times New Roman, serif;
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--muted);
+      text-decoration: none;
+      position: relative;
+      padding: 0.5rem 0;
+      transition: var(--transition-speed);
+    }
+
+    .navbar-links a:hover,
+    .navbar-links a.active {
+      color: var(--gold);
+    }
+
+    .navbar-links a::after {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      width: 0;
+      height: 1px;
+      background: var(--gold);
+      transition: var(--transition-speed);
+    }
+
+    .navbar-links a:hover::after,
+    .navbar-links a.active::after {
+      width: 100%;
+    }
+
+    .navbar-cta {
+      background: var(--gold);
+      color: var(--bg);
+      border: none;
+      padding: 0.8rem 1.5rem;
+      font-family: Georgia, Times New Roman, serif;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      cursor: pointer;
+      transition: var(--transition-speed);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .navbar-cta::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: -100%;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+      transition: left var(--transition-speed);
+    }
+
+    .navbar-cta:hover::before {
+      left: 100%;
+    }
+
+    .navbar-cta:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 30px rgba(214, 173, 96, 0.3);
+    }
+
+    /* ===== MOBILE MENU ===== */
+    .mobile-menu-btn {
+      display: none;
+      background: none;
+      border: none;
+      color: var(--gold);
+      font-size: 1.5rem;
+      cursor: pointer;
+    }
+
+    .mobile-nav {
+      position: fixed;
+      top: 0;
+      right: -300px;
+      width: 300px;
+      height: 100vh;
+      background: var(--velvet);
+      border-left: 1px solid var(--border);
+      padding: 8rem 2rem 2rem;
+      transition: var(--transition-speed);
+      z-index: 150;
+    }
+
+    .mobile-nav.active {
+      right: 0;
+    }
+
+    .mobile-nav-links {
+      list-style: none;
+      padding-top: 2rem;
+    }
+
+    .mobile-nav-links li {
+      margin-bottom: 2rem;
+    }
+
+    .mobile-nav-links a {
+      font-family: Georgia, Times New Roman, serif;
+      font-size: 1.2rem;
+      color: var(--ivory);
+      text-decoration: none;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      display: block;
+      padding: 0.5rem 1rem;
+      border-bottom: 1px solid var(--border);
+      transition: var(--transition-speed);
+    }
+
+    .mobile-nav-links a:hover {
+      background: var(--panel);
+      color: var(--gold);
+    }
+
+    .mobile-close-btn {
+      position: absolute;
+      top: 2rem;
+      right: 2rem;
+      background: none;
+      border: none;
+      color: var(--gold);
+      font-size: 1.5rem;
+      cursor: pointer;
+    }
+
+    /* ===== HERO SECTION ===== */
+    .hero {
+      min-height: 100vh;
+      background: linear-gradient(135deg, var(--velvet) 0%, var(--bg) 100%);
+      position: relative;
+      display: flex;
+      align-items: center;
+      padding: 0 2rem 4rem;
+      z-index: 1;
+    }
+
+    .hero::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: radial-gradient(circle at 20% 80%, rgba(214, 173, 96, 0.15) 0%, transparent 50%),
+                  radial-gradient(circle at 80% 20%, rgba(214, 173, 96, 0.1) 0%, transparent 50%);
+      pointer-events: none;
+    }
+
+    .hero-content {
+      max-width: 900px;
+      margin: 0 auto;
+      text-align: center;
+      position: relative;
+      z-index: 2;
+    }
+
+    .hero-tag {
+      display: inline-block;
+      padding: 0.5rem 1.5rem;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      font-family: Georgia, Times New Roman, serif;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.2em;
+      color: var(--gold);
+      margin-bottom: 2rem;
+      letter-spacing: 0.15em;
+    }
+
+    .hero h1 {
+      font-family: Georgia, Times New Roman, serif;
+      font-size: clamp(3rem, 12vw, 8rem);
+      font-weight: 400;
+      line-height: 1.1;
+      letter-spacing: 0.05em;
+      margin-bottom: 1.5rem;
+      color: var(--ivory);
+    }
+
+    .hero .event-name {
+      font-size: 1.5rem;
+      color: var(--soft-gold);
+      letter-spacing: 0.3em;
+      text-transform: uppercase;
+      margin-bottom: 3rem;
+      display: block;
+    }
+
+    .hero-meta {
+      display: flex;
+      justify-content: center;
+      gap: 3rem;
+      flex-wrap: wrap;
+      margin-top: 3rem;
+    }
+
+    .hero-meta div {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    .hero-meta svg {
+      width: 1rem;
+      height: 1rem;
+      color: var(--gold);
+    }
+
+    .hero-ctas {
+      display: flex;
+      gap: 1.5rem;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-top: 4rem;
+    }
+
+    .hero-cta-btn {
+      font-family: Georgia, Times New Roman, serif;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      padding: 1rem 2rem;
+      cursor: pointer;
+      transition: var(--transition-speed);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero-cta-btn::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: var(--gold);
+      transform: translateY(100%);
+      transition: transform var(--transition-speed);
+      z-index: -1;
+    }
+
+    .hero-cta-btn:hover::after {
+      transform: translateY(0);
+    }
+
+    .hero-cta-btn.primary {
+      background: var(--gold);
+      color: var(--bg);
+      border: none;
+    }
+
+    .hero-cta-btn.primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 30px rgba(214, 173, 96, 0.4);
+    }
+
+    .hero-cta-btn.outline {
+      background: transparent;
+      color: var(--gold);
+      border: 1px solid var(--gold);
+    }
+
+    .hero-cta-btn.outline:hover {
+      background: var(--gold);
+      color: var(--bg);
+    }
+
+    /* ===== HERO IMAGE ===== */
+    .hero-image {
+      position: absolute;
+      right: 0;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 500px;
+      height: 500px;
+      background: linear-gradient(135deg, var(--midnight) 0%, var(--velvet) 100%);
+      border-radius: 50% 0 50% 0;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1;
+    }
+
+    .hero-image img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transform: rotate(-2deg);
+    }
+
+    /* ===== CONCEPT SECTION ===== */
+    .section {
+      padding: 6rem 2rem;
+    }
+
+    .section-header {
+      max-width: 800px;
+      margin: 0 auto 4rem;
+      text-align: center;
+    }
+
+    .section-tag {
+      display: inline-block;
+      padding: 0.5rem 1.5rem;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      font-family: Georgia, Times New Roman, serif;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.2em;
+      color: var(--gold);
+      margin-bottom: 1.5rem;
+    }
+
+    .section h2 {
+      font-family: Georgia, Times New Roman, serif;
+      font-size: clamp(2rem, 6vw, 3.5rem);
+      font-weight: 400;
+      letter-spacing: 0.05em;
+      margin-bottom: 1rem;
+    }
+
+    .section p {
+      color: var(--muted);
+      font-size: 1.1rem;
+      max-width: 700px;
+      margin: 0 auto;
+    }
+
+    .concept-grid {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 2rem;
+    }
+
+    .concept-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      padding: 2.5rem;
+      position: relative;
+      overflow: hidden;
+      transition: var(--transition-speed);
+    }
+
+    .concept-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: var(--border);
+      opacity: 0;
+      transition: var(--transition-speed);
+    }
+
+    .concept-card:hover::before {
+      opacity: 1;
+    }
+
+    .concept-card:hover {
+      transform: translateY(-10px);
+      border-color: var(--gold);
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+    }
+
+    .concept-card h3 {
+      font-family: Georgia, Times New Roman, serif;
+      font-size: 1.2rem;
+      margin-bottom: 1rem;
+    }
+
+    .concept-card p {
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    /* ===== PROGRAM TIMELINE ===== */
+    .timeline {
+      max-width: 1200px;
+      margin: 0 auto;
+      position: relative;
+      padding: 2rem 0;
+    }
+
+    .timeline::before {
+      content: '';
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      background: linear-gradient(var(--gold), var(--border));
+    }
+
+    .timeline-item {
+      display: flex;
+      align-items: center;
+      gap: 2rem;
+      padding: 2rem 0;
+      opacity: 0;
+      transform: translateX(-20px);
+      transition: var(--transition-speed);
+    }
+
+    .timeline-item.visible {
+      opacity: 1;
+      transform: translateX(0);
+    }
+
+    .timeline-dot {
+      width: 20px;
+      height: 20px;
+      background: var(--gold);
+      border-radius: 50%;
+      flex-shrink: 0;
+      border: 3px solid var(--bg);
+    }
+
+    .timeline-content {
+      flex: 1;
+    }
+
+    .timeline-date {
+      font-family: Georgia, Times New Roman, serif;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--gold);
+      margin-bottom: 0.5rem;
+    }
+
+    .timeline-event {
+      font-size: 1.2rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .timeline-location {
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    /* ===== ARTISTS SECTION ===== */
+    .artists-grid {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 2rem;
+    }
+
+    .artist-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      padding: 2rem;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+      transition: var(--transition-speed);
+    }
+
+    .artist-card::after {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      width: 100%;
+      height: 3px;
+      background: var(--gold);
+      transform: scaleX(0);
+      transform-origin: left;
+      transition: var(--transition-speed);
+    }
+
+    .artist-card:hover::after {
+      transform: scaleX(1);
+    }
+
+    .artist-card:hover {
+      border-color: var(--gold);
+    }
+
+    .artist-image {
+      width: 120px;
+      height: 120px;
+      border-radius: 50%;
+      margin: 0 auto 1.5rem;
+      background: var(--midnight);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    .artist-image img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .artist-card h3 {
+      font-family: Georgia, Times New Roman, serif;
+      font-size: 1rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .artist-card p {
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    /* ===== VENUE SECTION ===== */
+    .venue-content {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .venue-image {
+      position: relative;
+      height: 400px;
+      background: linear-gradient(135deg, var(--midnight) 0%, var(--velvet) 100%);
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+
+    .venue-image img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .venue-image::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.4);
+    }
+
+    .venue-details {
+      position: absolute;
+      bottom: 2rem;
+      left: 2rem;
+      max-width: 500px;
+    }
+
+    .venue-details h3 {
+      font-family: Georgia, Times New Roman, serif;
+      font-size: 1.5rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .venue-details p {
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    /* ===== TICKET TIERS ===== */
+    .ticket-tabs {
+      max-width: 800px;
+      margin: 0 auto 3rem;
+      display: flex;
+      gap: 1rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .ticket-tab {
+      font-family: Georgia, Times New Roman, serif;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      padding: 0.8rem 1.5rem;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      cursor: pointer;
+      transition: var(--transition-speed);
+    }
+
+    .ticket-tab.active,
+    .ticket-tab:hover {
+      border-color: var(--gold);
+      color: var(--gold);
+    }
+
+    .ticket-grid {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 2rem;
+    }
+
+    .ticket-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      padding: 2.5rem 2rem;
+      position: relative;
+      overflow: hidden;
+      transition: var(--transition-speed);
+    }
+
+    .ticket-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 3px;
+      background: var(--gold);
+      transform: scaleX(0);
+      transform-origin: left;
+      transition: var(--transition-speed);
+    }
+
+    .ticket-card:hover::before {
+      transform: scaleX(1);
+    }
+
+    .ticket-card:hover {
+      border-color: var(--gold);
+      transform: translateY(-5px);
+    }
+
+    .ticket-tag {
+      position: absolute;
+      top: 1.5rem;
+      right: 1.5rem;
+      background: var(--gold);
+      color: var(--bg);
+      font-family: Georgia, Times New Roman, serif;
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      padding: 0.3rem 0.8rem;
+    }
+
+    .ticket-card h3 {
+      font-family: Georgia, Times New Roman, serif;
+      font-size: 1.3rem;
+      margin-bottom: 1rem;
+    }
+
+    .ticket-card .price {
+      font-family: Georgia, Times New Roman, serif;
+      font-size: 1.5rem;
+      color: var(--gold);
+      margin-bottom: 1.5rem;
+      display: block;
+    }
+
+    .ticket-card .period {
+      color: var(--muted);
+      font-size: 0.85rem;
+      margin-bottom: 2rem;
+      display: block;
+    }
+
+    .ticket-card ul {
+      list-style: none;
+      margin-bottom: 2rem;
+    }
+
+    .ticket-card ul li {
+      padding: 0.5rem 0;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .ticket-card ul li:last-child {
+      border-bottom: none;
+    }
+
+    .ticket-card .cta {
+      width: 100%;
+      padding: 1rem;
+      font-family: Georgia, Times New Roman, serif;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      cursor: pointer;
+      transition: var(--transition-speed);
+    }
+
+    .ticket-card .cta.primary {
+      background: var(--gold);
+      color: var(--bg);
+      border: none;
+    }
+
+    .ticket-card .cta.primary:hover {
+      box-shadow: 0 10px 30px rgba(214, 173, 96, 0.3);
+    }
+
+    /* ===== FAQ SECTION ===== */
+    .faq-item {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      margin-bottom: 1rem;
+      overflow: hidden;
+      transition: var(--transition-speed);
+    }
+
+    .faq-question {
+      width: 100%;
+      padding: 1.5rem 2rem;
+      background: none;
+      border: none;
+      text-align: left;
+      font-family: Georgia, Times New Roman, serif;
+      font-size: 1rem;
+      color: var(--ivory);
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .faq-question:hover {
+      background: var(--velvet);
+    }
+
+    .faq-question .plus {
+      transition: transform var(--transition-speed);
+    }
+
+    .faq-question.active .plus {
+      transform: rotate(45deg);
+    }
+
+    .faq-answer {
+      padding: 0 2rem 1.5rem;
+      color: var(--muted);
+      font-size: 0.9rem;
+      display: none;
+    }
+
+    .faq-answer.active {
+      display: block;
+    }
+
+    /* ===== NEWSLETTER SECTION ===== */
+    .newsletter {
+      background: linear-gradient(135deg, var(--velvet) 0%, var(--bg) 100%);
+      border: 1px solid var(--border);
+      padding: 4rem 2rem;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .newsletter::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: var(--border);
+    }
+
+    .newsletter h3 {
+      font-family: Georgia, Times New Roman, serif;
+      font-size: 1.8rem;
+      margin-bottom: 1rem;
+    }
+
+    .newsletter p {
+      color: var(--muted);
+      margin-bottom: 2rem;
+      max-width: 600px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .newsletter-form {
+      max-width: 500px;
+      margin: 0 auto;
+      display: flex;
+      gap: 1rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .newsletter-input {
+      flex: 1;
+      min-width: 250px;
+      padding: 1rem 1.5rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--ivory);
+      font-family: 'Inter', system-ui, Segoe UI, sans-serif;
+      font-size: 1rem;
+      outline: none;
+      transition: var(--transition-speed);
+    }
+
+    .newsletter-input::placeholder {
+      color: var(--muted);
+    }
+
+    .newsletter-input:focus {
+      border-color: var(--gold);
+    }
+
+    .newsletter-btn {
+      background: var(--gold);
+      color: var(--bg);
+      border: none;
+      padding: 1rem 2rem;
+      font-family: Georgia, Times New Roman, serif;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      cursor: pointer;
+      transition: var(--transition-speed);
+    }
+
+    .newsletter-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 30px rgba(214, 173, 96, 0.3);
+    }
+
+    /* ===== FOOTER ===== */
+    .footer {
+      background: var(--velvet);
+      border-top: 1px solid var(--border);
+      padding: 4rem 2rem 2rem;
+    }
+
+    .footer-container {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 3rem;
+    }
+
+    .footer-brand .logo {
+      font-family: Georgia, Times New Roman, serif;
+      font-size: 1.8rem;
+      color: var(--gold);
+      text-decoration: none;
+      display: inline-block;
+      margin-bottom: 1rem;
+    }
+
+    .footer-brand .tagline {
+      color: var(--muted);
+      font-size: 0.85rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .footer-links h4 {
+      font-family: Georgia, Times New Roman, serif;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--gold);
+      margin-bottom: 1.5rem;
+    }
+
+    .footer-links ul {
+      list-style: none;
+    }
+
+    .footer-links li {
+      margin-bottom: 0.8rem;
+    }
+
+    .footer-links a {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 0.85rem;
+      transition: var(--transition-speed);
+    }
+
+    .footer-links a:hover {
+      color: var(--gold);
+    }
+
+    .footer-bottom {
+      max-width: 1200px;
+      margin: 3rem auto 0;
+      padding-top: 2rem;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 1rem;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+
+    /* ===== ANIMATIONS ===== */
+    @keyframes fadeInUp {
+      from {
+        opacity: 0;
+        transform: translateY(30px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+
+    .reveal {
+      opacity: 0;
+      transform: translateY(30px);
+      transition: var(--transition-speed);
+    }
+
+    .reveal.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    /* ===== MOBILE MENU ANIMATION ===== */
+    .mobile-nav-links li {
+      opacity: 0;
+      transform: translateX(-30px);
+      transition: var(--transition-speed);
+    }
+
+    .mobile-nav-links li:nth-child(1) { transition-delay: 0.1s; }
+    .mobile-nav-links li:nth-child(2) { transition-delay: 0.2s; }
+    .mobile-nav-links li:nth-child(3) { transition-delay: 0.3s; }
+    .mobile-nav-links li:nth-child(4) { transition-delay: 0.4s; }
+    .mobile-nav-links li:nth-child(5) { transition-delay: 0.5s; }
+
+    .mobile-nav-links li.active {
+      opacity: 1;
+      transform: translateX(0);
+    }
+
+    /* ===== RESPONSIVE ===== */
+    @media (max-width: 1024px) {
+      .hero-image {
+        display: none;
+      }
+
+      .hero-ctas {
+        flex-direction: column;
+        align-items: center;
+      }
+
+      .hero-cta-btn {
+        width: 100%;
+        max-width: 300px;
+      }
+    }
+
+    @media (max-width: 768px) {
+      .navbar-container {
+        padding: 1rem;
+      }
+
+      .navbar-links {
+        display: none;
+        position: fixed;
+        top: 70px;
+        right: 0;
+        width: 100%;
+        height: calc(100vh - 70px);
+        background: var(--velvet);
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        gap: 1.5rem;
+        border-top: 1px solid var(--border);
+        z-index: 100;
+      }
+
+      .navbar-links.active {
+        display: flex;
+      }
+
+      .mobile-menu-btn {
+        display: block;
+      }
+
+      .section {
+        padding: 4rem 1rem;
+      }
+
+      .hero h1 {
+        font-size: clamp(2.5rem, 8vw, 4.5rem);
+      }
+
+      .hero .event-name {
+        font-size: 1.2rem;
+      }
+
+      .hero-meta {
+        gap: 1.5rem;
+      }
+
+      .hero-meta div {
+        font-size: 0.75rem;
+      }
+
+      .timeline::before {
+        left: 1.5rem;
+      }
+
+      .timeline-item {
+        padding-left: 3.5rem;
+      }
+
+      .timeline-item:nth-child(2n+1) {
+        padding-right: 3.5rem;
+      }
+
+      .artist-card {
+        padding: 1.5rem;
+      }
+
+      .venue-details {
+        left: 1rem;
+      }
+
+      .ticket-tabs {
+        gap: 0.5rem;
+      }
+
+      .ticket-tab {
+        font-size: 0.7rem;
+        padding: 0.5rem 1rem;
+      }
+
+      .footer-bottom {
+        flex-direction: column;
+        text-align: center;
+      }
+    }
+  </style>
+</head>
+<body>
+  <!-- Grain Overlay -->
+  <div class="grain-overlay"></div>
+
+  <!-- Navbar -->
+  <nav class="navbar" id="navbar">
+    <div class="navbar-container">
+      <a href="#" class="navbar-logo">
+        <span>ARTIFACT</span>
+        <span>Museum Night</span>
+      </a>
+      <ul class="navbar-links" id="navbarLinks">
+        <li><a href="#program">Program</a></li>
+        <li><a href="#artists">Artists</a></li>
+        <li><a href="#venue">Venue</a></li>
+        <li><a href="#tickets">Tickets</a></li>
+        <li><a href="#faq">FAQ</a></li>
+      </ul>
+      <button class="navbar-cta" id="getTicketsBtn">Get Tickets</button>
+      <button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="Open menu">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="3" y1="6" x2="21" y2="6"></line>
+          <line x1="3" y1="12" x2="21" y2="12"></line>
+          <line x1="3" y1="18" x2="21" y2="18"></line>
+        </svg>
+      </button>
+    </div>
+  </nav>
+
+  <!-- Mobile Nav -->
+  <div class="mobile-nav" id="mobileNav">
+    <button class="mobile-close-btn" id="mobileCloseBtn" aria-label="Close menu">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <line x1="18" y1="6" x2="6" y2="18"></line>
+        <line x1="6" y1="6" x2="18" y2="18"></line>
+      </svg>
+    </button>
+    <ul class="mobile-nav-links" id="mobileNavLinks">
+      <li><a href="#program">Program</a></li>
+      <li><a href="#artists">Artists</a></li>
+      <li><a href="#venue">Venue</a></li>
+      <li><a href="#tickets">Tickets</a></li>
+      <li><a href="#faq">FAQ</a></li>
+    </ul>
+  </div>
+
+  <!-- Hero Section -->
+  <section class="hero" id="hero">
+    <div class="hero-content">
+      <span class="hero-tag">Ticketed Event</span>
+      <h1>Museum Night, Reimagined</h1>
+      <div class="event-name">ARTIFACT: Museum Night</div>
+      <div class="hero-meta">
+        <div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"></polyline></svg> 18 October 2026</div>
+        <div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg> 19:00–02:00</div>
+        <div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="14" rx="2" ry="2"/><line x1="6" y1="6" x2="6" y2="18"/><line x1="10" y1="6" x2="10" y2="14"/><line x1="14" y1="6" x2="14" y2="10"></line></svg> The Old Gallery, Warsaw</div>
+      </div>
+      <div class="hero-ctas">
+        <button class="hero-cta-btn primary">Get Tickets</button>
+        <button class="hero-cta-btn outline">Save to Calendar</button>
+      </div>
+    </div>
+    <div class="hero-image">
+      <!-- Hero image would be inserted here -->
+      <svg viewBox="0 0 800 800" fill="none" stroke="var(--gold)" stroke-width="1">
+        <rect width="800" height="800" fill="#1a0710"/>
+        <circle cx="400" cy="400" r="350" fill="#07111f"/>
+        <path d="M400 200 L400 600" stroke="#d6ad60" stroke-width="1"/>
+        <circle cx="400" cy="200" r="80" fill="#070506"/>
+        <circle cx="250" cy="350" r="60" fill="#070506"/>
+        <circle cx="550" cy="350" r="60" fill="#070506"/>
+      </svg>
+    </div>
+  </section>
+
+  <!-- Concept Section -->
+  <section class="section" id="concept">
+    <div class="section-header">
+      <span class="section-tag">The Concept</span>
+      <h2>An Evening Like No Other</h2>
+      <p>Experience the museum after dark, where art meets atmosphere in a night of cultural discovery and sensory immersion.</p>
+    </div>
+    <div class="concept-grid">
+      <div class="concept-card reveal">
+        <h3>Velvet Darkness</h3>
+        <p>Immerse yourself in carefully calibrated lighting that reveals art in a new dimension, where shadows and light dance together.</p>
+      </div>
+      <div class="concept-card reveal">
+        <h3>Golden Spotlights</h3>
+        <p>Strategic golden accents highlight key works, creating moments of focus amidst the enveloping darkness.</p>
+      </div>
+      <div class="concept-card reveal">
+        <h3>Quiet Mystery</h3>
+        <p>A curated soundscape of ambient whispers and distant echoes guides your journey through the galleries.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Program Timeline -->
+  <section class="section" id="program">
+    <div class="section-header">
+      <span class="section-tag">Program</span>
+      <h2>Schedule of the Night</h2>
+    </div>
+    <div class="timeline" id="timeline">
+      <div class="timeline-item reveal">
+        <div class="timeline-dot"></div>
+        <div class="timeline-content">
+          <span class="timeline-date">19:00</span>
+          <h3 class="timeline-event">Opening Reception</h3>
+          <p class="timeline-location">Grand Entrance Hall</p>
+        </div>
+      </div>
+      <div class="timeline-item reveal" style="transition-delay: 0.1s;">
+        <div class="timeline-dot"></div>
+        <div class="timeline-content">
+          <span class="timeline-date">19:30</span>
+          <h3 class="timeline-event">Guided Tour</h3>
+          <p class="timeline-location">Main Gallery</p>
+        </div>
+      </div>
+      <div class="timeline-item reveal" style="transition-delay: 0.2s;">
+        <div class="timeline-dot"></div>
+        <div class="timeline-content">
+          <span class="timeline-date">20:30</span>
+          <h3 class="timeline-event">Performance</h3>
+          <p class="timeline-location">Sculpture Court</p>
+        </div>
+      </div>
+      <div class="timeline-item reveal" style="transition-delay: 0.3s;">
+        <div class="timeline-dot"></div>
+        <div class="timeline-content">
+          <span class="timeline-date">21:30</span>
+          <h3 class="timeline-event">Midnight Viewing</h3>
+          <p class="timeline-location">All Galleries</p>
+        </div>
+      </div>
+      <div class="timeline-item reveal" style="transition-delay: 0.4s;">
+        <div class="timeline-dot"></div>
+        <div class="timeline-content">
+          <span class="timeline-date">02:00</span>
+          <h3 class="timeline-event">Closing</h3>
+          <p class="timeline-location">Gallery Foyer</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Artists Section -->
+  <section class="section" id="artists">
+    <div class="section-header">
+      <span class="section-tag">Artists</span>
+      <h2>Featured Artists</h2>
+    </div>
+    <div class="artists-grid" id="artistsGrid">
+      <!-- Artist cards will be populated by JS -->
+    </div>
+  </section>
+
+  <!-- Venue Section -->
+  <section class="section" id="venue">
+    <div class="venue-content">
+      <div class="venue-image">
+        <img src="https://source.unsplash.com/1600x900/?gallery,art,museum" alt="The Old Gallery">
+        <div class="venue-details">
+          <h3>The Old Gallery</h3>
+          <p>Warsaw, Poland</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Ticket Tiers -->
+  <section class="section" id="tickets">
+    <div class="section-header">
+      <span class="section-tag">Tickets</span>
+      <h2>Select Your Experience</h2>
+    </div>
+    <div class="ticket-tabs" id="ticketTabs">
+      <button class="ticket-tab active" data-tab="general">General Admission</button>
+      <button class="ticket-tab" data-tab="vip">VIP Experience</button>
+      <button class="ticket-tab" data-tab="premium">Premium</button>
+    </div>
+    <div class="ticket-grid" id="ticketGrid">
+      <!-- Ticket cards will be populated by JS -->
+    </div>
+  </section>
+
+  <!-- FAQ Section -->
+  <section class="section" id="faq">
+    <div class="section-header">
+      <span class="section-tag">FAQ</span>
+      <h2>Frequently Asked Questions</h2>
+    </div>
+    <div class="faq-item">
+      <button class="faq-question" aria-expanded="false">
+        What time do doors open?
+        <span class="plus">+</span>
+      </button>
+      <div class="faq-answer">
+        Doors open at 19:00 and the event concludes at 02:00. We recommend arriving 15 minutes before your scheduled entry time.
+      </div>
+    </div>
+    <div class="faq-item">
+      <button class="faq-question" aria-expanded="false">
+        Is the venue accessible?
+        <span class="plus">+</span>
+      </button>
+      <div class="faq-answer">
+        The Old Gallery has limited accessibility. Please contact us in advance for accommodation details.
+      </div>
+    </div>
+    <div class="faq-item">
+      <button class="faq-question" aria-expanded="false">
+        Can I purchase tickets at the door?
+        <span class="plus">+</span>
+      </button>
+      <div class="faq-answer">
+        Tickets are available at the door, but we recommend pre-booking to guarantee entry, as capacity is limited for this premium experience.
+      </div>
+    </div>
+    <div class="faq-item">
+      <button class="faq-question" aria-expanded="false">
+        What should I wear?
+        <span class="plus">+</span>
+      </button>
+      <div class="faq-answer">
+        Smart casual attire is recommended. The event embraces a sophisticated atmosphere while remaining comfortable for evening exploration.
+      </div>
+    </div>
+  </section>
+
+  <!-- Newsletter Section -->
+  <section class="newsletter" id="newsletter">
+    <div class="newsletter">
+      <h3>Stay Informed</h3>
+      <p>Subscribe for updates on ARTIFACT events, artist announcements, and early access to ticket sales.</p>
+      <form class="newsletter-form" id="newsletterForm">
+        <input type="email" class="newsletter-input" placeholder="Enter your email" required>
+        <button type="submit" class="newsletter-btn">Subscribe</button>
+      </form>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer" id="footer">
+    <div class="footer-container">
+      <a href="#" class="footer-brand logo">
+        <span>ARTIFACT</span>
+        <span>Museum Night</span>
+      </a>
+      <p class="footer-brand tagline">Premium cultural event experience</p>
+      
+      <div class="footer-links">
+        <h4>Sections</h4>
+        <ul>
+          <li><a href="#program">Program</a></li>
+          <li><a href="#artists">Artists</a></li>
+          <li><a href="#venue">Venue</a></li>
+          <li><a href="#tickets">Tickets</a></li>
+          <li><a href="#faq">FAQ</a></li>
+        </ul>
+      </div>
+      
+      <div class="footer-links">
+        <h4>Legal</h4>
+        <ul>
+          <li><a href="#">Privacy Policy</a></li>
+          <li><a href="#">Terms of Service</a></li>
+          <li><a href="#">Accessibility</a></li>
+        </ul>
+      </div>
+      
+      <div class="footer-links">
+        <h4>Follow</h4>
+        <p>Stay connected</p>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>2026 ARTIFACT: Museum Night</span>
+      <span>All rights reserved</span>
+    </div>
+  </footer>
+
+  <script>
+    // ===== INITIALIZATION =====
+    document.addEventListener('DOMContentLoaded', function() {
+      // Initialize data
+      const artists = [
+        { name: "Marta Nowak", specialty: "Contemporary Sculpture", image: "https://source.unsplash.com/400x400/?sculpture" },
+        { name: "Lukas Chen", specialty: "Digital Art & Installation", image: "https://source.unsplash.com/400x400/?digital-art" },
+        { name: "Sophie Bernard", specialty: "Photography", image: "https://source.unsplash.com/400x400/?photography" },
+        { name: "Adam Kowalski", specialty: "Mixed Media", image: "https://source.unsplash.com/400x400/?mixed-media" }
+      ];
+
+      const tickets = {
+        general: [
+          { name: "Standard Ticket", price: "120 PLN", period: "18 Oct 2026, 19:00-02:00", features: ["Full gallery access", "Guided tour", "2 drinks voucher"] },
+          { name: "Early Bird", price: "90 PLN", period: "Available until 1 Sept", features: ["Standard benefits", "Discounted price"] }
+        ],
+        vip: [
+          { name: "VIP Pass", price: "250 PLN", period: "18 Oct 2026", features ["Priority entry", "Private guided tour", "4 drinks voucher", "Exclusive lounge access"] },
+          { name: "Early Bird VIP", price: "200 PLN", period: "Available until 1 Sept", features: ["VIP benefits", "Discounted price"] }
+        ],
+        premium: [
+          { name: "Premium Experience", price: "450 PLN", period: "18 Oct 2026", features: ["All VIP benefits", "Dinner with artists", "Limition edition print", "Concierge service"] }
+        ]
+      };
+
+      // ===== NAVBAR SCROLL EFFECT =====
+      const navbar = document.getElementById('navbar');
+      let lastScroll = 0;
+
+      window.addEventListener('scroll', function() {
+        const currentScroll = window.pageYOffset;
+        
+        if (currentScroll > lastScroll && currentScroll > 100) {
+          navbar.classList.add('scrolled');
+        } else {
+          navbar.classList.remove('scrolled');
+        }
+        
+        lastScroll = currentScroll;
+      });
+
+      // ===== MOBILE MENU =====
+      const mobileMenuBtn = document.getElementById('mobileMenuBtn');
+      const mobileCloseBtn = document.getElementById('mobileCloseBtn');
+      const mobileNav = document.getElementById('mobileNav');
+      const mobileNavLinks = document.getElementById('mobileNavLinks');
+      const navbarLinks = document.getElementById('navbarLinks');
+
+      mobileMenuBtn.addEventListener('click', function() {
+        mobileNav.classList.add('active');
+        document.body.style.overflow = 'hidden';
+      });
+
+      mobileCloseBtn.addEventListener('click', function() {
+        mobileNav.classList.remove('active');
+        document.body.style.overflow = '';
+      });
+
+      // Close mobile menu when clicking links
+      mobileNavLinks.querySelectorAll('a').forEach(link => {
+        link.addEventListener('click', function() {
+          mobileNav.classList.remove('active');
+          document.body.style.overflow = '';
+        });
+      });
+
+      // ===== SCROLL REVEAL ANIMATIONS =====
+      const revealElements = document.querySelectorAll('.reveal');
+      
+      const revealObserver = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('visible');
+          }
+        });
+      }, { threshold: 0.1 });
+
+      revealElements.forEach(el => revealObserver.observe(el));
+
+      // ===== STICKY NAV ACTIVE STATE =====
+      const sections = document.querySelectorAll('section[id]');
+      const navLinks = document.querySelectorAll('.navbar-links a, .mobile-nav-links a');
+
+      function updateActiveNav() {
+        let current = '';
+        
+        sections.forEach(section => {
+          const sectionTop = section.offsetTop;
+          const sectionHeight = section.clientHeight;
+          
+          if (pageYOffset >= sectionTop - 200) {
+            current = section.getAttribute('id');
+          }
+        });
+
+        navLinks.forEach(link => {
+          link.classList.remove('active');
+          if (link.getAttribute('href') === `#${current}`) {
+            link.classList.add('active');
+          }
+        });
+      }
+
+      window.addEventListener('scroll', updateActiveNav);
+      updateActiveNav(); // Initial check
+
+      // ===== TAB SWITCHING =====
+      const ticketTabs = document.getElementById('ticketTabs');
+      const ticketGrid = document.getElementById('ticketGrid');
+
+      ticketTabs.addEventListener('click', function(e) {
+        if (e.target.classList.contains('ticket-tab')) {
+          document.querySelectorAll('.ticket-tab').forEach(tab => tab.classList.remove('active'));
+          e.target.classList.add('active');
+          
+          const tab = e.target.dataset.tab;
+          renderTickets(tab);
+        }
+      });
+
+      function renderTickets(tab) {
+        const tabData = tickets[tab];
+        let html = '';
+        
+        tabData.forEach((ticket, index) => {
+          html += `
+            <div class="ticket-card reveal" style="transition-delay: ${index * 0.1}s;">
+              <span class="ticket-tag">${tab.toUpperCase()}</span>
+              <h3>${ticket.name}</h3>
+              <span class="price">${ticket.price}</span>
+              <span class="period">${ticket.period}</span>
+              <ul>
+                ${ticket.features.map(f => `<li>${f}</li>`).join('')}
+              </ul>
+              <button class="cta primary">Select Ticket</button>
+            </div>
+          `;
+        });
+        
+        ticketGrid.innerHTML = html;
+      }
+
+      // Initial render
+      renderTickets('general');
+
+      // ===== FAQ ACCORDION =====
+      const faqQuestions = document.querySelectorAll('.faq-question');
+
+      faqQuestions.forEach(question => {
+        question.addEventListener('click', function() {
+          const faqItem = this.parentElement;
+          const answer = faqItem.querySelector('.faq-answer');
+          const plus = this.querySelector('.plus');
+          
+          // Toggle active class on question
+          faqItem.classList.toggle('active');
+          
+          // Rotate plus icon
+          if (plus) {
+            plus.style.transform = faqItem.classList.contains('active') ? 'rotate(45deg)' : 'rotate(0)';
+          }
+          
+          // Toggle answer visibility
+          if (answer.style.display === 'none' || answer.style.display === '') {
+            answer.style.display = 'block';
+          } else {
+            answer.style.display = 'none';
+          }
+        });
+      });
+
+      // ===== NEWSLETTER FORM =====
+      const newsletterForm = document.getElementById('newsletterForm');
+      
+      newsletterForm.addEventListener('submit', function(e) {
+        e.preventDefault();
+        const input = this.querySelector('.newsletter-input');
+        const email = input.value;
+        
+        if (email) {
+          // Simple validation
+          if (email.includes('@') && email.includes('.')) {
+            alert('Thank you for subscribing! You\'ll receive updates about ARTIFACT events.');
+            input.value = '';
+          } else {
+            alert('Please enter a valid email address.');
+          }
+        }
+      });
+
+      // ===== SMOOTH SCROLLING =====
+      document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+        anchor.addEventListener('click', function(e) {
+          e.preventDefault();
+          const targetId = this.getAttribute('href');
+          if (targetId === '#') return;
+          
+          const targetElement = document.querySelector(targetId);
+          if (targetElement) {
+            window.scrollTo({
+              top: targetElement.offsetTop - 80,
+              behavior: 'smooth'
+            });
+          }
+        });
+      });
+
+      // ===== ARTIST CARDS RENDER =====
+      const artistsGrid = document.getElementById('artistsGrid');
+      let artistHtml = '';
+      
+      artists.forEach((artist, index) => {
+        artistHtml += `
+          <div class="artist-card reveal" style="transition-delay: ${index * 0.15}s;">
+            <div class="artist-image">
+              <img src="${artist.image}" alt="${artist.name}">
+            </div>
+            <h3>${artist.name}</h3>
+            <p>${artist.specialty}</p>
+          </div>
+        `;
+      });
+      
+      artistsGrid.innerHTML = artistHtml;
+
+      // ===== TIMELINE INTERSECTION =====
+      const timelineItems = document.querySelectorAll('.timeline-item');
+      
+      const timelineObserver = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('visible');
+          }
+        });
+      }, { threshold: 0.2 });
+
+      timelineItems.forEach(el => timelineObserver.observe(el));
+    });
+  </script>
+</body>
+</html>

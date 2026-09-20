@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Gouraud Shaded Rotating Cube</title>
+<style>
+  body { margin: 0; background: #111; overflow: hidden; }
+  canvas { display: block; }
+  #info {
+    position: absolute; top: 10px; left: 10px;
+    color: #0f0; font-family: monospace; font-size: 14px;
+    text-shadow: 1px 1px 2px #000;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="info">FPS: 0 | W=wireframe | P=pause</div>
+<script>
+// ── constants ──
+const W = 0.4, H = 0.4, D = 0.4; // cube half-extents
+const FOV = Math.PI / 4;
+const NEAR = 0.1, FAR = 100;
+const LIGHT = { x: 2, y: 2, z: 2 };
+const PALETTE = [
+  '#ff4444','#44ff44','#4444ff','#ffff44',
+  '#ff44ff','#44ffff','#ff8844','#44ff88',
+  '#8844ff','#ff4488','#88ff44','#4488ff'
+];
+
+// ── cube data ──
+const VERTS = [
+  [-W,-W,-D],[ W,-W,-D],[-W, W,-D],[ W, W,-D],
+  [-W,-W, D],[ W,-W, D],[-W, W, D],[ W, W, D]
+];
+const TRIANGLES = [
+  [0,1,2],[0,2,3],[4,5,6],[4,6,7],
+  [0,4,5],[0,5,1],[2,6,7],[2,7,3],
+  [0,3,7],[0,7,4],[1,5,6],[1,6,2],
+  [3,2,6],[3,6,7]
+];
+const TRI_INDICES = [
+  [0,1,2],[0,2,3],[4,5,6],[4,6,7],
+  [0,4,5],[0,5,1],[2,6,7],[2,7,3],
+  [0,3,7],[0,7,4],[1,5,6],[1,6,2],
+  [3,2,6],[3,6,7]
+];
+
+// ── state ──
+let t = 0, paused = false, wireframe = false;
+let lastTime = 0, fps = 0, fpsCount = 0, fpsAccum = 0;
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const info = document.getElementById('info');
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ── 3D helpers ──
+function rotX(a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return [[1,0,0],[0,c,s],[0,-s,c]];
+}
+function rotY(a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return [[c,0,-s],[0,1,0],[s,0,c]];
+}
+function rotZ(a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return [[c,s,0],[-s,c,0],[0,0,1]];
+}
+function mulM(m, v) {
+  const x = m[0][0]*v[0]+m[0][1]*v[1]+m[0][2]*v[2];
+  const y = m[1][0]*v[0]+m[1][1]*v[1]+m[1][2]*v[2];
+  const z = m[2][0]*v[0]+m[2][1]*v[1]+m[2][2]*v[2];
+  return [x,y,z];
+}
+function mulM2(m1, m2) {
+  return [
+    [m1[0][0]*m2[0][0]+m1[0][1]*m2[1][0]+m1[0][2]*m2[2][0],
+     m1[0][0]*m2[0][1]+m1[0][1]*m2[1][1]+m1[0][2]*m2[2][1],
+     m1[0][0]*m2[0][2]+m1[0][1]*m2[1][2]+m1[0][2]*m2[2][2]],
+    [m1[1][0]*m2[0][0]+m1[1][1]*m2[1][0]+m1[1][2]*m2[2][0],
+     m1[1][0]*m2[0][1]+m1[1][1]*m2[1][1]+m1[1][2]*m2[2][1],
+     m1[1][0]*m2[0][2]+m1[1][1]*m2[1][2]+m1[1][2]*m2[2][2]],
+    [m1[2][0]*m2[0][0]+m1[2][1]*m2[1][0]+m1[2][2]*m2[2][0],
+     m1[2][0]*m2[0][1]+m1[2][1]*m2[1][1]+m1[2][2]*m2[2][1],
+     m1[2][0]*m2[0][2]+m1[2][1]*m2[1][2]+m1[2][2]*m2[2][2]]
+  ];
+}
+function project(x, y, z) {
+  const f = FOV * canvas.width / (canvas.height / 2);
+  const scale = f / (fAR - z);
+  return [x * scale + canvas.width/2, y * scale + canvas.height/2, z * scale];
+}
+function project2(x, y, z) {
+  const f = FOV * canvas.width / (canvas.height / 2);
+  const scale = f / (fAR - z);
+  return [x * scale + canvas.width/2, y * scale + canvas.height/2];
+}
+
+// ── lighting ──
+function lightDir(v) {
+  return [LIGHT.x - v[0], LIGHT.y - v[1], LIGHT.z - v[2]];
+}
+function normalize(v) {
+  const l = Math.sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2]);
+  return [v[0]/l, v[1]/l, v[2]/l];
+}
+function dot(a, b) {
+  return a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+}
+
+// ── Gouraud shading ──
+function interpolateColors(v0, v1, v2, x, y) {
+  // barycentric
+  const a = v0[0], b = v1[0], c = v2[0];
+  const d = v0[1], e = v1[1], f = v2[1];
+  const g = v0[2], h = v1[2], i = v2[2];
+  const denom = a*(e-i) - b*(d-h) + c*(d-e);
+  const v = ((b*(e-i) - c*(d-i)) / denom) * x + ((c*(d-h) - a*(e-h)) / denom) * y;
+  return v;
+}
+
+// ── render ──
+function render() {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const rotX = rotX(t * 0.5);
+  const rotY = rotY(t * 0.7);
+  const rotZ = rotZ(t * 0.3);
+  const R = mulM2(mulM2(rotX, rotY), rotZ);
+
+  const projected = [];
+  const colors = [];
+  const normals = [];
+
+  for (let i = 0; i < 8; i++) {
+    const v = mulM(R, VERTS[i]);
+    const nd = lightDir(v);
+    const n = normalize(nd);
+    const p = project(v[0], v[1], v[2]);
+    projected.push(p);
+    normals.push(n);
+    colors.push([0,0,0]);
+  }
+
+  // Lambert per vertex
+  for (let i = 0; i < 8; i++) {
+    const n = normals[i];
+    const l = [LIGHT.x - VERTS[i][0], LIGHT.y - VERTS[i][1], LIGHT.z - VERTS[i][2]];
+    const nl = normalize(l);
+    const diff = dot(n, nl);
+    const intensity = Math.max(0, diff);
+    const color = PALETTE[i % PALETTE.length];
+    const r = Math.floor(color[0] * intensity);
+    const g = Math.floor(color[1] * intensity);
+    const b = Math.floor(color[2] * intensity);
+    colors[i] = [r, g, b];
+  }
+
+  // rasterize
+  const imgData = ctx.createImageData(canvas.width, canvas.height);
+  const data = imgData.data;
+
+  for (let i = 0; i < TRIANGLES.length; i++) {
+    const [v0, v1, v2] = TRI_INDICES[i];
+    const p0 = projected[v0];
+    const p1 = projected[v1];
+    const p2 = projected[v2];
+    const c0 = colors[v0];
+    const c1 = colors[v1];
+    const c2 = colors[v2];
+
+    const x0 = p0[0], y0 = p0[1];
+    const x1 = p1[0], y1 = p1[1];
+    const x2 = p2[0], y2 = p2[1];
+
+    const r0 = c0[0], g0 = c0[1], b0 = c0[2];
+    const r1 = c1[0], g1 = c1[1], b1 = c1[2];
+    const r2 = c2[0], g2 = c2[1], b2 = c2[2];
+
+    // edge equations
+    const a1 = y1 - y0, b1 = x0 - x1, c1 = a1 * x1 + b1 * y1;
+    const a2 = y2 - y0, b2 = x0 - x2, c2 = a2 * x2 + b2 * y2;
+    const a3 = y0 - y2, b3 = x2 - x0, c3 = a3 * x2 + b3 * y2;
+
+    for (let y = Math.floor(Math.min(y0, y1, y2)); y <= Math.ceil(Math.max(y0, y1, y2)); y++) {
+      const t1 = (a1 * y - c1) / b1;
+      const t2 = (a2 * y - c2) / b2;
+      const t3 = (a3 * y - c3) / b3;
+      const xLeft = Math.max(t1, t2);
+      const xRight = Math.min(t1, t2);
+      if (xLeft > xRight) continue;
+      for (let x = Math.floor(xLeft); x <= Math.ceil(xRight); x++) {
+        const u = interpolateColors([r0,g0,b0], [r1,g1,b1], [r2,g2,b2], x, y);
+        const idx = (y * canvas.width + x) * 4;
+        data[idx] = u[0];
+        data[idx+1] = u[1];
+        data[idx+2] = u[2];
+        data[idx+3] = 255;
+      }
+    }
+  }
+
+  ctx.putImageData(imgData, 0, 0);
+
+  // wireframe overlay
+  if (wireframe) {
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 0; i < 8; i++) {
+      const p = projected[i];
+      if (i === 0) ctx.moveTo(p[0], p[1]);
+      else ctx.lineTo(p[0], p[1]);
+    }
+    ctx.closePath();
+    ctx.stroke();
+  }
+
+  // FPS
+  const now = performance.now();
+  fpsAccum += now - lastTime;
+  fpsCount++;
+  if (fpsAccum >= 1000) {
+    fps = fpsCount;
+    fpsCount = 0;
+    fpsAccum = 0;
+    lastTime = now;
+  }
+  info.textContent = 'FPS: ' + fps + ' | W=wireframe | P=pause';
+}
+
+// ── loop ──
+function loop() {
+  if (!paused) {
+    t += 0.016;
+  }
+  render();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+// ── keyboard ──
+document.addEventListener('keydown', e => {
+  if (e.key === 'w' || e.key === 'W') wireframe = !wireframe;
+  if (e.key === 'p' || e.key === 'P') paused = !paused;
+});
+</script>
+</body>
+</html>

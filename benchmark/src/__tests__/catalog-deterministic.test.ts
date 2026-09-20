@@ -216,6 +216,53 @@ describe("buildDeterministicJudge", () => {
     expect(ids).toEqual(["compliance"]);
     expect(set.scores.find((s) => s.criterionId === "compliance")?.value).toBe(1);
   });
+
+  // A self-recovery sequence (delete a truncated file, retry via a shell script) can
+  // call advance_code_editing and still leave nothing behind. The trace's write count
+  // says the model tried; the directory scan that produced deliverableText says it did
+  // not land. agent_logic must trust the scan, or a run that produced no artifact at
+  // all scores a false PASS on the one criterion meant to catch exactly that.
+  it("fails agent_logic when a write was attempted but no deliverable was found on disk", () => {
+    const set = buildDeterministicJudge({
+      mode: "AGENT",
+      deliverableText: null,
+      finalOutput: "Now let me write the complete file.",
+      needles: [],
+      needleInOutput: null,
+      expectedToolOrder: [],
+      status: "SUCCESS",
+      rendered: null,
+      consoleErrors: [],
+      loop: { writes: 1, toolCalls: 7, duplicateCalls: 0, toolErrors: 1, recoveredFromError: true },
+      judgedAt: "2026-07-25T12:00:00.000Z",
+      screenshots: [],
+    });
+    const agentLogic = set.scores.find((s) => s.criterionId === "agent_logic");
+    expect(agentLogic?.value).toBe(0);
+    expect(agentLogic?.rationale).toContain("wrote no file");
+  });
+
+  // A multi-file (build-scored) task has no single deliverable file to check - the
+  // build command is the only evidence it worked - so a null deliverableText there
+  // must not be read as "wrote nothing" the way it is for a render-scored task.
+  it("does not penalise a build-scored task for having no single deliverable", () => {
+    const set = buildDeterministicJudge({
+      mode: "AGENT",
+      deliverableText: null,
+      finalOutput: "done",
+      needles: [],
+      needleInOutput: null,
+      expectedToolOrder: [],
+      status: "SUCCESS",
+      rendered: null,
+      build: { exitCode: 0, outputTail: "" },
+      consoleErrors: [],
+      loop: { writes: 1, toolCalls: 3, duplicateCalls: 0, toolErrors: 0, recoveredFromError: null },
+      judgedAt: "2026-07-25T12:00:00.000Z",
+      screenshots: [],
+    });
+    expect(set.scores.find((s) => s.criterionId === "agent_logic")?.value).toBe(1);
+  });
 });
 
 // A multi-file deliverable cannot be rendered in a browser, so what "works out of the
@@ -287,6 +334,17 @@ describe("agentLogicFromTrace", () => {
 
   it("does not expect a file from a run that was never meant to produce one", () => {
     expect(agentLogicFromTrace({ ...clean, writes: 0 }, false).value).toBe(1);
+  });
+
+  it("scores zero when a deliverable check says nothing was found, even if a write was called", () => {
+    const r = agentLogicFromTrace(clean, true, false);
+    expect(r?.value).toBe(0);
+    expect(r?.rationale).toContain("wrote no file");
+  });
+
+  it("trusts the write count when no deliverable check was made", () => {
+    expect(agentLogicFromTrace(clean, true).value).toBe(1);
+    expect(agentLogicFromTrace(clean, true, true).value).toBe(1);
   });
 
   it("docks a run that stopped at its last failing call", () => {

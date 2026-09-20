@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Gouraud Shaded Rotating Cube</title>
+<style>
+  html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:system-ui,Segoe UI,Roboto,sans-serif}
+  canvas{display:block;width:100vw;height:100vh}
+  #ui{position:fixed;top:10px;left:10px;color:#fff;background:rgba(0,0,0,.5);padding:8px 12px;border-radius:8px;font-size:14px;line-height:1.4}
+  #ui b{color:#9cf}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="ui">FPS: <b id="fps">0</b><br>W: wireframe <span id="wf">off</span><br>P: pause <span id="ps">running</span></div>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W = canvas.width = innerWidth;
+let H = canvas.height = innerHeight;
+addEventListener('resize',()=>{W=canvas.width=innerWidth;H=canvas.height=innerHeight;});
+
+const cubeSize = 1;
+const vertices = [
+  [-1,-1,-1],[ 1,-1,-1],[ 1, 1,-1],[-1, 1,-1],
+  [-1,-1, 1],[ 1,-1, 1],[ 1, 1, 1],[-1, 1, 1]
+].map(v=>v.map(x=>x*cubeSize));
+
+const faces = [
+  [0,1,2,3],[4,5,6,7],[0,4,7,3],[1,5,6,2],[0,1,5,4],[3,2,6,7]
+];
+
+function triFromQuad(a,b,c,d){return [[a,b,c],[a,c,d]];}
+
+let triangles = [];
+faces.forEach(f=>triangles.push(...triFromQuad(...f)));
+
+let angleX=0, angleY=0, angleZ=0;
+let wireframe=false, paused=false;
+let last=performance.now(), frames=0, fps=0, fpsTime=0;
+
+addEventListener('keydown',e=>{
+  if(e.key==='w'||e.key==='W'){wireframe=!wireframe;document.getElementById('wf').textContent=wireframe?'on':'off';}
+  if(e.key==='p'||e.key==='P'){paused=!paused;document.getElementById('ps').textContent=paused?'paused':'running';}
+});
+
+function matMulVec(m,v){
+  return [
+    m[0][0]*v[0]+m[0][1]*v[1]+m[0][2]*v[2],
+    m[1][0]*v[0]+m[1][1]*v[1]+m[1][2]*v[2],
+    m[2][0]*v[0]+m[2][1]*v[1]+m[2][2]*v[2]
+  ];
+}
+function rotate(v,ax,ay,az){
+  const cx=Math.cos(ax), sx=Math.sin(ax);
+  const cy=Math.cos(ay), sy=Math.sin(ay);
+  const cz=Math.cos(az), sz=Math.sin(az);
+  let x=v[0],y=v[1],z=v[2];
+  // X
+  let y1 = y*cx - z*sx;
+  let z1 = y*sx + z*cx;
+  y=y1; z=z1;
+  // Y
+  let x1 = x*cy + z*sy;
+  let z2 = -x*sy + z*cy;
+  x=x1; z=z2;
+  // Z
+  let x2 = x*cz - y*sz;
+  let y2 = x*sz + y*cz;
+  return [x2,y2,z];
+}
+
+function project(p){
+  const fov=400;
+  const z = p[2]+4;
+  if(z<=0.1) return null;
+  const scale = fov / z;
+  return [
+    W/2 + p[0]*scale,
+    H/2 - p[1]*scale,
+    z
+  ];
+}
+
+function normalFromTri(v0,v1,v2){
+  const e1=[v1[0]-v0[0],v1[1]-v0[1],v1[2]-v0[2]];
+  const e2=[v2[0]-v0[0],v2[1]-v0[1],v2[2]-v0[2]];
+  const n=[
+    e1[1]*e2[2]-e1[2]*e2[1],
+    e1[2]*e2[0]-e1[0]*e2[2],
+    e1[0]*e2[1]-e1[1]*e2[0]
+  ];
+  const len=Math.hypot(...n)||1;
+  return n.map(x=>x/len);
+}
+function dot(a,b){return a[0]*b[0]+a[1]*b[1]+a[2]*b[2];}
+
+function lerpColor(c1,c2,t){
+  return [
+    c1[0]+(c2[0]-c1[0])*t,
+    c1[1]+(c2[1]-c1[1])*t,
+    c1[2]+(c2[2]-c1[2])*t
+  ];
+}
+function shadeColor(base,intensity){
+  const i=Math.max(0,Math.min(1,intensity));
+  return `rgb(${Math.round(base[0]*i)},${Math.round(base[1]*i)},${Math.round(base[2]*i)})`;
+}
+
+function drawTriangle(p0,p1,p2,c0,c1,c2){
+  const pts=[p0,p1,p2];
+  // sort by y
+  const order=[0,1,2].sort((a,b)=>pts[a][1]-pts[b][1]);
+  const [i0,i1,i2]=order;
+  const v0=pts[i0], v1=pts[i1], v2=pts[i2];
+  const cA=c0[order], cB=c1[order], cC=c2[order]; // wrong mapping, fix below
+}
+function drawTriangleFixed(p0,p1,p2,col0,col1,col2){
+  const verts=[{x:p0[0],y:p0[1],c:col0},{x:p1[0],y:p1[1],c:col1},{x:p2[0],y:p2[1],c:col2}];
+  verts.sort((a,b)=>a.y-b.y);
+  const v0=verts[0], v1=verts[1], v2=verts[2];
+  if(v1.y===v2.y){
+    // bottom flat
+    for(let y=Math.floor(v0.y); y<=Math.floor(v2.y); y++){
+      const t=(y-v0.y)/(v2.y-v0.y||1);
+      const xL=v0.x+(v2.x-v0.x)*t;
+      const xR=v0.x+(v1.x-v0.x)*t;
+      if(xL>xR)[xL,xR]=[xR,xL];
+      const cL=lerpColor(v0.c,v2.c,t);
+      const cR=lerpColor(v0.c,v1.c,t);
+      drawScanline(y,xL,xR,cL,cR);
+    }
+  }else{
+    // general
+    const tSplit=(v1.y-v0.y)/(v2.y-v0.y);
+    const xSplit=v0.x+(v2.x-v0.x)*tSplit;
+    const cSplit=lerpColor(v0.c,v2.c,tSplit);
+    // upper
+    for(let y=Math.floor(v0.y); y<=Math.floor(v1.y); y++){
+      const t=(y-v0.y)/(v1.y-v0.y||1);
+      const xA=v0.x+(v1.x-v0.x)*t;
+      const xB=v0.x+(xSplit-v0.x)*t;
+      if(xA>xB)[xA,xB]=[xB,xA];
+      const cA=lerpColor(v0.c,v1.c,t);
+      const cB=lerpColor(v0.c,cSplit,t);
+      drawScanline(y,xA,xB,cA,cB);
+    }
+    // lower
+    for(let y=Math.floor(v1.y); y<=Math.floor(v2.y); y++){
+      const t=(y-v1.y)/(v2.y-v1.y||1);
+      const xA=v1.x+(v2.x-v1.x)*t;
+      const xB=xSplit+(v2.x-xSplit)*t;
+      if(xA>xB)[xA,xB]=[xB,xA];
+      const cA=lerpColor(v1.c,v2.c,t);
+      const cB=lerpColor(cSplit,v2.c,t);
+      drawScanline(y,xA,xB,cA,cB);
+    }
+  }
+}
+function drawScanline(y,x0,x1,c0,c1){
+  const xStart=Math.max(0,Math.floor(x0));
+  const xEnd=Math.min(W-1,Math.ceil(x1));
+  if(xEnd<=xStart) return;
+  const img=ctx.getImageData(xStart,y,xEnd-xStart+1,1);
+  const data=img.data;
+  for(let x=0;x<data.width;x++){
+    const t=(x)/(data.width-1||1);
+    const r=lerpColor(c0,c1,t);
+    const i=x*4;
+    data[i]=r[0]; data[i+1]=r[1]; data[i+2]=r[2]; data[i+3]=255;
+  }
+  ctx.putImageData(img,xStart,y);
+}
+
+function render(){
+  const now=performance.now();
+  const dt=(now-last)/1000; last=now;
+  if(!paused){
+    angleY+=dt*0.8;
+    angleX=Math.sin(now*0.0003)*0.5;
+    angleZ+=dt*0.3;
+  }
+
+  // light moving
+  const light=[Math.sin(now*0.001)*2, Math.cos(now*0.0007)*1.5, Math.sin(now*0.0005)*2];
+
+  ctx.fillStyle='#000';
+  ctx.fillRect(0,0,W,H);
+
+  // transform vertices
+  const transformed=vertices.map(v=>rotate(v,angleX,angleY,angleZ));
+
+  const tris=[];
+  for(const [i0,i1,i2] of triangles){
+    const v0=transformed[i0], v1=transformed[i1], v2=transformed[i2];
+    const n=normalFromTri(v0,v1,v2);
+    const view=[0,0,1];
+    const ndotv=dot(n,view);
+    if(ndotv<=0) continue; // backface culling
+    const p0=project(v0), p1=project(v1), p2=project(v2);
+    if(!p0||!p1||!p2) continue;
+    const depth=(p0[2]+p1[2]+p2[2])/3;
+    tris.push({p0,p1,p2,n,depth});
+  }
+  tris.sort((a,b)=>b.depth-a.depth);
+
+  const baseColor=[200,120,255];
+
+  for(const t of tris){
+    const v0=transformed[vertices.findIndex(v=>v===undefined)]; // placeholder
+  }
+
+  // Recompute with proper per-vertex lighting
+  const projected=[];
+  const colors=[];
+  for(let i=0;i<vertices.length;i++){
+    const v=transformed[i];
+    const p=project(v);
+    projected.push(p);
+    // face normal approx using vertex normal? Use average of adjacent faces for simplicity: use position as normal proxy
+    const n=[v[0],v[1],v[2]];
+    const len=Math.hypot(...n)||1;
+    const nn=n.map(x=>x/len);
+    const ldot=Math.max(0,dot(nn,light.map(x=>x/len)));
+    const intensity=0.3+0.7*ldot;
+    colors.push([baseColor[0]*intensity, baseColor[1]*intensity, baseColor[2]*intensity]);
+  }
+
+  // draw triangles
+  if(!wireframe){
+    for(const [i0,i1,i2] of triangles){
+      const p0=projected[i0], p1=projected[i1], p2=projected[i2];
+      if(!p0||!p1||!p2) continue;
+      const v0=transformed[i0], v1=transformed[i1], v2=transformed[i2];
+      const n=normalFromTri(v0,v1,v2);
+      if(dot(n,[0,0,1])<=0) continue;
+      drawTriangleFixed(p0,p1,p2,colors[i0],colors[i1],colors[i2]);
+    }
+  }else{
+    ctx.strokeStyle='#fff';
+    ctx.lineWidth=1;
+    for(const [i0,i1,i2] of triangles){
+      const p0=projected[i0], p1=projected[i1], p2=projected[i2];
+      if(!p0||!p1||!p2) continue;
+      const v0=transformed[i0], v1=transformed[i1], v2=transformed[i2];
+      const n=normalFromTri(v0,v1,v2);
+      if(dot(n,[0,0,1])<=0) continue;
+      ctx.beginPath();
+      ctx.moveTo(p0[0],p0[1]);
+      ctx.lineTo(p1[0],p1[1]);
+      ctx.lineTo(p2[0],p2[1]);
+      ctx.closePath();
+      ctx.stroke();
+    }
+  }
+
+  // FPS
+  frames++;
+  fpsTime+=dt;
+  if(fpsTime>0.5){fps=Math.round(frames/fpsTime); frames=0; fpsTime=0; document.getElementById('fps').textContent=fps;}
+  requestAnimationFrame(render);
+}
+render();
+</script>
+</body>
+</html>

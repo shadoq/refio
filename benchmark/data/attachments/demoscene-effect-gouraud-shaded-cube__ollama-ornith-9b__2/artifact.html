@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Gouraud-Shaded Rotating Cube</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #111; overflow: hidden; }
+  canvas { display: block; image-rendering: pixelated; }
+  #info {
+    position: absolute; top: 10px; left: 10px; color: #fff;
+    font-family: monospace; font-size: 14px; text-shadow: 1px 1px 2px #000;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="info"></div>
+<script>
+'use strict';
+
+// ── helpers ──
+function dot(a, b) { return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
+function sub(a, b) { return [a[0]-b[0], a[1]-b[1], a[2]-b[2]]; }
+function scale(a, s) { return [a[0]*s, a[1]*s, a[2]*s]; }
+function lerp(a, b, t) { return [a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, a[2]+(b[2]-a[2])*t]; }
+function norm(a) {
+  const l = Math.sqrt(a[0]*a[0]+a[1]*a[1]+a[2]*a[2]);
+  return [a[0]/l, a[1]/l, a[2]/l];
+}
+
+// ── cube data ──
+const V = [ // 8 vertices, x,y,z, index 0-7
+  [-1,-1,-1],[ 1,-1,-1],[-1, 1,-1],[ 1, 1,-1], // back
+  [-1,-1, 1],[ 1,-1, 1],[-1, 1, 1],[ 1, 1, 1],  // front
+];
+const TRIANGLES = [ // 12 triangles (6 faces × 2)
+  // back face (z=-1)
+  [0,1,2],[0,2,3],
+  // front face (z=1)
+  [4,6,7],[4,7,5],
+  // top face (y=1)
+  [2,6,0],[2,0,3],
+  // bottom face (y=-1)
+  [1,5,4],[1,4,0],
+  // left face (x=-1)
+  [0,4,2],[0,2,6],
+  // right face (x=1)
+  [1,3,5],[1,5,7],
+];
+
+// ── state ──
+const W = 0.8, H = 0.8;
+const light = { x: 0, y: 0, z: 1, t: 0 };
+const rot = { x: 0, y: 0, z: 0 };
+let paused = false;
+let fps = 0, fpsStart = 0, fpsCount = 0;
+let wireframe = false;
+
+// ── rotation helpers ──
+function rotX(angle) {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  return [
+    [1,0,0],
+    [0,c,s],
+    [0,-s,c],
+  ];
+}
+function rotY(angle) {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  return [
+    [c,0,-s],
+    [0,1,0],
+    [s,0,c],
+  ];
+}
+
+// ── transform vertex ──
+function transform(v, rx, ry, rz) {
+  let x = v[0], y = v[1], z = v[2];
+  // rotate around X
+  const y1 = y*Math.cos(rz) - z*Math.sin(rz);
+  const z1 = y*Math.sin(rz) + z*Math.cos(rz);
+  // rotate around Y
+  const x2 = x*Math.cos(ry) - z1*Math.sin(ry);
+  const z2 = x*Math.sin(ry) + z1*Math.cos(ry);
+  // rotate around Z
+  const x3 = x2*Math.cos(rx) - y1*Math.sin(rx);
+  const y3 = x2*Math.sin(rx) + y1*Math.cos(rx);
+  return [x3, y3, z2];
+}
+
+// ── perspective projection ──
+const FOV = 60, aspect = 1, near = 0.1, far = 100;
+function project(p) {
+  const fovRad = FOV * Math.PI / 180;
+  const scale = 1 / Math.tan(fovRad / 2);
+  const x = p[0] * scale / (p[2] + near);
+  const y = p[1] * scale / (p[2] + near);
+  return [x, y];
+}
+
+// ── Gouraud shading: rasterize triangle with barycentric interpolation ──
+function rasterizeTriangle(ctx, v0, v1, v2, color0, color1, color2, wireframe) {
+  const p0 = project(v0), p1 = project(v1), p2 = project(v2);
+  // barycentric coords at each vertex
+  const bc0 = [0.5, 0.5, 0];
+  const bc1 = [0.5, 0.5, 0];
+  const bc2 = [0.5, 0.5, 0];
+  // Use the projected area to compute barycentric weights
+  const area = (p0[0]*(p1[1]-p2[1]) + p1[0]*(p2[1]-p0[1]) + p2[0]*(p0[1]-p1[1])) / 2;
+  if (Math.abs(area) < 0.5) return; // too small
+
+  // Compute barycentric weights at each vertex based on the 3D normal projection
+  // Simple approach: interpolate colors using edge functions
+  const w0 = Math.abs(p0[0] - p1[0]) * Math.abs(p0[1] - p1[1]) / 16;
+  const w1 = Math.abs(p1[0] - p2[0]) * Math.abs(p1[1] - p2[1]) / 16;
+  const w2 = Math.abs(p2[0] - p0[0]) * Math.abs(p2[1] - p0[1]) / 16;
+
+  if (wireframe) {
+    ctx.beginPath();
+    ctx.moveTo(p0[0], p0[1]);
+    ctx.lineTo(p1[0], p1[1]);
+    ctx.lineTo(p2[0], p2[1]);
+    ctx.closePath();
+    ctx.strokeStyle = '#888';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  } else {
+    // Gouraud: interpolate colors across triangle
+    const grad = [
+      [(color0[0]-color1[0])*0.5, (color0[1]-color1[1])*0.5, (color0[2]-color1[2])*0.5],
+      [(color1[0]-color2[0])*0.5, (color1[1]-color2[1])*0.5, (color1[2]-color2[2])*0.5],
+      [(color2[0]-color0[0])*0.5, (color2[1]-color0[1])*0.5, (color2[2]-color0[2])*0.5],
+    ];
+    ctx.beginPath();
+    ctx.moveTo(p0[0], p0[1]);
+    ctx.lineTo(p1[0], p1[1]);
+    ctx.lineTo(p2[0], p2[1]);
+    ctx.closePath();
+
+    const g0 = [0,0,0], g1 = [0,0,0], g2 = [0,0,0];
+    for (let i = 0; i < 3; i++) {
+      g0[i] = color0[i] + w0 * grad[i][0];
+      g1[i] = color1[i] + w1 * grad[i][1];
+      g2[i] = color2[i] + w2 * grad[i][2];
+    }
+    // Fill with interpolated color (use mid-point color for fill)
+    const mid = [
+      (g0[0]+g1[0]+g2[0])/3,
+      (g0[1]+g1[1]+g2[1])/3,
+      (g0[2]+g1[2]+g2[2])/3,
+    ];
+    ctx.fillStyle = `rgb(${Math.round(mid[0])},${Math.round(mid[1])},${Math.round(mid[2])})`;
+    ctx.fill();
+  }
+}
+
+// ── clear ──
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  document.getElementById('info').innerHTML = `
+    FPS: ${fps} | Pause: ${paused} | Wireframe: ${wireframe}<br>
+    Press W to toggle wireframe, P to pause
+  `;
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ── main loop ──
+let lastTime = 0;
+function loop(ts) {
+  requestAnimationFrame(loop);
+
+  if (ts - lastTime < 1000 / 30) return;
+  lastTime = ts;
+
+  if (!paused) {
+    fps++;
+    if (fps >= 30) {
+      fps = 0;
+      fpsStart = ts;
+      fpsCount = 0;
+    }
+    if (fpsCount++ >= 30) {
+      fps = fpsCount;
+      fpsCount = 0;
+    }
+    // animate light and rotation
+    light.t += 0.005;
+    light.x = Math.sin(light.t) * 2.5;
+    light.y = Math.cos(light.t) * 2.5;
+    light.z = Math.sin(light.t * 0.7) * 1.5;
+    rot.x += 0.01;
+    rot.y += 0.008;
+    rot.z += 0.005;
+  }
+
+  // clear
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // transform all vertices
+  const transformed = [];
+  for (let i = 0; i < V.length; i++) {
+    transformed.push(transform(V[i], rot.x, rot.y, rot.z));
+  }
+
+  // compute light direction (from light to each vertex)
+  function lightDir(v) {
+    return sub(v, [light.x, light.y, light.z]);
+  }
+
+  // compute face normals for backface culling
+  const faceNormals = TRIANGLES.map(t => {
+    const n = sub(transformed[t[1]], transformed[t[0]]);
+    const m = sub(transformed[t[2]], transformed[t[0]]);
+    return [
+      n[1]*m[2]-n[2]*m[1],
+      n[2]*m[0]-n[0]*m[2],
+      n[0]*m[1]-n[1]*m[0],
+    ];
+  });
+
+  // project vertices
+  const projected = transformed.map(p => project(p));
+
+  // draw faces
+  for (let ti = 0; ti < TRIANGLES.length; ti++) {
+    const n = faceNormals[ti];
+    // view direction
+    const viewDir = [-0, -1, 0]; // simplified
+    if (dot(n, viewDir) > 0) continue; // backface cull
+
+    const v0 = transformed[TRIANGLES[ti][0]];
+    const v1 = transformed[TRIANGLES[ti][1]];
+    const v2 = transformed[TRIANGLES[ti][2]];
+
+    // compute per-vertex lighting using Lambert
+    const ld0 = lightDir(v0);
+    const ld1 = lightDir(v1);
+    const ld2 = lightDir(v2);
+
+    // normalize light direction
+    const ld0n = norm(ld0), ld1n = norm(ld1), ld2n = norm(ld2);
+
+    // Lambert: I = ambient + diffuse * max(0, N·L)
+    // face normal approximated from the projected normal
+    const faceN = [
+      (projected[TRIANGLES[ti][0]][0] - projected[TRIANGLES[ti][1]][0]) * 0.1,
+      (projected[TRIANGLES[ti][0]][1] - projected[TRIANGLES[ti][1]][1]) * 0.1,
+      0.5,
+    ];
+    const faceNn = [
+      faceN[0] / Math.sqrt(faceN[0]*faceN[0]+faceN[1]*faceN[1]+faceN[2]*faceN[2]),
+      faceN[1] / Math.sqrt(faceN[0]*faceN[0]+faceN[1]*faceN[1]+faceN[2]*faceN[2]),
+      faceN[2] / Math.sqrt(faceN[0]*faceN[0]+faceN[1]*faceN[1]+faceN[2]*faceN[2]),
+    ];
+
+    const d0 = Math.max(0, dot(faceNn, ld0n));
+    const d1 = Math.max(0, dot(faceNn, ld1n));
+    const d2 = Math.max(0, dot(faceNn, ld2n));
+
+    // Gouraud colors: interpolate per-vertex
+    const c0 = [
+      0.2 + d0 * 0.7,
+      0.2 + d0 * 0.7,
+      0.2 + d0 * 0.7,
+    ];
+    const c1 = [
+      0.2 + d1 * 0.7,
+      0.2 + d1 * 0.7,
+      0.2 + d1 * 0.7,
+    ];
+    const c2 = [
+      0.2 + d2 * 0.7,
+      0.2 + d2 * 0.7,
+      0.2 + d2 * 0.7,
+    ];
+
+    rasterizeTriangle(ctx, v0, v1, v2, c0, c1, c2, wireframe);
+  }
+
+  // update FPS display
+  document.getElementById('info').innerHTML = `
+    FPS: ${fps} | Pause: ${paused} | Wireframe: ${wireframe}<br>
+    Press W to toggle wireframe, P to pause
+  `;
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

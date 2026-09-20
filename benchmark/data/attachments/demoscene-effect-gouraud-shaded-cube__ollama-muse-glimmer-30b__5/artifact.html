@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Gouraud Shaded Rotating Cube</title>
+<style>
+html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:system-ui,Segoe UI,Roboto,sans-serif}
+canvas{display:block;width:100vw;height:100vh}
+#ui{position:absolute;top:10px;left:10px;color:#fff;background:rgba(0,0,0,.4);padding:8px 12px;border-radius:8px;font-size:14px;line-height:1.4}
+#ui b{color:#9cf}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="ui">FPS: <b id="fps">0</b><br>Press <b>W</b> wireframe, <b>P</b> pause</div>
+<script>
+const canvas=document.getElementById('c');
+const ctx=canvas.getContext('2d');
+let W,H;
+function resize(){W=canvas.width=canvas.clientWidth*devicePixelRatio;H=canvas.height=canvas.clientHeight*devicePixelRatio;canvas.style.width=canvas.clientWidth+'px';canvas.style.height=canvas.clientHeight+'px';}
+addEventListener('resize',resize);resize();
+
+const verts=[
+ [-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1],
+ [-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1]
+];
+const faces=[
+ [0,1,2,3],[4,5,6,7],[0,4,7,3],[1,5,6,2],[0,1,5,4],[3,2,6,7]
+];
+const faceNormals=[
+ [0,0,-1],[0,0,1],[-1,0,0],[1,0,0],[0,-1,0],[0,1,0]
+];
+
+let angleX=0,angleY=0,angleZ=0;
+let paused=false,wireframe=false;
+let last=performance.now(),frames=0,fps=0,fpsTime=0;
+
+addEventListener('keydown',e=>{
+ if(e.key==='w'||e.key==='W')wireframe=!wireframe;
+ if(e.key==='p'||e.key==='P')paused=!paused;
+});
+
+function matMulVec(m,v){
+ return [
+  m[0]*v[0]+m[1]*v[1]+m[2]*v[2],
+  m[3]*v[0]+m[4]*v[1]+m[5]*v[2],
+  m[6]*v[0]+m[7]*v[1]+m[8]*v[2]
+ ];
+}
+function rotateX(v,a){const c=Math.cos(a),s=Math.sin(a);return [v[0], v[1]*c - v[2]*s, v[1]*s + v[2]*c];}
+function rotateY(v,a){const c=Math.cos(a),s=Math.sin(a);return [v[0]*c + v[2]*s, v[1], -v[0]*s + v[2]*c];}
+function rotateZ(v,a){const c=Math.cos(a),s=Math.sin(a);return [v[0]*c - v[1]*s, v[0]*s + v[1]*c, v[2]];}
+
+function project(p){
+ const fov=400;
+ const z = p[2]+5;
+ if(z<=0.1) return null;
+ const scale = fov / z;
+ return [
+  W/2 + p[0]*scale,
+  H/2 + p[1]*scale,
+  z
+ ];
+}
+
+function cross(a,b){return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];}
+function dot(a,b){return a[0]*b[0]+a[1]*b[1]+a[2]*b[2];}
+function sub(a,b){return [a[0]-b[0],a[1]-b[1],a[2]-b[2]];}
+function normalize(v){const l=Math.hypot(v[0],v[1],v[2])||1;return [v[0]/l,v[1]/l,v[2]/l];}
+
+function lerpColor(c1,c2,t){
+ return [
+  Math.round(c1[0]+(c2[0]-c1[0])*t),
+  Math.round(c1[1]+(c2[1]-c1[1])*t),
+  Math.round(c1[2]+(c2[2]-c1[2])*t)
+ ];
+}
+
+function edgeFunction(a,b,c){
+ return (c[0]-a[0])*(b[1]-a[1])-(c[1]-a[1])*(b[0]-a[0]);
+}
+
+function rasterizeTriangle(p0,p1,p2,c0,c1,c2){
+ const minX=Math.max(0,Math.floor(Math.min(p0[0],p1[0],p2[0])));
+ const maxX=Math.min(W-1,Math.ceil(Math.max(p0[0],p1[0],p2[0])));
+ const minY=Math.max(0,Math.floor(Math.min(p0[1],p1[1],p2[1])));
+ const maxY=Math.min(H-1,Math.ceil(Math.max(p0[1],p1[1],p2[1])));
+ const area=edgeFunction(p0,p1,p2);
+ if(area===0) return;
+ const invArea=1/area;
+ for(let y=minY;y<=maxY;y++){
+  for(let x=minX;x<=maxX;x++){
+   const p=[x+0.5,y+0.5];
+   const w0=edgeFunction(p1,p2,p);
+   const w1=edgeFunction(p2,p0,p);
+   const w2=edgeFunction(p0,p1,p);
+   if((w0>=0 && w1>=0 && w2>=0)||(w0<=0 && w1<=0 && w2<=0)){
+    const u=w0*invArea, v=w1*invArea, w=w2*invArea;
+    const r=c0[0]*u + c1[0]*v + c2[0]*w;
+    const g=c0[1]*u + c1[1]*v + c2[1]*w;
+    const b=c0[2]*u + c1[2]*v + c2[2]*w;
+    ctx.fillStyle=`rgb(${r|0},${g|0},${b|0})`;
+    ctx.fillRect(x,y,1,1);
+   }
+  }
+ }
+}
+
+function draw(){
+ const now=performance.now();
+ if(!paused){
+  angleY+=0.01;
+  angleX+=0.005;
+  angleZ+=0.003;
+ }
+ const lightPos=[Math.sin(now*0.001)*3, Math.cos(now*0.0007)*2, 4];
+
+ // transform vertices
+ const transformed=[];
+ for(let i=0;i<verts.length;i++){
+  let v=verts[i];
+  v=rotateX(v,angleX);
+  v=rotateY(v,angleY);
+  v=rotateZ(v,angleZ);
+  transformed.push(v);
+ }
+ const projected=[];
+ for(let i=0;i<transformed.length;i++){
+  const p=project(transformed[i]);
+  projected.push(p);
+ }
+
+ ctx.fillStyle='#000';
+ ctx.fillRect(0,0,W,H);
+
+ const tris=[];
+ for(let f=0;f<faces.length;f++){
+  const idx=faces[f];
+  const n=faceNormals[f];
+  // compute face normal in world after rotation
+  let fn=rotateX(n,angleX);
+  fn=rotateY(fn,angleY);
+  fn=rotateZ(fn,angleZ);
+  fn=normalize(fn);
+  // backface culling
+  const center=[0,0,0];
+  for(let i=0;i<4;i++) center[0]+=transformed[idx[i]][0],center[1]+=transformed[idx[i]][1],center[2]+=transformed[idx[i]][2];
+  center[0]/=4;center[1]/=4;center[2]/=4;
+  const viewDir=normalize([-center[0],-center[1],-center[2]]);
+  if(dot(fn,viewDir)<=0) continue;
+  // split quad into two triangles
+  const triPairs=[[0,1,2],[0,2,3]];
+  for(const t of triPairs){
+   const i0=idx[t[0]],i1=idx[t[1]],i2=idx[t[2]];
+   const p0=projected[i0],p1=projected[i1],p2=projected[i2];
+   if(!p0||!p1||!p2) continue;
+   // per-vertex lighting
+   const v0=transformed[i0],v1=transformed[i1],v2=transformed[i2];
+   const l0=normalize(sub(lightPos,v0));
+   const l1=normalize(sub(lightPos,v1));
+   const l2=normalize(sub(lightPos,v2));
+   const base=[200,120,255];
+   const shade=(l)=>Math.max(0.2, dot(fn,l));
+   const c0=[base[0]*shade(l0),base[1]*shade(l0),base[2]*shade(l0)];
+   const c1=[base[0]*shade(l1),base[1]*shade(l1),base[2]*shade(l1)];
+   const c2=[base[0]*shade(l2),base[1]*shade(l2),base[2]*shade(l2)];
+   tris.push({p0,p1,p2,c0,c1,c2,z:(p0[2]+p1[2]+p2[2])/3});
+  }
+ }
+ // painter's sort
+ tris.sort((a,b)=>b.z-a.z);
+ for(const t of tris){
+  if(wireframe){
+   ctx.strokeStyle='rgba(255,255,255,0.3)';
+   ctx.beginPath();
+   ctx.moveTo(t.p0[0],t.p0[1]);
+   ctx.lineTo(t.p1[0],t.p1[1]);
+   ctx.lineTo(t.p2[0],t.p2[1]);
+   ctx.closePath();
+   ctx.stroke();
+  }else{
+   rasterizeTriangle(t.p0,t.p1,t.p2,t.c0,t.c1,t.c2);
+  }
+ }
+ if(wireframe){
+  ctx.strokeStyle='rgba(255,255,255,0.6)';
+  ctx.lineWidth=2;
+  for(let f=0;f<faces.length;f++){
+   const idx=faces[f];
+   ctx.beginPath();
+   for(let i=0;i<4;i++){
+    const p=projected[idx[i]];
+    if(!p) continue;
+    if(i===0) ctx.moveTo(p[0],p[1]); else ctx.lineTo(p[0],p[1]);
+   }
+   ctx.closePath();
+   ctx.stroke();
+  }
+ }
+
+ // FPS
+ frames++;
+ if(now-fpsTime>500){
+  fps=Math.round(frames*1000/(now-fpsTime));
+  document.getElementById('fps').textContent=fps;
+  frames=0;fpsTime=now;
+ }
+ requestAnimationFrame(draw);
+}
+draw();
+</script>
+</body>
+</html>

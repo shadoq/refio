@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Gouraud-Shaded Rotating Cube</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #111; overflow: hidden; display: flex; justify-content: center; align-items: center; height: 100vh; }
+canvas { display: block; background: #0a0a1a; }
+#hud { position: absolute; top: 12px; left: 14px; color: #8f8; font: 14px monospace; pointer-events: none; line-height: 1.6; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud"></div>
+<script>
+"use strict";
+
+// ── Canvas setup ────────────────────────────────────────────────
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+const hud = document.getElementById("hud");
+
+function resize() {
+    canvas.width = innerWidth;
+    canvas.height = innerHeight;
+}
+resize();
+addEventListener("resize", resize);
+
+// ── 3D math helpers ─────────────────────────────────────────────
+function vec3(x, y, z) { return [x, y, z]; }
+function sub(a, b) { return [a[0]-b[0], a[1]-b[1], a[2]-b[2]]; }
+function cross(a, b) { return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]; }
+function dot(a, b) { return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
+function norm(v) { const l = Math.hypot(v[0],v[1],v[2]); return [v[0]/l, v[1]/l, v[2]/l]; }
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+function rotateX(v, a) {
+    const c = Math.cos(a), s = Math.sin(a);
+    return [v[0], v[1]*c - v[2]*s, v[1]*s + v[2]*c];
+}
+function rotateY(v, a) {
+    const c = Math.cos(a), s = Math.sin(a);
+    return [v[0]*c + v[2]*s, v[1], -v[0]*s + v[2]*c];
+}
+function rotateZ(v, a) {
+    const c = Math.cos(a), s = Math.sin(a);
+    return [v[0]*c - v[1]*s, v[0]*s + v[1]*c, v[2]];
+}
+
+// ── Cube definition ─────────────────────────────────────────────
+const SIZE = 140;
+const HALF = SIZE / 2;
+
+// 8 vertices of a cube centred at origin
+const cubeVerts = [
+    vec3(-HALF, -HALF, -HALF),  // 0
+    vec3( HALF, -HALF, -HALF),  // 1
+    vec3( HALF,  HALF, -HALF),  // 2
+    vec3(-HALF,  HALF, -HALF),  // 3
+    vec3(-HALF, -HALF,  HALF),  // 4
+    vec3( HALF, -HALF,  HALF),  // 5
+    vec3( HALF,  HALF,  HALF),  // 6
+    vec3(-HALF,  HALF,  HALF),  // 7
+];
+
+// 6 faces, each defined by 4 vertex indices (counter-clockwise winding for outward normals)
+const cubeFaces = [
+    [0, 3, 2, 1],  // front  (-Z)
+    [4, 5, 6, 7],  // back   (+Z)
+    [0, 1, 5, 4],  // bottom (-Y)
+    [3, 0, 4, 7],  // left   (-X)
+    [1, 2, 6, 5],  // right  (+X)
+    [2, 3, 7, 6],  // top    (+Y)
+];
+
+// Base face colours (warm palette)
+const faceColors = [
+    [220, 60, 60],   // red-ish front
+    [60, 80, 220],   // blue-ish back
+    [220, 180, 40],  // yellow bottom
+    [60, 200, 120],  // green left
+    [200, 100, 200], // purple right
+    [240, 140, 40],  // orange top
+];
+
+// ── Perspective projection ──────────────────────────────────────
+const FOV = 500;
+const CAM_DIST = 500;
+
+function project(p) {
+    const z = p[2] + CAM_DIST;
+    const scale = FOV / z;
+    return [
+        p[0] * scale + canvas.width / 2,
+        p[1] * scale + canvas.height / 2,
+        z  // keep depth for sorting
+    ];
+}
+
+// ── Light source (moves in a figure-8 orbit) ───────────────────
+const LIGHT_SPEED = 0.6;
+function getLight(time) {
+    const x = Math.sin(time * LIGHT_SPEED) * 250;
+    const y = Math.cos(time * LIGHT_SPEED * 0.7) * 200;
+    const z = Math.cos(time * LIGHT_SPEED) * 250;
+    return vec3(x, y, z);
+}
+
+// ── Lambert lighting ────────────────────────────────────────────
+const AMBIENT = 0.15;
+
+function lambert(faceNormal, lightDir, color) {
+    const intensity = Math.max(0, dot(faceNormal, lightDir)) * (1 - AMBIENT) + AMBIENT;
+    return [
+        Math.min(255, Math.round(color[0] * intensity)),
+        Math.min(255, Math.round(color[1] * intensity)),
+        Math.min(255, Math.round(color[2] * intensity)),
+    ];
+}
+
+// ── Per-vertex normal computation ───────────────────────────────
+function vertexNormal(vi, transformed) {
+    // Average of adjacent face normals
+    let n = [0, 0, 0];
+    let count = 0;
+    for (const face of cubeFaces) {
+        if (face.includes(vi)) {
+            const i0 = face[0], i1 = face[1], i2 = face[2];
+            const a = sub(transformed[i1], transformed[i0]);
+            const b = sub(transformed[i2], transformed[i0]);
+            n = [n[0]+cross(a,b)[0], n[1]+cross(a,b)[1], n[2]+cross(a,b)[2]];
+            count++;
+        }
+    }
+    if (count === 0) return [0, 1, 0];
+    return norm(n);
+}
+
+// ── Triangle rasterisation with Gouraud interpolation ──────────
+function fillTriangleInterp(p0, p1, p2, c0, c1, c2) {
+    // Sort vertices by Y
+    const verts = [[p0,c0],[p1,c1],[p2,c2]];
+    verts.sort((a, b) => a[0][1] - b[0][1]);
+    const [v0, c_v0] = verts[0];
+    const [v1, c_v1] = verts[1];
+    const [v2, c_v2] = verts[2];
+
+    const xMin = Math.max(0, Math.floor(Math.min(v0[0], v1[0], v2[0])));
+    const xMax = Math.min(canvas.width - 1, Math.ceil(Math.max(v0[0], v1[0], v2[0])));
+    const yMin = Math.max(0, Math.floor(Math.min(v0[1], v1[1], v2[1])));
+    const yMax = Math.min(canvas.height - 1, Math.ceil(Math.max(v0[1], v1[1], v2[1])));
+
+    const imgData = ctx.getImageData(xMin, yMin, xMax - xMin + 1, yMax - yMin + 1);
+    const data = imgData.data;
+    const w = imgData.width;
+
+    for (let py = yMin; py <= yMax; py++) {
+        for (let px = xMin; px <= xMax; px++) {
+            // Barycentric
+            const det = (v1[1]-v2[1])*(v0[0]-v2[0]) + (v2[0]-v1[0])*(v0[1]-v2[1]);
+            if (Math.abs(det) < 0.5) continue;
+            const a = ((v1[1]-v2[1])*(px-v2[0]) + (v2[0]-v1[0])*(py-v2[1])) / det;
+            const b = ((v2[1]-v0[1])*(px-v2[0]) + (v0[0]-v2[0])*(py-v2[1])) / det;
+            const c = 1 - a - b;
+            if (a < 0 || b < 0 || c < 0) continue;
+
+            const r = Math.round(lerp(lerp(c_v0[0], c_v1[0], b), lerp(c_v1[0], c_v2[0], c), a));
+            const g = Math.round(lerp(lerp(c_v0[1], c_v1[1], b), lerp(c_v1[1], c_v2[1], c), a));
+            const bl = Math.round(lerp(lerp(c_v0[2], c_v1[2], b), lerp(c_v1[2], c_v2[2], c), a));
+
+            const idx = (py - yMin) * w + (px - xMin);
+            data[idx * 4] = r;
+            data[idx * 4 + 1] = g;
+            data[idx * 4 + 2] = bl;
+            data[idx * 4 + 3] = 255;
+        }
+    }
+    ctx.putImageData(imgData, xMin, yMin);
+}
+
+// ── State ───────────────────────────────────────────────────────
+let rotX = 0, rotY = 0, rotZ = 0;
+let showWireframe = false;
+let paused = false;
+let lastTime = 0;
+let fps = 0;
+let frameCount = 0;
+let fpsTime = 0;
+
+// ── Input ───────────────────────────────────────────────────────
+addEventListener("keydown", (e) => {
+    if (e.key === "w" || e.key === "W") showWireframe = !showWireframe;
+    if (e.key === "p" || e.key === "P") paused = !paused;
+});
+
+// ── Main render loop ────────────────────────────────────────────
+function render(timestamp) {
+    requestAnimationFrame(render);
+
+    // FPS counter
+    frameCount++;
+    if (timestamp - fpsTime >= 1000) {
+        fps = frameCount;
+        frameCount = 0;
+        fpsTime = timestamp;
+    }
+
+    const dt = (timestamp - lastTime) / 1000;
+    lastTime = timestamp;
+
+    if (!paused) {
+        rotX += dt * 0.5;
+        rotY += dt * 0.7;
+        rotZ += dt * 0.2;
+    }
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Transform vertices
+    const transformed = cubeVerts.map(v => {
+        let p = rotateX(v, rotX);
+        p = rotateY(p, rotY);
+        p = rotateZ(p, rotZ);
+        return p;
+    });
+
+    // Project vertices
+    const projected = transformed.map(v => project(v));
+
+    // Light
+    const lightPos = getLight(timestamp / 1000);
+    const lightDir = norm(sub(lightPos, [0, 0, 0]));
+
+    // Build faces with depth and lighting
+    const facesToRender = [];
+
+    for (let fi = 0; fi < cubeFaces.length; fi++) {
+        const face = cubeFaces[fi];
+        const indices = [face[0], face[1], face[2], face[3]];
+
+        // Compute face normal (from first 3 vertices)
+        const a = sub(transformed[indices[1]], transformed[indices[0]]);
+        const b = sub(transformed[indices[2]], transformed[indices[0]]);
+        const faceNormal = norm(cross(a, b));
+
+        // Backface culling
+        if (dot(faceNormal, transformed[indices[0]]) < 0) continue;
+
+        // Split quad into 2 triangles
+        const tri1 = [indices[0], indices[1], indices[2]];
+        const tri2 = [indices[0], indices[2], indices[3]];
+
+        // Compute per-vertex normals for smooth shading
+        const vn0 = vertexNormal(tri1[0], transformed);
+        const vn1 = vertexNormal(tri1[1], transformed);
+        const vn2 = vertexNormal(tri1[2], transformed);
+
+        // Compute per-vertex Lambert lighting
+        const vn0l = norm(sub(transformed[tri1[0]], lightPos));
+        const vn1l = norm(sub(transformed[tri1[1]], lightPos));
+        const vn2l = norm(sub(transformed[tri1[2]], lightPos));
+
+        const col = faceColors[fi];
+        const c0 = lambert(vn0, vn0l, col);
+        const c1 = lambert(vn1, vn1l, col);
+        const c2 = lambert(vn2, vn2l, col);
+
+        // Average depth for sorting
+        const zAvg = (transformed[tri1[0]][2] + transformed[tri1[1]][2] + transformed[tri1[2]][2]) / 3;
+
+        facesToRender.push({ indices: tri1, colors: [c0, c1, c2], z: zAvg });
+
+        // Triangle 2
+        const vn3 = vertexNormal(tri2[2], transformed);
+        const vn3l = norm(sub(transformed[tri2[2]], lightPos));
+        const c3 = lambert(vn3, vn3l, col);
+
+        const zAvg2 = (transformed[tri2[0]][2] + transformed[tri2[1]][2] + transformed[tri2[2]][2]) / 3;
+        facesToRender.push({ indices: tri2, colors: [c0, c2, c3], z: zAvg2 });
+    }
+
+    // Sort back to front (painter's algorithm)
+    facesToRender.sort((a, b) => b.z - a.z);
+
+    // Rasterise
+    for (const face of facesToRender) {
+        const [i0, i1, i2] = face.indices;
+        const p0 = projected[i0], p1 = projected[i1], p2 = projected[i2];
+        fillTriangleInterp(p0, p1, p2, face.colors[0], face.colors[1], face.colors[2]);
+    }
+
+    // Wireframe overlay
+    if (showWireframe) {
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.5)";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        for (const face of cubeFaces) {
+            for (let i = 0; i < 4; i++) {
+                const j = (i + 1) % 4;
+                const a = projected[face[i]];
+                const b = projected[face[j]];
+                ctx.moveTo(a[0], a[1]);
+                ctx.lineTo(b[0], b[1]);
+            }
+        }
+        ctx.stroke();
+    }
+
+    // HUD
+    hud.textContent = `FPS: ${fps}  |  W: Wireframe ${showWireframe ? "ON" : "OFF"}  |  P: Pause ${paused ? "ON" : "OFF"}`;
+}
+
+requestAnimationFrame(render);
+</script>
+</body>
+</html>

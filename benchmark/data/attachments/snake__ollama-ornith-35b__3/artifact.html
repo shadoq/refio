@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Snake Game</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #111;
+  color: #fff;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  overflow: hidden;
+}
+
+#menu, #gameOver {
+  text-align: center;
+  z-index: 10;
+}
+
+#menu h1 {
+  font-size: 3rem;
+  margin-bottom: 2rem;
+  text-shadow: 0 0 20px #0f0;
+  color: #0f0;
+}
+
+#gameOver h1 {
+  font-size: 2.5rem;
+  margin-bottom: 1rem;
+  text-shadow: 0 0 20px #f00;
+  color: #f00;
+}
+
+#gameOver .final-scores {
+  font-size: 1.2rem;
+  margin-bottom: 2rem;
+  line-height: 1.8;
+  color: #ccc;
+}
+
+.menu-btn {
+  display: block;
+  width: 300px;
+  margin: 0.8rem auto;
+  padding: 1rem;
+  font-size: 1.1rem;
+  border: 2px solid #0f0;
+  background: transparent;
+  color: #0f0;
+  cursor: pointer;
+  border-radius: 8px;
+  transition: all 0.2s;
+  font-family: inherit;
+}
+
+.menu-btn:hover {
+  background: #0f0;
+  color: #111;
+}
+
+#gameContainer {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+}
+
+#scoreboard {
+  display: flex;
+  gap: 2rem;
+  margin-bottom: 1rem;
+  font-size: 1.1rem;
+}
+
+.score-entry {
+  padding: 0.4rem 1rem;
+  border-radius: 6px;
+  background: rgba(255,255,255,0.05);
+}
+
+.score-entry.p1 { border: 1px solid #4af; }
+.score-entry.p2 { border: 1px solid #f4a; }
+
+#canvas {
+  border: 2px solid #333;
+  background: #0a0a0a;
+  display: block;
+}
+
+.hint {
+  margin-top: 1rem;
+  color: #666;
+  font-size: 0.85rem;
+}
+</style>
+</head>
+<body>
+
+<div id="menu">
+  <h1>&#x1F40D; Snake Game</h1>
+  <button class="menu-btn" onclick="startGame('pvp')">👥 Human vs Human</button>
+  <button class="menu-btn" onclick="startGame('cpuHuman')">🤖 CPU vs Human</button>
+  <button class="menu-btn" onclick="startGame('cpuCpu')">🤖🤖 CPU vs CPU</button>
+</div>
+
+<div id="gameContainer">
+  <div id="scoreboard">
+    <div class="score-entry p1" id="scoreP1">Player 1: 0</div>
+    <div class="score-entry p2" id="scoreP2">Player 2: 0</div>
+  </div>
+  <canvas id="canvas" width="600" height="600"></canvas>
+  <div class="hint">Press any key to restart | Esc for menu</div>
+</div>
+
+<div id="gameOver" style="display:none;">
+  <h1>Game Over!</h1>
+  <div class="final-scores" id="finalScores"></div>
+  <button class="menu-btn" onclick="showMenu()">🏠 Main Menu</button>
+  <div class="hint">Press any key to restart</div>
+</div>
+
+<script>
+const GRID = 30;
+const CELL = 20;
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+
+const DIR = { UP: {x:0,y:-1}, DOWN: {x:0,y:1}, LEFT: {x:-1,y:0}, RIGHT: {x:1,y:0} };
+const OPPOSITE = { UP: 'DOWN', DOWN: 'UP', LEFT: 'RIGHT', RIGHT: 'LEFT' };
+
+let gameMode = 'pvp';
+let snake1, snake2;
+let food;
+let dir1, dir2;
+let score1, score2;
+let gameRunning = false;
+let animFrame;
+let gameLoopInterval = 120;
+let lastTime = 0;
+let accumulator = 0;
+
+function showMenu() {
+  gameRunning = false;
+  if (animFrame) cancelAnimationFrame(animFrame);
+  document.getElementById('menu').style.display = 'block';
+  document.getElementById('gameContainer').style.display = 'none';
+  document.getElementById('gameOver').style.display = 'none';
+}
+
+function startGame(mode) {
+  gameMode = mode;
+  document.getElementById('menu').style.display = 'none';
+  document.getElementById('gameOver').style.display = 'none';
+  document.getElementById('gameContainer').style.display = 'flex';
+
+  initGame();
+}
+
+function initGame() {
+  // Snake 1 starts left side going right
+  snake1 = [{x:5, y:15}, {x:4, y:15}, {x:3, y:15}];
+  dir1 = DIR.RIGHT;
+
+  // Snake 2 starts right side going left
+  snake2 = [{x:24, y:15}, {x:25, y:15}, {x:26, y:15}];
+  dir2 = DIR.LEFT;
+
+  score1 = 0;
+  score2 = 0;
+  gameRunning = true;
+  accumulator = 0;
+  lastTime = 0;
+
+  placeFood();
+  updateScoreboard();
+  requestAnimationFrame(gameLoop);
+}
+
+function placeFood() {
+  let pos;
+  do {
+    pos = { x: Math.floor(Math.random() * GRID), y: Math.floor(Math.random() * GRID) };
+  } while (isOccupied(pos.x, pos.y));
+  food = pos;
+}
+
+function isOccupied(x, y) {
+  for (let s of snake1) if (s.x === x && s.y === y) return true;
+  for (let s of snake2) if (s.x === x && s.y === y) return true;
+  return false;
+}
+
+function isWall(x, y) {
+  return x < 0 || x >= GRID || y < 0 || y >= GRID;
+}
+
+function isSelf(x, y, snake) {
+  for (let i = 0; i < snake.length; i++) if (snake[i].x === x && snake[i].y === y) return true;
+  return false;
+}
+
+function isCollision(x, y) {
+  if (isWall(x, y)) return true;
+  if (isSelf(x, y, snake1)) return true;
+  if (isSelf(x, y, snake2)) return true;
+  return false;
+}
+
+function updateScoreboard() {
+  document.getElementById('scoreP1').textContent = `Player 1: ${score1}`;
+  document.getElementById('scoreP2').textContent = `Player 2: ${score2}`;
+}
+
+function getCPUDir(snake, target) {
+  const head = snake[0];
+  const moves = [DIR.UP, DIR.DOWN, DIR.LEFT, DIR.RIGHT];
+  
+  // Filter out moves that would cause collision
+  const safeMoves = moves.filter(m => {
+    const nx = head.x + m.x;
+    const ny = head.y + m.y;
+    return !isCollision(nx, ny);
+  });
+
+  if (safeMoves.length === 0) return moves[0]; // sacrifice
+
+  // Score each safe move by distance to food
+  let bestMove = safeMoves[0];
+  let bestDist = Infinity;
+
+  for (let m of safeMoves) {
+    const nx = head.x + m.x;
+    const ny = head.y + m.y;
+    const dist = Math.abs(nx - target.x) + Math.abs(ny - target.y);
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestMove = m;
+    }
+  }
+
+  return bestMove;
+}
+
+function getCPUTarget() {
+  // In cpuCpu mode, each CPU targets the food
+  return food;
+}
+
+function update() {
+  if (!gameRunning) return;
+
+  // Determine directions
+  if (gameMode === 'cpuCpu') {
+    dir1 = getCPUDir(snake1, food);
+    dir2 = getCPUDir(snake2, food);
+  } else if (gameMode === 'pvp') {
+    // directions set by keyboard
+  }
+  // cpuHuman: dir2 is CPU, dir1 is keyboard (set by keys)
+
+  // Move snake 1
+  const h1 = snake1[0];
+  const nx1 = h1.x + dir1.x;
+  const ny1 = h1.y + dir1.y;
+
+  if (isCollision(nx1, ny1)) {
+    endGame(1);
+    return;
+  }
+
+  snake1.unshift({x: nx1, y: ny1});
+  if (nx1 === food.x && ny1 === food.y) {
+    score1++;
+    placeFood();
+  } else {
+    snake1.pop();
+  }
+
+  // Move snake 2
+  const h2 = snake2[0];
+  const nx2 = h2.x + dir2.x;
+  const ny2 = h2.y + dir2.y;
+
+  if (isCollision(nx2, ny2)) {
+    endGame(2);
+    return;
+  }
+
+  snake2.unshift({x: nx2, y: ny2});
+  if (nx2 === food.x && ny2 === food.y) {
+    score2++;
+    placeFood();
+  } else {
+    snake2.pop();
+  }
+
+  // Check if both ate food same frame (rare)
+  if (nx1 === food.x && ny1 === food.y && nx2 === food.x && ny2 === food.y) {
+    placeFood();
+  }
+
+  updateScoreboard();
+}
+
+function endGame(winner) {
+  gameRunning = false;
+  const gameOverDiv = document.getElementById('gameOver');
+  const finalScores = document.getElementById('finalScores');
+  
+  let winnerText = '';
+  if (winner === 1) winnerText = '<p style="color:#4af;font-size:1.5rem;">Player 1 Wins!</p>';
+  else if (winner === 2) winnerText = '<p style="color:#f4a;font-size:1.5rem;">Player 2 Wins!</p>';
+  else winnerText = '<p style="color:#ff0;font-size:1.5rem;">Draw!</p>';
+
+  finalScores.innerHTML = winnerText + 
+    `Player 1: <strong>${score1}</strong><br>Player 2: <strong>${score2}</strong>`;
+
+  document.getElementById('gameContainer').style.display = 'none';
+  gameOverDiv.style.display = 'block';
+}
+
+function draw() {
+  ctx.fillStyle = '#0a0a0a';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Grid lines (subtle)
+  ctx.strokeStyle = '#151515';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i <= GRID; i++) {
+    ctx.beginPath();
+    ctx.moveTo(i * CELL, 0);
+    ctx.lineTo(i * CELL, GRID * CELL);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0, i * CELL);
+    ctx.lineTo(GRID * CELL, i * CELL);
+    ctx.stroke();
+  }
+
+  // Food
+  ctx.fillStyle = '#ff3333';
+  ctx.shadowColor = '#ff0000';
+  ctx.shadowBlur = 10;
+  ctx.beginPath();
+  ctx.arc(food.x * CELL + CELL/2, food.y * CELL + CELL/2, CELL/2 - 2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+
+  // Snake 1
+  for (let i = 0; i < snake1.length; i++) {
+    const s = snake1[i];
+    const alpha = 1 - (i / snake1.length) * 0.5;
+    ctx.fillStyle = i === 0 ? '#4af' : `rgba(68, 170, 255, ${alpha})`;
+    ctx.fillRect(s.x * CELL + 1, s.y * CELL + 1, CELL - 2, CELL - 2);
+  }
+
+  // Snake 2
+  for (let i = 0; i < snake2.length; i++) {
+    const s = snake2[i];
+    const alpha = 1 - (i / snake2.length) * 0.5;
+    ctx.fillStyle = i === 0 ? '#f4a' : `rgba(255, 68, 170, ${alpha})`;
+    ctx.fillRect(s.x * CELL + 1, s.y * CELL + 1, CELL - 2, CELL - 2);
+  }
+}
+
+function gameLoop(timestamp) {
+  if (!gameRunning) return;
+
+  if (!lastTime) lastTime = timestamp;
+  const delta = timestamp - lastTime;
+  lastTime = timestamp;
+  accumulator += delta;
+
+  if (accumulator >= gameLoopInterval) {
+    update();
+    accumulator = 0;
+  }
+
+  draw();
+  animFrame = requestAnimationFrame(gameLoop);
+}
+
+// Keyboard controls
+document.addEventListener('keydown', (e) => {
+  // Show menu with Escape
+  if (e.key === 'Escape') {
+    showMenu();
+    return;
+  }
+
+  // Restart with any key when game over or in menu
+  if (!gameRunning) {
+    if (document.getElementById('gameOver').style.display === 'block') {
+      startGame(gameMode);
+    } else if (document.getElementById('menu').style.display === 'block') {
+      // do nothing on menu, use buttons
+    }
+    return;
+  }
+
+  // Human player 1 controls (WASD)
+  switch(e.key) {
+    case 'w': case 'W':
+      if (dir1 !== DIR.DOWN) dir1 = DIR.UP;
+      break;
+    case 's': case 'S':
+      if (dir1 !== DIR.UP) dir1 = DIR.DOWN;
+      break;
+    case 'a': case 'A':
+      if (dir1 !== DIR.RIGHT) dir1 = DIR.LEFT;
+      break;
+    case 'd': case 'D':
+      if (dir1 !== DIR.LEFT) dir1 = DIR.RIGHT;
+      break;
+  }
+
+  // Human player 2 controls (Arrow keys) - only in PvP mode
+  if (gameMode === 'pvp') {
+    switch(e.key) {
+      case 'ArrowUp':
+        if (dir2 !== DIR.DOWN) dir2 = DIR.UP;
+        break;
+      case 'ArrowDown':
+        if (dir2 !== DIR.UP) dir2 = DIR.DOWN;
+        break;
+      case 'ArrowLeft':
+        if (dir2 !== DIR.RIGHT) dir2 = DIR.LEFT;
+        break;
+      case 'ArrowRight':
+        if (dir2 !== DIR.LEFT) dir2 = DIR.RIGHT;
+        break;
+    }
+  }
+
+  e.preventDefault();
+});
+</script>
+</body>
+</html>

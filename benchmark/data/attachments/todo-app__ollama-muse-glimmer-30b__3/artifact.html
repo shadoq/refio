@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Todo App</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,sans-serif;background:#f5f7fb;color:#222;display:flex;justify-content:center;padding:40px 16px}
+.container{width:100%;max-width:520px;background:#fff;border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.08);padding:24px}
+h1{text-align:center;margin-bottom:20px;font-size:28px}
+.input-row{display:flex;gap:8px;margin-bottom:16px}
+input[type=text]{flex:1;padding:12px 14px;border:1px solid #ddd;border-radius:10px;font-size:16px}
+input[type=text]:focus{outline:none;border-color:#6c63ff}
+button{cursor:pointer;border:none;background:#6c63ff;color:#fff;padding:12px 16px;border-radius:10px;font-weight:600}
+button.secondary{background:#e9eefc;color:#333}
+.filters{display:flex;gap:8px;margin:16px 0;justify-content:center}
+.filters button{padding:8px 12px;font-size:14px;background:#f1f3f8;color:#333}
+.filters button.active{background:#6c63ff;color:#fff}
+ul{list-style:none}
+li{display:flex;align-items:center;gap:10px;padding:10px 8px;border-bottom:1px solid #f0f0f0}
+li:last-child{border-bottom:none}
+li.completed span{text-decoration:line-through;color:#888}
+li span{flex:1}
+.checkbox{width:18px;height:18px;border:2px solid #bbb;border-radius:4px;display:inline-block;cursor:pointer}
+.checkbox.checked{background:#6c63ff;border-color:#6c63ff;position:relative}
+.checkbox.checked::after{content:'✓';color:#fff;font-size:12px;position:absolute;top:-3px;left:1px}
+.delete{background:transparent;color:#c33;font-size:18px;padding:4px 8px}
+.delete:hover{opacity:.7}
+.empty{text-align:center;color:#888;padding:24px 0}
+footer{text-align:center;font-size:12px;color:#999;margin-top:16px}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>Todo App</h1>
+<div class="input-row">
+<input id="newTodo" type="text" placeholder="Add a new todo..." />
+<button id="addBtn">Add</button>
+</div>
+<div class="filters">
+<button data-filter="all" class="active">All</button>
+<button data-filter="active">Active</button>
+<button data-filter="completed">Completed</button>
+</div>
+<ul id="list"></ul>
+<footer>Saved to localStorage</footer>
+</div>
+<script>
+const STORAGE_KEY='todos_v1';
+let todos = JSON.parse(localStorage.getItem(STORAGE_KEY)||'[]');
+let filter='all';
+
+const listEl=document.getElementById('list');
+const inputEl=document.getElementById('newTodo');
+const addBtn=document.getElementById('addBtn');
+
+function save(){localStorage.setItem(STORAGE_KEY,JSON.stringify(todos));}
+function render(){
+  const filtered = todos.filter(t=>{
+    if(filter==='active') return !t.done;
+    if(filter==='completed') return t.done;
+    return true;
+  });
+  listEl.innerHTML='';
+  if(filtered.length===0){
+    listEl.innerHTML='<li class="empty">No todos</li>';
+    return;
+  }
+  filtered.forEach(t=>{
+    const li=document.createElement('li');
+    li.className=t.done?'completed':'';
+    li.dataset.id=t.id;
+    li.innerHTML=`
+      <div class="checkbox ${t.done?'checked':''}" data-action="toggle"></div>
+      <span>${escapeHtml(t.text)}</span>
+      <button class="delete" data-action="delete">✕</button>
+    `;
+    listEl.appendChild(li);
+  });
+}
+function escapeHtml(s){return s.replace(/[&<>"']/g,m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m]));}
+function addTodo(text){
+  text=text.trim();
+  if(!text) return;
+  todos.unshift({id:Date.now(),text,done:false});
+  save();render();
+}
+addBtn.addEventListener('click',()=>{addTodo(inputEl.value);inputEl.value='';});
+inputEl.addEventListener('keydown',e=>{if(e.key==='Enter'){addTodo(inputEl.value);inputEl.value='';}});
+listEl.addEventListener('click',e=>{
+  const li=e.target.closest('li');
+  if(!li||li.classList.contains('empty')) return;
+  const id=Number(li.dataset.id);
+  const todo=todos.find(t=>t.id===id);
+  if(!todo) return;
+  if(e.target.dataset.action==='toggle'){
+    todo.done=!todo.done;
+    save();render();
+  }else if(e.target.dataset.action==='delete'){
+    todos=todos.filter(t=>t.id!==id);
+    save();render();
+  }
+});
+document.querySelectorAll('.filters button').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    document.querySelectorAll('.filters button').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    filter=btn.dataset.filter;
+    render();
+  });
+});
+render();
+</script>
+</body>
+</html>

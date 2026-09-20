@@ -1,0 +1,1511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ARTIFACT: Museum Night - Premium Event Landing Page</title>
+  <style>
+    :root {
+      --bg: #070506;
+      --velvet: #1a0710;
+      --burgundy: #3a0f1d;
+      --midnight: #07111f;
+      --gold: #d6ad60;
+      --soft-gold: #f3d79b;
+      --ivory: #f8efe2;
+      --muted: #b9a999;
+      --panel: rgba(255, 244, 220, 0.06);
+      --border: rgba(214, 173, 96, 0.28);
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: 'Inter', system-ui, Segoe UI, sans-serif;
+      background: var(--bg);
+      color: var(--ivory);
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    /* Noise/grain overlay */
+    body::before {
+      content: '';
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+      pointer-events: none;
+      opacity: 0.03;
+      z-index: 1000;
+    }
+
+    /* Reduced motion preference */
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after {
+        animation-duration: 0s !important;
+        transition-duration: 0s !important;
+      }
+    }
+
+    /* Navbar */
+    nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      background: rgba(7, 5, 6, 0.8);
+      backdrop-filter: blur(20px);
+      border-bottom: 1px solid var(--border);
+      padding: 1rem 2rem;
+      height: 80px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .logo {
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 1.8rem;
+      font-weight: 400;
+      letter-spacing: 0.05em;
+      color: var(--gold);
+      text-decoration: none;
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 3rem;
+      list-style: none;
+    }
+
+    .nav-links a {
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 0.9rem;
+      font-weight: 500;
+      color: var(--muted);
+      text-decoration: none;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      transition: color 0.3s ease;
+    }
+
+    .nav-links a:hover {
+      color: var(--gold);
+    }
+
+    .nav-links a.active {
+      color: var(--gold);
+    }
+
+    .nav-cta {
+      background: var(--gold);
+      color: var(--bg);
+      border: none;
+      padding: 0.8rem 1.5rem;
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 0.85rem;
+      font-weight: 500;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: transform 0.3s ease, box-shadow 0.3s ease;
+    }
+
+    .nav-cta:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 30px rgba(214, 173, 96, 0.3);
+    }
+
+    /* Mobile menu */
+    .mobile-toggle {
+      display: none;
+      flex-direction: column;
+      gap: 5px;
+      background: none;
+      border: none;
+      cursor: pointer;
+    }
+
+    .mobile-toggle span {
+      width: 25px;
+      height: 3px;
+      background: var(--gold);
+      transition: transform 0.3s ease, opacity 0.3s ease;
+    }
+
+    .mobile-toggle.active span:nth-child(1) {
+      transform: rotate(45deg) translate(5px, 5px);
+    }
+
+    .mobile-toggle.active span:nth-child(2) {
+      opacity: 0;
+    }
+
+    .mobile-toggle.active span:nth-child(3) {
+      transform: rotate(-45deg) translate(7px, -6px);
+    }
+
+    @media (max-width: 768px) {
+      .nav-links {
+        position: fixed;
+        top: 80px;
+        left: 0;
+        right: 0;
+        background: rgba(7, 5, 6, 0.98);
+        backdrop-filter: blur(20px);
+        flex-direction: column;
+        padding: 2rem;
+        gap: 2rem;
+        transform: translateY(-100%);
+        transition: transform 0.4s ease;
+      }
+
+      .nav-links.active {
+        transform: translateY(0);
+      }
+
+      .mobile-toggle {
+        display: flex;
+      }
+    }
+
+    /* Hero */
+    .hero {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 8rem 2rem 4rem;
+      position: relative;
+    }
+
+    .hero-content {
+      max-width: 900px;
+      text-align: center;
+      padding: 2rem;
+    }
+
+    .hero h1 {
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 4.5rem;
+      font-weight: 400;
+      line-height: 1.1;
+      letter-spacing: -0.03em;
+      color: var(--ivory);
+      margin-bottom: 1.5rem;
+    }
+
+    @media (max-width: 768px) {
+      .hero h1 {
+        font-size: 3rem;
+      }
+    }
+
+    .hero .event-name {
+      font-size: 1.8rem;
+      color: var(--soft-gold);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      margin-bottom: 3rem;
+    }
+
+    .hero .event-details {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      align-items: center;
+      margin-bottom: 4rem;
+    }
+
+    .hero .detail {
+      display: flex;
+      gap: 0.5rem;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .hero .detail span {
+      color: var(--gold);
+    }
+
+    .hero .cta-group {
+      display: flex;
+      gap: 1.5rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 0.9rem;
+      font-weight: 500;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      padding: 1rem 2.5rem;
+      border: none;
+      cursor: pointer;
+      transition: transform 0.3s ease, box-shadow 0.3s ease;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .btn {
+        transition: none !important;
+      }
+    }
+
+    .btn-primary {
+      background: var(--gold);
+      color: var(--bg);
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 30px rgba(214, 173, 96, 0.3);
+    }
+
+    .btn-secondary {
+      background: transparent;
+      color: var(--ivory);
+      border: 1px solid var(--gold);
+    }
+
+    .btn-secondary:hover {
+      background: var(--gold);
+      color: var(--bg);
+    }
+
+    /* Concept section */
+    .section {
+      padding: 6rem 2rem;
+    }
+
+    .section-header {
+      text-align: center;
+      margin-bottom: 4rem;
+    }
+
+    .section-header h2 {
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 3rem;
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      color: var(--ivory);
+    }
+
+    .section-header p {
+      max-width: 600px;
+      margin: 1.5rem auto 0;
+      color: var(--muted);
+      font-size: 1.1rem;
+    }
+
+    .concept-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 2rem;
+    }
+
+    .concept-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      padding: 2.5rem;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .concept-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: var(--gold);
+      transform: scaleX(0);
+      transform-origin: left;
+      transition: transform 0.4s ease;
+    }
+
+    .concept-card:hover::before {
+      transform: scaleX(1);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .concept-card::before {
+        transform: scaleX(1) !important;
+      }
+    }
+
+    .concept-card h3 {
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 1.5rem;
+      color: var(--gold);
+      margin-bottom: 1rem;
+    }
+
+    .concept-card p {
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    /* Program timeline */
+    .timeline {
+      position: relative;
+      padding-left: 2rem;
+    }
+
+    .timeline::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      background: var(--gold);
+    }
+
+    .timeline-item {
+      position: relative;
+      padding: 2rem 0;
+    }
+
+    .timeline-item::before {
+      content: '';
+      position: absolute;
+      left: -2rem;
+      top: 1.5rem;
+      width: 12px;
+      height: 12px;
+      background: var(--gold);
+      border: 3px solid var(--bg);
+      border-radius: 50%;
+    }
+
+    .timeline-item h3 {
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 1.3rem;
+      color: var(--ivory);
+      margin-bottom: 0.5rem;
+    }
+
+    .timeline-item p {
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    /* Artists section */
+    .artists-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 2rem;
+    }
+
+    .artist-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      padding: 2rem;
+      text-align: center;
+      transition: transform 0.3s ease;
+    }
+
+    .artist-card:hover {
+      transform: translateY(-5px);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .artist-card:hover {
+        transform: none !important;
+      }
+    }
+
+    .artist-card img {
+      width: 120px;
+      height: 120px;
+      border-radius: 50%;
+      object-fit: cover;
+      margin-bottom: 1.5rem;
+      border: 4px solid var(--velvet);
+    }
+
+    .artist-card h3 {
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 1.2rem;
+      color: var(--ivory);
+      margin-bottom: 0.5rem;
+    }
+
+    .artist-card p {
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    /* Venue section */
+    .venue-section {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      padding: 3rem;
+    }
+
+    .venue-section h3 {
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 1.5rem;
+      color: var(--ivory);
+      margin-bottom: 1.5rem;
+    }
+
+    .venue-section p {
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .venue-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 2rem;
+      margin-top: 2rem;
+    }
+
+    .venue-item {
+      padding: 1rem;
+    }
+
+    .venue-item h4 {
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 0.9rem;
+      text-transform: uppercase;
+      color: var(--gold);
+      margin-bottom: 0.5rem;
+    }
+
+    /* Ticket tiers */
+    .ticket-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 2rem;
+    }
+
+    .ticket-tier {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      padding: 3rem 2rem;
+      position: relative;
+      overflow: hidden;
+      transition: transform 0.3s ease, box-shadow 0.3s ease;
+    }
+
+    .ticket-tier:hover {
+      transform: translateY(-5px);
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .ticket-tier:hover {
+        transform: none !important;
+      }
+    }
+
+    .ticket-tier::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: var(--gold);
+    }
+
+    .ticket-tier.popular {
+      border-color: var(--gold);
+      transform: scale(1.02);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .ticket-tier.popular {
+        transform: scale(1) !important;
+      }
+    }
+
+    .ticket-tier::before {
+      height: 5px;
+    }
+
+    .ticket-tier.popular::before {
+      height: 5px;
+    }
+
+    .ticket-tier .tag {
+      position: absolute;
+      top: 1rem;
+      right: 1rem;
+      background: var(--gold);
+      color: var(--bg);
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 0.7rem;
+      font-weight: 500;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      padding: 0.3rem 0.8rem;
+    }
+
+    .ticket-tier .name {
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 1.8rem;
+      color: var(--ivory);
+      margin-bottom: 1rem;
+    }
+
+    .ticket-tier .price {
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 2.5rem;
+      color: var(--gold);
+      margin-bottom: 2rem;
+    }
+
+    .ticket-tier .features {
+      list-style: none;
+      margin-bottom: 2rem;
+    }
+
+    .ticket-tier .features li {
+      padding: 0.5rem 0;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .ticket-tier .btn {
+      width: 100%;
+    }
+
+    /* FAQ accordion */
+    .faq-item {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      margin-bottom: 1rem;
+      overflow: hidden;
+    }
+
+    .faq-question {
+      width: 100%;
+      background: none;
+      border: none;
+      padding: 1.5rem 2rem;
+      text-align: left;
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 1rem;
+      color: var(--ivory);
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .faq-question:hover {
+      background: var(--velvet);
+    }
+
+    .faq-question .plus {
+      transition: transform 0.3s ease;
+    }
+
+    .faq-question.active .plus {
+      transform: rotate(45deg);
+    }
+
+    .faq-answer {
+      padding: 0 2rem 1.5rem;
+      color: var(--muted);
+      font-size: 0.9rem;
+      display: none;
+    }
+
+    .faq-answer.open {
+      display: block;
+    }
+
+    /* Newsletter */
+    .newsletter {
+      background: linear-gradient(135deg, var(--velvet), var(--midnight));
+      border: 1px solid var(--border);
+      padding: 4rem 2rem;
+      text-align: center;
+    }
+
+    .newsletter h3 {
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 2rem;
+      color: var(--ivory);
+      margin-bottom: 1rem;
+    }
+
+    .newsletter p {
+      color: var(--muted);
+      margin-bottom: 2rem;
+      max-width: 500px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .newsletter-form {
+      display: flex;
+      gap: 1rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .newsletter-form input {
+      padding: 1rem 2rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--ivory);
+      font-family: 'Inter', system-ui, sans-serif;
+      font-size: 1rem;
+      width: 300px;
+    }
+
+    @media (max-width: 768px) {
+      .newsletter-form input {
+        width: 100%;
+        max-width: 100%;
+      }
+    }
+
+    .newsletter-form button {
+      background: var(--gold);
+      color: var(--bg);
+      border: none;
+      padding: 1rem 2rem;
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 0.9rem;
+      cursor: pointer;
+      transition: transform 0.3s ease;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .newsletter-form button {
+        transition: none !important;
+      }
+    }
+
+    .newsletter-form button:hover {
+      transform: translateY(-2px);
+    }
+
+    /* Toast */
+    .toast {
+      visibility: hidden;
+      min-width: 250px;
+      background: var(--gold);
+      color: var(--bg);
+      text-align: center;
+      border-radius: 4px;
+      padding: 1rem 1.5rem;
+      position: fixed;
+      bottom: 2rem;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 300;
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 0.9rem;
+      box-shadow: 0 5px 20px rgba(0, 0, 0, 0.3);
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
+
+    .toast.show {
+      visibility: visible;
+      opacity: 1;
+    }
+
+    /* Footer */
+    footer {
+      background: var(--velvet);
+      border-top: 1px solid var(--border);
+      padding: 4rem 2rem 2rem;
+    }
+
+    .footer-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 3rem;
+    }
+
+    .footer-brand .logo {
+      display: inline-block;
+      margin-bottom: 1rem;
+    }
+
+    .footer-brand p {
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .footer-links h4 {
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      color: var(--gold);
+      margin-bottom: 1.5rem;
+    }
+
+    .footer-links ul {
+      list-style: none;
+    }
+
+    .footer-links li {
+      margin-bottom: 0.8rem;
+    }
+
+    .footer-links a {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 0.85rem;
+      transition: color 0.3s ease;
+    }
+
+    .footer-links a:hover {
+      color: var(--gold);
+    }
+
+    .footer-bottom {
+      margin-top: 3rem;
+      padding-top: 2rem;
+      border-top: 1px solid var(--border);
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+
+    /* Modal */
+    .modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.9);
+      backdrop-filter: blur(8px);
+      z-index: 200;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .modal.active {
+      display: flex;
+    }
+
+    .modal-content {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      padding: 3rem;
+      width: 90%;
+      max-width: 500px;
+      position: relative;
+      animation: modalIn 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    @keyframes modalIn {
+      from { opacity: 0; transform: translateY(30px) scale(0.9); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .modal-content {
+        animation: none !important;
+      }
+    }
+
+    .modal-close {
+      position: absolute;
+      top: 1rem;
+      right: 1rem;
+      width: 30px;
+      height: 30px;
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-size: 1.5rem;
+      cursor: pointer;
+      transition: color 0.3s ease;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .modal-close {
+        transition: none !important;
+      }
+    }
+
+    .modal-close:hover {
+      color: var(--gold);
+    }
+
+    .modal-close::after,
+    .modal-close::before {
+      content: '';
+      position: absolute;
+      left: 15px;
+      top: 0;
+      width: 2px;
+      height: 30px;
+      background: currentColor;
+    }
+
+    .modal-close::after { transform: rotate(45deg); }
+    .modal-close::before { transform: rotate(-45deg); }
+
+    .modal h2 {
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 2rem;
+      color: var(--ivory);
+      margin-bottom: 1.5rem;
+    }
+
+    .modal p {
+      color: var(--muted);
+      margin-bottom: 2rem;
+    }
+
+    .ticket-option {
+      display: none;
+    }
+
+    .ticket-option.active {
+      display: block;
+    }
+
+    .ticket-option {
+      background: var(--velvet);
+      border: 1px solid var(--border);
+      padding: 2rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .ticket-option .name {
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 1.2rem;
+      color: var(--ivory);
+      margin-bottom: 0.5rem;
+    }
+
+    .ticket-option .price {
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 1.5rem;
+      color: var(--gold);
+    }
+
+    .ticket-option .features {
+      list-style: none;
+      margin: 1rem 0;
+    }
+
+    .ticket-option .features li {
+      padding: 0.3rem 0;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    .ticket-option .btn {
+      width: 100%;
+      margin-top: 1rem;
+    }
+
+    /* Scroll reveal */
+    .reveal {
+      opacity: 0;
+      transform: translateY(20px);
+      transition: opacity 0.6s ease, transform 0.6s ease;
+    }
+
+    .reveal.active {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .reveal {
+        transition: none !important;
+      }
+      .reveal.active {
+        opacity: 1;
+        transform: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Navbar -->
+  <nav>
+    <a href="#" class="logo">ARTIFACT</a>
+    <ul class="nav-links">
+      <li><a href="#program" class="active">Program</a></li>
+      <li><a href="#artists">Artists</a></li>
+      <li><a href="#venue">Venue</a></li>
+      <li><a href="#tickets">Tickets</a></li>
+      <li><a href="#faq">FAQ</a></li>
+    </ul>
+    <button class="nav-cta" id="navTicketsBtn">Get Tickets</button>
+    <button class="mobile-toggle" id="mobileMenuBtn">
+      <span></span>
+      <span></span>
+      <span></span>
+    </button>
+  </nav>
+
+  <!-- Hero -->
+  <section class="hero" id="hero">
+    <div class="hero-content">
+      <h1>Museum Night, Reimagined</h1>
+      <div class="event-name">ARTIFACT: Museum Night</div>
+      <div class="event-details">
+        <div class="detail"><span>18 October 2026</span> 19:00–02:00</div>
+        <div class="detail"><span>The Old Gallery</span>, Warsaw</div>
+      </div>
+      <div class="cta-group">
+        <button class="btn btn-primary">Get Tickets</button>
+        <button class="btn btn-secondary">Save to Calendar</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Concept -->
+  <section class="section" id="concept">
+    <div class="section-header">
+      <h2>Concept</h2>
+      <p>A nocturnal journey through art, history, and mystery. Experience the museum like never before under the cover of darkness.</p>
+    </div>
+    <div class="concept-grid">
+      <div class="concept-card reveal">
+        <h3>Velvet Darkness</h3>
+        <p>Immerse yourself in the hushed atmosphere of the museum after hours, where each gallery reveals new dimensions of the collection.</p>
+      </div>
+      <div class="concept-card reveal">
+        <h3>Golden Spotlights</h3>
+        <p>Curated pools of golden light guide your path, highlighting masterpieces and creating intimate moments of discovery.</p>
+      </div>
+      <div class="concept-card reveal">
+        <h3>Quiet Mystery</h3>
+        <p>Experience art in contemplative silence, undisturbed by the daytime crowds, where every corner holds a secret.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Program -->
+  <section class="section" id="program">
+    <div class="section-header">
+      <h2>Program</h2>
+    </div>
+    <div class="timeline">
+      <div class="timeline-item reveal">
+        <h3>19:00 – Opening</h3>
+        <p>Welcome reception with champagne and live classical music in the main hall.</p>
+      </div>
+      <div class="timeline-item reveal">
+        <h3>19:30 – Guided Tours</h3>
+        <p>Expert-led tours through the permanent collection and special installations.</p>
+      </div>
+      <div class="timeline-item reveal">
+        <h3>20:30 – Performance</h3>
+        <p>Site-specific contemporary dance performance responding to the museum space.</p>
+      </div>
+      <div class="timeline-item reveal">
+        <h3>21:30 – Late Night Viewing</h3>
+        <p>Unlimited access to all galleries with ambient electronic soundscape.</p>
+      </div>
+      <div class="timeline-item reveal">
+        <h3>02:00 – Closing</h3>
+        <p>Final moments together as the night draws to a close.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Artists -->
+  <section class="section" id="artists">
+    <div class="section-header">
+      <h2>Artists</h2>
+    </div>
+    <div class="artists-grid">
+      <div class="artist-card reveal">
+        <img src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&h=400&fit=crop" alt="Elena Voss">
+        <h3>Elena Voss</h3>
+        <p>Contemporary Installation</p>
+      </div>
+      <div class="artist-card reveal">
+        <img src="https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=400&h=400&fit=crop" alt="Marcus Chen">
+        <h3>Marcus Chen</h3>
+        <p>Digital Art</p>
+      </div>
+      <div class="artist-card reveal">
+        <img src="https://images.unsplash.com/photo-1522071820081-009f0129c71c?w=400&h=400&fit=crop" alt="Sophie Dubois">
+        <h3>Sophie Dubois</h3>
+        <p>Sculpture</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Venue -->
+  <section class="section" id="venue">
+    <div class="section-header">
+      <h2>Venue</h2>
+    </div>
+    <div class="venue-section">
+      <h3>The Old Gallery</h3>
+      <p>A historic venue in the heart of Warsaw, transformed for one night only.</p>
+      
+      <div class="venue-grid">
+        <div class="venue-item">
+          <h4>Address</h4>
+          <p>The Old Gallery, ul. Królewska 15, 00-001 Warsaw, Poland</p>
+        </div>
+        <div class="venue-item">
+          <h4>Getting Here</h4>
+          <p>Metro: Rondo ONZ, 5-minute walk. Parking available underground.</p>
+        </div>
+        <div class="venue-item">
+          <h4>Accessibility</h4>
+          <p>Ground floor access, wheelchair accessible restrooms, hearing loop available.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Tickets -->
+  <section class="section" id="tickets">
+    <div class="section-header">
+      <h2>Tickets</h2>
+    </div>
+    <div class="ticket-grid">
+      <div class="ticket-tier popular" data-tier="general">
+        <span class="tag">Most Popular</span>
+        <div class="name">General Admission</div>
+        <div class="price">€85</div>
+        <ul class="features">
+          <li>Access to all galleries</li>
+          <li>Guided tour included</li>
+          <li>2 drinks voucher</li>
+          <li>Event catalog</li>
+        </ul>
+        <button class="btn btn-primary">Select Ticket</button>
+      </div>
+      <div class="ticket-tier" data-tier="vip">
+        <div class="name">VIP Experience</div>
+        <div class="price">€150</div>
+        <ul class="features">
+          <li>Priority entry</li>
+          <li>Private guided tour</li>
+          <li>4 drinks voucher</li>
+          <li>Catalog + limited edition print</li>
+          <li>Access to lounge</li>
+        </ul>
+        <button class="btn btn-primary">Select Ticket</button>
+      </div>
+      <div class="ticket-tier" data-tier="premium">
+        <span class="tag">Limited</span>
+        <div class="name">Premium</div>
+        <div class="price">€250</div>
+        <ul class="features">
+          <li>Early access 18:30</li>
+          <li>Director's tour</li>
+          <li>6 drinks voucher</li>
+          <li>Catalog + signed artwork</li>
+          <li>Lounge access + dinner</li>
+          <li>Meet & greet</li>
+        </ul>
+        <button class="btn btn-primary">Select Ticket</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section class="section" id="faq">
+    <div class="section-header">
+      <h2>FAQ</h2>
+    </div>
+    <div class="faq-item">
+      <button class="faq-question" aria-expanded="false">
+        What time do doors open?
+        <span class="plus">+</span>
+      </button>
+      <div class="faq-answer">
+        Doors open at 19:00 on 18 October 2026. We recommend arriving 15 minutes early for check-in.
+      </div>
+    </div>
+    <div class="faq-item">
+      <button class="faq-question" aria-expanded="false">
+        Is there a dress code?
+        <span class="plus">+</span>
+      </button>
+      <div class="faq-answer">
+        Smart casual recommended. No sportswear or beachwear. Some areas may be cool, so a light jacket is advisable.
+      </div>
+    </div>
+    <div class="faq-item">
+      <button class="faq-question" aria-expanded="false">
+        Can I purchase tickets at the door?
+        <span class="plus">+</span>
+      </button>
+      <div class="faq-answer">
+        Tickets are available at the door, but we recommend pre-booking to guarantee entry. VIP and Premium tiers may sell out.
+      </div>
+    </div>
+    <div class="faq-item">
+      <button class="faq-question" aria-expanded="false">
+        Is the event suitable for children?
+        <span class="plus">+</span>
+      </button>
+      <div class="faq-answer">
+        The event is recommended for ages 16+. Some content may be mature. Children under 16 must be accompanied by an adult.
+      </div>
+    </div>
+    <div class="faq-item">
+      <button class="faq-question" aria-expanded="false">
+        What happens in case of rain?
+        <span class="plus">+</span>
+      </button>
+      <div class="faq-answer">
+        The event is primarily indoors. In case of extreme weather, ticket holders will be notified via email with any changes.
+      </div>
+    </div>
+  </section>
+
+  <!-- Newsletter -->
+  <section class="section" id="newsletter">
+    <div class="newsletter">
+      <h3>Stay Informed</h3>
+      <p>Subscribe for updates on ARTIFACT events, early bird ticket access, and exclusive content.</p>
+      <form class="newsletter-form">
+        <input type="email" placeholder="Enter your email" required>
+        <button type="submit">Subscribe</button>
+      </form>
+    </div>
+  </section>
+
+  <!-- Toast -->
+  <div class="toast" id="newsletterToast">
+    Thank you for subscribing!
+  </div>
+
+  <!-- Footer -->
+  <footer>
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <a href="#" class="logo">ARTIFACT</a>
+        <p>Premium cultural events reimagining the museum experience.</p>
+      </div>
+      <div class="footer-links">
+        <h4>Company</h4>
+        <ul>
+          <li><a href="#program">Program</a></li>
+          <li><a href="#artists">Artists</a></li>
+          <li><a href="#venue">Venue</a></li>
+        </ul>
+      </div>
+      <div class="footer-links">
+        <h4>Legal</h4>
+        <ul>
+          <li><a href="#tickets">Tickets</a></li>
+          <li><a href="#faq">FAQ</a></li>
+          <li><a href="#">Privacy Policy</a></li>
+        </ul>
+      </div>
+      <div class="footer-links">
+        <h4>Follow</h4>
+        <p>Stay connected with ARTIFACT</p>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <p>ARTIFACT: Museum Night • 18 October 2026 • The Old Gallery, Warsaw</p>
+    </div>
+  </footer>
+
+  <!-- Ticket Modal -->
+  <div class="modal" id="ticketModal">
+    <div class="modal-content">
+      <button class="modal-close" id="modalCloseBtn" aria-label="Close modal"></button>
+      <h2>Select Your Ticket</h2>
+      <p>Choose the experience that suits you best.</p>
+      
+      <div class="ticket-option active" data-tier="general">
+        <div class="name">General Admission</div>
+        <div class="price">€85</div>
+        <ul class="features">
+          <li>Access to all galleries</li>
+          <li>Guided tour included</li>
+          <li>2 drinks voucher</li>
+          <li>Event catalog</li>
+        </ul>
+        <button class="btn btn-primary">Confirm Selection</button>
+      </div>
+      
+      <div class="ticket-option" data-tier="vip">
+        <div class="name">VIP Experience</div>
+        <div class="price">€150</div>
+        <ul class="features">
+          <li>Priority entry</li>
+          <li>Private guided tour</li>
+          <li>4 drinks voucher</li>
+          <li>Catalog + limited edition print</li>
+          <li>Access to lounge</li>
+        </ul>
+        <button class="btn btn-primary">Confirm Selection</button>
+      </div>
+      
+      <div class="ticket-option" data-tier="premium">
+        <div class="name">Premium</div>
+        <div class="price">€250</div>
+        <ul class="features">
+          <li>Early access 18:30</li>
+          <li>Director's tour</li>
+          <li>6 drinks voucher</li>
+          <li>Catalog + signed artwork</li>
+          <li>Lounge access + dinner</li>
+          <li>Meet & greet</li>
+        </ul>
+        <button class="btn btn-primary">Confirm Selection</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Initialize variables first
+    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    
+    // Mobile menu
+    const mobileMenuBtn = document.getElementById('mobileMenuBtn');
+    const navLinks = document.querySelector('.nav-links');
+    
+    mobileMenuBtn.addEventListener('click', () => {
+      mobileMenuBtn.classList.toggle('active');
+      navLinks.classList.toggle('active');
+      document.body.style.overflow = navLinks.classList.contains('active') ? 'hidden' : '';
+    });
+    
+    // Close mobile menu when clicking a link
+    document.querySelectorAll('.nav-links a').forEach(link => {
+      link.addEventListener('click', () => {
+        mobileMenuBtn.classList.remove('active');
+        navLinks.classList.remove('active');
+        document.body.style.overflow = '';
+      });
+    });
+    
+    // Active nav state on scroll
+    const sections = document.querySelectorAll('section[id]');
+    const navLinksList = document.querySelectorAll('.nav-links a');
+    
+    window.addEventListener('scroll', () => {
+      let current = '';
+      
+      sections.forEach(section => {
+        const sectionTop = section.offsetTop;
+        const sectionHeight = section.clientHeight;
+        if (pageYOffset >= sectionTop - sectionHeight / 3) {
+          current = section.getAttribute('id');
+        }
+      });
+      
+      navLinksList.forEach(link => {
+        link.classList.remove('active');
+        if (link.getAttribute('href') === `#${current}`) {
+          link.classList.add('active');
+        }
+      });
+    });
+    
+    // Ticket modal
+    const navTicketsBtn = document.getElementById('navTicketsBtn');
+    const modal = document.getElementById('ticketModal');
+    const modalCloseBtn = document.getElementById('modalCloseBtn');
+    const ticketOptions = document.querySelectorAll('.ticket-option');
+    const tierButtons = document.querySelectorAll('.ticket-tier .btn');
+    
+    // Open modal from navbar
+    navTicketsBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      modal.classList.add('active');
+    });
+    
+    // Close modal
+    modalCloseBtn.addEventListener('click', () => {
+      modal.classList.remove('active');
+    });
+    
+    // Close modal when clicking outside
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) {
+        modal.classList.remove('active');
+      }
+    });
+    
+    // Ticket tier selection in modal
+    ticketOptions.forEach(option => {
+      option.addEventListener('click', () => {
+        // Remove active class from all options
+        ticketOptions.forEach(opt => opt.classList.remove('active'));
+        // Add active class to clicked option
+        option.classList.add('active');
+      });
+    });
+    
+    // Tier buttons in ticket sections to open modal
+    tierButtons.forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        modal.classList.add('active');
+        // Find the tier data and set it as active in modal
+        const tier = btn.closest('.ticket-tier').dataset.tier;
+        ticketOptions.forEach(opt => {
+          opt.classList.toggle('active', opt.dataset.tier === tier);
+        });
+      });
+    });
+    
+    // FAQ accordion
+    const faqQuestions = document.querySelectorAll('.faq-question');
+    
+    faqQuestions.forEach(question => {
+      question.addEventListener('click', () => {
+        const faqItem = question.parentElement;
+        const isActive = faqItem.classList.contains('active');
+        
+        // Close all FAQ items
+        document.querySelectorAll('.faq-item').forEach(item => {
+          item.classList.remove('active');
+        });
+        
+        // Open clicked item if it wasn't active
+        if (!isActive) {
+          faqItem.classList.add('active');
+        }
+        
+        // Update plus icon
+        const plus = question.querySelector('.plus');
+        if (plus) {
+          if (isActive) {
+            plus.style.transform = 'rotate(0deg)';
+          } else {
+            plus.style.transform = 'rotate(45deg)';
+          }
+        }
+      });
+    });
+    
+    // Close FAQ when clicking elsewhere
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.faq-item')) {
+        document.querySelectorAll('.faq-item').forEach(item => {
+          item.classList.remove('active');
+        });
+      }
+    });
+    
+    // Ticket tier hover effects
+    const ticketTiers = document.querySelectorAll('.ticket-tier');
+    
+    ticketTiers.forEach(tier => {
+      tier.addEventListener('mouseenter', () => {
+        ticketTiers.forEach(t => t.classList.remove('popular'));
+        tier.classList.add('popular');
+      });
+      
+      tier.addEventListener('mouseleave', () => {
+        ticketTiers.forEach(t => t.classList.remove('popular'));
+      });
+    });
+    
+    // Scroll reveal
+    const revealElements = document.querySelectorAll('.reveal');
+    
+    const revealObserver = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (!prefersReducedMotion.matches) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('active');
+          }
+        } else {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('active');
+          }
+        }
+      });
+    }, { threshold: 0.1 });
+    
+    revealElements.forEach(el => {
+      revealObserver.observe(el);
+    });
+    
+    // Newsletter form with toast
+    const newsletterForm = document.querySelector('.newsletter-form');
+    const newsletterToast = document.getElementById('newsletterToast');
+    
+    newsletterForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const input = newsletterForm.querySelector('input');
+      if (input.value) {
+        // Show toast
+        newsletterToast.classList.add('show');
+        // Hide toast after 3 seconds
+        setTimeout(() => {
+          newsletterToast.classList.remove('show');
+        }, 3000);
+        input.value = '';
+      }
+    });
+    
+    // Initialize elements to visible state for reveal
+    document.addEventListener('DOMContentLoaded', () => {
+      const revealElements = document.querySelectorAll('.reveal');
+      revealElements.forEach(el => {
+        setTimeout(() => {
+          el.classList.add('active');
+        }, 100);
+      });
+    });
+    
+    // Card hover effects
+    const conceptCards = document.querySelectorAll('.concept-card');
+    const artistCards = document.querySelectorAll('.artist-card');
+    
+    conceptCards.forEach(card => {
+      card.addEventListener('mouseenter', () => {
+        conceptCards.forEach(c => {
+          if (c !== card) c.style.opacity = '0.7';
+        });
+      });
+      card.addEventListener('mouseleave', () => {
+        conceptCards.forEach(c => {
+          c.style.opacity = '1';
+        });
+      });
+    });
+    
+    artistCards.forEach(card => {
+      card.addEventListener('mouseenter', () => {
+        artistCards.forEach(c => {
+          if (c !== card) c.style.opacity = '0.7';
+        });
+      });
+      card.addEventListener('mouseleave', () => {
+        artistCards.forEach(c => {
+          c.style.opacity = '1';
+        });
+      });
+    });
+  </script>
+</body>
+</html>

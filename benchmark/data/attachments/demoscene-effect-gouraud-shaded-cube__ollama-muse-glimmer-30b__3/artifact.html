@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Gouraud Shaded Rotating Cube</title>
+<style>
+  html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:system-ui,Segoe UI,Roboto,sans-serif}
+  canvas{display:block;width:100%;height:100%}
+  #ui{position:fixed;top:10px;left:10px;color:#fff;background:rgba(0,0,0,.5);padding:8px 12px;border-radius:8px;font-size:14px;line-height:1.4}
+  #ui b{color:#9cf}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="ui">FPS: <b id="fps">0</b><br>Wireframe: <b id="wf">OFF</b> (W)<br>Pause: <b id="pa">OFF</b> (P)</div>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W = canvas.width = innerWidth;
+let H = canvas.height = innerHeight;
+addEventListener('resize',()=>{W=canvas.width=innerWidth;H=canvas.height=innerHeight;});
+
+const vertices = [
+  [-1,-1,-1],[ 1,-1,-1],[ 1, 1,-1],[-1, 1,-1],
+  [-1,-1, 1],[ 1,-1, 1],[ 1, 1, 1],[-1, 1, 1]
+];
+const faces = [
+  [0,1,2],[0,2,3], // back
+  [4,6,5],[4,7,6], // front
+  [0,4,5],[0,5,1], // bottom
+  [2,6,7],[2,7,3], // top
+  [0,3,7],[0,7,4], // left
+  [1,5,6],[1,6,2]  // right
+];
+
+let angleX = 0, angleY = 0;
+let paused = false;
+let wireframe = false;
+let last = performance.now();
+let frames = 0, fps = 0, acc = 0;
+
+addEventListener('keydown', e=>{
+  if(e.key.toLowerCase()==='w') wireframe=!wireframe;
+  if(e.key.toLowerCase()==='p') paused=!paused;
+});
+
+function matMulVec(m,v){
+  return [
+    m[0]*v[0]+m[1]*v[1]+m[2]*v[2],
+    m[3]*v[0]+m[4]*v[1]+m[5]*v[2],
+    m[6]*v[0]+m[7]*v[1]+m[8]*v[2]
+  ];
+}
+function rotateX(a){
+  const c=Math.cos(a), s=Math.sin(a);
+  return [1,0,0, 0,c,-s, 0,s,c];
+}
+function rotateY(a){
+  const c=Math.cos(a), s=Math.sin(a);
+  return [c,0,s, 0,1,0, -s,0,c];
+}
+function mulMat(a,b){
+  const r=new Array(9);
+  for(let i=0;i<3;i++)for(let j=0;j<3;j++){
+    r[i*3+j]=a[i*3+0]*b[0*3+j]+a[i*3+1]*b[1*3+j]+a[i*3+2]*b[2*3+j];
+  }
+  return r;
+}
+function project(p){
+  const fov = 400;
+  const z = p[2]+5;
+  const scale = fov / z;
+  return [
+    W/2 + p[0]*scale,
+    H/2 - p[1]*scale,
+    z
+  ];
+}
+function lerp(a,b,t){return a+(b-a)*t;}
+function barycentric(p,a,b,c){
+  const v0=[b[0]-a[0],b[1]-a[1]], v1=[c[0]-a[0],c[1]-a[1]], v2=[p[0]-a[0],p[1]-a[1]];
+  const d00=v0[0]*v0[0]+v0[1]*v0[1];
+  const d01=v0[0]*v1[0]+v0[1]*v1[1];
+  const d11=v1[0]*v1[0]+v1[1]*v1[1];
+  const d20=v2[0]*v0[0]+v2[1]*v0[1];
+  const d21=v2[0]*v1[0]+v2[1]*v1[1];
+  const denom=d00*d11-d01*d01;
+  const v=(d11*d20-d01*d21)/denom;
+  const w=(d00*d21-d01*d20)/denom;
+  const u=1-v-w;
+  return [u,v,w];
+}
+function drawTriangle(p0,p1,p2,c0,c1,c2){
+  const minX=Math.floor(Math.min(p0[0],p1[0],p2[0]));
+  const maxX=Math.ceil(Math.max(p0[0],p1[0],p2[0]));
+  const minY=Math.floor(Math.min(p0[1],p1[1],p2[1]));
+  const maxY=Math.ceil(Math.max(p0[1],p1[1],p2[1]));
+  for(let y=minY;y<=maxY;y++){
+    for(let x=minX;x<=maxX;x++){
+      const bc=barycentric([x+0.5,y+0.5],p0,p1,p2);
+      const u=bc[0],v=bc[1],w=bc[2];
+      if(u<0||v<0||w<0) continue;
+      const r=lerp(lerp(c0[0],c1[0],v),c2[0],w);
+      const g=lerp(lerp(c0[1],c1[1],v),c2[1],w);
+      const b=lerp(lerp(c0[2],c1[2],v),c2[2],w);
+      ctx.fillStyle=`rgb(${r|0},${g|0},${b|0})`;
+      ctx.fillRect(x,y,1,1);
+    }
+  }
+}
+
+function frame(now){
+  requestAnimationFrame(frame);
+  const dt = Math.min(32, now-last)/1000;
+  last=now;
+  if(!paused){
+    angleY += dt*0.8;
+    angleX += dt*0.5;
+  }
+  // light orbit
+  const lt = now*0.001;
+  const lightDir = [Math.sin(lt*0.7)*2, Math.sin(lt*0.5)*1.5, Math.cos(lt*0.6)*2];
+  const lenL=Math.hypot(...lightDir);
+  const lightN=[lightDir[0]/lenL,lightDir[1]/lenL,lightDir[2]/lenL];
+
+  // transform vertices
+  const rx=rotateX(angleX);
+  const ry=rotateY(angleY);
+  const rot=mulMat(ry,rx);
+  const transformed=[];
+  for(const v of vertices){
+    const t=matMulVec(rot,v);
+    transformed.push(t);
+  }
+
+  // build triangles with shading
+  const tris=[];
+  for(const f of faces){
+    const i0=f[0],i1=f[1],i2=f[2];
+    const v0=transformed[i0],v1=transformed[i1],v2=transformed[i2];
+    // face normal in world space (approx)
+    const e1=[v1[0]-v0[0],v1[1]-v0[1],v1[2]-v0[2]];
+    const e2=[v2[0]-v0[0],v2[1]-v0[1],v2[2]-v0[2]];
+    const nx=e1[1]*e2[2]-e1[2]*e2[1];
+    const ny=e1[2]*e2[0]-e1[0]*e2[2];
+    const nz=e1[0]*e2[1]-e1[1]*e2[0];
+    const nlen=Math.hypot(nx,ny,nz)||1;
+    const n=[nx/nlen,ny/nlen,nz/nlen];
+    // backface culling: normal facing away from camera (camera at +z)
+    if(n[2]>0) continue;
+    // per-vertex normals approximated by face normal
+    const shade = Math.max(0, n[0]*lightN[0]+n[1]*lightN[1]+n[2]*lightN[2]);
+    const base=[200,120,255];
+    const col=[base[0]*shade, base[1]*shade, base[2]*shade];
+    const p0=project(v0),p1=project(v1),p2=project(v2);
+    // depth sort by average z
+    const avgZ=(p0[2]+p1[2]+p2[2])/3;
+    tris.push({p0:[p0[0],p0[1]],p1:[p1[0],p1[1]],p2:[p2[0],p2[1]],c0:col,c1:col,c2:col, z:avgZ});
+  }
+  tris.sort((a,b)=>b.z-a.z);
+
+  ctx.fillStyle='#000';
+  ctx.fillRect(0,0,W,H);
+
+  for(const t of tris){
+    if(wireframe){
+      ctx.strokeStyle='rgba(255,255,255,0.3)';
+      ctx.lineWidth=1;
+      ctx.beginPath();
+      ctx.moveTo(t.p0[0],t.p0[1]);
+      ctx.lineTo(t.p1[0],t.p1[1]);
+      ctx.lineTo(t.p2[0],t.p2[1]);
+      ctx.closePath();
+      ctx.stroke();
+    }else{
+      drawTriangle(t.p0,t.p1,t.p2,t.c0,t.c1,t.c2);
+    }
+  }
+
+  // FPS
+  frames++; acc+=dt;
+  if(acc>=0.5){fps=Math.round(frames/acc); frames=0; acc=0;}
+  document.getElementById('fps').textContent=fps;
+  document.getElementById('wf').textContent=wireframe?'ON':'OFF';
+  document.getElementById('pa').textContent=paused?'ON':'OFF';
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

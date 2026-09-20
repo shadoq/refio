@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Gouraud Shaded Rotating Cube</title>
+<style>
+html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:system-ui,Segoe UI,Roboto,sans-serif}
+canvas{display:block}
+#ui{position:absolute;top:10px;left:10px;color:#fff;font-size:14px;background:rgba(0,0,0,0.4);padding:8px 12px;border-radius:8px}
+#ui div{margin:2px 0}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="ui">
+<div id="fps">FPS: --</div>
+<div>Press W: wireframe toggle</div>
+<div>Press P: pause</div>
+</div>
+<script>
+const canvas=document.getElementById('c');
+const ctx=canvas.getContext('2d');
+let W=canvas.width=innerWidth;
+let H=canvas.height=innerHeight;
+addEventListener('resize',()=>{W=canvas.width=innerWidth;H=canvas.height=innerHeight;});
+
+const cubeSize=1;
+const vertices=[
+ [-1,-1,-1], [1,-1,-1], [1,1,-1], [-1,1,-1],
+ [-1,-1,1], [1,-1,1], [1,1,1], [-1,1,1]
+].map(v=>v.map(x=>x*cubeSize));
+
+const faces=[
+ [0,1,2,3],[4,5,6,7],[0,4,7,3],[1,5,6,2],[0,1,5,4],[3,2,6,7]
+];
+const faceNormals=[
+ [0,0,-1],[0,0,1],[-1,0,0],[1,0,0],[0,-1,0],[0,1,0]
+];
+
+let angleX=0, angleY=0, angleZ=0;
+let paused=false;
+let wireframe=false;
+let lastTime=performance.now();
+let frames=0, fps=0, fpsTimer=0;
+
+addEventListener('keydown',e=>{
+ if(e.key.toLowerCase()==='w') wireframe=!wireframe;
+ if(e.key.toLowerCase()==='p') paused=!paused;
+});
+
+function matMulVec(m,v){
+ return [
+  m[0][0]*v[0]+m[0][1]*v[1]+m[0][2]*v[2],
+  m[1][0]*v[0]+m[1][1]*v[1]+m[1][2]*v[2],
+  m[2][0]*v[0]+m[2][1]*v[1]+m[2][2]*v[2]
+ ];
+}
+function rotateX(v,a){const c=Math.cos(a),s=Math.sin(a);return [v[0], v[1]*c - v[2]*s, v[1]*s + v[2]*c];}
+function rotateY(v,a){const c=Math.cos(a),s=Math.sin(a);return [v[0]*c + v[2]*s, v[1], -v[0]*s + v[2]*c];}
+function rotateZ(v,a){const c=Math.cos(a),s=Math.sin(a);return [v[0]*c - v[1]*s, v[0]*s + v[1]*c, v[2]];}
+
+function project(p){
+ const fov=400;
+ const z = p[2]+4;
+ if(z<=0.1) return null;
+ const scale = fov / z;
+ return [
+  W/2 + p[0]*scale,
+  H/2 - p[1]*scale,
+  z
+ ];
+}
+
+function sub(a,b){return [a[0]-b[0],a[1]-b[1],a[2]-b[2]];}
+function cross(a,b){return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];}
+function dot(a,b){return a[0]*b[0]+a[1]*b[1]+a[2]*b[2];}
+function len(v){return Math.hypot(v[0],v[1],v[2]);}
+function norm(v){const l=len(v)||1;return [v[0]/l,v[1]/l,v[2]/l];}
+
+function lerp(a,b,t){return a+(b-a)*t;}
+
+function drawTriangle(p0,p1,p2,c0,c1,c2){
+ const pts=[p0,p1,p2];
+ // backface already culled
+ // simple scanline rasterization with barycentric interpolation
+ const minY=Math.max(0,Math.floor(Math.min(p0[1],p1[1],p2[1])));
+ const maxY=Math.min(H-1,Math.ceil(Math.max(p0[1],p1[1],p2[1])));
+ if(minY>=maxY) return;
+ const area = (p1[1]-p2[1])*(p0[0]-p2[0]) + (p2[0]-p1[0])*(p0[1]-p2[1]);
+ if(Math.abs(area)<1) return;
+ for(let y=minY;y<=maxY;y++){
+  let xs=[], cs=[];
+  for(let i=0;i<3;i++){
+   const j=(i+1)%3;
+   const y1=pts[i][1], y2=pts[j][1];
+   if((y>=Math.min(y1,y2)) && (y<=Math.max(y1,y2))){
+    if(y1===y2){xs.push(pts[i][0]);cs.push([c0,c1,c2][i]);continue;}
+    const t=(y - y1)/(y2 - y1);
+    const x = lerp(pts[i][0], pts[j][0], t);
+    xs.push(x);
+    // interpolate color along edge using t
+    const colA=[c0,c1,c2][i];
+    const colB=[c0,c1,c2][j];
+    // we need per-vertex color arrays, so handle generically
+  }
+  }
+ }
+ // Better: barycentric per pixel
+ const x0=p0[0], y0=p0[1];
+ const x1=p1[0], y1=p1[1];
+ const x2=p2[0], y2=p2[1];
+ const minX=Math.max(0,Math.floor(Math.min(x0,x1,x2)));
+ const maxX=Math.min(W-1,Math.ceil(Math.max(x0,x1,x2)));
+ for(let y=minY;y<=maxY;y++){
+  for(let x=minX;x<=maxX;x++){
+   const w0 = ((y1 - y2)*(x - x2) + (x2 - x1)*(y - y2)) / area;
+   const w1 = ((y2 - y0)*(x - x2) + (x0 - x2)*(y - y2)) / ((y1 - y2)*(x0 - x2) + (x2 - x1)*(y0 - y2) || area);
+   // Use proper barycentric
+  }
+ }
+}
+
+function rasterizeTriangle(p0,p1,p2,c0,c1,c2){
+ const x0=p0[0], y0=p0[1];
+ const x1=p1[0], y1=p1[1];
+ const x2=p2[0], y2=p2[1];
+ const minY=Math.max(0,Math.floor(Math.min(y0,y1,y2)));
+ const maxY=Math.min(H-1,Math.ceil(Math.max(y0,y1,y2)));
+ const denom = (y1 - y2)*(x0 - x2) + (x2 - x1)*(y0 - y2);
+ if(Math.abs(denom)<1e-6) return;
+ for(let y=minY;y<=maxY;y++){
+  let w0_row = ((y1 - y2)*(x0 - x2) + (x2 - x1)*(y - y2)) / denom;
+  // Actually compute per x
+  for(let x=Math.max(0,Math.floor(Math.min(x0,x1,x2))); x<=Math.min(W-1,Math.ceil(Math.max(x0,x1,x2))); x++){
+   const w0 = ((y1 - y2)*(x - x2) + (x2 - x1)*(y - y2)) / denom;
+   const w1 = ((y2 - y0)*(x - x2) + (x0 - x2)*(y - y2)) / denom;
+   const w2 = 1 - w0 - w1;
+   if(w0>=0 && w1>=0 && w2>=0){
+    const r = Math.max(0,Math.min(255, Math.round(w0*c0[0]+w1*c1[0]+w2*c2[0])));
+    const g = Math.max(0,Math.min(255, Math.round(w0*c0[1]+w1*c1[1]+w2*c2[1])));
+    const b = Math.max(0,Math.min(255, Math.round(w0*c0[2]+w1*c1[2]+w2*c2[2])));
+    ctx.fillStyle=`rgb(${r},${g},${b})`;
+    ctx.fillRect(x,y,1,1);
+   }
+  }
+ }
+}
+
+function render(){
+ ctx.fillStyle='#000';
+ ctx.fillRect(0,0,W,H);
+
+ if(!paused){
+  angleX += 0.01;
+  angleY += 0.013;
+  angleZ += 0.007;
+ }
+
+ const lightPos=[Math.sin(performance.now()*0.001)*2, 1.5, Math.cos(performance.now()*0.001)*2];
+ const transformed=[];
+ for(const v of vertices){
+  let p=[v[0],v[1],v[2]];
+  p=rotateX(p,angleX);
+  p=rotateY(p,angleY);
+  p=rotateZ(p,angleZ);
+  transformed.push(p);
+ }
+
+ const projected=[];
+ for(const p of transformed){
+  const pr=project(p);
+  if(!pr) projected.push([0,0,0]);
+  else projected.push(pr);
+ }
+
+ // collect triangles
+ const tris=[];
+ for(let f=0;f<faces.length;f++){
+  const idx=faces[f];
+  const v0=transformed[idx[0]], v1=transformed[idx[1]], v2=transformed[idx[2]], v3=transformed[idx[3]];
+  const e1=sub(v1,v0), e2=sub(v2,v0);
+  const faceNormal=cross(e1,e2);
+  const viewDir=[0,0,1];
+  if(dot(faceNormal,viewDir) >=0) continue; // backface cull
+  // split quad into two triangles
+  const triA=[idx[0],idx[1],idx[2]];
+  const triB=[idx[0],idx[2],idx[3]];
+  [triA,triB].forEach(tri=>{
+   const a=transformed[tri[0]], b=transformed[tri[1]], c=transformed[tri[2]];
+   const pa=projected[tri[0]], pb=projected[tri[1]], pc=projected[tri[2]];
+   if(!pa||!pb||!pc) return;
+   // per-vertex normals
+   const na=norm(faceNormals[f]), nb=na, nc=na;
+   const la=norm(sub(lightPos,a)), lb=norm(sub(lightPos,b)), lc=norm(sub(lightPos,c));
+   const ia=Math.max(0,dot(na,la));
+   const ib=Math.max(0,dot(nb,lb));
+   const ic=Math.max(0,dot(nc,lc));
+   const base=[200,120,255];
+   const colA=[base[0]*ia, base[1]*ia, base[2]*ia];
+   const colB=[base[0]*ib, base[1]*ib, base[2]*ib];
+   const colC=[base[0]*ic, base[1]*ic, base[2]*ic];
+   tris.push({pa,pb,pc,colA,colB,colC});
+  });
+ }
+
+ // sort by depth
+ tris.sort((a,b)=>(a.pa[2]+a.pb[2]+a.pc[2])-(b.pa[2]+b.pb[2]+b.pc[2]));
+
+ for(const t of tris){
+  if(wireframe){
+   ctx.strokeStyle='rgba(255,255,255,0.2)';
+   ctx.beginPath();
+   ctx.moveTo(t.pa[0],t.pa[1]);
+   ctx.lineTo(t.pb[0],t.pb[1]);
+   ctx.lineTo(t.pc[0],t.pc[1]);
+   ctx.closePath();
+   ctx.stroke();
+  }else{
+   rasterizeTriangle(t.pa,t.pb,t.pc,t.colA,t.colB,t.colC);
+  }
+ }
+
+ if(wireframe){
+  ctx.strokeStyle='rgba(255,255,255,0.6)';
+  ctx.lineWidth=1;
+  for(const t of tris){
+   ctx.beginPath();
+   ctx.moveTo(t.pa[0],t.pa[1]);
+   ctx.lineTo(t.pb[0],t.pb[1]);
+   ctx.lineTo(t.pc[0],t.pc[1]);
+   ctx.closePath();
+   ctx.stroke();
+  }
+ }
+
+ // FPS
+ frames++;
+ fpsTimer+=performance.now()-lastTime;
+ lastTime=performance.now();
+ if(fpsTimer>500){
+  fps=Math.round(frames*1000/fpsTimer);
+  frames=0; fpsTimer=0;
+  document.getElementById('fps').textContent='FPS: '+fps;
+ }
+ requestAnimationFrame(render);
+}
+render();
+</script>
+</body>
+</html>

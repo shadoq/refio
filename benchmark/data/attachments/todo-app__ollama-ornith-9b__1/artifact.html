@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Todo App</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif; background: #f5f7fa; color: #333; display: flex; justify-content: center; min-height: 100vh; padding-top: 60px; }
+  .app { max-width: 520px; width: 100%; padding: 24px; }
+  h1 { font-size: 1.8rem; margin-bottom: 20px; color: #1a1a2e; }
+  .input-row { display: flex; gap: 10px; margin-bottom: 20px; }
+  .input-row input { flex: 1; padding: 12px 16px; border: 2px solid #ddd; border-radius: 8px; font-size: 1rem; outline: none; transition: border-color 0.2s; }
+  .input-row input:focus { border-color: #4361ee; }
+  .input-row button { padding: 12px 24px; background: #4361ee; color: #fff; border: none; border-radius: 8px; font-size: 1rem; cursor: pointer; transition: background 0.2s; }
+  .input-row button:hover { background: #3a56d4; }
+  .filter-bar { display: flex; gap: 8px; margin-bottom: 16px; }
+  .filter-bar button { padding: 8px 16px; border: 2px solid #ddd; border-radius: 20px; background: #fff; cursor: pointer; font-size: 0.9rem; transition: all 0.2s; }
+  .filter-bar button.active { background: #4361ee; color: #fff; border-color: #4361ee; }
+  .filter-bar button:not(.active):hover { background: #e8edff; }
+  .todo-list { list-style: none; }
+  .todo-item { display: flex; align-items: center; gap: 12px; padding: 14px 16px; background: #fff; border-radius: 10px; margin-bottom: 10px; box-shadow: 0 2px 6px rgba(0,0,0,0.05); transition: opacity 0.2s; }
+  .todo-item .todo-text { flex: 1; font-size: 1rem; }
+  .todo-item .todo-text.completed { text-decoration: line-through; color: #999; }
+  .todo-item .delete-btn { background: none; border: none; color: #ff4757; cursor: pointer; font-size: 1.2rem; padding: 4px 8px; border-radius: 4px; transition: background 0.2s; }
+  .todo-item .delete-btn:hover { background: #ffe0e3; }
+  .empty { text-align: center; color: #999; padding: 40px 0; font-size: 1rem; }
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>📝 Todo List</h1>
+  <div class="input-row">
+    <input type="text" id="todoInput" placeholder="Add a new todo..." autofocus>
+    <button onclick="addTodo()">Add</button>
+  </div>
+  <div class="filter-bar">
+    <button class="active" onclick="setFilter('all', this)">All</button>
+    <button onclick="setFilter('active', this)">Active</button>
+    <button onclick="setFilter('completed', this)">Completed</button>
+  </div>
+  <ul class="todo-list" id="todoList"></ul>
+</div>
+<script>
+  let todos = JSON.parse(localStorage.getItem('todos') || '[]');
+  let filter = 'all';
+
+  function save() { localStorage.setItem('todos', JSON.stringify(todos)); }
+
+  function addTodo() {
+    const input = document.getElementById('todoInput');
+    const text = input.value.trim();
+    if (!text) return;
+    todos.push({ id: Date.now(), text, completed: false });
+    input.value = '';
+    save();
+    render();
+  }
+
+  function toggleTodo(id) {
+    const t = todos.find(x => x.id === id);
+    if (t) { t.completed = !t.completed; save(); render(); }
+  }
+
+  function deleteTodo(id) {
+    todos = todos.filter(x => x.id !== id);
+    save();
+    render();
+  }
+
+  function setFilter(f, btn) {
+    filter = f;
+    document.querySelectorAll('.filter-bar button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    render();
+  }
+
+  function render() {
+    const list = document.getElementById('todoList');
+    const filtered = filter === 'all' ? todos : todos.filter(x => x.completed === (filter === 'completed'));
+    if (filtered.length === 0) {
+      list.innerHTML = '<li class="empty">' + (filter === 'completed' ? 'No completed todos yet' : filter === 'active' ? 'No active todos' : 'No todos yet') + '</li>';
+      return;
+    }
+    list.innerHTML = filtered.map(t =>
+      '<li class="todo-item"><span class="todo-text ' + (t.completed ? 'completed' : '') + '">' + escapeHtml(t.text) + '</span><button class="delete-btn" onclick="deleteTodo(' + t.id + ')">✕</button></li>'
+    ).join('');
+  }
+
+  function escapeHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+  document.getElementById('todoInput').addEventListener('keydown', e => { if (e.key === 'Enter') addTodo(); });
+  render();
+</script>
+</body>
+</html>

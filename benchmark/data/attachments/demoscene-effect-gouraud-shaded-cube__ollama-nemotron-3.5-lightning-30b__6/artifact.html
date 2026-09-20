@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gouraud Shaded Rotating Cube</title>
+  <style>
+    body { margin: 0; background: #111; font-family: sans-serif; overflow: hidden; }
+    #ui { position: absolute; top: 10px; left: 10px; color: #fff; }
+    #fps { background: rgba(0,0,0,0.5); padding: 2px 6px; border-radius: 3px; font-family: monospace; }
+    #info { background: rgba(0,0,0,0.5); padding: 2px 6px; border-radius: 3px; font-size: 0.8em; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <div>W: Wireframe toggle</div>
+    <div>P: Pause/Resume</div>
+    <div id="fps">FPS: --</div>
+    <div id="info">Light: rotating</div>
+  </div>
+  <canvas id="canvas"></canvas>
+
+  <script>
+    // Canvas and rendering context
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const fpsEl = document.getElementById('fps');
+    const infoEl = document.getElementById('info');
+
+    // Resize canvas to fill viewport
+    function resizeCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+
+    // 3D vertices of a cube centered at origin
+    const vertices = [
+      [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
+      [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]
+    ];
+
+    // Faces: each face is defined by 4 vertices (quad), we'll split into 2 triangles
+    // Using vertex normals pointing outward
+    const faces = [
+      // Front (z = -1)
+      { v: [0, 1, 2, 3], n: [0, 0, -1] },
+      // Back (z = 1)
+      { v: [4, 5, 6, 7], n: [0, 0, 1] },
+      // Top (y = 1)
+      { v: [3, 2, 6, 7], n: [0, 1, 0] },
+      // Bottom (y = -1)
+      { v: [0, 4, 5, 1], n: [0, -1, 0] },
+      // Right (x = 1)
+      { v: [1, 5, 6, 2], n: [1, 0, 0] },
+      // Left (x = -1)
+      { v: [0, 3, 7, 4], n: [-1, 0, 0] }
+    ];
+
+    // Light direction (will be animated)
+    let lightAngle = 0;
+    const lightDirection = () => {
+      lightAngle += 0.01;
+      return Math.cos(lightAngle);
+    };
+
+    // Rotation angle
+    let angle = 0;
+    let paused = false;
+
+    // Rotation matrices
+    const rotateX = (a) => {
+      const c = Math.cos(a), s = Math.sin(a);
+      return [
+        [1, 0, 0],
+        [0, c, -s],
+        [0, s, c]
+      ];
+    };
+
+    const rotateY = (a) => {
+      const c = Math.cos(a), s = Math.sin(a);
+      return [
+        [c, 0, s],
+        [0, 1, 0],
+        [-s, 0, c]
+      ];
+    };
+
+    const rotateZ = (a) => {
+      const c = Math.cos(a), s = Math.sin(a);
+      return [
+        [c, -s, 0],
+        [s, c, 0],
+        [0, 0, 1]
+      ];
+    };
+
+    // Multiply 3D vector by 3x3 matrix
+    const mulMat3 = (m, v) => [
+      m[0][0]*v[0] + m[0][1]*v[1] + m[0][2]*v[2],
+      m[1][0]*v[0] + m[1][1]*v[1] + m[1][2]*v[2],
+      m[2][0]*v[0] + m[2][1]*v[1] + m[2][2]*v[2]
+    ];
+
+    // Perspective projection
+    const perspectiveProject = (v, d) => {
+      const z = v[2];
+      return [v[0] * d / (d + z), v[1] * d / (d + z), z];
+    };
+
+    // Lambert lighting: diffuse = max(0, dot(normal, light_dir))
+    const lambert = (normal, lightDir) => {
+      const dot = normal[0]*lightDir[0] + normal[1]*lightDir[1] + normal[2]*lightDir[2];
+      return Math.max(0, dot);
+    };
+
+    // Interpolate two values by factor t (0..1)
+    const interp = (a, b, t) => a + (b - a) * t;
+
+    // Barycentric coordinates for point in triangle
+    // Returns [alpha, beta, gamma] or null if point is outside
+    const barycentric = (x, y, v0, v1, v2) => {
+      const den = (v1[1]-v0[1])*(v2[0]-v0[0]) - (v2[1]-v0[1])*(v1[0]-v0[0]);
+      if (den === 0) return null;
+      const alpha = ((v1[1]-v0[1])*(y-v0[1]) - (v2[1]-v0[1])*(x-v0[0])) / den;
+      const beta = ((v2[1]-v0[1])*(x-v0[0]) - (v1[0]-v0[0])*(y-v0[1])) / den;
+      const gamma = 1 - alpha - beta;
+      if (alpha < 0 || alpha > 1 || beta < 0 || beta > 1 || gamma < 0 || gamma > 1) return null;
+      return [alpha, beta, gamma];
+    };
+
+    // Draw filled triangle with Gouraud shading (3 vertex colors)
+    const drawGouraudTriangle = (vs, cs) => {
+      // Sort vertices by y (top to bottom)
+      const vertices = [[vs[0], cs[0]], [vs[1], cs[1]], [vs[2], cs[2]]];
+      vertices.sort((a, b) => a[0][1] - b[0][1]);
+
+      const v0 = vertices[0][0], c0 = vertices[0][1];
+      const v1 = vertices[1][0], c1 = vertices[1][1];
+      const v2 = vertices[2][0], c2 = vertices[2][1];
+
+      const yMin = Math.round(v0[1]);
+      const yMax = Math.round(v2[1]);
+
+      if (yMin >= yMax) return;
+
+      // For each scanline
+      for (let y = yMin; y <= yMax; y++) {
+        // Compute intersections with triangle edges
+        let xs = [], cs_ = [];
+        
+        // Edge v0-v1
+        if (v0[1] !== v1[1]) {
+          const t = (y - v0[1]) / (v1[1] - v0[1]);
+          const x = v0[0] + (v1[0] - v0[0]) * t;
+          const c = [c0[0] + (c1[0] - c0[0]) * t, c0[1] + (c1[1] - c0[1]) * t, c0[2] + (c1[2] - c0[2]) * t];
+          xs.push(x); cs_.push(c);
+        }
+        // Edge v1-v2
+        if (v1[1] !== v2[1]) {
+          const t = (y - v1[1]) / (v2[1] - v1[1]);
+          const x = v1[0] + (v2[0] - v1[0]) * t;
+          const c = [c1[0] + (c2[0] - c1[0]) * t, c1[1] + (c2[1] - c1[1]) * t, c1[2] + (c2[2] - c1[2]) * t];
+          xs.push(x); cs_.push(c);
+        }
+        // Edge v2-v0
+        if (v2[1] !== v0[1]) {
+          const t = (y - v2[1]) / (v0[1] - v2[1]);
+          const x = v2[0] + (v0[0] - v2[0]) * t;
+          const c = [c2[0] + (c0[0] - c2[0]) * t, c2[1] + (c0[1] - c2[1]) * t, c2[2] + (c0[2] - c2[2]) * t];
+          xs.push(x); cs_.push(c);
+        }
+
+        if (xs.length < 2) continue;
+        
+        // Sort by x
+        const pair = xs.map((x, i) => ({x, c: cs_[i]})).sort((a, b) => a.x - b.x);
+        const x1 = Math.round(pair[0].x);
+        const x2 = Math.round(pair[1].x);
+        const c1 = pair[0].c;
+        const c2 = pair[1].c;
+
+        if (x1 >= x2) continue;
+
+        // Interpolate color across the scanline
+        const segmentLen = x2 - x1;
+        for (let x = x1; x <= x2; x++) {
+          const t = segmentLen > 0 ? (x - x1) / segmentLen : 0;
+          const r = Math.round(c1[0] + (c2[0] - c1[0]) * t);
+          const g = Math.round(c1[1] + (c2[1] - c1[1]) * t);
+          const b = Math.round(c1[2] + (c2[2] - c1[2]) * t);
+          ctx.fillStyle = `rgb(${r},${g},${b})`;
+          ctx.fillRect(x, y, 1, 1);
+        }
+      }
+    };
+
+    // Draw wireframe triangle
+    const drawWireframeTriangle = (vs) => {
+      ctx.beginPath();
+      ctx.moveTo(vs[0][0], vs[0][1]);
+      ctx.lineTo(vs[1][0], vs[1][1]);
+      ctx.lineTo(vs[2][0], vs[2][1]);
+      ctx.lineTo(vs[0][0], vs[0][1]);
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    };
+
+    // Main render loop
+    const render = () => {
+      const startTime = performance.now();
+      
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      if (!paused) {
+        angle += 0.01;
+      }
+
+      // Compute rotation matrices
+      const mrY = rotateY(angle * 0.7);
+      const mrX = rotateX(angle * 0.5);
+
+      // Animate light
+      const lightDir = [lightDirection(), Math.sin(lightAngle), 0];
+
+      // Track FPS
+      const now = performance.now();
+      const fps = 1000 / (now - startTime + 1e-6);
+      fpsEl.textContent = `FPS: ${Math.round(fps)}`;
+
+      // For each face
+      faces.forEach(face => {
+        // Rotate vertices of this face
+        const vs = face.v.map(idx => {
+          const v = vertices[idx];
+          // Apply Y rotation then X rotation
+          const v1 = mulMat3(mrY, v);
+          return mulMat3(mrX, v1);
+        });
+
+        // Perspective project
+        const vsProjected = vs.map(v => perspectiveProject(v, 4));
+
+        // Backface culling: compute face normal from transformed vertices
+        // Get two edge vectors
+        const v0 = vsProjected[face.v[0]];
+        const v1 = vsProjected[face.v[1]];
+        const v2 = vsProjected[face.v[2]];
+
+        // Edge vectors
+        const e1 = [v1[0]-v0[0], v1[1]-v0[1], v1[2]-v0[2]];
+        const e2 = [v2[0]-v0[0], v2[1]-v0[1], v2[2]-v0[2]];
+
+        // Cross product for normal
+        const normal = [
+          e1[1]*e2[2] - e1[2]*e2[1],
+          e1[2]*e2[0] - e1[0]*e2[2],
+          e1[0]*e2[1] - e1[1]*e2[0]
+        ];
+
+        // Check if face is towards camera (positive z after projection means facing us)
+        // Actually, we need to check if the face normal has positive z component after rotation
+        // For backface culling: if dot(normal, view_dir) < 0, it's a back face
+        // View direction is (0,0,-1) - so if normal.z < 0, it's facing us
+        // But we need the original face normal, transformed by the rotation
+        
+        // Use the face's original normal, transformed by the rotation matrices
+        const origNormal = face.n;
+        const transformedNormal = mulMat3(mrX, mulMat3(mrY, origNormal));
+        
+        // If transformedNormal.z < 0, face is facing the camera (backface culling)
+        if (transformedNormal[2] >= 0) return;
+
+        // Compute color at each vertex using Lambert lighting
+        const vertexColors = face.v.map(idx => {
+          const v = vertices[face.v[idx]];
+          const vRot = mulMat3(mrX, mulMat3(mrY, v));
+          const proj = perspectiveProject(vRot, 4);
+          const diff = lambert(transformedNormal, lightDir);
+          // Brightness value for R, G, B components
+          const brightness = Math.round(128 + 127 * diff);
+          return [brightness, brightness, brightness];
+        });
+
+        // Split quad into two triangles: (0,1,2) and (0,2,3)
+        const tri1 = { v: [vsProjected[face.v[0]], vsProjected[face.v[1]], vsProjected[face.v[2]] ], c: [vertexColors[0], vertexColors[1], vertexColors[2]] };
+        const tri2 = { v: [vsProjected[face.v[0]], vsProjected[face.v[2]], vsProjected[face.v[3]] ], c: [vertexColors[0], vertexColors[2], vertexColors[3]] };
+
+        // Draw filled triangles with Gouraud shading
+        drawGouraudTriangle(tri1.v, tri1.c);
+        drawGouraudTriangle(tri2.v, tri2.c);
+
+        // Draw wireframe if toggled
+        if (wireframe) {
+          drawWireframeTriangle(tri1.v);
+          drawWireframeTriangle(tri2.v);
+        }
+      });
+    };
+
+    let wireframe = false;
+
+    // Keyboard controls
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'w') {
+        wireframe = !wireframe;
+        infoEl.textContent = `Wireframe: ${wireframe}`;
+      }
+      if (e.key === 'p') {
+        paused = !paused;
+        infoEl.textContent = `Paused: ${paused}`;
+      }
+    });
+
+    // Animation loop
+    let lastTime = 0;
+    const animate = (time) => {
+      render();
+      requestAnimationFrame(animate);
+    };
+    requestAnimationFrame(animate);
+  </script>
+</body>
+</html>

@@ -1,0 +1,1085 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ARTIFACT: Museum Night - Premium Event Landing Page</title>
+  <style>
+    :root {
+      --bg: #070506;
+      --velvet: #1a0710;
+      --burgundy: #3a0f1d;
+      --midnight: #07111f;
+      --gold: #d6ad60;
+      --soft-gold: #f3d79b;
+      --ivory: #f8efe2;
+      --muted: #b9a999;
+      --panel: rgba(255, 244, 220, 0.06);
+      --border: rgba(214, 173, 96, 0.28);
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: 'Inter', system-ui, Segoe UI, sans-serif;
+      background: var(--bg);
+      color: var(--ivory);
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    /* Noise/grain overlay */
+    body::before {
+      content: '';
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+      pointer-events: none;
+      z-index: 1001;
+    }
+
+    /* Reduced motion preference */
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after {
+        animation-duration: 0s !important;
+        transition-duration: 0s !important;
+      }
+    }
+
+    /* Navbar */
+    nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      background: rgba(7, 5, 6, 0.8);
+      backdrop-filter: blur(20px);
+      border-bottom: 1px solid var(--border);
+      padding: 1rem 2rem;
+      height: 80px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .logo {
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 1.8rem;
+      font-weight: 400;
+      letter-spacing: 0.3em;
+      color: var(--gold);
+      text-transform: uppercase;
+      letter-spacing: 0.2em;
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 3rem;
+      list-style: none;
+    }
+
+    .nav-links a {
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 0.9rem;
+      font-weight: 500;
+      color: var(--muted);
+      text-decoration: none;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      transition: color 0.3s ease;
+    }
+
+    .nav-links a:hover {
+      color: var(--gold);
+    }
+
+    .nav-cta {
+      background: var(--gold);
+      color: var(--bg);
+      border: none;
+      padding: 0.8rem 2rem;
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 0.85rem;
+      font-weight: 500;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: transform 0.3s ease, box-shadow 0.3s ease;
+    }
+
+    .nav-cta:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 30px rgba(214, 173, 96, 0.3);
+    }
+
+    /* Mobile menu */
+    .mobile-toggle {
+      display: none;
+      flex-direction: column;
+      gap: 5px;
+      cursor: pointer;
+    }
+
+    .mobile-toggle span {
+      width: 25px;
+      height: 3px;
+      background: var(--gold);
+      transition: transform 0.3s ease, opacity 0.3s ease;
+    }
+
+    .mobile-toggle.active span:nth-child(1) {
+      transform: rotate(45deg) translate(5px, 5px);
+    }
+
+    .mobile-toggle.active span:nth-child(2) {
+      opacity: 0;
+    }
+
+    .mobile-toggle.active span:nth-child(3) {
+      transform: rotate(-45deg) translate(7px, -6px);
+    }
+
+    .mobile-menu {
+      position: fixed;
+      top: 0;
+      right: -100%;
+      width: 70%;
+      max-width: 300px;
+      height: 100vh;
+      background: var(--velvet);
+      backdrop-filter: blur(20px);
+      border-left: 1px solid var(--border);
+      padding: 8rem 2rem 2rem;
+      transition: right 0.3s ease;
+      z-index: 99;
+    }
+
+    .mobile-menu.active {
+      right: 0;
+    }
+
+    .mobile-menu-links {
+      flex-direction: column;
+      gap: 2rem;
+    }
+
+    .mobile-menu-links a {
+      font-size: 1.5rem;
+      color: var(--ivory);
+      text-decoration: none;
+      transition: color 0.3s ease;
+    }
+
+    .mobile-menu-links a:hover {
+      color: var(--gold);
+    }
+
+    /* Hero Section */
+    .hero {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 8rem 2rem 2rem;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: linear-gradient(180deg, var(--velvet) 0%, var(--bg) 100%);
+      z-index: 0;
+    }
+
+    .hero-content {
+      position: relative;
+      z-index: 1;
+      max-width: 900px;
+      width: 100%;
+      text-align: center;
+      padding: 2rem;
+    }
+
+    .hero h1 {
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 4.5rem;
+      font-weight: 400;
+      line-height: 1.1;
+      letter-spacing: 0.3em;
+      color: var(--ivory);
+      margin-bottom: 1rem;
+      text-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+    }
+
+    .hero h2 {
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 2.5rem;
+      font-weight: 400;
+      letter-spacing: 0.15em;
+      color: var(--gold);
+      margin-bottom: 2rem;
+    }
+
+    .hero-info {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      margin-bottom: 3rem;
+      align-items: center;
+    }
+
+    .hero-info div {
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .hero-info span {
+      color: var(--gold);
+      font-family: 'Georgia', Times New Roman, serif;
+    }
+
+    .hero-ctas {
+      display: flex;
+      gap: 1.5rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 0.9rem;
+      font-weight: 500;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      padding: 1rem 2.5rem;
+      border: none;
+      cursor: pointer;
+      transition: transform 0.3s ease, box-shadow 0.3s ease;
+    }
+
+    .btn-gold {
+      background: var(--gold);
+      color: var(--bg);
+    }
+
+    .btn-gold:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 30px rgba(214, 173, 96, 0.3);
+    }
+
+    .btn-soft {
+      background: transparent;
+      color: var(--soft-gold);
+      border: 1px solid var(--soft-gold);
+    }
+
+    .btn-soft:hover {
+      background: var(--soft-gold);
+      color: var(--bg);
+    }
+
+    /* Divider */
+    .divider {
+      width: 60px;
+      height: 1px;
+      background: var(--border);
+      margin: 2rem auto 0;
+    }
+
+    /* Sections */
+    section {
+      padding: 6rem 2rem;
+    }
+
+    .section-title {
+      text-align: center;
+      margin-bottom: 4rem;
+    }
+
+    .section-title h3 {
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 2.5rem;
+      font-weight: 400;
+      letter-spacing: 0.2em;
+      color: var(--ivory);
+      text-transform: uppercase;
+    }
+
+    .section-title p {
+      margin-top: 1rem;
+      color: var(--muted);
+      font-size: 1.1rem;
+    }
+
+    /* Program Section */
+    .program-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 2rem;
+    }
+
+    .program-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      padding: 2rem;
+      position: relative;
+      overflow: hidden;
+      transition: transform 0.3s ease, box-shadow 0.3s ease;
+    }
+
+    .program-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: var(--gold);
+      transform: scaleX(0);
+      transform-origin: left;
+      transition: transform 0.3s ease;
+    }
+
+    .program-card:hover {
+      transform: translateY(-5px);
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+    }
+
+    .program-card:hover::before {
+      transform: scaleX(1);
+    }
+
+    .program-card h4 {
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 1.2rem;
+      color: var(--gold);
+      margin-bottom: 0.5rem;
+    }
+
+    .program-card p {
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    /* Artists Section */
+    .artists-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 2rem;
+    }
+
+    .artist-card {
+      text-align: center;
+      padding: 2rem;
+    }
+
+    .artist-card img {
+      width: 150px;
+      height: 150px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 4px solid var(--border);
+      margin-bottom: 1.5rem;
+      transition: border-color 0.3s ease;
+    }
+
+    .artist-card:hover img {
+      border-color: var(--gold);
+    }
+
+    .artist-card h4 {
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 1.1rem;
+      color: var(--ivory);
+      margin-bottom: 0.5rem;
+    }
+
+    .artist-card p {
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    /* Venue Section */
+    .venue-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      padding: 3rem 2rem;
+      text-align: center;
+      position: relative;
+    }
+
+    .venue-card::after {
+      content: '';
+      position: absolute;
+      bottom: 2rem;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 40px;
+      height: 1px;
+      background: var(--border);
+    }
+
+    .venue-icon {
+      width: 60px;
+      height: 60px;
+      margin: 0 auto 1.5rem;
+      background: var(--gold);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .venue-icon svg {
+      width: 25px;
+      height: 25px;
+      color: var(--bg);
+    }
+
+    .venue-card h4 {
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 1.3rem;
+      color: var(--ivory);
+      margin-bottom: 0.5rem;
+    }
+
+    .venue-card p {
+      color: var(--muted);
+    }
+
+    /* Tickets Section */
+    .ticket-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 2rem;
+    }
+
+    .ticket-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      padding: 2.5rem 2rem;
+      position: relative;
+      transition: transform 0.3s ease, box-shadow 0.3s ease;
+    }
+
+    .ticket-card.popular {
+      border-color: var(--gold);
+      transform: scale(1.02);
+    }
+
+    .ticket-card.popular::before {
+      content: 'MOST POPULAR';
+      position: absolute;
+      top: 1rem;
+      right: 1rem;
+      background: var(--gold);
+      color: var(--bg);
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      padding: 0.3rem 0.8rem;
+    }
+
+    .ticket-card:hover {
+      transform: translateY(-5px);
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+    }
+
+    .ticket-card h4 {
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 1.2rem;
+      color: var(--gold);
+      margin-bottom: 1rem;
+    }
+
+    .ticket-card ul {
+      list-style: none;
+      margin-bottom: 1.5rem;
+    }
+
+    .ticket-card ul li {
+      padding: 0.5rem 0;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .ticket-card ul li:last-child {
+      border-bottom: none;
+    }
+
+    .ticket-card .btn {
+      width: 100%;
+    }
+
+    /* FAQ Section */
+    .faq-item {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      margin-bottom: 1rem;
+      overflow: hidden;
+    }
+
+    .faq-question {
+      width: 100%;
+      padding: 1.5rem 2rem;
+      background: none;
+      border: none;
+      text-align: left;
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 1rem;
+      color: var(--ivory);
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      transition: color 0.3s ease;
+    }
+
+    .faq-question:hover {
+      color: var(--gold);
+    }
+
+    .faq-question svg {
+      width: 20px;
+      height: 20px;
+      transition: transform 0.3s ease;
+    }
+
+    .faq-question.active svg {
+      transform: rotate(180deg);
+    }
+
+    .faq-answer {
+      padding: 0 2rem 1.5rem;
+      color: var(--muted);
+      font-size: 0.9rem;
+      display: none;
+    }
+
+    .faq-answer.open {
+      display: block;
+    }
+
+    /* Countdown */
+    .countdown {
+      display: flex;
+      gap: 2rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .countdown-item {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      padding: 1.5rem 1rem;
+      min-width: 80px;
+      text-align: center;
+    }
+
+    .countdown-item .number {
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 2.5rem;
+      color: var(--gold);
+    }
+
+    .countdown-item .label {
+      color: var(--muted);
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-top: 0.5rem;
+    }
+
+    /* Footer */
+    footer {
+      background: var(--velvet);
+      padding: 4rem 2rem 2rem;
+      border-top: 1px solid var(--border);
+    }
+
+    .footer-content {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: grid;
+      grid-templateColumns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 2rem;
+    }
+
+    .footer-brand p {
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin-top: 1rem;
+      line-height: 1.6;
+    }
+
+    .footer-links h4 {
+      font-family: 'Georgia', Times New Roman, serif;
+      font-size: 0.85rem;
+      color: var(--gold);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-bottom: 1rem;
+    }
+
+    .footer-links ul {
+      list-style: none;
+    }
+
+    .footer-links li {
+      margin-bottom: 0.5rem;
+    }
+
+    .footer-links a {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 0.85rem;
+      transition: color 0.3s ease;
+    }
+
+    .footer-links a:hover {
+      color: var(--gold);
+    }
+
+    .footer-bottom {
+      max-width: 1200px;
+      margin: 3rem auto 0;
+      padding-top: 2rem;
+      border-top: 1px solid var(--border);
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .nav-links {
+        display: none;
+      }
+
+      .mobile-toggle {
+        display: flex;
+      }
+
+      .hero h1 {
+        font-size: 3rem;
+      }
+
+      .hero h2 {
+        font-size: 1.8rem;
+      }
+
+      .section-title h3 {
+        font-size: 2rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <!-- Navbar -->
+  <nav>
+    <div class="logo">ARTIFACT</div>
+    <ul class="nav-links">
+      <li><a href="#program">Program</a></li>
+      <li><a href="#artists">Artists</a></li>
+      <li><a href="#venue">Venue</a></li>
+      <li><a href="#tickets">Tickets</a></li>
+      <li><a href="#faq">FAQ</a></li>
+    </ul>
+    <button class="nav-cta">Get Tickets</button>
+    
+    <!-- Mobile menu toggle -->
+    <div class="mobile-toggle" id="mobileToggle">
+      <span></span>
+      <span></span>
+      <span></span>
+    </div>
+    
+    <!-- Mobile menu -->
+    <div class="mobile-menu" id="mobileMenu">
+      <ul class="mobile-menu-links">
+        <li><a href="#program">Program</a></li>
+        <li><a href="#artists">Artists</a></li>
+        <li><a href="#venue">Venue</a></li>
+        <li><a href="#tickets">Tickets</a></li>
+        <li><a href="#faq">FAQ</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <!-- Hero Section -->
+  <section class="hero" id="hero">
+    <div class="hero-content">
+      <h1>Museum Night, Reimagined</h1>
+      <h2>ARTIFACT: Museum Night</h2>
+      <div class="hero-info">
+        <div>
+          <span>18 October 2026</span>
+          <span>•</span>
+          <span>19:00 – 02:00</span>
+        </div>
+        <div>
+          <span>The Old Gallery, Warsaw</span>
+        </div>
+      </div>
+      <div class="divider"></div>
+      <div class="hero-ctas">
+        <button class="btn btn-gold">Get Tickets</button>
+        <button class="btn btn-soft">Save to Calendar</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Program Section -->
+  <section class="program" id="program">
+    <div class="section-title">
+      <h3>Program</h3>
+      <p>Experience an evening of curated artistic encounters</p>
+    </div>
+    <div class="program-grid">
+      <div class="program-card">
+        <h4>Opening Night</h4>
+        <p>Guided tour through the museum's hidden collections</p>
+      </div>
+      <div class="program-card">
+        <h4>Live Performances</h4>
+        <p>Site-specific art performances throughout the galleries</p>
+      </div>
+      <div class="program-card">
+        <h4>Midnight Gallery</h4>
+        <p>Interactive installations after dark</p>
+      </div>
+      <div class="program-card">
+        <h4>Artist Talks</h4>
+        <p>Intimate conversations with exhibiting artists</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Artists Section -->
+  <section class="artists" id="artists">
+    <div class="section-title">
+      <h3>Artists</h3>
+      <p>Featured creators of ARTIFACT</p>
+    </div>
+    <div class="artists-grid">
+      <div class="artist-card">
+        <img src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&h=400&fit=crop" alt="Artist 1">
+        <h4>Marta Nowak</h4>
+        <p>Contemporary Installation</p>
+      </div>
+      <div class="artist-card">
+        <img src="https://images.unsplash.com/photo-1522071820081-002f1dc44219?w=400&h=400&fit=crop" alt="Artist 2">
+        <h4>Jan Kowalski</h4>
+        <p>Sculpture & Light</p>
+      </div>
+      <div class="artist-card">
+        <img src="https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=400&h=400&fit=crop" alt="Artist 3">
+        <h4>Anna Zielinska</h4>
+        <p>Digital Art</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Venue Section -->
+  <section class="venue" id="venue">
+    <div class="venue-card">
+      <div class="venue-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+          <circle cx="8.5" cy="8.5" r="1.5"/>
+          <polyline points="21 15 16 10 5 21"/>
+        </svg>
+      </div>
+      <h4>The Old Gallery</h4>
+      <p>Warsaw, Poland</p>
+      <p>Historic 19th-century venue restored to its former glory</p>
+    </div>
+  </section>
+
+  <!-- Tickets Section -->
+  <section class="tickets" id="tickets">
+    <div class="section-title">
+      <h3>Tickets</h3>
+      <p>Choose your experience</p>
+    </div>
+    <div class="ticket-grid">
+      <div class="ticket-card">
+        <h4>General Admission</h4>
+        <ul>
+          <li>Access to all galleries</li>
+          <li>Guided tour included</li>
+          <li>One complimentary drink</li>
+        </ul>
+        <button class="btn btn-gold">Select Ticket</button>
+      </div>
+      <div class="ticket-card popular">
+        <h4>VIP Experience</h4>
+        <ul>
+          <li>Access to all galleries</li>
+          <li>Private guided tour</li>
+          <li>Two complimentary drinks</li>
+          <li>Exclusive lounge access</li>
+          <li>Limited edition poster</li>
+        </ul>
+        <button class="btn btn-gold">Select Ticket</button>
+      </div>
+      <div class="ticket-card">
+        <h4>Student</h4>
+        <ul>
+          <li>Access to all galleries</li>
+          <li>Guided tour included</li>
+          <li>Discounted pricing</li>
+        </ul>
+        <button class="btn btn-gold">Select Ticket</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- FAQ Section -->
+  <section class="faq" id="faq">
+    <div class="section-title">
+      <h3>FAQ</h3>
+      <p>Frequently asked questions</p>
+    </div>
+    <div class="faq-item">
+      <button class="faq-question" aria-controls="faq-answer-1" aria-expanded="false">
+        What time does the event start?
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+      <div class="faq-answer" id="faq-answer-1">
+        The event runs from 19:00 to 02:00 on 18 October 2026. Doors open at 18:30.
+      </div>
+    </div>
+    <div class="faq-item">
+      <button class="faq-question" aria-controls="faq-answer-2" aria-expanded="false">
+        Is the venue accessible?
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+      <div class="faq-answer" id="faq-answer-2">
+        Yes, The Old Gallery is fully wheelchair accessible with ramps and elevators to all floors.
+      </div>
+    </div>
+    <div class="faq-item">
+      <button class="faq-question" aria-controls="faq-answer-3" aria-expanded="false">
+        Can I purchase tickets at the door?
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+      <div class="faq-answer" id="faq-answer-3">
+        Tickets are available online until 18:00 on the event day. Limited availability may be sold at the door.
+      </div>
+    </div>
+  </section>
+
+  <!-- Countdown -->
+  <section class="countdown">
+    <div class="countdown-item">
+      <div class="number" id="days">18</div>
+      <div class="label">Days</div>
+    </div>
+    <div class="countdown-item">
+      <div class="number" id="hours">00</div>
+      <div class="label">Hours</div>
+    </div>
+    <div class="countdown-item">
+      <div class="number" id="minutes">00</div>
+      <div class="label">Minutes</div>
+    </div>
+    <div class="countdown-item">
+      <div class="number" id="seconds">00</div>
+      <div class="label">Seconds</div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <div class="footer-content">
+      <div class="footer-brand">
+        <div class="logo">ARTIFACT</div>
+        <p>Premium cultural event experience. Curated by art enthusiasts for art lovers.</p>
+      </div>
+      <div class="footer-links">
+        <h4>Sections</h4>
+        <ul>
+          <li><a href="#program">Program</a></li>
+          <li><a href="#artists">Artists</a></li>
+          <li><a href="#venue">Venue</a></li>
+          <li><a href="#tickets">Tickets</a></li>
+          <li><a href="#faq">FAQ</a></li>
+        </ul>
+      </div>
+      <div class="footer-links">
+        <h4>Company</h4>
+        <ul>
+          <li><a href="#">Privacy Policy</a></li>
+          <li><a href="#">Terms of Service</a></li>
+          <li><a href="#">Contact</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <p>ARTIFACT: Museum Night • 18 October 2026 • The Old Gallery, Warsaw</p>
+    </div>
+  </footer>
+
+  <script>
+    // Initialize mobile menu
+    const mobileToggle = document.getElementById('mobileToggle');
+    const mobileMenu = document.getElementById('mobileMenu');
+    
+    if (mobileToggle && mobileMenu) {
+      mobileToggle.addEventListener('click', () => {
+        mobileMenu.classList.toggle('active');
+        mobileToggle.classList.toggle('active');
+      });
+    }
+
+    // Smooth scrolling for anchor links
+    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+      anchor.addEventListener('click', function(e) {
+        e.preventDefault();
+        const target = document.querySelector(this.getAttribute('href'));
+        if (target) {
+          target.scrollIntoView({
+            behavior: smoothScrolling ? 'smooth' : 'auto',
+            block: 'start'
+          });
+        }
+      });
+    });
+
+    // FAQ accordion
+    const faqQuestions = document.querySelectorAll('.faq-question');
+    
+    faqQuestions.forEach(question => {
+      question.addEventListener('click', () => {
+        const faqItem = question.parentElement;
+        const answer = faqItem.querySelector('.faq-answer');
+        const isActive = faqItem.classList.contains('active');
+        
+        // Close all FAQ items
+        document.querySelectorAll('.faq-item').forEach(item => {
+          item.classList.remove('active');
+          item.querySelector('.faq-answer').classList.remove('open');
+          item.querySelector('.faq-question').setAttribute('aria-expanded', 'false');
+          item.querySelector('.faq-question svg').style.transform = 'rotate(0deg)';
+        });
+        
+        // Toggle current item
+        if (!isActive) {
+          faqItem.classList.add('active');
+          answer.classList.add('open');
+          question.setAttribute('aria-expanded', 'true');
+          question.querySelector('svg').style.transform = 'rotate(180deg)';
+        }
+      });
+    });
+
+    // Countdown timer
+    const eventDate = new Date('2026-10-18T19:00:00').getTime();
+    
+    const countdownInterval = setInterval(() => {
+      const now = new Date().getTime();
+      const distance = eventDate - now;
+      
+      const days = Math.floor(distance / (1000 * 60 * 60 * 24));
+      const hours = Math.floor((distance % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+      const minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
+      const seconds = Math.floor((distance % (1000 * 60)) / 1000);
+      
+      if (days > 0 || hours > 0 || minutes > 0 || seconds >= 0) {
+        document.getElementById('days').textContent = days.toString().padStart(2, '0');
+        document.getElementById('hours').textContent = hours.toString().padStart(2, '0');
+        document.getElementById('minutes').textContent = minutes.toString().padStart(2, '0');
+        document.getElementById('seconds').textContent = seconds.toString().padStart(2, '0');
+      } else {
+        clearInterval(countdownInterval);
+        document.querySelectorAll('.countdown-item .number').forEach(el => {
+          el.textContent = '00';
+        });
+      }
+    }, 1000);
+
+    // Navbar background on scroll
+    const nav = document.querySelector('nav');
+    let lastScroll = 0;
+    let smoothScrolling = true;
+    
+    window.addEventListener('scroll', () => {
+      const currentScroll = window.pageYOffset;
+      
+      if (currentScroll > 100) {
+        if (nav) {
+          nav.style.background = 'rgba(7, 5, 6, 0.95)';
+        }
+      } else {
+        if (nav) {
+          nav.style.background = 'rgba(7, 5, 6, 0.8)';
+        }
+      }
+      
+      lastScroll = currentScroll;
+    });
+
+    // Active nav state on scroll
+    const sections = document.querySelectorAll('section[id]');
+    
+    window.addEventListener('scroll', () => {
+      const scrollY = window.pageYOffset;
+      
+      sections.forEach(section => {
+        const sectionHeight = section.offsetHeight;
+        const sectionTop = section.offsetTop - 100;
+        const sectionId = section.getAttribute('id');
+        
+        if (scrollY > sectionTop && scrollY <= sectionTop + sectionHeight) {
+          document.querySelectorAll('.nav-links a').forEach(link => {
+            link.classList.remove('active');
+            if (link.getAttribute('href') === '#' + sectionId) {
+              link.classList.add('active');
+            }
+          });
+        }
+      });
+    });
+
+    // Parallax effect for hero
+    window.addEventListener('scroll', () => {
+      const hero = document.querySelector('.hero');
+      if (hero) {
+        const scrollY = window.pageYOffset;
+        hero.style.backgroundPosition = `center ${scrollY * 0.5}px`;
+      }
+    });
+  </script>
+</body>
+</html>
