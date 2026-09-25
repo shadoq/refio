@@ -2,6 +2,7 @@ package pl.jclab.refio.core.context.mcp
 
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
+import io.ktor.client.engine.HttpClientEngine
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -19,9 +20,12 @@ private val logger = dualLogger("MCPConnection")
 
 /**
  * Connection to an MCP (Model Context Protocol) server.
+ *
+ * [httpEngine] replaces the network engine of the HTTP transports in tests.
  */
 class MCPConnection(
-    private val config: MCPServerConfig
+    private val config: MCPServerConfig,
+    private val httpEngine: HttpClientEngine? = null
 ) {
     companion object {
         private const val RESOURCE_CACHE_TTL_MS = 5 * 60 * 1000L
@@ -280,7 +284,8 @@ class MCPConnection(
         val transport = MCPHttpTransport(
             config = config,
             onMessage = { raw -> handleIncomingMessage(raw) },
-            onError = { error -> logger.warn(error) { "MCP http error for ${config.id}" } }
+            onError = { error -> logger.warn(error) { "MCP http error for ${config.id}" } },
+            engine = httpEngine
         )
         transport.connect()
         this.httpTransport = transport
@@ -363,9 +368,28 @@ class MCPConnection(
                 }
             }
             MCPServerType.HTTP_SSE, MCPServerType.HTTP_STREAMABLE -> {
-                val responseJson = httpTransport?.request(json)
-                    ?: throw MCPTransportException("HTTP transport not connected")
-                parseDirectResponse(responseJson, id)
+                val http = httpTransport ?: throw MCPTransportException("HTTP transport not connected")
+                // Registered before the POST: an SSE server may push the answer over its stream
+                // before the POST itself returns.
+                val deferred = CompletableDeferred<MCPSuccessResponse>()
+                pendingRequests[id] = deferred
+                try {
+                    val response = http.exchange(json, isInitialize = method == MCPMethods.INITIALIZE)
+                    if (response.body.isNotBlank()) {
+                        parseDirectResponse(response.body, response.contentType, id)
+                    } else if (config.type == MCPServerType.HTTP_SSE) {
+                        // The POST was only acknowledged; the answer travels over the SSE stream.
+                        try {
+                            withTimeout(config.timeout) { deferred.await() }
+                        } catch (e: TimeoutCancellationException) {
+                            throw MCPTransportException("MCP request timed out: $method")
+                        }
+                    } else {
+                        throw MCPTransportException("MCP server ${config.id} returned an empty response to $method")
+                    }
+                } finally {
+                    pendingRequests.remove(id)
+                }
             }
         }
     }
@@ -601,8 +625,13 @@ class MCPConnection(
         }
     }
 
-    private fun parseDirectResponse(raw: String, expectedId: Long): MCPSuccessResponse {
-        val json = gson.fromJson(raw, JsonObject::class.java)
+    private fun parseDirectResponse(raw: String, contentType: String?, expectedId: Long): MCPSuccessResponse {
+        val json = if (MCPSseFraming.isEventStream(contentType, raw)) {
+            MCPSseFraming.selectResponse(raw, expectedId)
+                ?: throw MCPTransportException("MCP server ${config.id} sent an event stream without a JSON-RPC response")
+        } else {
+            gson.fromJson(raw, JsonObject::class.java)
+        }
         if (json.has("error")) {
             val errorObj = json.getAsJsonObject("error")
             val message = errorObj.get("message")?.asString ?: "Unknown MCP error"

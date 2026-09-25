@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The native tool channel can be decided from the server rather than only from the built-in model registry. A model built locally is not in that registry, so `auto` read it as a model without function calling and dropped the turn onto the text-envelope path; Ollama is now asked what the model supports, once per model, and the answer is cached for the process.
 - The Debug screen shows the model the session last actually used, which is not always the one the dropdown shows.
 - The scenario harness gained three things a scenario needs to state its own conditions: configuration overrides carried by the scenario itself (a command-line override still wins), an assertion that a given text does NOT appear in the output, and an assertion that a file was NOT created. It also reads the iteration count from the run document when it is there instead of inferring it from the number of assistant messages, which counted a turn that answered twice in one iteration as two.
+- The MCP client now speaks the transport as the specification defines it, not only Refio's own dialect. A response framed as `text/event-stream` is read event by event and the JSON-RPC reply matching the request id is picked out; an SSE server that announces its message endpoint with an `endpoint` event gets its POSTs sent there; and `Mcp-Session-Id` is taken from the `initialize` response, sent on every later request and dropped on reconnect. A spec-compliant server used to fail on the first framed response. Servers speaking the Refio dialect connect as before.
 
 ### Changed
 
@@ -30,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Agent events no longer appear twice in the execution view. The view loaded the stored history and subscribed to the live stream, whose replay buffer handed back the same events again, so every step of a long-running agent was drawn twice. Events are now deduplicated by identity where they are published, and a failure to read the history leaves the live stream running rather than taking it down with it.
 - A tool-template error from Ollama is no longer retried. It is deterministic - the same request fails the same way every time - so the retries only delayed the fallback to the text channel by the full backoff.
 - The context accounting reported by a run is reset per turn instead of carrying the previous turn's dropped-message counters.
+- The SSE stream of an MCP server was opened with a call that waits for the whole response body. An event stream never ends, so no event ever reached the client. It is now read as it arrives.
 
 ## [0.0.2.0] - 2026-09-07
 
