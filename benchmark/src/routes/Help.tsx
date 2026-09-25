@@ -34,6 +34,12 @@ const leaderboardMetrics = [
       "Stability across attempts. It is clamped to 0-100%. A model with consistent scores gets a higher reliability value.",
   },
   {
+    name: "Avg Stability",
+    formula: "mean(score consistency, code similarity, median judge verdict)",
+    description:
+      "How consistent a model is across repeated attempts at the same task, averaged over tasks. Unlike Reliability it also checks whether the attempts are built the same way and asks the judges. Shows '-' when the model has no stability groups. See the Stability section below.",
+  },
+  {
     name: "Local Viability",
     formula: "localQualityRatio * 0.7 + stability * 0.3",
     description:
@@ -257,12 +263,77 @@ export default function Help() {
                   <Text code>scoreVariance</Text> (mean absolute deviation of the judge
                   aggregate between attempts, lower is more stable) and{" "}
                   <Text code>codeSimilarity</Text> (token-Jaccard over the artifacts) -
-                  plus a judge verdict over all attempts. It shows on the task page.
+                  plus a judge verdict over all attempts. It shows on the task page, and the
+                  Stability page compares models on it with radars and a ranking.
                 </Paragraph>
                 <Paragraph>
                   <Text strong>Review.</Text> Judge scores are advisory: they never
                   overwrite the manual scores, and a human reads them in the result
                   detail alongside the human ones.
+                </Paragraph>
+              </Space>
+            ),
+          },
+          {
+            key: "stability",
+            label: "Stability page and Avg Stability",
+            children: (
+              <Space direction="vertical">
+                <Paragraph>
+                  Stability answers a different question than quality: if you run the same
+                  model on the same task again, do you get the same kind of result? It is
+                  computed per group - all attempts of one model on one task in one
+                  environment and harness. A group needs at least two attempts with an HTML
+                  artifact.
+                </Paragraph>
+                <Paragraph>
+                  Each group gets three signals, each on a 0-100% scale where higher means
+                  more stable:
+                </Paragraph>
+                <Space direction="vertical" size={4}>
+                  <Text>
+                    <Text strong>Score consistency</Text> - how close the judge scores of
+                    the attempts are to each other:{" "}
+                    <Text code>clamp(1 - scoreVariance / 0.5, 0, 1)</Text>, where{" "}
+                    <Text code>scoreVariance</Text> is the mean absolute deviation between
+                    attempts. It uses the same 0.5 ceiling as Reliability.
+                  </Text>
+                  <Text>
+                    <Text strong>Code similarity</Text> - token overlap (Jaccard) between
+                    the attempts' artifacts. Low values mean the model writes the solution
+                    differently every time, even when the scores are close.
+                  </Text>
+                  <Text>
+                    <Text strong>Judge verdict</Text> - each strong judge looks at all
+                    attempts at once and answers <Text code>1</Text> (same approach,
+                    comparable quality), <Text code>0.5</Text> (same approach, variable
+                    quality) or <Text code>0</Text> (different approaches or wildly
+                    different quality). The group uses the median across judges.
+                  </Text>
+                </Space>
+                <Paragraph>
+                  <Text strong>Overall stability</Text> of a group is the equal-weight mean
+                  of the three signals. A group no judge has scored yet is averaged over the
+                  two deterministic signals only, so a missing verdict never counts as 0.
+                  The model value (<Text strong>Avg Stability</Text> on the Leaderboard) is
+                  the mean over its tasks.
+                </Paragraph>
+                <Paragraph>
+                  <Text strong>Avg Stability vs Reliability.</Text> Reliability only looks
+                  at how much the scores move between attempts. Avg Stability also asks
+                  whether the attempts are built the same way and what the judges think,
+                  so the two can differ a lot: a model can score equally badly every time
+                  (high Reliability) while producing a different program on each attempt
+                  (low Avg Stability), or the other way round.
+                </Paragraph>
+                <Paragraph>
+                  <Text strong>The Stability page</Text> shows two radars for up to six
+                  selected models - stability per task and per signal (with one axis per
+                  judge) - plus the same values as tables, where the best value in each
+                  row is highlighted, and a ranking of all models. Clicking a ranking row
+                  adds the model to the comparison or removes it. The selection is shared
+                  with the Compare page. Global environment, task and harness filters
+                  apply; hidden tasks are left out.
                 </Paragraph>
               </Space>
             ),

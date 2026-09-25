@@ -8,6 +8,7 @@ import { defaultThemeId, isThemeId, palettes, type ThemeId } from "@/theme/palet
 import Landing from "@/routes/Landing";
 import TaskDetail from "@/routes/TaskDetail";
 import Compare from "@/routes/Compare";
+import Stability from "@/routes/Stability";
 import Pareto from "@/routes/Pareto";
 import Agents from "@/routes/Agents";
 import Results from "@/routes/Results";
@@ -86,6 +87,7 @@ export default function App() {
                 <Route path="/tasks/:taskId" element={<TaskDetail />} />
                 <Route path="/results" element={<Results />} />
                 <Route path="/compare" element={<Compare />} />
+                <Route path="/stability" element={<Stability />} />
                 <Route path="/pareto" element={<Pareto />} />
                 <Route path="/agents" element={<Agents />} />
                 <Route path="/help" element={<Help />} />

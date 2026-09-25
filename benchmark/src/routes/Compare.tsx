@@ -16,7 +16,7 @@ import { useSearchParams } from "react-router-dom";
 import { useTasks } from "@/data/queries";
 import { useResults } from "@/data/queries";
 import { useFilters, applyFilters } from "@/store/filters";
-import { useCompareSelection } from "@/store/compareSelection";
+import { COMPARE_SELECT_PARAM, useCompareSelection } from "@/store/compareSelection";
 import { RadarCompare } from "@/components/charts/RadarCompare";
 import { JudgeRadarCompare } from "@/components/charts/JudgeRadarCompare";
 import { MetricRadarCompare } from "@/components/charts/MetricRadarCompare";
@@ -50,9 +50,9 @@ export default function Compare() {
   const { data: tasksData, isLoading: tasksLoading } = useTasks();
   const { data: resultsData, isLoading: resultsLoading } = useResults();
 
-  // Sync URL ?models= → Zustand on mount
+  // Sync URL ?select= → Zustand on mount
   useEffect(() => {
-    const param = searchParams.get("models");
+    const param = searchParams.get(COMPARE_SELECT_PARAM);
     if (param) {
       const ids = param.split(",").filter(Boolean);
       compare.setModels(ids);
@@ -66,9 +66,9 @@ export default function Compare() {
       (prev) => {
         const next = new URLSearchParams(prev);
         if (compare.modelIds.length > 0) {
-          next.set("models", compare.modelIds.join(","));
+          next.set(COMPARE_SELECT_PARAM, compare.modelIds.join(","));
         } else {
-          next.delete("models");
+          next.delete(COMPARE_SELECT_PARAM);
         }
         return next;
       },

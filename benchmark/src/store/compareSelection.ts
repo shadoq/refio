@@ -2,6 +2,11 @@ import { create } from "zustand";
 
 const MAX_COMPARE = 6;
 
+// URL param holding the models picked for side-by-side comparison. Deliberately not
+// ?models=, which is the global model filter: sharing it made picking models to
+// compare silently narrow every other page to just those models.
+export const COMPARE_SELECT_PARAM = "select";
+
 interface CompareSelectionState {
   modelIds: string[];
   toggleModel: (id: string) => void;

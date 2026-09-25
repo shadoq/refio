@@ -4,6 +4,8 @@ import type { ColumnsType } from "antd/es/table";
 import { useNavigate } from "react-router-dom";
 import { compareLeaderboardRows, leaderboard, type LeaderboardRow } from "@/lib/stats";
 import { applyFilters, useFilters } from "@/store/filters";
+import { COMPARE_SELECT_PARAM } from "@/store/compareSelection";
+import { filterStabilityEntries, modelStability } from "@/lib/stabilityView";
 import { useTasks } from "@/data/queries";
 import { useResults } from "@/data/queries";
 import {
@@ -26,6 +28,22 @@ export function LeaderboardTable() {
     const filtered = applyFilters(resultsData.results, filters);
     return leaderboard(filtered, resultsData, tasksData);
   }, [tasksData, resultsData, filters]);
+
+  // Same overall stability as the Stability page, per leaderboard row (model, env, harness).
+  const stabilityByRow = useMemo(() => {
+    const out = new Map<string, number>();
+    if (!tasksData || !resultsData) return out;
+    const hidden = new Set(tasksData.tasks.filter((t) => t.hidden === true).map((t) => t.id));
+    const entries = filterStabilityEntries(resultsData.stability, filters, hidden);
+    for (const row of rows) {
+      const own = entries.filter(
+        (e) => e.environmentId === row.environmentId && e.harnessId === row.harnessId,
+      );
+      const s = modelStability(own, row.modelId);
+      if (s) out.set(rowKey(row), s.overall);
+    }
+    return out;
+  }, [tasksData, resultsData, filters, rows]);
 
   const showHarness = new Set(rows.map((r) => r.harnessId)).size > 1;
 
@@ -156,6 +174,15 @@ export function LeaderboardTable() {
         formatNullableScore(row.reliabilityScore),
     },
     {
+      title: "Avg Stability",
+      key: "stability",
+      width: 130,
+      sorter: (a: LeaderboardRow, b: LeaderboardRow) =>
+        (stabilityByRow.get(rowKey(a)) ?? -1) - (stabilityByRow.get(rowKey(b)) ?? -1),
+      render: (_: unknown, row: LeaderboardRow) =>
+        formatNullableScore(stabilityByRow.get(rowKey(row)) ?? null),
+    },
+    {
       title: "Local Viability",
       key: "localViability",
       width: 140,
@@ -203,19 +230,23 @@ export function LeaderboardTable() {
     <Table<LeaderboardRow>
       columns={columns}
       dataSource={rows}
-      rowKey={(row) => `${row.modelId}::${row.environmentId}::${row.harnessId}`}
+      rowKey={rowKey}
       loading={tasksLoading || resultsLoading}
       pagination={false}
       size="middle"
-      scroll={{ x: 1388 }}
+      scroll={{ x: 1518 }}
       onRow={(row, index) => ({
         onClick: () =>
-          navigate(`/compare?models=${encodeURIComponent(row.modelId)}`),
+          navigate(`/compare?${COMPARE_SELECT_PARAM}=${encodeURIComponent(row.modelId)}`),
         className: index === 0 ? "leaderboard-row-top" : "",
         style: { cursor: "pointer" },
       })}
     />
   );
+}
+
+function rowKey(row: LeaderboardRow): string {
+  return `${row.modelId}::${row.environmentId}::${row.harnessId}`;
 }
 
 function scoreColor(score: number): string {
