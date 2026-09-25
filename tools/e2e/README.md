@@ -6,7 +6,8 @@ nothing here depends on the benchmark viewer, so `main` alone can define and run
 ```
 tools/e2e/
   gen-catalog.ts          generator: case -> e2e scenario + prompt + fixture stub
-  lib/                    case loader, idempotent writer, e2e emitter
+  lib/                    case loader, idempotent writer, e2e emitter; trusted post-run checks
+                          (preserve-check.mjs) and the batch manifest writer (batch-manifest.mjs)
   src/schema/case.ts      the case schema (single source of truth for a scenario)
   src/schema/criterion.ts scored review criterion (re-used by the benchmark toolchain)
   src/emit-scenario.ts    pure case -> scenario transform
@@ -27,6 +28,8 @@ tools/e2e/
 | `multi-file` category | a case whose deliverable is a set of modules, not a page: it carries a `build_cmd` (the fixture's own `node --test`) and a golden solution, so `validate-scenarios.sh` can prove the fixture fails and the golden passes |
 | `test_data/e2e/<id>.json`, `prompts/<id>.md` | generated artifacts, committed |
 | `test_data/e2e/fixtures/<name>/` | starting project state for a scenario |
+| `test_data/e2e/golden/<id>/` | a correct solution, overlaid on the fixture by `validate-scenarios.sh` (must pass) |
+| `test_data/e2e/negative/<id>/<name>/` | deliberately wrong solutions (constant answer, deleted test, unrelated file changed...), overlaid on fixture + golden; an optional `.delete` lists paths to remove. `validate-scenarios.sh` requires each one to fail |
 
 Hand-written scenarios that predate the catalog also live in `test_data/e2e/` and are left alone
 by the generator; it only ever touches files derived from a case.

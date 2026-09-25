@@ -18,6 +18,7 @@ export interface ScenarioNeedle {
   path: string;
   regex?: string;
   text?: string;
+  absent?: boolean;
 }
 
 export interface ScenarioAssert {
@@ -63,9 +64,12 @@ export function caseToScenario(c: CatalogCase): E2eScenario {
   }
   if (c.deliverable && c.assert.needles.length > 0) {
     const path = resolveModelTemplate(c.deliverable, E2E_MODEL_TOKEN);
-    assert.needles_in_file = c.assert.needles.map((n) =>
-      n.regex !== undefined ? { path, regex: n.regex } : { path, text: n.text as string },
-    );
+    assert.needles_in_file = c.assert.needles.map((n) => {
+      const needle: ScenarioNeedle =
+        n.regex !== undefined ? { path, regex: n.regex } : { path, text: n.text as string };
+      if (n.absent) needle.absent = true;
+      return needle;
+    });
   }
   if (c.assert.needleInOutput) {
     assert.needle_in_output = { regex: c.assert.needleInOutput.regex };

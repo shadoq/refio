@@ -83,7 +83,7 @@ the right change landed.
 | `plan-validation` | PLAN | produce a plan, edit nothing | `needle_in_output` + `file_unchanged` |
 | `js-fix-off-by-one` | AGENT | cross-language (JavaScript) off-by-one | **run** (`node`), asserts kept |
 | `add-edge-case-test` | AGENT | add a missing test, leave the impl alone | needle in test + `file_unchanged` impl + **run** |
-| `add-build-script` | AGENT | edit `package.json`, keep it valid JSON | 2 needles + `text` (existing kept) + JSON parses |
+| `add-build-script` | AGENT | edit `package.json`, keep it valid JSON | 2 needles + `text` (existing kept) + JSON parses + `preserved_except` (JSON identical outside `scripts.build`) |
 | `wire-format-helper` | AGENT | new file + wire it into a caller | 2 needles + build runs and prints `$10.00` |
 | `snake-game` | AGENT | **generate** a single-file game from scratch | needles on `snake.html` (canvas/keydown/score/game over) |
 | `stellar-sound-page` | AGENT | **generate** a single-file landing page | needles on `index.html` (brand/nav/form/table) |
@@ -141,7 +141,7 @@ gate is the point, so run them with a sufficient window (see the 32k/64k note un
 
 | id | mode | what it exercises | key assertion |
 |---|---|---|---|
-| `large-file-edit` | AGENT | one ~430-line file with a bug (`totalBalance` subtracts instead of adds) buried among ~210 look-alike helpers - locate and fix it without truncating the file | needle on the `credits + debits` fix + `no_context_overflow` |
+| `large-file-edit` | AGENT | one ~430-line file with a bug (`totalBalance` subtracts instead of adds) buried among ~210 look-alike helpers - locate and fix it without truncating the file | needle on the `credits + debits` fix + `preserved_except` (every line outside `totalBalance` unchanged) + `no_context_overflow` |
 
 ### Local network scenario
 
@@ -202,8 +202,12 @@ chains, many files, deep context).
 The benchmark catalog adds a `multi-file` category for the same idea on a bigger scale: the deliverable is
 a set of modules under `src/`, the fixture ships its own `node --test` suite as the `build_cmd`, and a
 golden solution lets `validate-scenarios.sh` prove the untouched fixture fails while the golden passes.
-`multi-file-notes-api-hidden-tests` builds an API against a hidden suite; `multi-file-refactor-keep-tests-green`
-splits a tangled module while its suite stays green.
+`multi-file-notes-api-hidden-tests` builds an API against the acceptance suite shipped in the fixture. Despite the
+historical id, that suite is **visible** to the agent (the prompt names it) and only protected from edits by
+`file_unchanged`, so a PASS measures "made the visible tests pass", not generalisation to unseen cases. A variant
+that delivers independent acceptance tests only after the turn has ended does not exist yet.
+`multi-file-refactor-keep-tests-green` splits a tangled module while its suite stays green, and an `absent`
+needle proves `src/legacy.js` became a facade (it may no longer define functions itself).
 
 The `build_cmd` for the two backend builds is the deterministic gate: it compiles/runs the app and
 exercises real behaviour (the CLI persists across runs; the API serves and mutates), so "SUCCESS" also
@@ -279,10 +283,14 @@ examples/                      # sample run.json + scenario used by --self-test 
     ],
     "needle_in_output": { "regex": "[Vv]alidat" },                       // HARD: regex vs run.json .finalOutput (PLAN/CHAT)
     "file_unchanged": ["src/Main.kt"],                                   // HARD: byte-identical to the fixture
+    "preserved_except": [                                                // HARD: only the allowed part may change
+      { "path": "src/Main.kt", "region": { "start": "^\\s*fun f\\(" } },  //   lines outside the region unchanged
+      { "path": "package.json", "json_paths": ["scripts.build"] }        //   JSON equal once scripts.build is removed
+    ],
     "build_cmd": "kotlinc src -include-runtime -d build/out.jar && java -jar build/out.jar", // HARD: exit 0 (OPTIONAL)
     "no_context_overflow": true,                                         // HARD
     "enforce_max_iterations": true,                                      // HARD: max_iterations is a real cap
-    "self_verified": true,                                               // HARD: the agent ran the build/tests itself
+    "self_verified": true,                                               // HARD: Refio's loop verifier ran and PASSED
     "forbidden_markers": ["LOOP_ABORTED", "NOOP_WRITE_STALL"],           // HARD: even on a run that delivered
     "tool_budget": { "read_file": 8 },                                   // HARD: ceiling per tool
     "no_immediate_repeat": true                                          // HARD: no identical call twice in a row
@@ -305,7 +313,27 @@ makes the assertion a tautology (the bug this rewrite fixed).
 **`needle_in_output`** (`{ regex? | text? }`) matches against `run.json.finalOutput` - for PLAN/CHAT
 scenarios that produce a plan or answer instead of editing a file. **`file_unchanged`** (array of paths)
 asserts each listed file is **byte-identical to the original fixture** - proves the agent did *not*
-touch it (guards "no change needed" restraint and "don't edit the test" scenarios).
+touch it (guards "no change needed" restraint and "don't edit the test" scenarios). List every protected file
+individually (tests, the project manifest such as `package.json`, runner scripts): there are no globs.
+
+**`preserved_except`** (array) asserts that a file the agent had to edit changed **only** where it was allowed to.
+A needle on the fix alone passes a file that was cut short after the fix or had a neighbouring function
+rewritten; this does not. Each entry is one of:
+
+- `{ path, region: { start, end? } }` - `start`/`end` are **JavaScript** regexes (not grep ERE) matched per line
+  against the **original fixture**: the region is the single line matching `start` (it must match exactly one
+  line, otherwise the scenario itself is reported as misconfigured) through the first following line matching
+  `end` (inclusive; without `end`, just that line). Every original line before and after the region must still
+  be there, in order, around whatever now stands in its place.
+- `{ path, json_paths: ["scripts.build"] }` - both files must parse as JSON and be structurally equal once the
+  listed dotted paths are removed from both. Key order and formatting are ignored; array order is not.
+
+CRLF and LF compare equal and trailing newlines at end of file are ignored: a Windows checkout turns the fixture
+into CRLF while an agent's write tool may emit LF, which is the environment, not a content change. The check is
+`tools/e2e/lib/preserve-check.mjs`, run from the harness directory with `node`. `e2e-run.sh`, `e2e-run.ps1` and
+`validate-scenarios.sh` all call the same script directly rather than through `build_cmd`, so it behaves the same
+under bash and under `cmd /c`. It only reads the pristine fixture and the project; nothing the agent writes can
+change the check. No `node` on PATH is a HARD fail with that reason, never a silent pass.
 
 **Loop-quality gates.** Everything above measures the final state of the project; these five measure
 how the run got there, which is the one thing the rest is blind to. A run that took forty wasted turns,
@@ -316,10 +344,20 @@ recovered leaves exactly the same files behind as a run that did the job well.
   has carried that budget since the harness was written and nothing read it, so it was documentation.
   Iterations are counted as assistant messages in the conversation: `metrics.toolCallCount` counts
   SUBTASK rows, which is a different quantity under a name that reads like this one.
-- **`self_verified`** requires `metrics.verification.ran` with result `PASSED` - the agent itself ran the
-  build or the tests. The harness runs `build_cmd` afterwards either way, so without this gate a model
-  that writes code blind and one that runs the tests and repairs what broke score identically. This is
-  the sharpest single behavioural difference between agent loops.
+- **`self_verified`** requires `metrics.verification.ran` with result `PASSED`: **Refio's loop verifier**
+  (the post-write verification step of the turn loop) ran the build or the tests during the turn and they
+  passed. It describes the Refio loop, not a choice the model made: it does not show that the model decided to
+  run the tests itself, and it is not a portable measure for agents that have no such verifier. The harness
+  runs `build_cmd` afterwards either way, so without this gate a loop that writes code blind and one that
+  checks and repairs what broke score identically. Results recorded earlier carry the same semantics; only the
+  wording of the failure reason changed ("the Refio loop verifier never ran"). Newer run documents may add
+  optional fields to `metrics.verification` (`exitCode`, `timedOut`, `baseline`, `attributionUncertain`,
+  `notRunReason`; absent when null). They do not change the pass/fail rule; the harness appends them to the
+  failure reason, so a run whose check was already red before the change (`baseline FAILED`,
+  `attributionUncertain`) still fails `self_verified` but is reported as "attribution uncertain" rather
+  than as a regression the agent caused. Whether the **model** chose to
+  run the tests is reported separately, as `modelRanBuildCmd` in `results.jsonl` (see Benchmark statistics);
+  it is not an assertion.
 - **`forbidden_markers`** fails a run whose `metrics.failureMarker` is one of the listed values, **even
   when the run delivered**. The marker used to be read only for an already-failing verdict, so a
   guardrail could fire, the agent could recover, and the incident vanished behind a green PASS.
@@ -387,6 +425,7 @@ harness splits assertions:
 | **HARD** | `needle_in_file` / `needles_in_file[]` (regex/text, with `absent`/`min_count`/`max_count`) | fail - proves the *right* change landed in the *right* file(s) |
 | **HARD** | `needle_in_output` (regex/text vs `run.json.finalOutput`) | fail - for PLAN/CHAT scenarios that answer instead of editing |
 | **HARD** | `file_unchanged[]` byte-identical to fixture | fail - proves a file the agent should *not* touch is intact |
+| **HARD** | `preserved_except[]` (`region` or `json_paths`) | fail - proves an edited file changed only where allowed (not truncated, no neighbour rewritten, no JSON field lost) |
 | **HARD** | `build_cmd` exit `== 0` (when present; may compile **and run** a test) | fail - proves the code actually works, not just "something was written" |
 | **HARD** | `no_context_overflow` (`run.json.metrics.contextOverflow == false`) | fail - silent truncation is never a success |
 | **HARD** | `tool_invoked[]` (`{name, args_regex?, absent?}`) | fail - a named tool **had** to run (or, with `absent:true`, must **not** have). `args_regex` matches the raw arguments JSON in `run.json.conversation[].toolCallDetails[]`, so a scenario can assert the *right* subagent/tool ran, not just *a* tool |
@@ -411,6 +450,22 @@ fields (`scenario`, `model`, `run`, `verdict`, `failure_mode`, `status`, `costUs
 | `tokensIn` / `durationMs` | input tokens and wall-clock duration |
 | `tools` | per-tool call histogram `{toolName: count}` (from `conversation[].toolCalls[]`) |
 | `apiErrors` | provider/tool error histogram `{errorType: count}` (from `apiLogs[].errorType`) |
+| `modelRanBuildCmd` | how many terminal commands (`run_terminal_command` / `run_process_background`) the **model** issued whose `command` contains the scenario's `build_cmd` verbatim, read from `conversation[].toolCallDetails[]`: the model's own choice to run the tests, as opposed to `self_verified` (Refio's loop verifier). `null` when the scenario has no `build_cmd` or the run document has no tool arguments. Another spelling of the same test run (`npm test` for `node --test`) is not counted. Absent in records written before it existed: read that as unknown, not as 0 |
+| `batch` | the invocation's batch id, the key into `manifest.jsonl` (absent in older records) |
+
+**Batch manifest.** Each harness invocation with `E2E_OUT_DIR` set also appends one line to
+`<E2E_OUT_DIR>/manifest.jsonl` (written by `tools/e2e/lib/batch-manifest.mjs`, needs `node`): `batch_id`, time,
+git commit and dirty flag, the model, a content hash of every scenario used (scenario JSON + prompt + fixture,
+line endings normalized) with its scenario-level `config` and `build_cmd`, the requested Ollama context size,
+endpoint, cost cap, auto-approve regex and every `--config` override passed to the runs, what the Ollama server
+reports about the model (server version, digest, quantization, template and its hash, parameters, and the
+`/api/ps` size, `size_vram` and `context_length` when it is loaded), host OS/CPU/RAM/GPU (`nvidia-smi`), and the
+CLI's `--print-config` output for the same overrides. Secrets (keys, tokens, passwords, `user:pass@` in URLs)
+are masked. Every probe is best effort: an unreachable server or a missing CLI or tool is recorded as `null`
+plus a reason and never fails the run. The host section describes the machine running the harness, which is
+not the inference machine when `--ollama-host` points elsewhere. `run.json` is unchanged. The manifest is a
+separate append-only file because `gate.sh` and model comparisons reuse one `E2E_OUT_DIR` for several
+invocations.
 
 These fields are **additive**: the Kotlin gate (`cli --gate`, `GateRunRecord` via Gson) ignores unknown
 fields, so enrichment never breaks it. `tools/e2e/e2e-stats.sh <results-dir | results.jsonl> …`

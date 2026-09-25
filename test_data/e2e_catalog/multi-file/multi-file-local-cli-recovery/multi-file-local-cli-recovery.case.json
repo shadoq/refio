@@ -1,0 +1,37 @@
+{
+  "id": "multi-file-local-cli-recovery",
+  "title": "Rebuild a stale local registry with the documented CLI and publish a release",
+  "category": "multi-file",
+  "tier": "medium",
+  "mode": "AGENT",
+  "maxIterations": 30,
+  "deliverable": "out/release.json",
+  "fixture": "fixtures/multi-file-local-cli-recovery",
+  "assert": {
+    "toolOrder": [],
+    "needles": [],
+    "fileUnchanged": [
+      "README.md",
+      "package.json",
+      "bin/packctl.cjs",
+      "manifests/release.json",
+      "artifacts/app-3.0.0.pkg",
+      "artifacts/base-1.2.0.pkg",
+      "artifacts/ui-2.4.1.pkg",
+      "test/release.test.js"
+    ],
+    "buildCmd": "node --test test/release.test.js",
+    "enforceMaxIterations": true,
+    "selfVerified": true,
+    "forbiddenMarkers": ["LOOP_ABORTED", "NOOP_WRITE_STALL"],
+    "noImmediateRepeat": false
+  },
+  "judge": {
+    "criteria": [
+      "The agent read packctl --help and the README, saw that the seeded registry is stale, ran reset, published base, ui and app in dependency order, ran verify until it exited 0 and exported out/release.json with the CLI instead of writing the file by hand. The CLI, manifest, artifacts, tests and README are untouched, no network was used, and the final report lists the commands and the verification result."
+    ]
+  },
+  "review": {
+    "description": "A terminal task driven by a local tool: the workspace ships a packctl CLI, its README, a release manifest, three artifacts and a stale registry state (an old base checksum, app published before its dependencies, ui missing). The agent has to discover the documented recovery flow (reset, publish in dependency order, verify, export) and produce out/release.json. The verifier recomputes checksums and checks the package set and order; it never trusts the export's verified flag."
+  }
+}
