@@ -31,6 +31,33 @@ class NativeToolTemplateErrorTest {
     }
 
     @Test
+    fun `recognises a tool-call parse failure from a different template family`() {
+        val real = RuntimeException(
+            """Ollama API error (HTTP 500): {"error":"parse Glimmer call to tasks: malformed ATEM parameter"}"""
+        )
+
+        assertTrue(NativeToolTemplateError.matches(real))
+    }
+
+    @Test
+    fun `either word pair alone is enough`() {
+        assertTrue(NativeToolTemplateError.matches(RuntimeException("HTTP 500: failed to parse tool call")))
+        assertTrue(NativeToolTemplateError.matches(RuntimeException("HTTP 500: malformed parameter block")))
+    }
+
+    @Test
+    fun `a bare parse failure unrelated to tool calls stays retryable`() {
+        assertFalse(NativeToolTemplateError.matches(RuntimeException("Ollama API error (HTTP 500): failed to parse request body")))
+        assertFalse(NativeToolTemplateError.matches(RuntimeException("Ollama API error (HTTP 500): malformed JSON")))
+    }
+
+    @Test
+    fun `the pair words only count as whole words, not inside longer ones`() {
+        assertFalse(NativeToolTemplateError.matches(RuntimeException("HTTP 500: parser crashed while the worker was being called")))
+        assertFalse(NativeToolTemplateError.matches(RuntimeException("HTTP 500: could not parse callback payload")))
+    }
+
+    @Test
     fun `an ordinary server error stays retryable`() {
         assertFalse(NativeToolTemplateError.matches(RuntimeException("Ollama API error (HTTP 500): internal error")))
         assertFalse(NativeToolTemplateError.matches(RuntimeException("HTTP 503 service unavailable")))

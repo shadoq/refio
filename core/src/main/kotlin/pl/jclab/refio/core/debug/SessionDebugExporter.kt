@@ -94,6 +94,11 @@ class SessionDebugExporter(
                         ran = it.ran,
                         attempts = it.attempts,
                         result = it.result,
+                        exitCode = it.exitCode,
+                        timedOut = it.timedOut,
+                        baseline = it.baseline,
+                        attributionUncertain = it.attributionUncertain,
+                        notRunReason = it.notRunReason,
                     )
                 },
                 guardrails = TurnGuardrailStatsTracker.statsFor(taskId).let {

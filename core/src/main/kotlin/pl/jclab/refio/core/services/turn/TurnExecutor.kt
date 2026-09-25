@@ -2151,72 +2151,54 @@ internal class TurnExecutor(
                             usedTools.any { turnToolExecutor.isFileWriteTool(it) }
                         ) {
                             updateTurnState { copy(phase = TurnPhase.FINALIZING) }
-                            when (val outcome = turnVerifier.verify(taskId)) {
-                                is TurnVerifier.Outcome.Skipped -> {
-                                    logger.info { "[VERIFY] taskId=$taskId skipped: ${outcome.reason}" }
-                                }
-                                TurnVerifier.Outcome.Passed -> {
-                                    verificationAttempts++
-                                    verificationSummary = pl.jclab.refio.core.debug.VerificationSummary(
-                                        ran = true,
-                                        attempts = verificationAttempts,
-                                        result = pl.jclab.refio.core.debug.VerificationSummary.RESULT_PASSED
-                                    )
-                                    pl.jclab.refio.core.debug.TurnVerificationTracker.record(taskId, verificationSummary!!)
-                                }
-                                is TurnVerifier.Outcome.Failed -> {
-                                    verificationAttempts++
-                                    val maxRepairRounds = turnVerifier.maxRepairRounds(taskId)
-                                    val errorList = outcome.errors.joinToString("\n") { "- $it" }
-                                    if (verificationAttempts <= maxRepairRounds && iteration < maxIterations) {
-                                        logger.warn {
-                                            "[VERIFY] taskId=$taskId failed (exit=${outcome.exitCode}) - " +
-                                                "repair round $verificationAttempts/$maxRepairRounds"
-                                        }
-                                        // Keep the model's completion text in history, then send
-                                        // the error list as the single repair message and re-enter
-                                        // the loop; the next terminal point re-verifies.
-                                        val verifyTextResponse = toolCallParser.extractTextResponse(llmResponse.content)
-                                        turnPersistence.persist(
-                                            role = MessageRole.ASSISTANT,
-                                            content = verifyTextResponse.ifEmpty { llmResponse.content },
-                                            thinking = turnResponseProcessor.resolveAssistantThinking(llmResponse),
-                                            toolCalls = null,
-                                            tokensIn = llmResponse.usage.inputTokens,
-                                            tokensOut = llmResponse.usage.outputTokens,
-                                            cost = llmResponse.cost,
-                                        )
-                                        turnPersistence.persist(
-                                            role = MessageRole.SYSTEM,
-                                            content = "Verification failed (exit ${outcome.exitCode}). Errors:\n$errorList\nFix them.",
-                                            toolCalls = null,
-                                        )
-                                        continue
+                            val outcome = turnVerifier.verify(taskId)
+                            if (outcome.executed) verificationAttempts++
+                            verificationSummary = recordVerification(turnVerifier, taskId, outcome, verificationAttempts, verificationSummary)
+                            if (outcome is TurnVerifier.Outcome.Failed) {
+                                val maxRepairRounds = turnVerifier.maxRepairRounds(taskId)
+                                val errorList = outcome.errors.joinToString("\n") { "- $it" }
+                                if (verificationAttempts <= maxRepairRounds && iteration < maxIterations) {
+                                    logger.warn {
+                                        "[VERIFY] taskId=$taskId failed (exit=${outcome.exitCode}) - " +
+                                            "repair round $verificationAttempts/$maxRepairRounds"
                                     }
-                                    logger.error {
-                                        "[VERIFY] taskId=$taskId still failing after $verificationAttempts " +
-                                            "attempt(s) (maxRepairRounds=$maxRepairRounds) - finalizing VERIFICATION_FAILED"
-                                    }
-                                    verificationSummary = pl.jclab.refio.core.debug.VerificationSummary(
-                                        ran = true,
-                                        attempts = verificationAttempts,
-                                        result = pl.jclab.refio.core.debug.VerificationSummary.RESULT_FAILED
+                                    // Keep the model's completion text in history, then send
+                                    // the error list as the single repair message and re-enter
+                                    // the loop; the next terminal point re-verifies.
+                                    val verifyTextResponse = toolCallParser.extractTextResponse(llmResponse.content)
+                                    turnPersistence.persist(
+                                        role = MessageRole.ASSISTANT,
+                                        content = verifyTextResponse.ifEmpty { llmResponse.content },
+                                        thinking = turnResponseProcessor.resolveAssistantThinking(llmResponse),
+                                        toolCalls = null,
+                                        tokensIn = llmResponse.usage.inputTokens,
+                                        tokensOut = llmResponse.usage.outputTokens,
+                                        cost = llmResponse.cost,
                                     )
-                                    pl.jclab.refio.core.debug.TurnVerificationTracker.record(taskId, verificationSummary!!)
-                                    TurnFailureMarkerTracker.record(taskId, TurnFailureMarkerTracker.VERIFICATION_FAILED)
-                                    val result = TurnResult(
-                                        success = false,
-                                        response = "Verification failed (exit ${outcome.exitCode}) after " +
-                                            "$verificationAttempts attempt(s). Errors:\n$errorList",
-                                        iterations = iteration,
-                                        tokensIn = totalTokensIn,
-                                        tokensOut = totalTokensOut,
-                                        cost = totalCost,
-                                        toolsUsed = usedTools.distinct(),
-                                        verification = verificationSummary
+                                    turnPersistence.persist(
+                                        role = MessageRole.SYSTEM,
+                                        content = "Verification failed (exit ${outcome.exitCode}). Errors:\n$errorList\nFix them.",
+                                        toolCalls = null,
                                     )
-                                    return turnPersistence.finish(result, persistAssistantMessage = true, stopReason = TurnStopReason.VERIFICATION_FAILED)
+                                    continue
                                 }
+                                logger.error {
+                                    "[VERIFY] taskId=$taskId still failing after $verificationAttempts " +
+                                        "attempt(s) (maxRepairRounds=$maxRepairRounds) - finalizing VERIFICATION_FAILED"
+                                }
+                                TurnFailureMarkerTracker.record(taskId, TurnFailureMarkerTracker.VERIFICATION_FAILED)
+                                val result = TurnResult(
+                                    success = false,
+                                    response = "Verification failed (exit ${outcome.exitCode}) after " +
+                                        "$verificationAttempts attempt(s). Errors:\n$errorList",
+                                    iterations = iteration,
+                                    tokensIn = totalTokensIn,
+                                    tokensOut = totalTokensOut,
+                                    cost = totalCost,
+                                    toolsUsed = usedTools.distinct(),
+                                    verification = verificationSummary
+                                )
+                                return turnPersistence.finish(result, persistAssistantMessage = true, stopReason = TurnStopReason.VERIFICATION_FAILED)
                             }
                         }
 
@@ -2438,6 +2420,31 @@ internal class TurnExecutor(
             toolsUsed = usedTools.distinct()
         )
         return turnPersistence.finish(result, persistAssistantMessage = true, stopReason = TurnStopReason.MAX_ITERATIONS)
+    }
+
+    /**
+     * Records the exported verification state after one finalization verify. Every executed run is
+     * recorded, including a failure that goes back for repair and a failure that was already there
+     * before the turn, so `run.json` never reports an executed command as not run. Extracted from
+     * `executeLoop` to keep that method under the JVM's 64 KB per-method ceiling.
+     */
+    private fun recordVerification(
+        turnVerifier: TurnVerifier,
+        taskId: String,
+        outcome: TurnVerifier.Outcome,
+        attempts: Int,
+        previous: pl.jclab.refio.core.debug.VerificationSummary?,
+    ): pl.jclab.refio.core.debug.VerificationSummary {
+        when (outcome) {
+            is TurnVerifier.Outcome.Skipped ->
+                logger.info { "[VERIFY] taskId=$taskId skipped: ${outcome.reason}" }
+            is TurnVerifier.Outcome.PreExistingFailure ->
+                logger.info { "[VERIFY] taskId=$taskId failure already present before the turn - finalizing without repair" }
+            else -> Unit
+        }
+        val summary = turnVerifier.summarize(taskId, outcome, attempts, previous)
+        pl.jclab.refio.core.debug.TurnVerificationTracker.record(taskId, summary)
+        return summary
     }
 
     /**

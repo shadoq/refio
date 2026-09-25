@@ -278,6 +278,37 @@ class TurnGuardrailsTest {
         }
 
         @Test
+        fun `a read-only loop is not explained to the model as edits that change nothing`() {
+            // A model stuck re-running the same search was told its edits do not change runtime
+            // behaviour, which is false and points it at the wrong fix.
+            val reason = TurnGuardrails.TurnRepetitionTracker.identicalOutputAbortReason(
+                "rag_search", 4, "rag_search@query@*"
+            )
+
+            assertTrue(reason.contains("change the query or move on"), reason)
+            assertTrue(!reason.contains("Edits"), reason)
+        }
+
+        @Test
+        fun `a writing loop keeps the edits-are-not-changing-behaviour explanation`() {
+            val reason = TurnGuardrails.TurnRepetitionTracker.identicalOutputAbortReason(
+                "run_terminal_command", 4, "run_terminal_command@npm test"
+            )
+
+            assertTrue(reason.contains("Edits are not changing runtime behaviour."), reason)
+        }
+
+        @Test
+        fun `the read-only abort carries the read-only explanation`() {
+            val tracker = TurnGuardrails.TurnRepetitionTracker()
+            val args = mapOf<String, Any?>("pattern" to "fooBar", "path" to "src")
+            val last = (1..4).map { tracker.record("grep_search", args, "src/a.kt:1: fooBar") }.last()
+
+            val abort = assertIs<TurnGuardrails.LoopStatus.ABORT>(last)
+            assertTrue(abort.reason.contains("change the query or move on"), abort.reason)
+        }
+
+        @Test
         fun `rag_search varying query stays OK across many calls`() {
             // Legitimate exploration: different queries each time, default 15-call
             // count threshold is never approached, output hashes vary.

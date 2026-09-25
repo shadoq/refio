@@ -18,6 +18,15 @@ object NativeToolTemplateError {
 
     private val SIGNATURES = listOf("xml syntax error", "element <parameter>")
 
+    // Other template families word the same failure differently ("parse Glimmer call to tasks:
+    // malformed ATEM parameter"). Each word alone is too broad (a bare "parse" error can be a bad
+    // request body), so only a pair that ties the failure to a tool call counts. Whole words only:
+    // "parser" or "called" appear in unrelated 500s that are still worth retrying.
+    private val WORD_PAIRS = listOf(
+        Regex("""\bparse\b""") to Regex("""\bcalls?\b"""),
+        Regex("""\bmalformed\b""") to Regex("""\bparameters?\b"""),
+    )
+
     private const val MAX_CAUSE_DEPTH = 5
 
     /** True when [error] or any of its causes is a tool-template parse failure. */
@@ -27,6 +36,7 @@ object NativeToolTemplateError {
         while (cause != null && depth < MAX_CAUSE_DEPTH) {
             val msg = cause.message?.lowercase() ?: ""
             if (SIGNATURES.any { msg.contains(it) }) return true
+            if (WORD_PAIRS.any { (a, b) -> a.containsMatchIn(msg) && b.containsMatchIn(msg) }) return true
             cause = cause.cause
             depth++
         }

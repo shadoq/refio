@@ -2500,6 +2500,97 @@ class AgentTurnLoopTest {
                 pl.jclab.refio.core.debug.TurnFailureMarkerTracker.markerFor(testTaskId)
             )
         }
+
+        @Test
+        fun `a project that was red before the turn is reported as an executed failure, without a repair loop`() = runTest {
+            // The test command fails on the untouched project and still fails after the edit. The
+            // turn must not be sent to repair a project it did not break, but the run document
+            // must say the command ran and failed - "not run" would hide a possible new regression.
+            stubWriteTool()
+            val runner = RecordingRunner(
+                pl.jclab.refio.core.services.turn.VerificationExecution(exitCode = 1, output = "CalcTest > add FAILED")
+            )
+            val loop = buildAgentTurnLoop(NoopTaskVerifier(), turnVerifier = verifierWith(runner))
+            stubLlmResponses(
+                createLLMResponse(editCall),
+                createLLMResponse("""{"actions":[],"response":"Change applied."}""")
+            )
+
+            val result = loop.runTurn(taskId = testTaskId, userInput = "Set MAX_RETRIES to 5", mode = TaskMode.AGENT)
+
+            assertTrue(result.success, "a failure that predates the turn must not fail the turn: ${result.response}")
+            assertEquals(2, runner.invocations.size, "baseline + one finalization run, no repair re-runs")
+            val summary = pl.jclab.refio.core.debug.TurnVerificationTracker.summaryFor(testTaskId)
+            assertEquals(result.verification, summary)
+            assertTrue(summary.ran, "the command executed; NOT_RUN is not an acceptable report")
+            assertEquals(1, summary.attempts)
+            assertEquals("FAILED", summary.result)
+            assertEquals(1, summary.exitCode)
+            assertEquals("FAILED", summary.baseline)
+            assertTrue(summary.attributionUncertain)
+            assertNull(pl.jclab.refio.core.debug.TurnFailureMarkerTracker.markerFor(testTaskId))
+            verify(exactly = 0) {
+                chatMessageRepository.create(
+                    testTaskId, MessageRole.SYSTEM, match { it.startsWith("Verification failed") },
+                    any(), any(), any(), any(), any(), any()
+                )
+            }
+        }
+
+        private fun stubTerminalTool(output: String) {
+            // run_terminal_command is mode=WRITE in production (for approval) but is an execution
+            // tool: isFileWriteTool() excludes it.
+            val cmdTool = mockk<pl.jclab.refio.core.tools.base.Tool>(relaxed = true) {
+                every { name } returns "run_terminal_command"
+                every { mode } returns pl.jclab.refio.core.tools.base.ToolMode.WRITE
+            }
+            every { toolRegistry.getTool("run_terminal_command") } returns cmdTool
+            coEvery { toolExecutor.executeTool(match { it.name == "run_terminal_command" }, any()) } returns
+                ToolResult(success = true, output = output)
+        }
+
+        @Test
+        fun `a turn that only runs read-only commands is not verified and is not a delivered change`() = runTest {
+            stubTerminalTool("Config.kt\nMain.kt")
+            val runner = RecordingRunner(
+                pl.jclab.refio.core.services.turn.VerificationExecution(exitCode = 0, output = "BUILD SUCCESSFUL")
+            )
+            val loop = buildAgentTurnLoop(NoopTaskVerifier(), turnVerifier = verifierWith(runner))
+            stubLlmResponses(
+                createLLMResponse("""{"response":"listing","actions":[{"tool":"run_terminal_command","arguments":{"command":"ls"}}]}"""),
+                createLLMResponse("""{"actions":[],"response":"The project has Config.kt and Main.kt."}""")
+            )
+
+            val result = loop.runTurn(taskId = testTaskId, userInput = "What files are there?", mode = TaskMode.AGENT)
+
+            assertTrue(result.success, result.response)
+            assertTrue(runner.invocations.isEmpty(), "running a command is not a file change; no verification")
+            assertNull(result.verification)
+            assertFalse(pl.jclab.refio.core.debug.TurnVerificationTracker.summaryFor(testTaskId).ran)
+        }
+
+        @Test
+        fun `a file written only through a terminal command is not verified by the loop (known limitation)`() = runTest {
+            // Documents current behaviour: the verification gate keys on file-editing tools, and a
+            // terminal command cannot be told apart from a read-only one without watching the file
+            // system. Such a write therefore gets no loop verification and run.json says ran=false.
+            // If this starts failing because terminal writes are now detected, update the test.
+            stubTerminalTool("")
+            val runner = RecordingRunner(
+                pl.jclab.refio.core.services.turn.VerificationExecution(exitCode = 0, output = "BUILD SUCCESSFUL")
+            )
+            val loop = buildAgentTurnLoop(NoopTaskVerifier(), turnVerifier = verifierWith(runner))
+            stubLlmResponses(
+                createLLMResponse("""{"response":"writing","actions":[{"tool":"run_terminal_command","arguments":{"command":"echo MAX_RETRIES=5 > config.properties"}}]}"""),
+                createLLMResponse("""{"actions":[],"response":"Wrote config.properties."}""")
+            )
+
+            val result = loop.runTurn(taskId = testTaskId, userInput = "Set MAX_RETRIES to 5", mode = TaskMode.AGENT)
+
+            assertTrue(runner.invocations.isEmpty(), "no baseline and no finalization run for a terminal-only write")
+            assertNull(result.verification)
+            assertFalse(pl.jclab.refio.core.debug.TurnVerificationTracker.summaryFor(testTaskId).ran)
+        }
     }
 
     @Test

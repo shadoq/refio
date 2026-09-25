@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Debug screen shows the model the session last actually used, which is not always the one the dropdown shows.
 - The scenario harness gained three things a scenario needs to state its own conditions: configuration overrides carried by the scenario itself (a command-line override still wins), an assertion that a given text does NOT appear in the output, and an assertion that a file was NOT created. It also reads the iteration count from the run document when it is there instead of inferring it from the number of assistant messages, which counted a turn that answered twice in one iteration as two.
 - The MCP client now speaks the transport as the specification defines it, not only Refio's own dialect. A response framed as `text/event-stream` is read event by event and the JSON-RPC reply matching the request id is picked out; an SSE server that announces its message endpoint with an `endpoint` event gets its POSTs sent there; and `Mcp-Session-Id` is taken from the `initialize` response, sent on every later request and dropped on reconnect. A spec-compliant server used to fail on the first framed response. Servers speaking the Refio dialect connect as before.
+- `metrics.verification` in the run document tells apart what the verification command did: `exitCode`, `timedOut`, `baseline` (the same command on the untouched project before the first write), `attributionUncertain` (it was already failing before the turn, so a failure cannot be pinned on the agent) and `notRunReason`. The existing `ran`, `attempts` and `result` keep their meaning and absent fields are omitted, so older readers are unaffected.
 
 ### Changed
 
@@ -25,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The reminder budget for a malformed answer doubles while the turn has produced nothing. Spending the same small budget before and after a deliverable exists treated the two situations alike, and a turn was given up on while it had not yet written anything.
 - A turn abandoned because the model kept repeating itself is now reported as incomplete rather than successful. This is a behaviour change: such a turn used to be indistinguishable from one that finished its work, both for the task status and for anything reading the run afterwards.
 - The agent execution view subscribes once to a stream that replays the stored history and then continues live, instead of loading the history and subscribing separately.
+- A verification command that fails both before and after the turn is reported as run and failed, with `attributionUncertain`, instead of as not run. The turn is still not failed for it and no repair round is started, so the agent is not pushed into fixing a breakage it did not cause. A command that cannot be started at all is reported as skipped with a reason instead of escaping the turn loop as an exception.
+- A repetition abort on a read-only tool tells the model that the search or read keeps returning the same result and to change the query or act. It used to say that edits were not changing runtime behaviour, which was untrue when nothing had been edited.
+- When the approval gate refuses to delete a file inside the project, the refusal suggests rewriting the file with `advance_code_editing`. A model that wanted to replace a file it had written tried `rm`, `rm -f` and `unlink` in turn and ended the turn on repeated denials without ever being told another way.
 
 ### Fixed
 
@@ -32,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A tool-template error from Ollama is no longer retried. It is deterministic - the same request fails the same way every time - so the retries only delayed the fallback to the text channel by the full backoff.
 - The context accounting reported by a run is reset per turn instead of carrying the previous turn's dropped-message counters.
 - The SSE stream of an MCP server was opened with a call that waits for the whole response body. An event stream never ends, so no event ever reached the client. It is now read as it arrives.
+- A tool-template error from Ollama is recognised in more than one wording. A failure such as `parse ... call ... malformed ... parameter` from another template family was treated as an ordinary 500, retried six times and ended the turn, although it is the same deterministic failure and the text-channel fallback was available. The words are matched whole, so an unrelated 500 mentioning a "parser" or something "called" is still retried.
 
 ## [0.0.2.0] - 2026-09-07
 

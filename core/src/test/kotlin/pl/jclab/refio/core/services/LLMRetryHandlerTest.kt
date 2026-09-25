@@ -298,6 +298,30 @@ class LLMRetryHandlerTest {
 
             assertEquals(0, retryHandler.getStats().totalRetries)
         }
+
+        @Test
+        fun `does not retry a tool-call template parse 500, the turn falls back to the text contract instead`() = runTest {
+            // Deterministic for the same request: retrying only burns the backoff before the
+            // turn's own native-to-text fallback, which is what recovers the call.
+            coEvery { llmClient.complete(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } throws
+                LLMErrorMapper.fromHttpStatus(
+                    "ollama", "muse-glimmer", 500,
+                    """Ollama API error (HTTP 500): {"error":"parse Glimmer call to tasks: malformed ATEM parameter"}""",
+                )
+
+            assertFailsWith<RefioError.LLMError> {
+                retryHandler.callWithRetry(
+                    provider = "ollama",
+                    model = "muse-glimmer",
+                    messages = testMessages,
+                    taskId = "task-1",
+                    source = "test",
+                    baseDelayMs = 1
+                )
+            }
+
+            assertEquals(0, retryHandler.getStats().totalRetries)
+        }
     }
 
     @Nested

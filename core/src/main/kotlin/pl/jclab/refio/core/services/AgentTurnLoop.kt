@@ -368,8 +368,10 @@ data class TurnResult(
      * Outcome of the deterministic post-turn verification step (project build/test run by the
      * loop code after a file-writing AGENT turn). Null when verification was not applicable to
      * this exit path; [pl.jclab.refio.core.debug.VerificationSummary.NOT_RUN] when it was
-     * considered but never executed. `result == "FAILED"` means the repair rounds were exhausted
-     * and the turn ended as a verification failure - never faked as success.
+     * considered but never executed. `result == "FAILED"` with `attributionUncertain == false`
+     * means the repair rounds were exhausted and the turn ended as a verification failure - never
+     * faked as success. With `attributionUncertain == true` the command was already failing before
+     * the turn, so the failure is reported but the turn is not failed for it.
      */
     val verification: pl.jclab.refio.core.debug.VerificationSummary? = null,
     /**

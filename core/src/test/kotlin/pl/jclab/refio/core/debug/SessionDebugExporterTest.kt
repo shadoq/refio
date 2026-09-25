@@ -356,6 +356,55 @@ class SessionDebugExporterTest {
     }
 
     @Test
+    fun `a verification that ran red on an already red project is exported as executed and unattributable`() {
+        TurnVerificationTracker.reset()
+        try {
+            stub()
+            TurnVerificationTracker.record(
+                "t1",
+                VerificationSummary(
+                    ran = true, attempts = 1, result = VerificationSummary.RESULT_FAILED, exitCode = 1,
+                    baseline = VerificationSummary.RESULT_FAILED, attributionUncertain = true,
+                ),
+            )
+
+            val snap = exporter.export("t1", SessionDebugOptions.forLevel(DebugLevel.STANDARD))
+            val v = snap.metrics.verification
+
+            // The original three fields keep their meaning for existing readers.
+            assertEquals(true, v.ran)
+            assertEquals(1, v.attempts)
+            assertEquals("FAILED", v.result)
+            // The additive ones separate the outcome from whether it can be blamed on the turn.
+            assertEquals(1, v.exitCode)
+            assertEquals("FAILED", v.baseline)
+            assertEquals(true, v.attributionUncertain)
+            assertTrue(exporter.toJson(snap).contains("\"attributionUncertain\": true"))
+        } finally {
+            TurnVerificationTracker.reset()
+        }
+    }
+
+    @Test
+    fun `a verification that never started carries the reason in the run document`() {
+        TurnVerificationTracker.reset()
+        try {
+            stub()
+            TurnVerificationTracker.record(
+                "t1", VerificationSummary.NOT_RUN.copy(notRunReason = "verification command 'npm test' could not be started"),
+            )
+
+            val v = exporter.export("t1", SessionDebugOptions.forLevel(DebugLevel.STANDARD)).metrics.verification
+
+            assertEquals(false, v.ran)
+            assertEquals(null, v.result)
+            assertTrue(v.notRunReason!!.contains("could not be started"))
+        } finally {
+            TurnVerificationTracker.reset()
+        }
+    }
+
+    @Test
     fun `a file edited and put back is reported as written twice and unchanged`() {
         TurnFileWriteTracker.reset()
         try {
