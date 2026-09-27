@@ -3125,10 +3125,7 @@ internal class TurnExecutor(
             )
         }
 
-        return TurnPrompt(
-            systemPrompt = turnPrompt.systemPrompt,
-            messages = turnPrompt.messages
-        )
+        return turnPrompt
     }
 
     /**

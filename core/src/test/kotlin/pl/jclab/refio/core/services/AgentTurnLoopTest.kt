@@ -331,6 +331,27 @@ class AgentTurnLoopTest {
         }
 
         @Test
+        fun `turn call carries the cacheable system prefix so Anthropic can bill it at the cache rate`() = runTest {
+            // Without the boundary the Anthropic adapter sends the system prompt as plain text, so
+            // every iteration re-bills the whole prefix (instructions + tool schemas) at full price.
+            val kwargsPerCall = mutableListOf<Map<String, Any>>()
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = capture(kwargsPerCall)
+                )
+            } returns createLLMResponse("""{"response": "Done."}""")
+
+            agentTurnLoop.runTurn(taskId = testTaskId, userInput = "Hello", mode = TaskMode.AGENT)
+
+            val boundary = kwargsPerCall.firstOrNull()?.get("cacheable_system_length") as? Int
+            assertNotNull(boundary, "the turn call lost the stable-prefix boundary: ${kwargsPerCall.firstOrNull()}")
+            assertTrue(boundary > 0)
+        }
+
+        @Test
         fun `should save user message to history`() = runTest {
             // Given
             val userInput = "Test input"
