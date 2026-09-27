@@ -1,0 +1,62 @@
+{
+  "id": "multi-file-search-overflow",
+  "title": "Fix the active validator when a search returns hundreds of archived copies",
+  "category": "multi-file",
+  "tier": "medium",
+  "mode": "AGENT",
+  "maxIterations": 35,
+  "deliverable": "src/validation.js",
+  "fixture": "fixtures/multi-file-search-overflow",
+  "assert": {
+    "toolOrder": [],
+    "needles": [{ "regex": "[^0-9]24[^0-9]" }],
+    "fileUnchanged": [
+      "package.json",
+      "src/api.js",
+      "test/api.test.js",
+      "archive/rel-2015-q1/validation.js",
+      "archive/rel-2015-q2/validation.js",
+      "archive/rel-2015-q3/validation.js",
+      "archive/rel-2015-q4/validation.js",
+      "archive/rel-2016-q1/validation.js",
+      "archive/rel-2016-q2/validation.js",
+      "archive/rel-2016-q3/validation.js",
+      "archive/rel-2016-q4/validation.js",
+      "archive/rel-2017-q1/validation.js",
+      "archive/rel-2017-q2/validation.js",
+      "archive/rel-2017-q3/validation.js",
+      "archive/rel-2017-q4/validation.js",
+      "archive/rel-2018-q1/validation.js",
+      "archive/rel-2018-q2/validation.js",
+      "archive/rel-2018-q3/validation.js",
+      "archive/rel-2018-q4/validation.js",
+      "archive/rel-2019-q1/validation.js",
+      "archive/rel-2019-q2/validation.js",
+      "archive/rel-2019-q3/validation.js",
+      "archive/rel-2019-q4/validation.js",
+      "archive/rel-2020-q1/validation.js",
+      "archive/rel-2020-q2/validation.js",
+      "archive/rel-2020-q3/validation.js",
+      "archive/rel-2020-q4/validation.js",
+      "archive/rel-2021-q1/validation.js",
+      "archive/rel-2021-q2/validation.js",
+      "archive/rel-2021-q3/validation.js",
+      "archive/rel-2021-q4/validation.js",
+      "archive/rel-2022-q1/validation.js",
+      "archive/rel-2022-q2/validation.js"
+    ],
+    "buildCmd": "node --test test/api.test.js",
+    "enforceMaxIterations": true,
+    "selfVerified": true,
+    "forbiddenMarkers": ["LOOP_ABORTED", "NOOP_WRITE_STALL"],
+    "noImmediateRepeat": true
+  },
+  "judge": {
+    "criteria": [
+      "The agent located the validator that src/api.js actually imports (src/validation.js) instead of editing any of the 30 archived copies, and lowered its length limit to 24 while keeping the ASCII letters, digits and underscore rule, the rejection of non-string input and the exact API return values. The archive, the API module and the tests are untouched, and the agent ran the tests and reported their result."
+    ]
+  },
+  "review": {
+    "description": "A small record API validates identifiers in src/validation.js, which still allows 32 characters instead of the documented 24. The tree also holds 30 archived files with 20 historical validator revisions each, so a plain text search for the validator returns about 600 hits, far above a typical search result cap. The agent has to follow the import from src/api.js rather than trust the first search hits."
+  }
+}

@@ -240,7 +240,8 @@ internal fun describeTurnFailure(turnResult: pl.jclab.refio.core.services.TurnRe
         turnResult.rejectedByUser ->
             "tool '${turnResult.rejectedToolName ?: "unknown"}' was rejected after $iterations: " +
                 (turnResult.rejectionReason ?: "no reason given")
-        turnResult.verification?.result == pl.jclab.refio.core.debug.VerificationSummary.RESULT_FAILED ->
+        turnResult.verification?.result == pl.jclab.refio.core.debug.VerificationSummary.RESULT_FAILED &&
+            turnResult.verification?.attributionUncertain != true ->
             "post-turn verification failed after ${turnResult.verification?.attempts ?: 0} attempt(s) and $iterations"
         turnResult.incomplete ->
             "turn ended without delivering the request after $iterations" + describeTools(turnResult)

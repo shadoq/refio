@@ -1,0 +1,41 @@
+{
+  "id": "multi-file-kotlin-config-precedence",
+  "title": "Make the configuration row read respect the run-scoped override",
+  "category": "multi-file",
+  "tier": "hard",
+  "mode": "AGENT",
+  "maxIterations": 40,
+  "deliverable": "src/main/kotlin/configdemo/ConfigResolver.kt",
+  "fixture": "fixtures/multi-file-kotlin-config-precedence",
+  "assert": {
+    "toolOrder": [],
+    "needles": [],
+    "fileUnchanged": [
+      "verify.cjs",
+      "build.gradle.kts",
+      "settings.gradle.kts",
+      "gradle.properties",
+      "gradlew",
+      "gradlew.bat",
+      "gradle/wrapper/gradle-wrapper.jar",
+      "gradle/wrapper/gradle-wrapper.properties",
+      "src/main/kotlin/configdemo/ConfigRow.kt",
+      "src/main/kotlin/configdemo/InMemoryConfigRepository.kt",
+      "src/test/kotlin/configdemo/ConfigPrecedenceTest.kt",
+      "src/test/kotlin/configdemo/RunOverrideTest.kt"
+    ],
+    "buildCmd": "node verify.cjs",
+    "enforceMaxIterations": true,
+    "selfVerified": true,
+    "forbiddenMarkers": ["LOOP_ABORTED", "NOOP_WRITE_STALL"],
+    "noImmediateRepeat": true
+  },
+  "judge": {
+    "criteria": [
+      "The row read (getConfigWithPrecedence) now returns the run override before any stored task, project or application value, with the same blank-means-absent rule the ordinary get() already used, so the model selector picks the overridden model. The override is never written to the repository and a new resolver without overrides reads the stored values again. Public signatures, the repository, the tests and the build files are untouched, and the agent ran the Gradle tests through the wrapper."
+    ]
+  },
+  "review": {
+    "description": "A minimal Kotlin project derived from a historical Refio defect in ConfigResolver.getConfigWithPrecedence: the ordinary value read honours run-scoped overrides, but the row read that the model selector uses skips them and returns the persisted model. The agent has to make every read follow run override > task > project > application without persisting the override or leaking it into the next run. It is a task derived from a historical defect, not a full reproduction of the original repository."
+  }
+}

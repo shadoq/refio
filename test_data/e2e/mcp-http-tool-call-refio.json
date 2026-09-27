@@ -1,0 +1,38 @@
+{
+  "id": "mcp-http-tool-call-refio",
+  "mode": "AGENT",
+  "description": "Backward compatibility: call a tool on an MCP server over Streamable HTTP that answers in Refio's older plain-JSON dialect.",
+  "category": "mcp",
+  "max_iterations": 20,
+  "fixture": "fixtures/mcp-empty",
+  "prompt_file": "prompts/mcp-http-tool-call.md",
+  "mcp": {
+    "config": "configs/http-docs.json",
+    "stub": {
+      "script": "stub_http.py",
+      "profile": "docs",
+      "port": 8934,
+      "args": [
+        "--dialect",
+        "refio"
+      ]
+    }
+  },
+  "assert": {
+    "tool_invoked": [
+      {
+        "name": "mcp_stubhttp_query-docs"
+      }
+    ],
+    "needle_in_file": {
+      "path": "result.txt",
+      "regex": "MCP_DOCS\\{4fc18df7227c\\}"
+    },
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "Did the agent call the MCP tool over HTTP and write its verbatim answer into result.txt?"
+    ]
+  }
+}

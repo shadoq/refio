@@ -2,7 +2,7 @@
 #
 # validate-scenarios.sh - deterministic quality gate for e2e scenarios (no LLM call).
 #
-# A scenario enters the pool only when it survives three checks:
+# A scenario enters the pool only when it survives these checks:
 #   (a) fixture sanity     - the fixture dir, prompt file and every referenced assertion
 #                            path are coherent; every *.py in the fixture byte-compiles.
 #   (b) golden pass        - after overlaying the golden solution from
@@ -11,6 +11,14 @@
 #                            build_cmd exit 0, needle_in_output vs golden/answer.txt).
 #   (c) untouched fail     - on the untouched fixture at least one HARD assertion FAILS,
 #                            proving the scenario cannot pass without real agent work.
+#   (d) controls rejected  - every deliberately wrong solution under
+#                            test_data/e2e/negative/<id>/<name>/ FAILS at least one HARD assertion.
+#
+# Negative-control convention: test_data/e2e/negative/<id>/<name>/ is applied on top of the fixture
+# WITH the golden solution already overlaid, so each control only holds what it breaks relative to a
+# correct solution (a constant answer, a deleted test, a missing input check, an unrelated file
+# changed). An optional `.delete` file in the control dir lists relative paths (one per line) to
+# remove after the overlay. A control that passes means the scenario accepts a wrong answer.
 #
 # Golden-solution convention: test_data/e2e/golden/<id>/ mirrors the fixture's relative
 # layout with the full post-solution content of every changed/added file. For scenarios
@@ -19,6 +27,8 @@
 #
 # Run-time-only assertions (tool_invoked, tool_order, agent_order, session status,
 # no_context_overflow) need a run.json and are out of scope here - e2e-run.sh owns them.
+# preserved_except runs through the same trusted script the runners use (lib/preserve-check.mjs,
+# needs node on PATH).
 #
 # Usage:
 #   validate-scenarios.sh --list             # scenarios that have a golden dir
@@ -32,6 +42,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 E2E_DIR="$REPO_ROOT/test_data/e2e"
 GOLDEN_DIR="$E2E_DIR/golden"
+NEGATIVE_DIR="$E2E_DIR/negative"
 
 KEEP=0
 LIST=0
@@ -154,6 +165,23 @@ check_hard() {
         fi
     done
 
+    # preserved_except: only the allowed region / JSON paths of a file may differ from the fixture.
+    local pe_count pe_out pe_exit=0 pe_line
+    pe_count="$(jq '(.assert.preserved_except // []) | length' "$scenario")"
+    if (( pe_count > 0 )); then
+        if ! command -v node >/dev/null 2>&1; then
+            hard_fail=1; reasons+=("preserved_except needs node on PATH")
+        else
+            pe_out="$(node "$SCRIPT_DIR/lib/preserve-check.mjs" "$scenario" "$fixture" "$project_dir" 2>&1)" || pe_exit=$?
+            if (( pe_exit != 0 )); then
+                hard_fail=1
+                while IFS= read -r pe_line; do
+                    pe_line="${pe_line%$'\r'}"; [[ -n "$pe_line" ]] && reasons+=("$pe_line")
+                done <<<"$pe_out"
+            fi
+        fi
+    fi
+
     # build_cmd in the project dir.
     local build_cmd build_exit=0
     build_cmd="$(jq -r '.assert.build_cmd // empty' "$scenario")"
@@ -225,7 +253,42 @@ validate_scenario() {
     fi
     [[ $KEEP -eq 1 ]] || rm -rf "$work_c"
 
-    echo "| $id | PASS | untouched: ${v_c} |"
+    # --- (d) every deliberately wrong control solution must FAIL ---
+    local neg_dir="$NEGATIVE_DIR/$id" ctl name work_d v_d rejected=0 accepted=()
+    if [[ -d "$neg_dir" ]]; then
+        for ctl in "$neg_dir"/*/; do
+            [[ -d "$ctl" ]] || continue
+            name="$(basename "$ctl")"
+            work_d="$(mktemp -d "${TMPDIR:-/tmp}/refio-val-${id}-d-XXXXXX")"
+            cp -R "$fixture/." "$work_d/"
+            ( cd "$golden" && find . -type f ! -name 'answer.txt' | while IFS= read -r f; do
+                mkdir -p "$work_d/$(dirname "$f")"; cp "$f" "$work_d/$f"
+              done )
+            ( cd "$ctl" && find . -type f ! -name '.delete' | while IFS= read -r f; do
+                mkdir -p "$work_d/$(dirname "$f")"; cp "$f" "$work_d/$f"
+              done )
+            if [[ -f "$ctl/.delete" ]]; then
+                while IFS= read -r f; do
+                    f="${f%$'\r'}"
+                    if [[ -n "$f" && "$f" != \#* ]]; then rm -rf "${work_d:?}/$f"; fi
+                done < "$ctl/.delete"
+            fi
+            v_d="$(check_hard "$scenario" "$work_d" "$fixture" "" || true)"
+            if [[ "$v_d" == FAIL* ]]; then
+                rejected=$((rejected+1))
+                echo "  (d) control ${name} rejected: ${v_d}" >&2
+            else
+                accepted+=("$name")
+            fi
+            [[ $KEEP -eq 1 ]] || rm -rf "$work_d"
+        done
+    fi
+    if [[ ${#accepted[@]} -gt 0 ]]; then
+        echo "| $id | FAIL (d) | wrong control solution(s) accepted: ${accepted[*]} |"
+        return 1
+    fi
+
+    echo "| $id | PASS | untouched: ${v_c}; controls rejected: ${rejected} |"
     return 0
 }
 

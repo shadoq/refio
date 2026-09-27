@@ -2,21 +2,18 @@
 """
 MCP stub server over HTTP, for Refio's HTTP_STREAMABLE transport.
 
-Two dialects, because Refio's client and the MCP specification disagree:
+Two dialects, so both the MCP specification and Refio's older behaviour stay covered:
 
   --dialect refio (default)
-      Answers a POST with a plain application/json JSON-RPC body. This is what
-      MCPConnection.parseDirectResponse expects: it runs the body through
-      gson.fromJson(raw, JsonObject).
+      Answers a POST with a plain application/json JSON-RPC body, the form Refio's client
+      originally required.
 
   --dialect spec
       Answers a POST with an SSE-framed body (Content-Type: text/event-stream,
       "event: message" + "data: {...}"), and returns an Mcp-Session-Id header on initialize, which
       is what a specification-compliant Streamable HTTP server does.
 
-Running a scenario against `spec` is how you demonstrate the gap: Refio cannot currently parse
-that response. Keep the two dialects apart so a green test never silently means "our client agrees
-with itself".
+Keep the two dialects apart so a green test never silently means "our client agrees with itself".
 
 Usage:
   python stub_http.py --port 8931 --profile docs [--dialect spec]

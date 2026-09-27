@@ -1,0 +1,38 @@
+{
+  "id": "mcp-sse-tool-call-refio",
+  "mode": "AGENT",
+  "description": "Backward compatibility: call a tool on an MCP server over SSE that answers on the POST body in Refio's older dialect.",
+  "category": "mcp",
+  "max_iterations": 20,
+  "fixture": "fixtures/mcp-empty",
+  "prompt_file": "prompts/mcp-sse-tool-call.md",
+  "mcp": {
+    "config": "configs/sse-docs.json",
+    "stub": {
+      "script": "stub_sse.py",
+      "profile": "docs",
+      "port": 8935,
+      "args": [
+        "--dialect",
+        "refio"
+      ]
+    }
+  },
+  "assert": {
+    "tool_invoked": [
+      {
+        "name": "mcp_stubsse_query-docs"
+      }
+    ],
+    "needle_in_file": {
+      "path": "result.txt",
+      "regex": "MCP_DOCS\\{56adcfcde426\\}"
+    },
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "Did the agent call the MCP tool over SSE and write its verbatim answer into result.txt?"
+    ]
+  }
+}

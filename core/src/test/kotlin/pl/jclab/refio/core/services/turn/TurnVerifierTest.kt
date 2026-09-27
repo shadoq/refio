@@ -6,11 +6,14 @@ import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import pl.jclab.refio.core.config.ConfigKeys
+import pl.jclab.refio.core.debug.VerificationSummary
 import pl.jclab.refio.core.services.ConfigService
 import java.io.File
+import java.io.IOException
 import java.nio.file.Path
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -239,9 +242,11 @@ class TurnVerifierTest {
     // ---- pre-write baseline: an already-red project is not blamed on the agent ----
 
     @Test
-    fun `verify skips when the baseline was already failing before the turn`() = runTest {
-        // The project's build/test command is broken independently of the agent (missing test
-        // script, red fixture). The agent must not be pushed into an unwinnable repair loop.
+    fun `red baseline and red final is reported as an executed failure with uncertain attribution`() = runTest {
+        // The project's test command was already red before the agent touched anything (missing
+        // test script, red fixture). The agent must not be pushed into an unwinnable repair loop,
+        // but the command DID run and DID fail: reporting it as "not run" hides a possible new
+        // regression behind the old failure.
         projectDir.resolve("package.json").toFile().writeText("{}")
         val runner = FakeRunner(VerificationExecution(exitCode = 1, output = "npm ERR! missing script: test"))
         val verifier = TurnVerifier(configService(), projectDir, runner)
@@ -249,11 +254,132 @@ class TurnVerifierTest {
         verifier.captureBaseline("task-1")
         val outcome = verifier.verify("task-1")
 
-        assertTrue(outcome is TurnVerifier.Outcome.Skipped)
-        assertTrue(
-            (outcome as TurnVerifier.Outcome.Skipped).reason.contains("already failing"),
-            "skip reason must name the pre-existing failure"
+        assertTrue(outcome is TurnVerifier.Outcome.PreExistingFailure, "got $outcome")
+        assertTrue(outcome.executed)
+        assertEquals(2, runner.invocations.size, "baseline + final run both executed the command")
+        val summary = verifier.summarize("task-1", outcome, attempts = 1)
+        assertNotEquals(VerificationSummary.NOT_RUN, summary, "an executed red run must never be reported as NOT_RUN")
+        assertTrue(summary.ran)
+        assertEquals(1, summary.attempts)
+        assertEquals(VerificationSummary.RESULT_FAILED, summary.result)
+        assertEquals(1, summary.exitCode)
+        assertEquals(VerificationSummary.RESULT_FAILED, summary.baseline)
+        assertTrue(summary.attributionUncertain, "a red baseline makes a red final unattributable")
+        assertNull(summary.notRunReason)
+    }
+
+    @Test
+    fun `a command that cannot be started is reported as not executed with the reason, not a crash`() = runTest {
+        // Environment failure: the runner cannot start the process at all. The verifier must not
+        // throw out of the turn, and must not pretend the tests ran.
+        projectDir.resolve("build.gradle").toFile().writeText("// gradle")
+        val runner = object : VerificationCommandRunner {
+            var calls = 0
+            override fun run(command: String, workingDir: File, timeoutSeconds: Int): VerificationExecution {
+                calls++
+                throw IOException("Cannot run program: error=2")
+            }
+        }
+        val verifier = TurnVerifier(configService(), projectDir, runner)
+
+        verifier.captureBaseline("task-1")
+        val outcome = verifier.verify("task-1")
+
+        assertEquals(2, runner.calls)
+        assertTrue(outcome is TurnVerifier.Outcome.Skipped, "got $outcome")
+        assertFalse(outcome.executed)
+        assertTrue((outcome as TurnVerifier.Outcome.Skipped).reason.contains("could not be started"))
+        val summary = verifier.summarize("task-1", outcome, attempts = 0)
+        assertFalse(summary.ran)
+        assertNull(summary.result)
+        assertTrue(summary.notRunReason!!.contains("could not be started"))
+    }
+
+    @Test
+    fun `a missing tool on both runs still counts as executed and failing, with uncertain attribution`() = runTest {
+        // Environment failure of the other kind: the shell started but the test tool is missing
+        // (exit 127 = command not found). Same before and after the agent's change.
+        projectDir.resolve("package.json").toFile().writeText("{}")
+        val runner = FakeRunner(VerificationExecution(exitCode = 127, output = "sh: npm: command not found"))
+        val verifier = TurnVerifier(configService(), projectDir, runner)
+
+        verifier.captureBaseline("task-1")
+        val outcome = verifier.verify("task-1")
+        val summary = verifier.summarize("task-1", outcome, attempts = 1)
+
+        assertTrue(summary.ran)
+        assertEquals(VerificationSummary.RESULT_FAILED, summary.result)
+        assertEquals(127, summary.exitCode)
+        assertTrue(summary.attributionUncertain)
+    }
+
+    @Test
+    fun `no command configured is reported as not executed with the reason`() = runTest {
+        val runner = FakeRunner(VerificationExecution(exitCode = 0, output = ""))
+        val verifier = TurnVerifier(configService(), projectDir, runner)
+
+        verifier.captureBaseline("task-1")
+        val outcome = verifier.verify("task-1")
+        val summary = verifier.summarize("task-1", outcome, attempts = 0)
+
+        assertTrue(runner.invocations.isEmpty())
+        assertFalse(summary.ran)
+        assertEquals(0, summary.attempts)
+        assertNull(summary.result)
+        assertNull(summary.baseline)
+        assertTrue(summary.notRunReason!!.contains("no verify.command"))
+    }
+
+    @Test
+    fun `a red baseline turned green by the agent is a passed, attributable repair`() = runTest {
+        projectDir.resolve("build.gradle").toFile().writeText("// gradle")
+        val runner = FakeRunner(
+            VerificationExecution(exitCode = 1, output = "CalcTest > add FAILED"),
+            VerificationExecution(exitCode = 0, output = "BUILD SUCCESSFUL"),
         )
+        val verifier = TurnVerifier(configService(), projectDir, runner)
+
+        verifier.captureBaseline("task-1")
+        val outcome = verifier.verify("task-1")
+        val summary = verifier.summarize("task-1", outcome, attempts = 1)
+
+        assertTrue(outcome is TurnVerifier.Outcome.Passed)
+        assertTrue(summary.ran)
+        assertEquals(VerificationSummary.RESULT_PASSED, summary.result)
+        assertEquals(0, summary.exitCode)
+        assertEquals(VerificationSummary.RESULT_FAILED, summary.baseline)
+        assertFalse(summary.attributionUncertain, "a green final needs no attribution caveat")
+    }
+
+    @Test
+    fun `a green baseline broken by the agent is an attributable failure`() = runTest {
+        projectDir.resolve("build.gradle").toFile().writeText("// gradle")
+        val runner = FakeRunner(
+            VerificationExecution(exitCode = 0, output = "BUILD SUCCESSFUL"),
+            VerificationExecution(exitCode = 1, output = "e: Main.kt:1:1 broken"),
+        )
+        val verifier = TurnVerifier(configService(), projectDir, runner)
+
+        verifier.captureBaseline("task-1")
+        val summary = verifier.summarize("task-1", verifier.verify("task-1"), attempts = 1)
+
+        assertEquals(VerificationSummary.RESULT_FAILED, summary.result)
+        assertEquals(VerificationSummary.RESULT_PASSED, summary.baseline)
+        assertFalse(summary.attributionUncertain)
+    }
+
+    @Test
+    fun `a skip after an executed run keeps the executed result`() = runTest {
+        // Last write wins in the tracker: a later run that could not start must not erase the
+        // fact that an earlier run executed and failed.
+        val verifier = TurnVerifier(configService(), projectDir, FakeRunner(VerificationExecution(0, "")))
+        val previous = VerificationSummary(
+            ran = true, attempts = 1, result = VerificationSummary.RESULT_FAILED, exitCode = 1,
+        )
+
+        val summary = verifier.summarize("task-1", TurnVerifier.Outcome.Skipped("could not be started"), 1, previous)
+
+        assertEquals(previous, summary)
     }
 
     @Test

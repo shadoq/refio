@@ -1,0 +1,34 @@
+{
+  "id": "multi-file-offline-log-report",
+  "mode": "AGENT",
+  "description": "A terminal task on local data: the fixture ships a CLI entry point, a stub summariser, a README contract and synthetic JSONL logs. The agent has to implement validation, first-wins de-duplication, per-service counts and a nearest-rank p95, and handle the output directory and the missing-input case without overwriting anything. No network and no keys are involved.",
+  "category": "multi-file",
+  "max_iterations": 35,
+  "fixture": "fixtures/multi-file-offline-log-report",
+  "prompt_file": "prompts/multi-file-offline-log-report.md",
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": [
+      "README.md",
+      "package.json",
+      "data/requests.jsonl",
+      "data/invalid-then-valid.jsonl",
+      "data/latency-20.jsonl",
+      "data/empty.jsonl",
+      "test/report.test.js"
+    ],
+    "build_cmd": "node --test test/report.test.js",
+    "enforce_max_iterations": true,
+    "self_verified": true,
+    "forbidden_markers": [
+      "LOOP_ABORTED",
+      "NOOP_WRITE_STALL"
+    ],
+    "no_immediate_repeat": true
+  },
+  "judge": {
+    "criteria": [
+      "node bin/report.js --input <file> --output <file> follows the README contract using only Node built-ins: empty lines ignored, malformed or invalid records counted as rejected, the first valid record kept for a duplicated id, services sorted by name with count, errors (status >= 500) and a nearest-rank p95 (ceil(0.95*n)), parent directories created, and a missing input failing with a nonzero exit without creating or overwriting the output. The data files, tests, README and package.json are untouched and the agent ran the tests."
+    ]
+  }
+}

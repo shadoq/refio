@@ -26,11 +26,13 @@ export const CaseTier = z.enum(["easy", "medium", "hard", "stress"]);
 export const CaseMode = z.enum(["AGENT", "PLAN", "CHAT"]);
 
 // One needle matched against the produced deliverable. Exactly one of regex/text
-// carries the pattern; regex uses POSIX ERE to match the e2e harness.
+// carries the pattern; regex uses POSIX ERE to match the e2e harness. `absent` turns it
+// into "must NOT appear", e.g. a facade that must no longer define any function itself.
 export const CaseNeedleSchema = z
   .object({
     regex: z.string().optional(),
     text: z.string().optional(),
+    absent: z.boolean().optional(),
   })
   .refine((n) => !!n.regex !== !!n.text, {
     message: "needle needs exactly one of regex or text",

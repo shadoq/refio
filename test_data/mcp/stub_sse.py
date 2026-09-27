@@ -2,21 +2,19 @@
 """
 MCP stub server over SSE, for Refio's HTTP_SSE transport.
 
-Two dialects, because Refio's client and the MCP specification disagree:
+Two dialects, so both the MCP specification and Refio's older behaviour stay covered:
 
   --dialect refio (default)
       One URL. GET with Accept: text/event-stream opens a long-lived stream that only carries
       server-initiated notifications; POST to the same URL returns the JSON-RPC response in the
-      body. This is what MCPHttpTransport.startSse plus MCPConnection.sendRequest implement.
+      body. This is the form Refio's client originally required.
 
   --dialect spec
       GET /sse first emits an `endpoint` event announcing a separate POST address; POST there is
       acknowledged with 202 and the actual response is delivered over the open stream. This is the
       specification's SSE transport.
 
-Refio has no handling for the `endpoint` event and reads responses from the POST body, so the
-`spec` dialect is expected to fail against the current client. That failure is the evidence, not a
-broken fixture.
+Point the client at /sse for the spec dialect (configs/sse-docs-spec.json).
 
 Usage:
   python stub_sse.py --port 8932 --profile docs [--dialect spec]

@@ -64,7 +64,8 @@ class TurnToolExecutor(
     private val approvalService: ToolApprovalService? = null,
     private val permissionsService: ToolPermissionsService? = null,
     private val hookService: pl.jclab.refio.core.services.hooks.HookService? = null,
-    private val proposedChangeBuilder: ProposedChangeBuilder? = null
+    private val proposedChangeBuilder: ProposedChangeBuilder? = null,
+    private val projectRoot: java.nio.file.Path? = null
 ) {
     /** Callback to update turn phase (set by AgentTurnLoop before each turn) */
     var turnStateUpdater: ((TurnPhase) -> Unit)? = null
@@ -1047,9 +1048,13 @@ class TurnToolExecutor(
                         // told what was blocked - the same shape as any other failed tool result.
                         // Naming the blocked call and telling it not to retry matters: without that
                         // the model re-issues the identical command and burns the iteration budget.
-                        val errorText = "Error: not permitted — ${decision.reason ?: "no reason"}. " +
-                            "This call was blocked and retrying it will be blocked again; " +
-                            "reach the goal another way or continue without it."
+                        val errorText = FileDeleteDenialHint.appendTo(
+                            "Error: not permitted - ${decision.reason ?: "no reason"}. " +
+                                "This call was blocked and retrying it will be blocked again; " +
+                                "reach the goal another way or continue without it.",
+                            (argumentsMap["command"] ?: argumentsMap["cmd"])?.toString(),
+                            projectRoot,
+                        )
                         listener?.onToolExecutionCompleted(taskId, toolCall, errorText, false)
                         subtaskRepository.updateStatus(subtaskId, TaskStatus.FAILED)
                         subtaskRepository.updateResult(

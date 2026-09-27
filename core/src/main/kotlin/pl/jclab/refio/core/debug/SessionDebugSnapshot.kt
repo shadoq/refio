@@ -125,11 +125,19 @@ data class SessionDebugSnapshot(
         val nativeToolsDegraded: String? = null,
     )
 
-    /** Deterministic verification outcome: whether it ran, how many attempts, PASSED/FAILED. */
+    /**
+     * Deterministic verification outcome: whether it ran, how many attempts, PASSED/FAILED. The
+     * fields after [result] are additive; see [VerificationSummary] for their meaning.
+     */
     data class VerificationInfo(
         val ran: Boolean = false,
         val attempts: Int = 0,
         val result: String? = null,
+        val exitCode: Int? = null,
+        val timedOut: Boolean = false,
+        val baseline: String? = null,
+        val attributionUncertain: Boolean = false,
+        val notRunReason: String? = null,
     )
 
     /** Counters from the turn's own steering: how often it had to intervene, and how hard. */

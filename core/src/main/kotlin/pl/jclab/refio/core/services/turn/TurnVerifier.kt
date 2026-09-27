@@ -3,6 +3,7 @@ package pl.jclab.refio.core.services.turn
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import pl.jclab.refio.core.config.ConfigKeys
+import pl.jclab.refio.core.debug.VerificationSummary
 import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.services.ConfigService
 import java.io.File
@@ -142,16 +143,37 @@ class TurnVerifier(
     private val baselines = java.util.concurrent.ConcurrentHashMap<String, Baseline>()
 
     sealed class Outcome {
-        /** Verification did not run (disabled, no project root, or no command found). */
-        data class Skipped(val reason: String) : Outcome()
+        /** True when the verification command actually executed (whatever it returned). */
+        open val executed: Boolean get() = true
+
+        /**
+         * Verification did not run (disabled, no project root, no command found, or the command
+         * could not be started).
+         */
+        data class Skipped(val reason: String) : Outcome() {
+            override val executed: Boolean get() = false
+        }
 
         /** The verification command exited 0. */
         object Passed : Outcome()
 
-        /** The verification command failed; [errors] holds only the extracted error lines. */
+        /**
+         * The verification command failed and the failure is the turn's to repair (the baseline
+         * passed, or no baseline was captured); [errors] holds only the extracted error lines.
+         */
         data class Failed(
             val exitCode: Int,
             val errors: List<String>,
+            val timedOut: Boolean = false,
+        ) : Outcome()
+
+        /**
+         * The verification command executed and failed, but it was already failing on the
+         * unmodified project. Reported as an executed failure; not sent back for repair, because
+         * the turn cannot be expected to fix a project that was broken before it started.
+         */
+        data class PreExistingFailure(
+            val exitCode: Int,
             val timedOut: Boolean = false,
         ) : Outcome()
     }
@@ -179,8 +201,12 @@ class TurnVerifier(
         val command = resolveCommand(taskId, root) ?: return
         val timeoutSeconds = configService.getTyped(ConfigKeys.TOOL_EXECUTION_TIMEOUT, taskId)
         logger.info { "[VERIFY_BASELINE] taskId=$taskId running '$command' before first write (timeout=${timeoutSeconds}s)" }
-        val execution = withContext(Dispatchers.IO) {
-            runner.run(command, root, timeoutSeconds)
+        val execution = runOrNull(command, root, timeoutSeconds)
+        if (execution == null) {
+            // The untouched project could not produce a green run either, so a later failure is
+            // just as unattributable as after a red baseline.
+            baselines[taskId] = Baseline.FAILED
+            return
         }
         val baseline = if (!execution.timedOut && execution.exitCode == 0) Baseline.PASSED else Baseline.FAILED
         baselines[taskId] = baseline
@@ -203,9 +229,8 @@ class TurnVerifier(
             ?: return Outcome.Skipped("no verify.command configured and no known project marker detected")
         val timeoutSeconds = configService.getTyped(ConfigKeys.TOOL_EXECUTION_TIMEOUT, taskId)
         logger.info { "[VERIFY] taskId=$taskId running '$command' in ${root.absolutePath} (timeout=${timeoutSeconds}s)" }
-        val execution = withContext(Dispatchers.IO) {
-            runner.run(command, root, timeoutSeconds)
-        }
+        val execution = runOrNull(command, root, timeoutSeconds)
+            ?: return Outcome.Skipped("verification command '$command' could not be started")
         if (!execution.timedOut && execution.exitCode == 0) {
             logger.info { "[VERIFY] taskId=$taskId passed (exit 0)" }
             return Outcome.Passed
@@ -213,12 +238,9 @@ class TurnVerifier(
         if (baselines[taskId] == Baseline.FAILED) {
             logger.warn {
                 "[VERIFY] taskId=$taskId failed (exit=${execution.exitCode}) but the pre-write " +
-                    "baseline was already failing - skipping, not attributable to this turn"
+                    "baseline was already failing - no repair round, attribution uncertain"
             }
-            return Outcome.Skipped(
-                "verification command '$command' was already failing before this turn's changes - " +
-                    "failure not attributable to the agent"
-            )
+            return Outcome.PreExistingFailure(exitCode = execution.exitCode, timedOut = execution.timedOut)
         }
         val errors = extractErrorLines(execution.output).ifEmpty {
             listOf(
@@ -241,6 +263,49 @@ class TurnVerifier(
         }
         return Outcome.Failed(exitCode = execution.exitCode, errors = errors, timedOut = execution.timedOut)
     }
+
+    /**
+     * The exported summary for [outcome], after [attempts] executed runs this turn. A skip never
+     * erases an earlier executed run: when [previous] exists it is kept as the last real state.
+     */
+    fun summarize(
+        taskId: String,
+        outcome: Outcome,
+        attempts: Int,
+        previous: VerificationSummary? = null,
+    ): VerificationSummary {
+        val baseline = when (baselines[taskId]) {
+            Baseline.PASSED -> VerificationSummary.RESULT_PASSED
+            Baseline.FAILED -> VerificationSummary.RESULT_FAILED
+            null -> null
+        }
+        return when (outcome) {
+            is Outcome.Skipped ->
+                previous ?: VerificationSummary.NOT_RUN.copy(baseline = baseline, notRunReason = outcome.reason)
+            Outcome.Passed -> VerificationSummary(
+                ran = true, attempts = attempts, result = VerificationSummary.RESULT_PASSED,
+                exitCode = 0, baseline = baseline,
+            )
+            is Outcome.Failed -> VerificationSummary(
+                ran = true, attempts = attempts, result = VerificationSummary.RESULT_FAILED,
+                exitCode = outcome.exitCode, timedOut = outcome.timedOut, baseline = baseline,
+            )
+            is Outcome.PreExistingFailure -> VerificationSummary(
+                ran = true, attempts = attempts, result = VerificationSummary.RESULT_FAILED,
+                exitCode = outcome.exitCode, timedOut = outcome.timedOut, baseline = baseline,
+                attributionUncertain = true,
+            )
+        }
+    }
+
+    /** Runs the command off the caller's thread; null when the process could not be started. */
+    private suspend fun runOrNull(command: String, root: File, timeoutSeconds: Int): VerificationExecution? =
+        try {
+            withContext(Dispatchers.IO) { runner.run(command, root, timeoutSeconds) }
+        } catch (e: IOException) {
+            logger.warn { "[VERIFY] '$command' could not be started: ${e.message}" }
+            null
+        }
 
     /**
      * The command to run: explicit `verify.command` wins; otherwise autodetected from project

@@ -53,6 +53,21 @@ class AgentTurnFailureReasonTest {
     }
 
     @Test
+    fun `a test command that was already failing before the turn is not blamed for the failure`() {
+        val reason = describeTurnFailure(
+            turn(
+                incomplete = true,
+                verification = VerificationSummary(
+                    ran = true, attempts = 1, result = VerificationSummary.RESULT_FAILED,
+                    baseline = VerificationSummary.RESULT_FAILED, attributionUncertain = true,
+                ),
+            )
+        )
+
+        assertTrue(reason.contains("without delivering"), "the real cause must win over an old red build: $reason")
+    }
+
+    @Test
     fun `an undelivered turn is distinguished from an errored one`() {
         val reason = describeTurnFailure(turn(incomplete = true, iterations = 12))
 

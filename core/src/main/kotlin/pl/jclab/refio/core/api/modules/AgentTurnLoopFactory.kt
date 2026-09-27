@@ -81,7 +81,8 @@ internal class AgentTurnLoopFactory(
             approvalService = toolApprovalService,
             permissionsService = toolPermissionsService,
             hookService = hookService,
-            proposedChangeBuilder = projectRoot?.let { ProposedChangeBuilder(it) }
+            proposedChangeBuilder = projectRoot?.let { ProposedChangeBuilder(it) },
+            projectRoot = projectRoot
         )
 
         val turnLLMCaller = TurnLLMCaller(

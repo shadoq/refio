@@ -2,6 +2,7 @@ package pl.jclab.refio.core.tools.implementations
 
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -693,6 +694,31 @@ class GrepSearchToolTest {
             val firstIdx = hitLines.indexOfFirst { it.contains("first") }
             val secondIdx = hitLines.indexOfFirst { it.contains("second") }
             assertTrue(firstIdx >= 0 && secondIdx > firstIdx, "file order must be preserved: $hitLines")
+        }
+
+        @Test
+        @Disabled("declaration can fall outside the collected pool when hits exceed the limit; fix pending a measured run")
+        fun `a declaration survives when usages exceed the result limit`() = runBlocking {
+            // A widely used symbol can have more call sites than the result limit. Ranking only
+            // helps if the declaration is in the pool at all. The declaration file itself holds a
+            // full limit of usages above the declaration, so the pool fills before the declaration
+            // whichever file the walk visits first: the outcome does not depend on walk order.
+            val limit = 500
+            val usage = "    val w = Widget()\n"
+            repeat(5) { i ->
+                Files.writeString(tempDir.resolve("usages$i.kt"), usage.repeat(100))
+            }
+            Files.writeString(tempDir.resolve("Widget.kt"), usage.repeat(limit) + "class Widget {\n}\n")
+
+            val result = tool.execute(
+                mapOf("pattern" to "Widget", "file_pattern" to "*.kt", "max_results" to limit)
+            )
+
+            assertTrue(result.success)
+            assertTrue(
+                result.output!!.contains("class Widget"),
+                "the declaration must be among the results even when usages exceed the limit"
+            )
         }
     }
 

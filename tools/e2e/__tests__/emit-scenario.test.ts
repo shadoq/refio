@@ -65,6 +65,19 @@ describe("caseToScenario (AGENT)", () => {
   it("keeps the judge criteria", () => {
     assert.deepEqual(scn.judge.criteria, ["one self-contained todo.html"]);
   });
+
+  it("carries a must-not-appear needle through, so a facade that still defines functions fails", () => {
+    const facade = caseToScenario(
+      CatalogCaseSchema.parse({
+        ...agentCase,
+        assert: { needles: [{ regex: "require" }, { regex: "function", absent: true }] },
+      }),
+    );
+    assert.deepEqual(facade.assert.needles_in_file, [
+      { path: "todo_model_01.html", regex: "require" },
+      { path: "todo_model_01.html", regex: "function", absent: true },
+    ]);
+  });
 });
 
 describe("caseToScenario (PLAN)", () => {

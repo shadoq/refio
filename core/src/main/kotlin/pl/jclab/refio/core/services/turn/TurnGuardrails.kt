@@ -300,13 +300,28 @@ class TurnGuardrails {
          */
         private val readOnlyIdenticalOutputAbortThreshold: Int = 4
     ) {
-        private companion object {
+        internal companion object {
             // Tools whose repeated identical output is benign re-inspection, not a no-progress loop.
             // Kept in sync with the read-only branches of [effectKey].
-            val READ_ONLY_TOOLS = setOf(
+            private val READ_ONLY_TOOLS = setOf(
                 "read_file", "read_directory", "grep_search",
                 "file_search", "rag_search", "code_intelligence"
             )
+
+            /**
+             * Abort reason shown to the model when [toolName] returned the same output [identical]
+             * times on [key]. A read-only loop is a repeated query, not an ineffective edit, so it
+             * gets advice that points at the actual way out.
+             */
+            fun identicalOutputAbortReason(toolName: String, identical: Int, key: String): String {
+                val explanation = if (toolName in READ_ONLY_TOOLS) {
+                    "The search/read returns the same result; change the query or move on to acting."
+                } else {
+                    "Edits are not changing runtime behaviour."
+                }
+                return "Tool $toolName produced byte-identical output $identical times " +
+                    "in a row on the same target ($key). $explanation"
+            }
         }
         private class State {
             var callCount: Int = 0
@@ -381,10 +396,7 @@ class TurnGuardrails {
                     if (toolName in READ_ONLY_TOOLS) readOnlyIdenticalOutputAbortThreshold
                     else identicalOutputAbortThreshold
                 if (identical >= effectiveThreshold) {
-                    return LoopStatus.ABORT(
-                        "Tool $toolName produced byte-identical output $identical times " +
-                            "in a row on the same target ($key). Edits are not changing runtime behaviour."
-                    )
+                    return LoopStatus.ABORT(identicalOutputAbortReason(toolName, identical, key))
                 }
             }
 

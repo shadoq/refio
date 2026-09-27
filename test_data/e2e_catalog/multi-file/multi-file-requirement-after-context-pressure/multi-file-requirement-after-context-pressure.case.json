@@ -1,0 +1,36 @@
+{
+  "id": "multi-file-requirement-after-context-pressure",
+  "title": "Exclude canceled orders from both report aggregators without breaking the CSV contract",
+  "category": "multi-file",
+  "tier": "medium",
+  "mode": "AGENT",
+  "maxIterations": 30,
+  "deliverable": "src/regionTotals.js",
+  "fixture": "fixtures/multi-file-requirement-after-context-pressure",
+  "assert": {
+    "toolOrder": [],
+    "needles": [],
+    "fileUnchanged": [
+      "package.json",
+      "bin/report.js",
+      "src/report.js",
+      "data/orders.csv",
+      "data/sample.csv",
+      "data/empty.csv",
+      "test/report.test.js"
+    ],
+    "buildCmd": "node --test test/report.test.js",
+    "enforceMaxIterations": true,
+    "selfVerified": true,
+    "forbiddenMarkers": ["LOOP_ABORTED", "NOOP_WRITE_STALL"],
+    "noImmediateRepeat": true
+  },
+  "judge": {
+    "criteria": [
+      "Canceled orders contribute nothing in both src/regionTotals.js and src/overallTotal.js, so the regional rows and the TOTAL row agree. Paid and refunded orders keep their previous behaviour. The CSV contract (semicolon separator, header region;total_cents, regions sorted alphabetically, final TOTAL row, LF line endings) is unchanged because src/report.js, bin/report.js, the input files and the tests are untouched. The agent ran the report tests."
+    ]
+  },
+  "review": {
+    "description": "A sales report is computed by two independent aggregators (per region and overall) and a protected CSV formatter. Both aggregators count canceled orders as if they were paid. The format requirements are stated at the start of the prompt and must still hold after the agent has read the modules and a 240-row order export, which is where the canceled-order rule has to be applied twice. The context-pressure variant (32k/64k) is a separate measurement on the same version of this task."
+  }
+}

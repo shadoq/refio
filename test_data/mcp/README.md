@@ -56,18 +56,18 @@ server fronts:
 
 ## Dialects (`--dialect`, HTTP and SSE only)
 
-Refio's HTTP client and the MCP specification disagree, so the stubs speak both:
+Refio's HTTP client used to speak only its own dialect, so the stubs speak both:
 
-- `refio` (default) - what Refio implements today. A POST returns a plain JSON body;
+- `refio` (default) - Refio's older dialect. A POST returns a plain JSON body;
   for SSE, the stream carries only server notifications while requests answer on the POST.
 - `spec` - what a compliant server does. Streamable HTTP answers with an SSE-framed body and an
   `Mcp-Session-Id` header; SSE announces a separate POST address with an `endpoint` event and
-  delivers responses over the stream.
+  delivers responses over the stream. The SSE stream lives at `/sse`, so use
+  `configs/sse-docs-spec.json`.
 
-**The `spec` dialect does not connect to Refio today.** `MCPConnection.parseDirectResponse` runs
-the POST body through `gson.fromJson`, and nothing handles the `endpoint` event. Verified with
-`--mcp-probe`: both spec-dialect servers end up DISCONNECTED. Keep the dialects apart so a green
-test never quietly means "our client agrees with itself".
+Refio connects to both. The `mcp-http-tool-call` and `mcp-sse-tool-call` scenarios run the `spec`
+dialect; `mcp-http-tool-call-refio` and `mcp-sse-tool-call-refio` keep the older dialect covered.
+Keep the dialects apart so a green test never quietly means "our client agrees with itself".
 
 ## Checking a server without spending a model
 

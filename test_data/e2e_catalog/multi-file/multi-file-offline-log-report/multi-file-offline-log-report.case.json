@@ -1,0 +1,36 @@
+{
+  "id": "multi-file-offline-log-report",
+  "title": "Implement an offline JSONL request-log report CLI",
+  "category": "multi-file",
+  "tier": "medium",
+  "mode": "AGENT",
+  "maxIterations": 35,
+  "deliverable": "src/summarize.js",
+  "fixture": "fixtures/multi-file-offline-log-report",
+  "assert": {
+    "toolOrder": [],
+    "needles": [],
+    "fileUnchanged": [
+      "README.md",
+      "package.json",
+      "data/requests.jsonl",
+      "data/invalid-then-valid.jsonl",
+      "data/latency-20.jsonl",
+      "data/empty.jsonl",
+      "test/report.test.js"
+    ],
+    "buildCmd": "node --test test/report.test.js",
+    "enforceMaxIterations": true,
+    "selfVerified": true,
+    "forbiddenMarkers": ["LOOP_ABORTED", "NOOP_WRITE_STALL"],
+    "noImmediateRepeat": true
+  },
+  "judge": {
+    "criteria": [
+      "node bin/report.js --input <file> --output <file> follows the README contract using only Node built-ins: empty lines ignored, malformed or invalid records counted as rejected, the first valid record kept for a duplicated id, services sorted by name with count, errors (status >= 500) and a nearest-rank p95 (ceil(0.95*n)), parent directories created, and a missing input failing with a nonzero exit without creating or overwriting the output. The data files, tests, README and package.json are untouched and the agent ran the tests."
+    ]
+  },
+  "review": {
+    "description": "A terminal task on local data: the fixture ships a CLI entry point, a stub summariser, a README contract and synthetic JSONL logs. The agent has to implement validation, first-wins de-duplication, per-service counts and a nearest-rank p95, and handle the output directory and the missing-input case without overwriting anything. No network and no keys are involved."
+  }
+}

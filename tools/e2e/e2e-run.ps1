@@ -214,6 +214,32 @@ function Assert-Run {
         }
     }
 
+    # HARD 1c3 - preserved_except: only the allowed region / JSON paths of a file may differ from the
+    # fixture. Runs the same trusted script as e2e-run.sh from this harness directory, reading the
+    # pristine fixture, so nothing in the agent's project can alter the check. Mirrors HARD 1c3.
+    if ($s.assert.preserved_except -and @($s.assert.preserved_except).Count -gt 0) {
+        $node = Get-Command node -ErrorAction SilentlyContinue
+        if (-not $s.fixture) {
+            $hardFail = $true; $reasons += "preserved_except needs a fixture to compare against"
+        } elseif (-not $node) {
+            $hardFail = $true; $reasons += "preserved_except needs node on PATH"
+        } else {
+            $peFx = Join-Path (Split-Path -Parent (Resolve-Path $Scenario)) $s.fixture
+            $peScript = Join-Path $ScriptDir 'lib\preserve-check.mjs'
+            $savedEAP = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try {
+                $peOut = @(& $node.Source $peScript (Resolve-Path $Scenario).Path $peFx $ProjectDir 2>&1)
+                $peExit = $LASTEXITCODE
+            } catch { $peOut = @("preserved_except check could not run: $_"); $peExit = 2 }
+            finally { $ErrorActionPreference = $savedEAP }
+            if ($peExit -ne 0) {
+                $hardFail = $true
+                foreach ($l in $peOut) { $t = ([string]$l).Trim(); if ($t) { $reasons += $t } }
+            }
+        }
+    }
+
     # HARD 1d — tool_invoked: a named tool MUST (or, with absent:true, must NOT) have been called.
     # {name, args_regex?, absent?}. Name presence reads the always-present conversation[].toolCalls[];
     # args_regex matches the raw arguments JSON in conversation[].toolCallDetails[] (additive run.json
@@ -289,12 +315,26 @@ function Assert-Run {
         }
     }
 
-    # HARD 5 — self_verified: the agent itself had to run the build or the tests. Mirrors HARD 5.
+    # HARD 5 - self_verified: Refio's loop verifier ran the build or the tests during the turn and it
+    # ended PASSED (run.json metrics.verification). It measures the Refio loop, not the model's own
+    # choice; the model's voluntary test runs are counted separately in results.jsonl as
+    # modelRanBuildCmd (from the tool trace). Mirrors e2e-run.sh HARD 5.
     if ($s.assert.self_verified -eq $true) {
         $vran = $run.metrics.verification -and $run.metrics.verification.ran -eq $true
         $vres = if ($run.metrics.verification -and $run.metrics.verification.result) { [string]$run.metrics.verification.result } else { 'NONE' }
-        if (-not $vran) { $hardFail = $true; $reasons += "the agent never verified its own work" }
-        elseif ($vres -ne 'PASSED') { $hardFail = $true; $reasons += "self-verification ended $vres" }
+        # Optional detail fields only enrich the reason; the pass/fail rule is unchanged.
+        $vd = @()
+        $vm = $run.metrics.verification
+        if ($vm) {
+            if ($vm.notRunReason) { $vd += "not run: $($vm.notRunReason)" }
+            if ($null -ne $vm.exitCode) { $vd += "exit $($vm.exitCode)" }
+            if ($vm.timedOut -eq $true) { $vd += 'timed out' }
+            if ($vm.baseline) { $vd += "baseline $($vm.baseline)" }
+            if ($vm.attributionUncertain -eq $true) { $vd += 'attribution uncertain: the check already failed before the change' }
+        }
+        $vdText = if ($vd.Count -gt 0) { ', ' + ($vd -join ', ') } else { '' }
+        if (-not $vran) { $hardFail = $true; $reasons += "the Refio loop verifier never ran (self_verified$vdText)" }
+        elseif ($vres -ne 'PASSED') { $hardFail = $true; $reasons += "the Refio loop verifier ended $vres (self_verified$vdText)" }
     }
 
     # HARD 6 — forbidden_markers: a guardrail that fired must not hide behind a delivered file.
@@ -570,7 +610,7 @@ function Invoke-Judge {
 # script-scope $Model (a plain assignment inside a function would only shadow it locally).
 function Write-ResultRecord {
     param([string]$Id, [string]$Verdict, [string]$RunJsonPath, [string]$ModelLabelOverride = $script:Model,
-          $Judge = $null)
+          $Judge = $null, [string]$BuildCmd = '')
     $outDir = $env:E2E_OUT_DIR
     if (-not $outDir) { return }
     $runIdx = $env:E2E_RUN_INDEX
@@ -578,7 +618,7 @@ function Write-ResultRecord {
     $modelLabel = if ($ModelLabelOverride) { $ModelLabelOverride } else { 'default' }
     $status = 'UNKNOWN'; $cost = 0; $tokens = 0; $mode = ''; $provider = ''
     $tokensIn = 0; $iters = 0; $subtasks = 0; $apiCalls = 0; $duration = 0
-    $tools = [ordered]@{}; $apiErrors = [ordered]@{}
+    $tools = [ordered]@{}; $apiErrors = [ordered]@{}; $ranBuild = $null
     if (Test-Path $RunJsonPath) {
         try {
             $r = Get-Content -Raw $RunJsonPath | ConvertFrom-Json
@@ -605,6 +645,24 @@ function Write-ResultRecord {
             foreach ($e in @($r.apiLogs | ForEach-Object { $_.errorType } | Where-Object { $_ })) {
                 if ($apiErrors.Contains($e)) { $apiErrors[$e]++ } else { $apiErrors[$e] = 1 }
             }
+            # modelRanBuildCmd: terminal commands the MODEL issued that contain the scenario's
+            # build_cmd verbatim, from the tool trace. Distinct from self_verified (Refio's loop
+            # verifier). null = no build_cmd, or no tool arguments in the run document (unknown).
+            # Mirrors e2e-run.sh.
+            if ($BuildCmd) {
+                $details = @($r.conversation | ForEach-Object { $_.toolCallDetails } | Where-Object { $_ })
+                $calls = @($r.conversation | ForEach-Object { $_.toolCalls } | Where-Object { $_ })
+                if ($details.Count -gt 0 -or $calls.Count -eq 0) {
+                    $n = 0
+                    foreach ($d in $details) {
+                        if ($d.name -ne 'run_terminal_command' -and $d.name -ne 'run_process_background') { continue }
+                        $cmd = ''
+                        try { $a = ([string]$d.arguments) | ConvertFrom-Json; if ($a.command) { $cmd = [string]$a.command } } catch {}
+                        if ($cmd.Contains($BuildCmd)) { $n++ }
+                    }
+                    $ranBuild = $n
+                }
+            }
         } catch {}
     }
     $fmode = ConvertTo-FailureMode -Verdict $Verdict -RunJsonPath $RunJsonPath
@@ -628,10 +686,85 @@ function Write-ResultRecord {
             tools = $tools; apiErrors = $apiErrors
             # SOFT judge verdict object, or null when the run was not judged (mirrors e2e-run.sh).
             judge = $Judge
+            modelRanBuildCmd = $ranBuild
+            batch = $(if ($env:E2E_BATCH_ID) { $env:E2E_BATCH_ID } else { $null })
             reasons = $reasons
         }
         ($record | ConvertTo-Json -Compress -Depth 6) | Add-Content -Path (Join-Path $outDir 'results.jsonl')
     } catch {}
+}
+
+# Append the batch manifest line (tools/e2e/lib/batch-manifest.mjs, needs node) to
+# $env:E2E_OUT_DIR\manifest.jsonl: git commit, a content hash of every scenario used, the model, what
+# the Ollama server reports about it (digest, quantization, template, server version; null plus a
+# reason when unavailable), the requested context window and config overrides, host hardware/OS and
+# the CLI's --print-config output, all secrets masked. No-op unless E2E_OUT_DIR is set; best effort,
+# never throws. results.jsonl records carry the same batch id. Mirrors e2e-run.sh write_batch_manifest.
+# --print-config makes no LLM call and writes nothing; it runs against an empty temp project.
+function Write-BatchManifest {
+    param([string[]]$ScenarioFiles, [string]$CliPath = $script:Cli, [string]$ModelLabel = $script:Model,
+          [string]$Endpoint = '', [string[]]$Overrides = @())
+    $outDir = $env:E2E_OUT_DIR
+    if (-not $outDir) { return }
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("refio-e2e-manifest-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+    try {
+        New-Item -ItemType Directory -Path $outDir -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $tmp 'project') -Force | Out-Null
+        $cfg = @()
+        if ($OllamaHost) {
+            $ep = switch -Regex ($OllamaHost) {
+                '^https?://' { $OllamaHost; break }
+                ':\d+$'      { "http://$OllamaHost"; break }
+                default      { "http://${OllamaHost}:11434" }
+            }
+            $cfg += "providers.ollama.ollama_endpoint=$ep"
+            if (-not $Endpoint) { $Endpoint = $ep }
+        }
+        if ($OllamaCtx -gt 0) { $cfg += "providers.ollama.ollama_context_size=$OllamaCtx" }
+        foreach ($kv in @($Config) + @($Overrides)) { if ($kv) { $cfg += [string]$kv } }
+        if (-not $Endpoint) { $Endpoint = 'http://127.0.0.1:11434' }
+
+        $margs = @('--out', $outDir, '--repo', $RepoRoot, '--batch-id', "$env:E2E_BATCH_ID",
+                   '--harness', 'e2e-run.ps1', '--ollama-endpoint', $Endpoint, '--max-cost', "$MaxCost")
+        if ($ModelLabel) { $margs += @('--model', $ModelLabel) }
+        if ($OllamaCtx -gt 0) { $margs += @('--ollama-ctx', "$OllamaCtx") }
+        if ($AutoApprove) { $margs += @('--auto-approve', $AutoApprove) }
+        foreach ($c in $cfg) { $margs += @('--config', $c) }
+        foreach ($f in $ScenarioFiles) { $margs += @('--scenario', $f) }
+
+        if ($CliPath -and ((Test-Path $CliPath) -or (Get-Command $CliPath -ErrorAction SilentlyContinue))) {
+            $pcFile = Join-Path $tmp 'print-config.txt'
+            $pcArgs = @('-p', (Join-Path $tmp 'project'), '--print-config', '--max-cost', "$MaxCost")
+            foreach ($c in $cfg) { $pcArgs += @('--config', $c) }
+            $pcExit = Invoke-Cli -CliArgs $pcArgs -OutFile $pcFile
+            if ($pcExit -eq 0) { $margs += @('--print-config-file', $pcFile) }
+            else { $margs += @('--print-config-error', '--print-config exited non-zero') }
+        } else {
+            $margs += @('--print-config-error', "CLI not found/executable: $CliPath")
+        }
+
+        $node = Get-Command node -ErrorAction SilentlyContinue
+        if ($node) {
+            $savedEAP = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try { & $node.Source (Join-Path $ScriptDir 'lib\batch-manifest.mjs') @margs 2>&1 | Out-Host }
+            finally { $ErrorActionPreference = $savedEAP }
+            if ($LASTEXITCODE -ne 0) { Write-Host "  WARN batch manifest could not be written (continuing)" }
+        } else {
+            Write-Host "  WARN batch manifest limited: node not found on PATH"
+            $line = [ordered]@{
+                manifest_version = 1; batch_id = "$env:E2E_BATCH_ID"
+                created_at = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+                harness = 'e2e-run.ps1'; model = $(if ($ModelLabel) { $ModelLabel } else { $null })
+                reason = 'node not found on PATH; only the batch id and model were recorded'
+            }
+            ($line | ConvertTo-Json -Compress) | Add-Content -Path (Join-Path $outDir 'manifest.jsonl')
+        }
+    } catch {
+        Write-Host "  WARN batch manifest could not be written: $_"
+    } finally {
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $tmp
+    }
 }
 
 function Invoke-Scenario {
@@ -891,7 +1024,7 @@ function Invoke-Scenario {
         }
     }
 
-    Write-ResultRecord -Id $s.id -Verdict $verdict -RunJsonPath $runJson -Judge $judge
+    Write-ResultRecord -Id $s.id -Verdict $verdict -RunJsonPath $runJson -Judge $judge -BuildCmd ([string]$s.assert.build_cmd)
     if (-not $Keep) { Remove-Item -Recurse -Force $work }
     return ($verdict -like 'PASS*')
 }
@@ -1043,6 +1176,79 @@ function Invoke-SelfTest {
     if ($rec.iterations -ne 3) { Write-Host "  !! emitted record must carry iterations=3"; $fails = 1 }
     Remove-Item -Recurse -Force $gateOut
 
+    # self_verified is Refio's loop verifier; modelRanBuildCmd is the model's own test run, read from
+    # the tool trace. This sample ran `node --test` itself while the loop verifier never ran, so the
+    # two measures must disagree. Mirrors e2e-run.sh.
+    $vscen = Join-Path $proj 'self-verified.scenario.json'
+    '{ "id":"self-verified","assert":{"self_verified":true}}' | Set-Content $vscen
+    $ranRun = Join-Path $sample 'sample-run.model-ran-tests.json'
+    $v = Assert-Run $vscen $ranRun $proj 0; Write-Host "  verified-by-loop -> $v"; if ($v -notlike 'FAIL*') { Write-Host "  !! self_verified must read the loop verifier"; $fails = 1 }
+    # A check already red before the change still fails self_verified, with the uncertain attribution reported.
+    $v = Assert-Run $vscen (Join-Path $sample 'sample-run.verify-preexisting.json') $proj 0; Write-Host "  verified-preexist-> $v"
+    if ($v -notlike 'FAIL*' -or $v -notlike '*attribution uncertain*' -or $v -notlike '*baseline FAILED*') { Write-Host "  !! a pre-existing verifier failure must FAIL and report the uncertain attribution"; $fails = 1 }
+    $gateOut4 = Join-Path ([System.IO.Path]::GetTempPath()) ("refio-e2e-gate4-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+    $prevOutDir = $env:E2E_OUT_DIR; $prevBatch = $env:E2E_BATCH_ID
+    $env:E2E_OUT_DIR = $gateOut4; $env:E2E_BATCH_ID = 'batch-selftest'
+    try {
+        Write-ResultRecord -Id 'ran-scn' -Verdict 'PASS' -RunJsonPath $ranRun -ModelLabelOverride 'ollama/qwen3.5:4b' -BuildCmd 'node --test'
+        Write-ResultRecord -Id 'blind-scn' -Verdict 'PASS' -RunJsonPath (Join-Path $sample 'sample-run.pass.json') -ModelLabelOverride 'ollama/qwen3.5:4b' -BuildCmd 'node --test'
+        Write-ResultRecord -Id 'nobuild-scn' -Verdict 'PASS' -RunJsonPath $ranRun -ModelLabelOverride 'ollama/qwen3.5:4b'
+    } finally {
+        $env:E2E_OUT_DIR = $prevOutDir; $env:E2E_BATCH_ID = $prevBatch
+    }
+    $recs = @(Get-Content (Join-Path $gateOut4 'results.jsonl') | ForEach-Object { $_ | ConvertFrom-Json })
+    Write-Host "  model-ran-tests-> modelRanBuildCmd=$($recs[0].modelRanBuildCmd) batch=$($recs[0].batch)"
+    if ($recs[0].modelRanBuildCmd -ne 1) { Write-Host "  !! one 'node --test' command must count as 1 (ls must not)"; $fails = 1 }
+    if ($recs[0].batch -ne 'batch-selftest') { Write-Host "  !! the record must carry the batch id"; $fails = 1 }
+    if ($null -ne $recs[1].modelRanBuildCmd) { Write-Host "  !! a run without tool arguments must report unknown (null), not 0"; $fails = 1 }
+    if ($null -ne $recs[2].modelRanBuildCmd) { Write-Host "  !! a scenario without build_cmd must report null"; $fails = 1 }
+    Remove-Item -Recurse -Force $gateOut4
+
+    # preserved_except: only the allowed part of a file may change, through the same trusted script
+    # a real run uses. Mirrors e2e-run.sh.
+    if (Get-Command node -ErrorAction SilentlyContinue) {
+        $pfx = Join-Path $proj 'pfx'; New-Item -ItemType Directory -Path (Join-Path $pfx 'src') -Force | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $pfx 'src\L.kt'), "package x`n`nfun a() = 1`nfun total(c: Int, d: Int) = c - d`nfun b() = 2`n")
+        [System.IO.File]::WriteAllText((Join-Path $pfx 'package.json'), "{`n  `"name`": `"w`",`n  `"scripts`": { `"test`": `"node test.js`" }`n}`n")
+        $pscen = Join-Path $proj 'preserve.scenario.json'
+        '{ "id":"preserve","fixture":"pfx","assert":{"preserved_except":[{"path":"src/L.kt","region":{"start":"^fun total\\("}},{"path":"package.json","json_paths":["scripts.build"]}]}}' | Set-Content $pscen
+        $pproj = Join-Path $proj 'pp'; New-Item -ItemType Directory -Path (Join-Path $pproj 'src') -Force | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $pproj 'src\L.kt'), "package x`r`n`r`nfun a() = 1`r`nfun total(c: Int, d: Int) = c + d`r`nfun b() = 2`r`n")
+        [System.IO.File]::WriteAllText((Join-Path $pproj 'package.json'), '{"scripts":{"build":"node build.js","test":"node test.js"},"name":"w"}')
+        $v = Assert-Run $pscen (Join-Path $sample 'sample-run.pass.json') $pproj 0; Write-Host "  preserve-ok    -> $v"; if ($v -notlike 'PASS*') { $fails = 1 }
+        [System.IO.File]::WriteAllText((Join-Path $pproj 'src\L.kt'), "package x`n`nfun a() = 1`nfun total(c: Int, d: Int) = c + d`n")
+        $v = Assert-Run $pscen (Join-Path $sample 'sample-run.pass.json') $pproj 0; Write-Host "  preserve-trunc -> $v"; if ($v -notlike 'FAIL*') { $fails = 1 }
+        [System.IO.File]::WriteAllText((Join-Path $pproj 'src\L.kt'), "package x`n`nfun a() = 1`nfun total(c: Int, d: Int) = c + d`nfun b() = 2`n")
+        [System.IO.File]::WriteAllText((Join-Path $pproj 'package.json'), '{"scripts":{"build":"node build.js"},"name":"w"}')
+        $v = Assert-Run $pscen (Join-Path $sample 'sample-run.pass.json') $pproj 0; Write-Host "  preserve-json  -> $v"; if ($v -notlike '*scripts.test*') { $fails = 1 }
+    } else {
+        Write-Host "  preserve-*     -> skipped: node not found on PATH"
+    }
+
+    # Batch manifest: secrets masked, an unreachable server or a missing CLI recorded as a reason.
+    # The CLI points nowhere so nothing runs; the Ollama endpoint is a closed loopback port.
+    if (Get-Command node -ErrorAction SilentlyContinue) {
+        $mout = Join-Path ([System.IO.Path]::GetTempPath()) ("refio-e2e-manifest-st-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+        $prevOutDir = $env:E2E_OUT_DIR; $prevBatch = $env:E2E_BATCH_ID
+        $env:E2E_OUT_DIR = $mout; $env:E2E_BATCH_ID = 'batch-selftest'
+        try {
+            Write-BatchManifest -ScenarioFiles @((Join-Path $E2EDir 'large-file-edit.json')) -CliPath (Join-Path $mout 'no-such-cli') `
+                -ModelLabel 'ollama/qwen3.5:4b' -Endpoint 'http://127.0.0.1:9' -Overrides @('providers.openai.openai_api_key=sk-selftest-secret')
+        } finally {
+            $env:E2E_OUT_DIR = $prevOutDir; $env:E2E_BATCH_ID = $prevBatch
+        }
+        $mraw = Get-Content (Join-Path $mout 'manifest.jsonl') -Tail 1
+        $m = $mraw | ConvertFrom-Json
+        Write-Host "  batch-manifest -> batch_id=$($m.batch_id) model=$($m.model) scenario=$($m.scenarios[0].id)"
+        if ($m.batch_id -ne 'batch-selftest') { Write-Host "  !! manifest must carry the batch id"; $fails = 1 }
+        if (([string]$m.scenarios[0].sha256).Length -ne 64) { Write-Host "  !! manifest must hash each scenario"; $fails = 1 }
+        if (-not $m.ollama.errors.show) { Write-Host "  !! an unreachable server must be recorded with a reason"; $fails = 1 }
+        if ($mraw -match 'sk-selftest-secret') { Write-Host "  !! manifest must mask secrets"; $fails = 1 }
+        Remove-Item -Recurse -Force $mout
+    } else {
+        Write-Host "  batch-manifest -> skipped: node not found on PATH"
+    }
+
     Remove-Item -Recurse -Force $proj, $empty
     if ($fails -eq 0) { Write-Host 'self-test OK' } else { throw 'self-test FAILED' }
 }
@@ -1128,6 +1334,13 @@ if ($All) {
     if (-not $Scenarios) { throw "no scenarios selected (try -List, -All, or pass <id|scenario.json>)" }
     foreach ($s in $Scenarios) { $resolved += (Resolve-Scenario $s) }
 }
+
+# One id per invocation (unless the caller pins one), shared by the manifest line and every
+# results.jsonl record this invocation writes. Mirrors e2e-run.sh.
+if (-not $env:E2E_BATCH_ID) {
+    $env:E2E_BATCH_ID = "{0}-{1}-{2}" -f (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ'), $PID, (Get-Random -Maximum 32768)
+}
+Write-BatchManifest -ScenarioFiles $resolved
 
 Write-Output "| scenario | verdict | metrics |"
 Write-Output "|---|---|---|"

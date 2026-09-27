@@ -1,0 +1,1 @@
+The active API accepts identifiers longer than our documented limit. Fix identifier validation: accept ASCII letters, digits and underscore, with length from 1 through 24 inclusive. Reject all other values, including non-string inputs. Preserve existing API return values and do not change archived implementations or tests. Run the relevant tests and report the result.

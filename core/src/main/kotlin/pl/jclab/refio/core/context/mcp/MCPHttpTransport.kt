@@ -1,11 +1,14 @@
 package pl.jclab.refio.core.context.mcp
 
 import io.ktor.client.HttpClient
+import io.ktor.client.HttpClientConfig
+import io.ktor.client.engine.HttpClientEngine
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.request.accept
+import io.ktor.client.request.header
 import io.ktor.client.request.post
-import io.ktor.client.request.get
+import io.ktor.client.request.prepareGet
 import io.ktor.client.request.headers
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
@@ -15,13 +18,16 @@ import io.ktor.utils.io.readUTF8Line
 import io.ktor.http.ContentType
 import io.ktor.http.contentLength
 import io.ktor.http.contentType
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import pl.jclab.refio.core.logging.dualLogger
+import java.net.URI
 
 private val httpLogger = dualLogger("MCPHttpTransport")
 
@@ -60,15 +66,27 @@ private fun mergeHeaders(config: MCPServerConfig): List<MCPHttpHeader> {
     return authHeaders + config.httpHeaders
 }
 
+/** One HTTP answer from an MCP server. [contentType] tells a plain JSON body from an event stream. */
+data class MCPHttpResponse(val status: Int, val body: String, val contentType: String?)
+
 /**
  * HTTP/SSE transport for MCP servers.
+ *
+ * Speaks both what the MCP specification prescribes and Refio's older dialect: an SSE server may
+ * announce a separate POST address with an `endpoint` event (otherwise POSTs go to the configured
+ * URL), and a server may hand out an `Mcp-Session-Id` on initialize, which is then sent with every
+ * later request.
+ *
+ * [engine] replaces the network engine in tests; production passes nothing and gets CIO.
  */
 class MCPHttpTransport(
     private val config: MCPServerConfig,
     private val onMessage: (String) -> Unit,
-    private val onError: (Exception) -> Unit
+    private val onError: (Exception) -> Unit,
+    private val engine: HttpClientEngine? = null,
+    private val endpointWaitMs: Long = DEFAULT_ENDPOINT_WAIT_MS
 ) {
-    private val client = HttpClient(CIO) {
+    private val client = buildClient {
         expectSuccess = false
         install(HttpTimeout) {
             requestTimeoutMillis = config.timeout
@@ -77,7 +95,7 @@ class MCPHttpTransport(
         }
     }
 
-    private val sseClient = HttpClient(CIO) {
+    private val sseClient = buildClient {
         expectSuccess = false
         install(HttpTimeout) {
             requestTimeoutMillis = null  // No timeout for long-lived SSE connections
@@ -86,8 +104,25 @@ class MCPHttpTransport(
         }
     }
 
+    private fun buildClient(block: HttpClientConfig<*>.() -> Unit): HttpClient =
+        engine?.let { HttpClient(it, block) } ?: HttpClient(CIO, block)
+
     private var scope: CoroutineScope? = null
     private var sseJob: Job? = null
+
+    /** Session assigned by the server on initialize; sent back on every later request. */
+    @Volatile
+    internal var sessionId: String? = null
+        private set
+
+    /** POST address announced by an SSE server's `endpoint` event; null means the configured URL. */
+    @Volatile
+    internal var postUrl: String? = null
+        private set
+
+    /** Completes once the SSE stream has either announced an endpoint or shown it will not. */
+    @Volatile
+    private var endpointSettled = CompletableDeferred<Unit>()
 
     companion object {
         /**
@@ -96,16 +131,39 @@ class MCPHttpTransport(
          * into memory before anything looks at it.
          */
         private const val MAX_RESPONSE_BYTES = 10L * 1024 * 1024
+
+        /**
+         * How long connect waits for an SSE server's `endpoint` event. A compliant server sends it
+         * first thing; a server in Refio's own dialect never does, and POSTs then keep going to the
+         * configured URL once this runs out.
+         */
+        const val DEFAULT_ENDPOINT_WAIT_MS = 2_000L
+
+        private const val SESSION_HEADER = "Mcp-Session-Id"
     }
 
+    /** Opens the transport. A reconnect starts a fresh session: nothing from the last one is reused. */
     suspend fun connect() {
+        sessionId = null
+        postUrl = null
         if (config.type == MCPServerType.HTTP_SSE) {
+            sseJob?.cancel()
+            scope?.cancel()
+            endpointSettled = CompletableDeferred()
             startSse()
+            withTimeoutOrNull(endpointWaitMs) { endpointSettled.await() }
         }
     }
 
-    suspend fun request(payload: String): String {
-        val url = config.url ?: throw IllegalArgumentException("HTTP transport requires url")
+    /** Sends [payload] and returns the raw body, for callers that only need the body. */
+    suspend fun request(payload: String): String = exchange(payload).body
+
+    /**
+     * Sends [payload] and returns the whole answer. With [isInitialize] a session id handed out in
+     * the response header is remembered for every request that follows.
+     */
+    suspend fun exchange(payload: String, isInitialize: Boolean = false): MCPHttpResponse {
+        val url = postUrl ?: config.url ?: throw IllegalArgumentException("HTTP transport requires url")
         val startTime = System.currentTimeMillis()
         var httpStatus: Int? = null
         var loggedError = false
@@ -116,6 +174,10 @@ class MCPHttpTransport(
             withContext(Dispatchers.IO) {
                 val response = client.post(url) {
                     contentType(ContentType.Application.Json)
+                    // A Streamable HTTP server may answer in either form and may reject a client
+                    // that does not accept both.
+                    header("Accept", "application/json, text/event-stream")
+                    sessionId?.let { header(SESSION_HEADER, it) }
                     setBody(payload)
                     headers {
                         mergeHeaders(config).forEach { header ->
@@ -131,6 +193,9 @@ class MCPHttpTransport(
                 }
                 val body = readBoundedBody(response)
                 httpStatus = response.status.value
+                if (isInitialize && response.status.value < 400) {
+                    response.headers[SESSION_HEADER]?.takeIf { it.isNotBlank() }?.let { sessionId = it }
+                }
                 httpLogger.debug { "[${config.id}] HTTP ${response.status.value} response: $body" }
 
                 if (response.status.value >= 400) {
@@ -163,7 +228,7 @@ class MCPHttpTransport(
                     latencyMs = latencyMs,
                     source = "MCP_HTTP"
                 )
-                body
+                MCPHttpResponse(response.status.value, body, response.headers["Content-Type"])
             }
         } catch (e: Exception) {
             if (!loggedError) {
@@ -208,11 +273,17 @@ class MCPHttpTransport(
     )
 
     private fun startSse() {
-        val url = config.url ?: return
+        val settled = endpointSettled
+        val url = config.url ?: run {
+            settled.complete(Unit)
+            return
+        }
         scope = CoroutineScope(Dispatchers.IO)
         sseJob = scope?.launch {
             try {
-                val response = sseClient.get(url) {
+                // prepareGet + execute streams the body; a plain get buffers it until the server
+                // closes the stream, and an SSE server never does.
+                sseClient.prepareGet(url) {
                     accept(ContentType.Text.EventStream)
                     headers {
                         mergeHeaders(config).forEach { header ->
@@ -220,25 +291,36 @@ class MCPHttpTransport(
                             append(header.name, resolvedValue)
                         }
                     }
-                }
-                val channel = response.bodyAsChannel()
-                val buffer = StringBuilder()
-                while (!channel.isClosedForRead) {
-                    val line = channel.readUTF8Line() ?: continue
-                    if (line.startsWith("data:")) {
-                        buffer.append(line.removePrefix("data:").trim())
-                    } else if (line.isBlank() && buffer.isNotEmpty()) {
-                        val message = buffer.toString()
-                        buffer.clear()
-                        onMessage(message)
+                }.execute { response ->
+                    if (response.status.value >= 400) {
+                        httpLogger.warn { "[${config.id}] SSE stream refused with HTTP ${response.status.value}" }
+                        return@execute
+                    }
+                    val channel = response.bodyAsChannel()
+                    val reader = SseEventReader()
+                    while (true) {
+                        val line = channel.readUTF8Line() ?: break
+                        val event = reader.feed(line) ?: continue
+                        if (event.event == "endpoint") {
+                            postUrl = resolveEndpoint(url, event.data)
+                            httpLogger.debug { "[${config.id}] SSE endpoint announced: $postUrl" }
+                        } else {
+                            onMessage(event.data)
+                        }
+                        settled.complete(Unit)
                     }
                 }
             } catch (e: Exception) {
                 httpLogger.warn(e) { "SSE closed for MCP server ${config.id}" }
                 onError(MCPTransportException("SSE error for MCP server ${config.id}", e))
+            } finally {
+                settled.complete(Unit)
             }
         }
     }
+
+    private fun resolveEndpoint(base: String, announced: String): String =
+        runCatching { URI(base).resolve(announced.trim()).toString() }.getOrElse { announced.trim() }
 
     fun disconnect() {
         sseJob?.cancel()

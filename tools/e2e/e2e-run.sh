@@ -54,6 +54,14 @@
 # E2E_RUN_INDEX=<n> tags the run number (default 1; an N-runs driver sets it per iteration).
 # With E2E_OUT_DIR unset (the default) nothing is persisted and behaviour is unchanged.
 #
+# Batch manifest: with E2E_OUT_DIR set, each invocation also appends one line to
+# <dir>/manifest.jsonl (tools/e2e/lib/batch-manifest.mjs, needs node): git commit, a content hash of
+# every scenario used, the model, what the Ollama server reports about it (digest, quantization,
+# template, server version; null plus a reason when unavailable), the requested context window and
+# config overrides, host hardware/OS and the CLI's --print-config output, all secrets masked. It is
+# best effort and never fails a run. results.jsonl records carry the same `batch` id
+# (E2E_BATCH_ID, generated when unset). run.json is not changed.
+#
 # LLM judge (SOFT tier): set JUDGE_MODEL=<provider/model> to run an external judge after each
 # scenario. The judge is the headless CLI itself in CHAT mode; it gets the task text, the diff of
 # the fixture project after the run, the build/test output, and the scenario's optional
@@ -311,6 +319,29 @@ assert_run() {
         fi
     done
 
+    # HARD 1c3 - preserved_except: the agent may change only the allowed part of a file (a region of
+    # lines, or listed JSON paths); everything else must match the fixture. A needle on the fix alone
+    # passes a file that was cut short or had a neighbour rewritten. The check is a script in this
+    # harness directory reading the pristine fixture, so nothing in the agent's project can alter it.
+    local pe_count pe_out pe_exit pe_line
+    pe_count="$(jq '(.assert.preserved_except // []) | length' "$scenario")"
+    if (( pe_count > 0 )); then
+        if [[ -z "$fx_dir" ]]; then
+            hard_fail=1; reasons+=("preserved_except needs a fixture to compare against")
+        elif ! command -v node >/dev/null 2>&1; then
+            hard_fail=1; reasons+=("preserved_except needs node on PATH")
+        else
+            pe_exit=0
+            pe_out="$(node "$SCRIPT_DIR/lib/preserve-check.mjs" "$scenario" "$fx_dir" "$project_dir" 2>&1)" || pe_exit=$?
+            if (( pe_exit != 0 )); then
+                hard_fail=1
+                while IFS= read -r pe_line; do
+                    pe_line="${pe_line%$'\r'}"; [[ -n "$pe_line" ]] && reasons+=("$pe_line")
+                done <<<"$pe_out"
+            fi
+        fi
+    fi
+
     # HARD 1d — tool_invoked: a named tool MUST (or, with absent:true, must NOT) have been called.
     # Each entry is {name, args_regex?, absent?}. Name presence is read from the always-present
     # conversation[].toolCalls[] (bare names). With args_regex it matches the raw arguments JSON in
@@ -407,19 +438,32 @@ assert_run() {
         fi
     fi
 
-    # HARD 5 — self_verified: the agent had to run the build or the tests ITSELF. The
-    # harness runs build_cmd afterwards either way, so without this a model that writes
-    # code blind and one that runs the tests and repairs what broke score identically -
-    # and that is the sharpest single difference between agent loops.
-    local want_verify verify_ran verify_result
+    # HARD 5 - self_verified: Refio's loop verifier ran the build or the tests during the turn and
+    # it ended PASSED (run.json metrics.verification). It measures the Refio loop, not the model's
+    # own choice: it does not prove the model decided to run the tests. The model's voluntary test
+    # runs are counted separately in results.jsonl as modelRanBuildCmd (from the tool trace). The
+    # harness runs build_cmd afterwards either way, so without this a loop that writes code blind
+    # and one that checks and repairs what broke score identically.
+    # The optional detail fields (notRunReason, exitCode, timedOut, baseline, attributionUncertain)
+    # only enrich the reason; the pass/fail rule is unchanged and older run documents without them
+    # read exactly as before.
+    local want_verify verify_ran verify_result verify_detail
     want_verify="$(jq -r '.assert.self_verified // false' "$scenario")"
     if [[ "$want_verify" == "true" ]]; then
         verify_ran="$(jq -r '.metrics.verification.ran // false' "$run_json" 2>/dev/null || echo false)"
         verify_result="$(jq -r '.metrics.verification.result // "NONE"' "$run_json" 2>/dev/null || echo NONE)"
+        verify_detail="$(jq -r '(.metrics.verification // {}) as $v | [
+                (if $v.notRunReason then "not run: \($v.notRunReason)" else empty end),
+                (if $v.exitCode != null then "exit \($v.exitCode)" else empty end),
+                (if $v.timedOut == true then "timed out" else empty end),
+                (if $v.baseline then "baseline \($v.baseline)" else empty end),
+                (if $v.attributionUncertain == true then "attribution uncertain: the check already failed before the change" else empty end)
+            ] | join(", ")' "$run_json" 2>/dev/null || true)"
+        [[ -n "$verify_detail" ]] && verify_detail=", ${verify_detail}"
         if [[ "$verify_ran" != "true" ]]; then
-            hard_fail=1; reasons+=("the agent never verified its own work")
+            hard_fail=1; reasons+=("the Refio loop verifier never ran (self_verified${verify_detail})")
         elif [[ "$verify_result" != "PASSED" ]]; then
-            hard_fail=1; reasons+=("self-verification ended ${verify_result}")
+            hard_fail=1; reasons+=("the Refio loop verifier ended ${verify_result} (self_verified${verify_detail})")
         fi
     fi
 
@@ -640,7 +684,7 @@ run_judge() {
 # record. Never aborts the caller (all failure paths swallowed) - the gate is observ-only.
 emit_result_record() {
     [[ -n "${E2E_OUT_DIR:-}" ]] || return 0
-    local id="$1" verdict="$2" run_json="$3" judge="${4:-}"
+    local id="$1" verdict="$2" run_json="$3" judge="${4:-}" build_cmd="${5:-}"
     # Judge object is optional and SOFT; a missing/invalid value serializes as null.
     jq -e . >/dev/null 2>&1 <<<"$judge" || judge="null"
     [[ -n "$judge" ]] || judge="null"
@@ -653,7 +697,7 @@ emit_result_record() {
     # Additive: the Kotlin gate parser (GateRunRecord via Gson) ignores unknown fields, so enriching
     # the record never breaks `cli --gate`; the aggregator (e2e-stats.sh) reads these back.
     local mode="" provider="" tokens_in="0" iters="0" apicalls="0" duration="0"
-    local tools_json="{}" apierr_json="{}" subtasks=0
+    local tools_json="{}" apierr_json="{}" subtasks=0 ran_build="null"
     if [[ -f "$run_json" ]]; then
         status="$(jq -r '.session.status // "UNKNOWN"' "$run_json" 2>/dev/null || echo UNKNOWN)"
         cost="$(jq -r '.metrics.costUsd // 0' "$run_json" 2>/dev/null || echo 0)"
@@ -674,6 +718,21 @@ emit_result_record() {
         # API-error histogram (errorType -> count) for provider/tool reliability.
         apierr_json="$(jq -c '[.apiLogs[]?.errorType | select(. != null and . != "")] | reduce .[] as $e ({}; .[$e] = ((.[$e]//0)+1))' "$run_json" 2>/dev/null || echo '{}')"
         [[ -n "$apierr_json" && "$apierr_json" != "null" ]] || apierr_json="{}"
+        # modelRanBuildCmd: how many terminal commands the MODEL issued that contain the scenario's
+        # build_cmd verbatim - its own choice to run the tests, read from the tool trace. Distinct
+        # from self_verified (Refio's loop verifier). null = no build_cmd, or a run document without
+        # tool arguments (toolCallDetails), where the count cannot be known.
+        if [[ -n "$build_cmd" ]]; then
+            ran_build="$(jq --arg cmd "$build_cmd" '
+                if ([.conversation[]?.toolCallDetails[]?] | length) == 0
+                   and ([.conversation[]?.toolCalls[]?] | length) > 0 then null
+                else [.conversation[]?.toolCallDetails[]?
+                      | select(.name == "run_terminal_command" or .name == "run_process_background")
+                      | ((.arguments | fromjson? // {}) | .command // "")
+                      | select(type == "string" and contains($cmd))] | length
+                end' "$run_json" 2>/dev/null || echo null)"
+            [[ -n "$ran_build" ]] || ran_build="null"
+        fi
     fi
     fmode="$(classify_failure_mode "$verdict" "$run_json")"
     reasons_str="$(sed -n 's/^FAIL (\(.*\))$/\1/p' <<<"$verdict")"
@@ -691,15 +750,64 @@ emit_result_record() {
         --argjson subtasks "$subtasks" \
         --argjson apiCalls "$apicalls" --argjson durationMs "$duration" \
         --argjson tools "$tools_json" --argjson apiErrors "$apierr_json" \
-        --argjson judge "$judge" \
+        --argjson judge "$judge" --arg batch "${E2E_BATCH_ID:-}" --argjson ranBuild "$ran_build" \
         '{scenario:$scenario, model:$model, run:$run, verdict:$verdict, failure_mode:$fmode,
           status:$status, costUsd:$cost, tokensOut:$tokens,
           mode:$mode, provider:$provider, tokensIn:$tokensIn, iterations:$iterations,
           subtasks:$subtasks,
           apiCalls:$apiCalls, durationMs:$durationMs, tools:$tools, apiErrors:$apiErrors,
-          judge:$judge,
+          judge:$judge, modelRanBuildCmd:$ranBuild,
+          batch: (if $batch == "" then null else $batch end),
           reasons: ($reasons | if . == "" then [] else split("; ") end)}' \
         >>"$E2E_OUT_DIR/results.jsonl" 2>/dev/null || true
+}
+
+# Append the batch manifest line (see the header). No-op unless E2E_OUT_DIR is set. Best effort:
+# never aborts the caller. The CLI's --print-config makes no LLM call and writes nothing; it runs
+# against an empty temp project so no project config leaks into the resolved view.
+write_batch_manifest() {
+    [[ -n "${E2E_OUT_DIR:-}" ]] || return 0
+    mkdir -p "$E2E_OUT_DIR" 2>/dev/null || return 0
+    local -a cfg=() margs=() pc_args=()
+    local c s pc_tmp
+    [[ ${#OLLAMA_SUGAR[@]} -gt 0 ]] && cfg+=("${OLLAMA_SUGAR[@]}")
+    [[ ${#CONFIG_OVERRIDES[@]} -gt 0 ]] && cfg+=("${CONFIG_OVERRIDES[@]}")
+    margs=(--out "$E2E_OUT_DIR" --repo "$REPO_ROOT" --batch-id "${E2E_BATCH_ID:-}" --harness e2e-run.sh
+           --ollama-endpoint "$WARM_ENDPOINT" --max-cost "$MAX_COST")
+    [[ -n "$MODEL" ]] && margs+=(--model "$MODEL")
+    [[ -n "$OLLAMA_CTX" ]] && margs+=(--ollama-ctx "$OLLAMA_CTX")
+    [[ -n "$AUTO_APPROVE" ]] && margs+=(--auto-approve "$AUTO_APPROVE")
+    for c in ${cfg[@]+"${cfg[@]}"}; do margs+=(--config "$c"); done
+    for s in "$@"; do margs+=(--scenario "$s"); done
+
+    pc_tmp="$(mktemp -d "${TMPDIR:-/tmp}/refio-e2e-manifest-XXXXXX")"
+    mkdir -p "$pc_tmp/project"
+    if [[ -x "$CLI" ]]; then
+        pc_args=(-p "$pc_tmp/project" --print-config --max-cost "$MAX_COST")
+        for c in ${cfg[@]+"${cfg[@]}"}; do pc_args+=(--config "$c"); done
+        if "$CLI" "${pc_args[@]}" >"$pc_tmp/print-config.txt" 2>/dev/null; then
+            margs+=(--print-config-file "$pc_tmp/print-config.txt")
+        else
+            margs+=(--print-config-error "--print-config exited non-zero")
+        fi
+    else
+        margs+=(--print-config-error "CLI not found/executable: $CLI")
+    fi
+
+    if command -v node >/dev/null 2>&1; then
+        node "$SCRIPT_DIR/lib/batch-manifest.mjs" "${margs[@]}" \
+            || echo "  WARN batch manifest could not be written (continuing)" >&2
+    else
+        echo "  WARN batch manifest limited: node not found on PATH" >&2
+        jq -cn --arg id "${E2E_BATCH_ID:-}" --arg model "$MODEL" \
+            --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{manifest_version:1, batch_id:$id, created_at:$ts, harness:"e2e-run.sh",
+              model:(if $model == "" then null else $model end),
+              reason:"node not found on PATH; only the batch id and model were recorded"}' \
+            >>"$E2E_OUT_DIR/manifest.jsonl" 2>/dev/null || true
+    fi
+    rm -rf "$pc_tmp"
+    return 0
 }
 
 run_scenario() {
@@ -942,7 +1050,7 @@ run_scenario() {
         fi
     fi
 
-    emit_result_record "$id" "$verdict" "$run_json" "$judge_json"
+    emit_result_record "$id" "$verdict" "$run_json" "$judge_json" "$build_cmd"
     [[ $KEEP -eq 1 ]] || rm -rf "$work"
     [[ "$verdict" == PASS* ]]
 }
@@ -1265,17 +1373,17 @@ JSON
     echo "  case iters-unenforced-> $v" >&2
     [[ "$v" == PASS* ]] || { echo "  !! an unenforced budget must not fail a run" >&2; fails=1; }
 
-    # self_verified: the agent itself had to run the build or the tests.
+    # self_verified: Refio's loop verifier ran the build or the tests and it PASSED.
     local vscen="$proj/self-verified.scenario.json"
     cat > "$vscen" <<'JSON'
 { "id": "self-verified", "assert": { "self_verified": true } }
 JSON
     v="$(assert_run "$vscen" "$sample/sample-run.verified.json" "$proj" 0 2>/dev/null || true)"
     echo "  case verified-yes   -> $v" >&2
-    [[ "$v" == PASS* ]] || { echo "  !! a run that verified itself must PASS" >&2; fails=1; }
+    [[ "$v" == PASS* ]] || { echo "  !! a run whose loop verifier passed must PASS" >&2; fails=1; }
     v="$(assert_run "$vscen" "$sample/sample-run.pass.json" "$proj" 0 2>/dev/null || true)"
     echo "  case verified-no    -> $v" >&2
-    [[ "$v" == FAIL* ]] || { echo "  !! a run that never checked its own work must FAIL" >&2; fails=1; }
+    [[ "$v" == FAIL* ]] || { echo "  !! a run where the loop verifier never ran must FAIL" >&2; fails=1; }
 
     # forbidden_markers: a guardrail that fired must not hide behind a delivered file.
     local mscen="$proj/markers.scenario.json"
@@ -1351,6 +1459,85 @@ JSON
     rm -rf "$gate_out3"
     rm -rf "$gate_out"
 
+    # self_verified is Refio's loop verifier; modelRanBuildCmd is the model's own test run, read
+    # from the tool trace. This sample ran `node --test` itself while the loop verifier never ran,
+    # so the two measures must disagree here.
+    local ran_run="$sample/sample-run.model-ran-tests.json"
+    v="$(assert_run "$vscen" "$ran_run" "$proj" 0 2>/dev/null || true)"
+    echo "  case verified-by-loop-> $v" >&2
+    [[ "$v" == FAIL* ]] || { echo "  !! self_verified must read the loop verifier, not the model's own test run" >&2; fails=1; }
+    # A check that was already red before the change still fails self_verified (old semantics), but
+    # the reason must say the failure may not be the agent's.
+    v="$(assert_run "$vscen" "$sample/sample-run.verify-preexisting.json" "$proj" 0 2>/dev/null || true)"
+    echo "  case verified-preexist-> $v" >&2
+    [[ "$v" == FAIL* && "$v" == *"attribution uncertain"* && "$v" == *"baseline FAILED"* ]] \
+        || { echo "  !! a pre-existing verifier failure must FAIL and report the uncertain attribution" >&2; fails=1; }
+    local gate_out4; gate_out4="$(mktemp -d "${TMPDIR:-/tmp}/refio-e2e-gate4-XXXXXX")"
+    ( E2E_OUT_DIR="$gate_out4"; E2E_BATCH_ID="batch-selftest"; MODEL="ollama/qwen3.5:4b"
+      emit_result_record "ran-scn" "PASS" "$ran_run" "" "node --test"
+      emit_result_record "blind-scn" "PASS" "$sample/sample-run.pass.json" "" "node --test"
+      emit_result_record "nobuild-scn" "PASS" "$ran_run" "" "" )
+    local r_ran r_blind r_nobuild
+    r_ran="$(sed -n 1p "$gate_out4/results.jsonl")"; r_blind="$(sed -n 2p "$gate_out4/results.jsonl")"
+    r_nobuild="$(sed -n 3p "$gate_out4/results.jsonl")"
+    echo "  case model-ran-tests -> $(jq -rc '{modelRanBuildCmd,batch}' <<<"$r_ran" 2>/dev/null || echo PARSE_ERR)" >&2
+    [[ "$(jq -r '.modelRanBuildCmd' <<<"$r_ran")" == "1" ]] || { echo "  !! one 'node --test' command must count as 1 (ls must not)" >&2; fails=1; }
+    [[ "$(jq -r '.batch' <<<"$r_ran")" == "batch-selftest" ]] || { echo "  !! the record must carry the batch id" >&2; fails=1; }
+    [[ "$(jq -r '.modelRanBuildCmd' <<<"$r_blind")" == "null" ]] || { echo "  !! a run without tool arguments must report unknown (null), not 0" >&2; fails=1; }
+    [[ "$(jq -r '.modelRanBuildCmd' <<<"$r_nobuild")" == "null" ]] || { echo "  !! a scenario without build_cmd must report null" >&2; fails=1; }
+    rm -rf "$gate_out4"
+
+    # preserved_except: only the allowed part of a file may change. Run through the same trusted
+    # script a real run uses; the unit tests in tools/e2e/__tests__ cover the edge cases.
+    if command -v node >/dev/null 2>&1; then
+        local pfx="$proj/pfx"; mkdir -p "$pfx/src"
+        printf 'package x\n\nfun a() = 1\nfun total(c: Int, d: Int) = c - d\nfun b() = 2\n' > "$pfx/src/L.kt"
+        printf '{\n  "name": "w",\n  "scripts": { "test": "node test.js" }\n}\n' > "$pfx/package.json"
+        local pscen="$proj/preserve.scenario.json"
+        cat > "$pscen" <<'JSON'
+{ "id":"preserve", "fixture":"pfx", "assert": { "preserved_except": [
+    { "path":"src/L.kt", "region": { "start": "^fun total\\(" } },
+    { "path":"package.json", "json_paths": ["scripts.build"] } ] } }
+JSON
+        local pproj="$proj/pp"; mkdir -p "$pproj/src"
+        printf 'package x\r\n\r\nfun a() = 1\r\nfun total(c: Int, d: Int) = c + d\r\nfun b() = 2\r\n' > "$pproj/src/L.kt"
+        printf '{"scripts":{"build":"node build.js","test":"node test.js"},"name":"w"}' > "$pproj/package.json"
+        v="$(assert_run "$pscen" "$sample/sample-run.pass.json" "$pproj" 0 2>/dev/null || true)"
+        echo "  case preserve-ok     -> $v" >&2
+        [[ "$v" == PASS* ]] || { echo "  !! an in-region fix and an added scripts.build must PASS (line endings ignored)" >&2; fails=1; }
+        printf 'package x\n\nfun a() = 1\nfun total(c: Int, d: Int) = c + d\n' > "$pproj/src/L.kt"
+        v="$(assert_run "$pscen" "$sample/sample-run.pass.json" "$pproj" 0 2>/dev/null || true)"
+        echo "  case preserve-trunc  -> $v" >&2
+        [[ "$v" == FAIL* ]] || { echo "  !! a file cut short after the fix must FAIL" >&2; fails=1; }
+        printf 'package x\n\nfun a() = 1\nfun total(c: Int, d: Int) = c + d\nfun b() = 2\n' > "$pproj/src/L.kt"
+        printf '{"scripts":{"build":"node build.js"},"name":"w"}' > "$pproj/package.json"
+        v="$(assert_run "$pscen" "$sample/sample-run.pass.json" "$pproj" 0 2>/dev/null || true)"
+        echo "  case preserve-json   -> $v" >&2
+        [[ "$v" == *"scripts.test"* ]] || { echo "  !! a lost scripts.test must FAIL and name the path" >&2; fails=1; }
+    else
+        echo "  case preserve-*      -> skipped: node not found on PATH" >&2
+    fi
+
+    # Batch manifest: written next to results, secrets masked, and an unreachable server or a
+    # missing CLI recorded as a reason instead of failing. CLI points nowhere so nothing runs, and
+    # the Ollama endpoint is a closed loopback port.
+    if command -v node >/dev/null 2>&1; then
+        local mout; mout="$(mktemp -d "${TMPDIR:-/tmp}/refio-e2e-manifest-st-XXXXXX")"
+        ( E2E_OUT_DIR="$mout"; E2E_BATCH_ID="batch-selftest"; MODEL="ollama/qwen3.5:4b"
+          CLI="$mout/no-such-cli"; WARM_ENDPOINT="http://127.0.0.1:9"
+          CONFIG_OVERRIDES=("providers.openai.openai_api_key=sk-selftest-secret")
+          write_batch_manifest "$E2E_DIR/large-file-edit.json" )
+        local mline; mline="$(tail -n1 "$mout/manifest.jsonl" 2>/dev/null || true)"
+        echo "  case batch-manifest  -> $(jq -rc '{batch_id,model,scenario:.scenarios[0].id,cfg:.effective_config_reason}' <<<"$mline" 2>/dev/null || echo PARSE_ERR)" >&2
+        [[ "$(jq -r '.batch_id' <<<"$mline" 2>/dev/null)" == "batch-selftest" ]] || { echo "  !! manifest must carry the batch id" >&2; fails=1; }
+        [[ "$(jq -r '.scenarios[0].sha256 | length' <<<"$mline" 2>/dev/null)" == "64" ]] || { echo "  !! manifest must hash each scenario" >&2; fails=1; }
+        [[ "$(jq -r '.ollama.errors.show // empty' <<<"$mline" 2>/dev/null)" != "" ]] || { echo "  !! an unreachable server must be recorded with a reason" >&2; fails=1; }
+        grep -q 'sk-selftest-secret' <<<"$mline" && { echo "  !! manifest must mask secrets" >&2; fails=1; }
+        rm -rf "$mout"
+    else
+        echo "  case batch-manifest  -> skipped: node not found on PATH" >&2
+    fi
+
     rm -rf "$proj" "$empty"
     if [[ $fails -eq 0 ]]; then echo "self-test OK" >&2; else die "self-test FAILED"; fi
 }
@@ -1379,6 +1566,11 @@ else
 fi
 
 warm_ollama_model "$MODEL" "$WARM_ENDPOINT"
+
+# One id per invocation (unless the caller pins one), shared by the manifest line and every
+# results.jsonl record this invocation writes.
+export E2E_BATCH_ID="${E2E_BATCH_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM}"
+write_batch_manifest "${RESOLVED[@]}"
 
 echo "| scenario | verdict | metrics |"
 echo "|---|---|---|"
