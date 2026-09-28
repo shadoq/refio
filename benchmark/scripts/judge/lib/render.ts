@@ -76,8 +76,9 @@ async function closeQuietly(browser: Browser): Promise<void> {
 // Whether the page shows anything at all. A clean console over a blank canvas passed
 // every mechanical check while the deliverable was, to a person looking at it, not
 // there - so the browser that takes the screenshot is asked one more question before
-// it closes. Sampling every seventh pixel is enough to tell a flat fill from a drawing
-// and keeps the evaluation cheap.
+// it closes. A grid of points spread over the WHOLE canvas tells a flat fill from a
+// drawing and keeps the evaluation cheap; sampling only a corner read a scene drawn in
+// the middle (a centred cube) as a blank canvas.
 async function readEvidence(page: Page): Promise<RenderEvidence | null> {
   try {
     return await page.evaluate(() => {
@@ -87,13 +88,18 @@ async function readEvidence(page: Page): Promise<RenderEvidence | null> {
         try {
           const ctx = canvas.getContext("2d");
           if (!ctx) continue; // a WebGL context cannot be sampled this way
-          const w = Math.min(canvas.width, 200);
-          const h = Math.min(canvas.height, 200);
+          const w = canvas.width;
+          const h = canvas.height;
           if (w === 0 || h === 0) continue;
           const data = ctx.getImageData(0, 0, w, h).data;
           const seen = new Set<string>();
-          for (let p = 0; p < data.length; p += 4 * 7) {
-            seen.add(`${data[p]},${data[p + 1]},${data[p + 2]},${data[p + 3]}`);
+          const stepX = Math.max(1, Math.floor(w / 100));
+          const stepY = Math.max(1, Math.floor(h / 100));
+          for (let y = 0; y < h; y += stepY) {
+            for (let x = 0; x < w; x += stepX) {
+              const p = (y * w + x) * 4;
+              seen.add(`${data[p]},${data[p + 1]},${data[p + 2]},${data[p + 3]}`);
+            }
           }
           canvasColors = Math.max(canvasColors ?? 0, seen.size);
         } catch {

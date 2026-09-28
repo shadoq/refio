@@ -98,12 +98,17 @@ export interface RenderEvidence {
   canvasColors: number | null;
 }
 
+// Visible text above which a page carries a UI of its own (a start menu, instructions)
+// rather than just a title and a score over its canvas.
+const MENU_TEXT_CHARS = 80;
+
 // A page that loaded without complaining and still shows nothing. Only unambiguous
-// evidence counts: a canvas we could read that holds a single flat colour, or a page
-// with no text and almost no elements. Anything we could not measure is not emptiness.
+// evidence counts: a canvas we could read that holds a single flat colour with little
+// text around it, or a page with no text and almost no elements. Anything we could not
+// measure is not emptiness, and neither is a blank board waiting under a start menu.
 export function artifactLooksEmpty(ev: RenderEvidence): boolean {
   if (ev.hasCanvas) {
-    return ev.canvasColors !== null && ev.canvasColors <= 1;
+    return ev.canvasColors !== null && ev.canvasColors <= 1 && ev.textLength < MENU_TEXT_CHARS;
   }
   return ev.textLength === 0 && ev.domNodes < 10;
 }

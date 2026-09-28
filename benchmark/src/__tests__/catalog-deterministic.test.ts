@@ -370,6 +370,12 @@ describe("artifactLooksEmpty", () => {
     expect(artifactLooksEmpty({ domNodes: 40, textLength: 12, hasCanvas: true, canvasColors: 1 })).toBe(true);
   });
 
+  // A game that opens on a mode-select menu leaves its board blank until a mode is
+  // picked. The menu is what the player sees, so the page is not empty.
+  it("accepts a blank canvas under a start menu", () => {
+    expect(artifactLooksEmpty({ domNodes: 60, textLength: 180, hasCanvas: true, canvasColors: 1 })).toBe(false);
+  });
+
   it("accepts a canvas with something drawn on it", () => {
     expect(artifactLooksEmpty({ domNodes: 40, textLength: 12, hasCanvas: true, canvasColors: 260 })).toBe(false);
   });
