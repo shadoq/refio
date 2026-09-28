@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#080f20">
+  <title>Gouraud Cube — Canvas 2D</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #080f20;
+      color: #e9f1ff;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+    }
+
+    body {
+      background:
+        radial-gradient(ellipse at 51% 46%, #1b3150 0%, #101c32 37%, #080f20 78%);
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background-image:
+        linear-gradient(#b4d6ff08 1px, transparent 1px),
+        linear-gradient(90deg, #b4d6ff08 1px, transparent 1px);
+      background-size: 42px 42px;
+      mask-image: radial-gradient(ellipse at center, black 12%, transparent 78%);
+    }
+
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background: radial-gradient(ellipse at center, transparent 35%, #050a16a6 100%);
+    }
+
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    .hud {
+      position: fixed;
+      z-index: 1;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: clamp(20px, 4vw, 48px);
+      pointer-events: none;
+    }
+
+    .top, .bottom {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 20px;
+    }
+
+    .eyebrow, .label, .hint {
+      color: #8da5c2;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .17em;
+      text-transform: uppercase;
+    }
+
+    .eyebrow { color: #79dbe0; }
+
+    h1 {
+      margin: 9px 0 5px;
+      font-size: clamp(24px, 3vw, 39px);
+      font-weight: 650;
+      letter-spacing: -.045em;
+      line-height: 1.1;
+    }
+
+    .subtitle {
+      margin: 0;
+      color: #9aafca;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .readout {
+      display: flex;
+      gap: 26px;
+      align-items: center;
+      padding-top: 3px;
+      text-align: right;
+    }
+
+    .readout strong {
+      display: block;
+      margin-top: 5px;
+      font-size: 18px;
+      font-weight: 600;
+      letter-spacing: -.025em;
+      white-space: nowrap;
+    }
+
+    .status strong { color: #86e4cb; }
+    .status.paused strong { color: #ffc582; }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 9px;
+      pointer-events: auto;
+    }
+
+    button {
+      min-height: 43px;
+      padding: 0 14px;
+      border: 1px solid #9cbbe13b;
+      border-radius: 10px;
+      background: #182741b8;
+      color: #e9f1ff;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .2s, border-color .2s, transform .2s;
+    }
+
+    button:hover {
+      background: #283d60;
+      border-color: #9cbbe186;
+      transform: translateY(-1px);
+    }
+
+    button:focus-visible {
+      outline: 2px solid #82dfe4;
+      outline-offset: 3px;
+    }
+
+    button[aria-pressed="true"] {
+      border-color: #79dbe0a6;
+      background: #1a4857;
+    }
+
+    kbd {
+      display: inline-block;
+      margin-right: 9px;
+      padding: 3px 6px;
+      border: 1px solid #9cbbe14d;
+      border-radius: 4px;
+      color: #aeeef0;
+      font: inherit;
+      font-size: 10px;
+    }
+
+    .bottom-right {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .light-orbit {
+      position: relative;
+      width: 38px;
+      height: 38px;
+      flex: none;
+      border: 1px solid #82acc75c;
+      border-radius: 50%;
+      background: #15294180;
+    }
+
+    .light-orbit::before {
+      content: "";
+      position: absolute;
+      inset: 10px;
+      border: 1px dashed #82acc76b;
+      border-radius: 50%;
+    }
+
+    .light-dot {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 7px;
+      height: 7px;
+      margin: -3.5px;
+      border-radius: 50%;
+      background: #ffe3a4;
+      box-shadow: 0 0 12px 4px #ffc77785;
+      transform: translate(12px, 0);
+    }
+
+    .light-copy { line-height: 1.7; }
+    .light-copy span { display: block; }
+
+    @media (max-width: 600px) {
+      .hud { padding: 22px; }
+      .top { gap: 12px; }
+      .readout { display: block; }
+      .readout .status { margin-top: 12px; }
+      .readout strong { font-size: 15px; }
+      .subtitle { max-width: 210px; }
+      .bottom { align-items: flex-end; }
+      .bottom-right { gap: 8px; }
+      .light-copy { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="scene" aria-label="Animated Gouraud-shaded rotating cube"></canvas>
+
+  <main class="hud">
+    <div class="top">
+      <div>
+        <div class="eyebrow">Canvas 2D / software renderer</div>
+        <h1>Gouraud Cube</h1>
+        <p class="subtitle">Twelve triangles. One orbiting light. Every pixel by hand.</p>
+      </div>
+      <div class="readout" aria-live="off">
+        <div>
+          <div class="label">Frame rate</div>
+          <strong><span id="fps">—</span> FPS</strong>
+        </div>
+        <div class="status" id="status">
+          <div class="label">Renderer</div>
+          <strong id="statusText">Live</strong>
+        </div>
+      </div>
+    </div>
+
+    <div class="bottom">
+      <div class="controls">
+        <button id="wireButton" type="button" aria-pressed="false" aria-keyshortcuts="W"><kbd>W</kbd>Wireframe</button>
+        <button id="pauseButton" type="button" aria-pressed="false" aria-keyshortcuts="P"><kbd>P</kbd>Pause</button>
+      </div>
+      <div class="bottom-right">
+        <div class="light-orbit" aria-hidden="true"><div class="light-dot" id="lightDot"></div></div>
+        <div class="light-copy">
+          <span class="label">Moving light</span>
+          <span class="hint">W wireframe · P pause</span>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const canvas = document.getElementById("scene");
+      const ctx = canvas.getContext("2d", { alpha: true });
+      const fpsLabel = document.getElementById("fps");
+      const status = document.getElementById("status");
+      const statusText = document.getElementById("statusText");
+      const wireButton = document.getElementById("wireButton");
+      const pauseButton = document.getElementById("pauseButton");
+      const lightDot = document.getElementById("lightDot");
+
+      const vertices = [
+        [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
+        [-1, -1, 1],  [1, -1, 1],  [1, 1, 1],  [-1, 1, 1]
+      ];
+
+      // Each quad is wound outward and divided into two triangles.
+      const faces = [
+        { corners: [0, 3, 2, 1], normal: [0, 0, -1], color: [78, 218, 231] },
+        { corners: [4, 5, 6, 7], normal: [0, 0, 1], color: [239, 138, 183] },
+        { corners: [0, 4, 7, 3], normal: [-1, 0, 0], color: [169, 143, 245] },
+        { corners: [1, 2, 6, 5], normal: [1, 0, 0], color: [255, 172, 112] },
+        { corners: [0, 1, 5, 4], normal: [0, -1, 0], color: [128, 218, 161] },
+        { corners: [3, 7, 6, 2], normal: [0, 1, 0], color: [118, 165, 248] }
+      ];
+
+      const normalize = v => {
+        const length = Math.hypot(v[0], v[1], v[2]) || 1;
+        return [v[0] / length, v[1] / length, v[2] / length];
+      };
+
+      const multiplyMatrices = (a, b) => [
+        a[0] * b[0] + a[1] * b[3] + a[2] * b[6],
+        a[0] * b[1] + a[1] * b[4] + a[2] * b[7],
+        a[0] * b[2] + a[1] * b[5] + a[2] * b[8],
+        a[3] * b[0] + a[4] * b[3] + a[5] * b[6],
+        a[3] * b[1] + a[4] * b[4] + a[5] * b[7],
+        a[3] * b[2] + a[4] * b[5] + a[5] * b[8],
+        a[6] * b[0] + a[7] * b[3] + a[8] * b[6],
+        a[6] * b[1] + a[7] * b[4] + a[8] * b[7],
+        a[6] * b[2] + a[7] * b[5] + a[8] * b[8]
+      ];
+
+      const transform = (m, v) => [
+        m[0] * v[0] + m[1] * v[1] + m[2] * v[2],
+        m[3] * v[0] + m[4] * v[1] + m[5] * v[2],
+        m[6] * v[0] + m[7] * v[1] + m[8] * v[2]
+      ];
+
+      function rotationMatrix(x, y, z) {
+        const cx = Math.cos(x), sx = Math.sin(x);
+        const cy = Math.cos(y), sy = Math.sin(y);
+        const cz = Math.cos(z), sz = Math.sin(z);
+        const rx = [1, 0, 0, 0, cx, -sx, 0, sx, cx];
+        const ry = [cy, 0, sy, 0, 1, 0, -sy, 0, cy];
+        const rz = [cz, -sz, 0, sz, cz, 0, 0, 0, 1];
+        return multiplyMatrices(rz, multiplyMatrices(ry, rx));
+      }
+
+      let image;
+      let depth;
+      let wireframe = false;
+      let paused = false;
+      let time = 0;
+      let lastFrame = 0;
+      let smoothedFps = 0;
+      let fpsUpdate = 0;
+
+      function resize() {
+        const rect = canvas.getBoundingClientRect();
+        const ratio = Math.min(
+          window.devicePixelRatio || 1,
+          1.5,
+          Math.sqrt(650000 / Math.max(1, rect.width * rect.height))
+        );
+        const width = Math.max(1, Math.round(rect.width * ratio));
+        const height = Math.max(1, Math.round(rect.height * ratio));
+
+        if (canvas.width !== width || canvas.height !== height) {
+          canvas.width = width;
+          canvas.height = height;
+          image = ctx.createImageData(width, height);
+          depth = new Float32Array(width * height);
+        }
+      }
+
+      function rasterize(triangle) {
+        const [a, b, c] = triangle;
+        const width = canvas.width;
+        const height = canvas.height;
+        const minX = Math.max(0, Math.floor(Math.min(a.x, b.x, c.x)));
+        const maxX = Math.min(width - 1, Math.ceil(Math.max(a.x, b.x, c.x)));
+        const minY = Math.max(0, Math.floor(Math.min(a.y, b.y, c.y)));
+        const maxY = Math.min(height - 1, Math.ceil(Math.max(a.y, b.y, c.y)));
+        const area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+
+        if (Math.abs(area) < .001) return;
+
+        const invArea = 1 / area;
+        const pixels = image.data;
+
+        for (let y = minY; y <= maxY; y++) {
+          for (let x = minX; x <= maxX; x++) {
+            const px = x + .5;
+            const py = y + .5;
+            const w0 = ((b.x - px) * (c.y - py) - (b.y - py) * (c.x - px)) * invArea;
+            const w1 = ((c.x - px) * (a.y - py) - (c.y - py) * (a.x - px)) * invArea;
+            const w2 = 1 - w0 - w1;
+
+            if (w0 < 0 || w1 < 0 || w2 < 0) continue;
+
+            const q0 = w0 / a.z;
+            const q1 = w1 / b.z;
+            const q2 = w2 / c.z;
+            const inverseDepth = q0 + q1 + q2;
+            const index = y * width + x;
+
+            if (inverseDepth <= depth[index]) continue;
+            depth[index] = inverseDepth;
+
+            const offset = index * 4;
+            pixels[offset] = (a.color[0] * q0 + b.color[0] * q1 + c.color[0] * q2) / inverseDepth;
+            pixels[offset + 1] = (a.color[1] * q0 + b.color[1] * q1 + c.color[1] * q2) / inverseDepth;
+            pixels[offset + 2] = (a.color[2] * q0 + b.color[2] * q1 + c.color[2] * q2) / inverseDepth;
+            pixels[offset + 3] = 255;
+          }
+        }
+      }
+
+      function render() {
+        resize();
+
+        const width = canvas.width;
+        const height = canvas.height;
+        const focal = Math.min(width, height) * 1.36;
+        const rotation = rotationMatrix(-.36 + time * .42, .58 + time * .67, .1 + time * .14);
+        const positions = vertices.map(vertex => {
+          const p = transform(rotation, vertex);
+          return [p[0], p[1], p[2] + 5.2];
+        });
+        const light = [
+          3.5 * Math.cos(time * .86),
+          2.8 * Math.sin(time * .73),
+          3.2 + 1.5 * Math.sin(time * .59)
+        ];
+        const triangles = [];
+
+        lightDot.style.transform = `translate(${12 * Math.cos(time * .86)}px, ${12 * Math.sin(time * .73)}px)`;
+
+        for (const face of faces) {
+          const normal = transform(rotation, face.normal);
+          const center = face.corners.reduce(
+            (sum, index) => [
+              sum[0] + positions[index][0] / 4,
+              sum[1] + positions[index][1] / 4,
+              sum[2] + positions[index][2] / 4
+            ],
+            [0, 0, 0]
+          );
+
+          // The camera is at the origin and looks along positive Z.
+          if (normal[0] * center[0] + normal[1] * center[1] + normal[2] * center[2] >= 0) continue;
+
+          const corners = face.corners.map(index => {
+            const position = positions[index];
+            const cornerDirection = normalize(vertices[index]);
+            const vertexNormal = normalize(transform(rotation, normalize([
+              .55 * face.normal[0] + .45 * cornerDirection[0],
+              .55 * face.normal[1] + .45 * cornerDirection[1],
+              .55 * face.normal[2] + .45 * cornerDirection[2]
+            ])));
+            const toLight = [
+              light[0] - position[0],
+              light[1] - position[1],
+              light[2] - position[2]
+            ];
+            const distanceSquared = toLight[0] ** 2 + toLight[1] ** 2 + toLight[2] ** 2;
+            const distance = Math.sqrt(distanceSquared);
+            const lambert = Math.max(0,
+              (vertexNormal[0] * toLight[0] +
+               vertexNormal[1] * toLight[1] +
+               vertexNormal[2] * toLight[2]) / distance
+            );
+            const brightness = .28 + 1.5 * lambert / (1 + .055 * distanceSquared);
+
+            return {
+              x: width / 2 + focal * position[0] / position[2],
+              y: height / 2 - focal * position[1] / position[2],
+              z: position[2],
+              color: face.color.map(channel => Math.min(255, channel * brightness))
+            };
+          });
+
+          triangles.push([corners[0], corners[1], corners[2]]);
+          triangles.push([corners[0], corners[2], corners[3]]);
+        }
+
+        if (wireframe) {
+          ctx.clearRect(0, 0, width, height);
+          ctx.lineWidth = Math.max(1, Math.min(width, height) / 550);
+          ctx.lineJoin = "round";
+
+          for (const triangle of triangles) {
+            const [a, b, c] = triangle;
+            const color = a.color.map(channel => Math.min(255, Math.round(channel * 1.65)));
+            ctx.strokeStyle = `rgba(${color[0]}, ${color[1]}, ${color[2]}, .86)`;
+            ctx.fillStyle = `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
+            ctx.beginPath();
+            ctx.moveTo(a.x, a.y);
+            ctx.lineTo(b.x, b.y);
+            ctx.lineTo(c.x, c.y);
+            ctx.closePath();
+            ctx.stroke();
+
+            for (const vertex of triangle) {
+              ctx.beginPath();
+              ctx.arc(vertex.x, vertex.y, Math.max(1.8, ctx.lineWidth * 1.7), 0, Math.PI * 2);
+              ctx.fill();
+            }
+          }
+        } else {
+          image.data.fill(0);
+          depth.fill(0);
+          for (const triangle of triangles) rasterize(triangle);
+          ctx.putImageData(image, 0, 0);
+        }
+      }
+
+      function toggleWireframe() {
+        wireframe = !wireframe;
+        wireButton.setAttribute("aria-pressed", String(wireframe));
+      }
+
+      function togglePause() {
+        paused = !paused;
+        pauseButton.setAttribute("aria-pressed", String(paused));
+        pauseButton.innerHTML = paused ? "<kbd>P</kbd>Resume" : "<kbd>P</kbd>Pause";
+        status.classList.toggle("paused", paused);
+        statusText.textContent = paused ? "Paused" : "Live";
+      }
+
+      wireButton.addEventListener("click", toggleWireframe);
+      pauseButton.addEventListener("click", togglePause);
+      window.addEventListener("keydown", event => {
+        if (event.repeat || event.altKey || event.ctrlKey || event.metaKey) return;
+        if (event.key.toLowerCase() === "w") toggleWireframe();
+        if (event.key.toLowerCase() === "p") togglePause();
+      });
+      window.addEventListener("resize", resize);
+
+      function frame(timestamp) {
+        if (lastFrame) {
+          const delta = Math.min((timestamp - lastFrame) / 1000, .05);
+          if (!paused) time += delta;
+          smoothedFps = smoothedFps ? smoothedFps * .9 + (1 / Math.max(delta, .001)) * .1 : 1 / Math.max(delta, .001);
+        }
+        lastFrame = timestamp;
+
+        render();
+
+        if (timestamp - fpsUpdate > 300) {
+          fpsLabel.textContent = smoothedFps ? Math.round(smoothedFps) : "—";
+          fpsUpdate = timestamp;
+        }
+        requestAnimationFrame(frame);
+      }
+
+      requestAnimationFrame(frame);
+    })();
+  </script>
+</body>
+</html>

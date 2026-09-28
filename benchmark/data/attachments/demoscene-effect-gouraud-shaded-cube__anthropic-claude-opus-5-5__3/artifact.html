@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Gouraud Shaded Cube - Canvas 2D</title>
+<style>
+  html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:monospace}
+  canvas{display:block;width:100vw;height:100vh;image-rendering:pixelated}
+  #hud{position:fixed;left:10px;top:8px;color:#0f0;font-size:14px;text-shadow:1px 1px #000;pointer-events:none;white-space:pre}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud"></div>
+<script>
+(() => {
+"use strict";
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+const hud = document.getElementById("hud");
+let W, H, img, buf32;
+
+function resize() {
+  W = canvas.width = Math.max(1, Math.floor(innerWidth / 2));   // half-res software raster
+  H = canvas.height = Math.max(1, Math.floor(innerHeight / 2));
+  img = ctx.createImageData(W, H);
+  buf32 = new Uint32Array(img.data.buffer);
+}
+addEventListener("resize", resize);
+resize();
+
+// ---- Geometry ----
+const V = [
+  [-1,-1,-1],[ 1,-1,-1],[ 1, 1,-1],[-1, 1,-1],
+  [-1,-1, 1],[ 1,-1, 1],[ 1, 1, 1],[-1, 1, 1]
+];
+// Quads, counter-clockwise when seen from outside; each with base color
+const FACES = [
+  { q:[4,5,6,7], c:[255, 80, 80] },  // front  (+z)
+  { q:[1,0,3,2], c:[ 80,255, 80] },  // back   (-z)
+  { q:[5,1,2,6], c:[ 80,120,255] },  // right  (+x)
+  { q:[0,4,7,3], c:[255,230, 80] },  // left   (-x)
+  { q:[7,6,2,3], c:[255, 80,255] },  // top    (+y)
+  { q:[0,1,5,4], c:[ 80,255,255] }   // bottom (-y)
+];
+// split quads into triangles
+const TRIS = [];
+for (const f of FACES) {
+  const [a,b,c,d] = f.q;
+  TRIS.push({ v:[a,b,c], c:f.c }, { v:[a,c,d], c:f.c });
+}
+
+// ---- Math ----
+function matMul(a, b) {
+  const r = [];
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++)
+    r[i*3+j] = a[i*3]*b[j] + a[i*3+1]*b[3+j] + a[i*3+2]*b[6+j];
+  return r;
+}
+const rotX = t => { const c=Math.cos(t), s=Math.sin(t); return [1,0,0, 0,c,-s, 0,s,c]; };
+const rotY = t => { const c=Math.cos(t), s=Math.sin(t); return [c,0,s, 0,1,0, -s,0,c]; };
+const rotZ = t => { const c=Math.cos(t), s=Math.sin(t); return [c,-s,0, s,c,0, 0,0,1]; };
+const apply = (m, v) => [
+  m[0]*v[0]+m[1]*v[1]+m[2]*v[2],
+  m[3]*v[0]+m[4]*v[1]+m[5]*v[2],
+  m[6]*v[0]+m[7]*v[1]+m[8]*v[2]
+];
+const sub = (a,b) => [a[0]-b[0],a[1]-b[1],a[2]-b[2]];
+const dot = (a,b) => a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const cross = (a,b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+const norm = a => { const l = Math.hypot(a[0],a[1],a[2]) || 1; return [a[0]/l,a[1]/l,a[2]/l]; };
+
+// ---- Rasterizer: Gouraud triangle via barycentric interpolation ----
+function fillTri(p0, p1, p2, c0, c1, c2) {
+  let minX = Math.max(0, Math.floor(Math.min(p0[0],p1[0],p2[0])));
+  let maxX = Math.min(W-1, Math.ceil(Math.max(p0[0],p1[0],p2[0])));
+  let minY = Math.max(0, Math.floor(Math.min(p0[1],p1[1],p2[1])));
+  let maxY = Math.min(H-1, Math.ceil(Math.max(p0[1],p1[1],p2[1])));
+  const area = (p1[0]-p0[0])*(p2[1]-p0[1]) - (p1[1]-p0[1])*(p2[0]-p0[0]);
+  if (Math.abs(area) < 1e-6) return;
+  const inv = 1 / area;
+  for (let y = minY; y <= maxY; y++) {
+    const py = y + 0.5;
+    for (let x = minX; x <= maxX; x++) {
+      const px = x + 0.5;
+      let w0 = ((p2[0]-p1[0])*(py-p1[1]) - (p2[1]-p1[1])*(px-p1[0])) * inv;
+      let w1 = ((p0[0]-p2[0])*(py-p2[1]) - (p0[1]-p2[1])*(px-p2[0])) * inv;
+      let w2 = 1 - w0 - w1;
+      if (w0 < 0 || w1 < 0 || w2 < 0) continue;
+      const r = c0[0]*w0 + c1[0]*w1 + c2[0]*w2;
+      const g = c0[1]*w0 + c1[1]*w1 + c2[1]*w2;
+      const b = c0[2]*w0 + c1[2]*w1 + c2[2]*w2;
+      buf32[y*W + x] = 0xff000000 | (b << 16) | (g << 8) | (r | 0);
+    }
+  }
+}
+
+// ---- State ----
+let wireframe = false, paused = false;
+let angle = 0, lightT = 0, last = performance.now();
+let fps = 0, frames = 0, fpsTime = last;
+addEventListener("keydown", e => {
+  const k = e.key.toLowerCase();
+  if (k === "w") wireframe = !wireframe;
+  if (k === "p") paused = !paused;
+});
+
+function frame(now) {
+  const dt = Math.min(0.1, (now - last) / 1000);
+  last = now;
+  if (!paused) { angle += dt; lightT += dt * 0.9; }
+
+  frames++;
+  if (now - fpsTime >= 500) { fps = frames * 1000 / (now - fpsTime); frames = 0; fpsTime = now; }
+
+  // background gradient-free clear
+  buf32.fill(0xff201010);
+
+  const m = matMul(matMul(rotY(angle*0.9), rotX(angle*0.6)), rotZ(angle*0.3));
+  const camZ = 5;
+  const world = V.map(v => { const r = apply(m, v); return [r[0], r[1], r[2] + camZ]; });
+  const light = [Math.cos(lightT)*3.5, Math.sin(lightT*1.3)*2.5, camZ - 3 + Math.sin(lightT*0.7)*1.5];
+  const fov = Math.min(W, H) * 1.1;
+  const proj = world.map(p => [W/2 + p[0]/p[2]*fov, H/2 - p[1]/p[2]*fov]);
+
+  const edges = [];
+  for (const t of TRIS) {
+    const [a,b,c] = t.v;
+    const A = world[a], B = world[b], C = world[c];
+    const n = norm(cross(sub(B,A), sub(C,A)));
+    // backface culling: face normal vs. view vector from camera (origin)
+    if (dot(n, A) >= 0) continue;
+    // per-vertex Lambert lighting with point light (distance attenuated)
+    const col = [A,B,C].map(P => {
+      const L = sub(light, P);
+      const d = Math.hypot(L[0],L[1],L[2]);
+      const diff = Math.max(0, dot(n, [L[0]/d,L[1]/d,L[2]/d])) * Math.min(1.6, 6 / (d*d));
+      const k = 0.12 + diff;
+      return [Math.min(255, t.c[0]*k)|0, Math.min(255, t.c[1]*k)|0, Math.min(255, t.c[2]*k)|0];
+    });
+    if (!wireframe) fillTri(proj[a], proj[b], proj[c], col[0], col[1], col[2]);
+    else edges.push([proj[a], proj[b], proj[c]]);
+  }
+  ctx.putImageData(img, 0, 0);
+
+  if (wireframe) {
+    ctx.strokeStyle = "#0f0"; ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (const [p,q,r] of edges) { ctx.moveTo(p[0],p[1]); ctx.lineTo(q[0],q[1]); ctx.lineTo(r[0],r[1]); ctx.closePath(); }
+    ctx.stroke();
+  }
+
+  // draw light source
+  if (light[2] > 0.1) {
+    const lx = W/2 + light[0]/light[2]*fov, ly = H/2 - light[1]/light[2]*fov;
+    ctx.fillStyle = "#fff8c0";
+    ctx.beginPath(); ctx.arc(lx, ly, Math.max(2, 8 / light[2] * 2), 0, Math.PI*2); ctx.fill();
+  }
+
+  hud.textContent = `FPS: ${fps.toFixed(1)}\n[W] wireframe: ${wireframe ? "on" : "off"}\n[P] pause: ${paused ? "on" : "off"}`;
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

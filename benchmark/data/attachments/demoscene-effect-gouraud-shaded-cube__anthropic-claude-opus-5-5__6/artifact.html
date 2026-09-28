@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gouraud Shaded Cube - Canvas 2D Software Rasterizer</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: #05060a;
+    overflow: hidden;
+  }
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+</style>
+</head>
+<body>
+<canvas id="screen"></canvas>
+<script>
+(function () {
+  'use strict';
+
+  // ---------------------------------------------------------------------------
+  // Framebuffer setup (internal resolution, scaled up to fit the window)
+  // ---------------------------------------------------------------------------
+  const BW = 640, BH = 480;
+  const canvas = document.getElementById('screen');
+  const ctx = canvas.getContext('2d');
+
+  const off = document.createElement('canvas');
+  off.width = BW;
+  off.height = BH;
+  const octx = off.getContext('2d');
+  const imageData = octx.createImageData(BW, BH);
+  const buf32 = new Uint32Array(imageData.data.buffer);
+  const zbuf = new Float32Array(BW * BH);
+
+  // Precomputed vertical gradient background (ABGR little endian)
+  const bg = new Uint32Array(BW * BH);
+  (function buildBackground() {
+    for (let y = 0; y < BH; y++) {
+      const t = y / (BH - 1);
+      const r = Math.round(10 + 8 * (1 - t));
+      const g = Math.round(12 + 10 * (1 - t));
+      const b = Math.round(26 + 24 * (1 - t));
+      const c = ((255 << 24) | (b << 16) | (g << 8) | r) >>> 0;
+      const row = y * BW;
+      for (let x = 0; x < BW; x++) bg[row + x] = c;
+    }
+  })();
+
+  let dpr = 1, cssW = 0, cssH = 0, scale = 1, ox = 0, oy = 0;
+  function resize() {
+    dpr = window.devicePixelRatio || 1;
+    cssW = window.innerWidth;
+    cssH = window.innerHeight;
+    canvas.width = Math.max(1, Math.floor(cssW * dpr));
+    canvas.height = Math.max(1, Math.floor(cssH * dpr));
+    scale = Math.min(cssW / BW, cssH / BH);
+    ox = (cssW - BW * scale) * 0.5;
+    oy = (cssH - BH * scale) * 0.5;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ---------------------------------------------------------------------------
+  // Geometry
+  // ---------------------------------------------------------------------------
+  // Vertex i: x = bit0, y = bit1, z = bit2  (each ±1)
+  const verts = [];
+  for (let i = 0; i < 8; i++) {
+    verts.push([(i & 1) ? 1 : -1, (i & 2) ? 1 : -1, (i & 4) ? 1 : -1]);
+  }
+  // Averaged vertex normals (normalized position for a cube centered at origin)
+  const vnormals = verts.map(v => {
+    const l = Math.hypot(v[0], v[1], v[2]);
+    return [v[0] / l, v[1] / l, v[2] / l];
+  });
+
+  // Faces: (v1-v0) x (v2-v0) points outward for triangles (a,b,c) and (a,c,d)
+  const faces = [
+    { idx: [0, 2, 3, 1], color: [230, 60, 60] },   // -Z
+    { idx: [4, 5, 7, 6], color: [60, 200, 90] },   // +Z
+    { idx: [0, 4, 6, 2], color: [70, 110, 240] },  // -X
+    { idx: [1, 3, 7, 5], color: [240, 210, 60] },  // +X
+    { idx: [0, 1, 5, 4], color: [220, 80, 220] },  // -Y
+    { idx: [2, 6, 7, 3], color: [60, 210, 220] }   // +Y
+  ];
+
+  // ---------------------------------------------------------------------------
+  // Math helpers
+  // ---------------------------------------------------------------------------
+  function rotX(a) {
+    const c = Math.cos(a), s = Math.sin(a);
+    return [1, 0, 0,
+            0, c, -s,
+            0, s, c];
+  }
+  function rotY(a) {
+    const c = Math.cos(a), s = Math.sin(a);
+    return [c, 0, s,
+            0, 1, 0,
+            -s, 0, c];
+  }
+  function rotZ(a) {
+    const c = Math.cos(a), s = Math.sin(a);
+    return [c, -s, 0,
+            s, c, 0,
+            0, 0, 1];
+  }
+  function mul3(a, b) {
+    const r = new Array(9);
+    for (let i = 0; i < 3; i++) {
+      for (let j = 0; j < 3; j++) {
+        r[i * 3 + j] = a[i * 3] * b[j] + a[i * 3 + 1] * b[3 + j] + a[i * 3 + 2] * b[6 + j];
+      }
+    }
+    return r;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Camera / projection
+  // ---------------------------------------------------------------------------
+  const CUBE_Z = 4;          // camera at origin looking +z, cube translated to z=4
+  const FOCAL = BH * 0.85;
+  const CX = BW * 0.5, CY = BH * 0.5;
+  const NEAR = 0.1;
+
+  // Per-frame transformed data
+  const camPos = new Float32Array(24);
+  const camNrm = new Float32Array(24);
+  const scrX = new Float32Array(8);
+  const scrY = new Float32Array(8);
+  const invZ = new Float32Array(8);
+
+  // ---------------------------------------------------------------------------
+  // Rasterizer: bounding box + edge functions, top-left rule, z-buffer (1/z)
+  // ---------------------------------------------------------------------------
+  function rasterTriangle(x0, y0, z0, r0, g0, b0,
+                          x1, y1, z1, r1, g1, b1,
+                          x2, y2, z2, r2, g2, b2) {
+    let area = (x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0);
+    if (area === 0) return;
+    if (area < 0) {
+      // Swap v1 and v2 so the rasterizer accepts either winding
+      let t;
+      t = x1; x1 = x2; x2 = t;
+      t = y1; y1 = y2; y2 = t;
+      t = z1; z1 = z2; z2 = t;
+      t = r1; r1 = r2; r2 = t;
+      t = g1; g1 = g2; g2 = t;
+      t = b1; b1 = b2; b2 = t;
+      area = -area;
+    }
+
+    let minX = Math.floor(Math.min(x0, x1, x2));
+    let maxX = Math.floor(Math.max(x0, x1, x2));
+    let minY = Math.floor(Math.min(y0, y1, y2));
+    let maxY = Math.floor(Math.max(y0, y1, y2));
+    if (minX < 0) minX = 0;
+    if (minY < 0) minY = 0;
+    if (maxX > BW - 1) maxX = BW - 1;
+    if (maxY > BH - 1) maxY = BH - 1;
+    if (minX > maxX || minY > maxY) return;
+
+    // Edge 0: v1->v2 (weight of v0), Edge 1: v2->v0 (weight of v1), Edge 2: v0->v1 (weight of v2)
+    const A0 = -(y2 - y1), B0 = (x2 - x1);
+    const A1 = -(y0 - y2), B1 = (x0 - x2);
+    const A2 = -(y1 - y0), B2 = (x1 - x0);
+
+    const tl0 = (y2 - y1) < 0 || ((y2 - y1) === 0 && (x2 - x1) > 0);
+    const tl1 = (y0 - y2) < 0 || ((y0 - y2) === 0 && (x0 - x2) > 0);
+    const tl2 = (y1 - y0) < 0 || ((y1 - y0) === 0 && (x1 - x0) > 0);
+
+    const px = minX + 0.5, py = minY + 0.5;
+    let w0r = (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1);
+    let w1r = (x0 - x2) * (py - y2) - (y0 - y2) * (px - x2);
+    let w2r = (x1 - x0) * (py - y0) - (y1 - y0) * (px - x0);
+
+    const inv = 1 / area;
+
+    for (let y = minY; y <= maxY; y++) {
+      let w0 = w0r, w1 = w1r, w2 = w2r;
+      let idx = y * BW + minX;
+      for (let x = minX; x <= maxX; x++, idx++) {
+        if ((w0 > 0 || (w0 === 0 && tl0)) &&
+            (w1 > 0 || (w1 === 0 && tl1)) &&
+            (w2 > 0 || (w2 === 0 && tl2))) {
+          const l0 = w0 * inv, l1 = w1 * inv, l2 = w2 * inv;
+          const iz = l0 * z0 + l1 * z1 + l2 * z2;
+          if (iz > zbuf[idx]) {
+            zbuf[idx] = iz;
+            const r = (l0 * r0 + l1 * r1 + l2 * r2) | 0;
+            const g = (l0 * g0 + l1 * g1 + l2 * g2) | 0;
+            const b = (l0 * b0 + l1 * b1 + l2 * b2) | 0;
+            buf32[idx] = (0xff000000 | (b << 16) | (g << 8) | r);
+          }
+        }
+        w0 += A0; w1 += A1; w2 += A2;
+      }
+      w0r += B0; w1r += B1; w2r += B2;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // State
+  // ---------------------------------------------------------------------------
+  let wireframe = false;
+  let paused = false;
+  let ax = 0.4, ay = 0.6, az = 0.0;
+  let lightTime = 0;
+
+  const AMBIENT = 0.15;
+  const LIGHT_COL = [1.0, 0.95, 0.85];
+
+  let fpsFrames = 0, fpsTime = 0, fpsValue = 0;
+  let hudLines = ['FPS: --'];
+  let lastTrisDrawn = 0;
+
+  window.addEventListener('keydown', e => {
+    const k = e.key.toLowerCase();
+    if (k === 'w') wireframe = !wireframe;
+    else if (k === 'p') paused = !paused;
+  });
+
+  // Face-vertex colors scratch (4 vertices x rgb)
+  const fvColor = new Float32Array(12);
+
+  function computeFaceColors(face, lx, ly, lz) {
+    const fc = face.color;
+    for (let k = 0; k < 4; k++) {
+      const vi = face.idx[k];
+      const px = camPos[vi * 3], py = camPos[vi * 3 + 1], pz = camPos[vi * 3 + 2];
+      const nx = camNrm[vi * 3], ny = camNrm[vi * 3 + 1], nz = camNrm[vi * 3 + 2];
+      let dx = lx - px, dy = ly - py, dz = lz - pz;
+      const dl = Math.hypot(dx, dy, dz) || 1;
+      dx /= dl; dy /= dl; dz /= dl;
+      let diff = nx * dx + ny * dy + nz * dz;
+      if (diff < 0) diff = 0;
+      for (let c = 0; c < 3; c++) {
+        let v = fc[c] * (AMBIENT + diff * LIGHT_COL[c]);
+        if (v > 255) v = 255;
+        if (v < 0) v = 0;
+        fvColor[k * 3 + c] = v;
+      }
+    }
+  }
+
+  function isVisible(a, b, c) {
+    const ax_ = camPos[a * 3], ay_ = camPos[a * 3 + 1], az_ = camPos[a * 3 + 2];
+    const e1x = camPos[b * 3] - ax_, e1y = camPos[b * 3 + 1] - ay_, e1z = camPos[b * 3 + 2] - az_;
+    const e2x = camPos[c * 3] - ax_, e2y = camPos[c * 3 + 1] - ay_, e2z = camPos[c * 3 + 2] - az_;
+    const nx = e1y * e2z - e1z * e2y;
+    const ny = e1z * e2x - e1x * e2z;
+    const nz = e1x * e2y - e1y * e2x;
+    // Camera at origin: visible if normal points toward camera
+    return (nx * ax_ + ny * ay_ + nz * az_) < 0;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Frame
+  // ---------------------------------------------------------------------------
+  let lastT = performance.now();
+
+  function frame(now) {
+    let dt = (now - lastT) / 1000;
+    lastT = now;
+    if (dt > 0.1) dt = 0.1;
+    if (dt < 0) dt = 0;
+
+    // FPS
+    fpsFrames++;
+    fpsTime += dt;
+    if (fpsTime >= 0.5) {
+      fpsValue = fpsFrames / fpsTime;
+      fpsFrames = 0;
+      fpsTime = 0;
+      hudLines = [
+        'FPS: ' + fpsValue.toFixed(1),
+        'Mode: ' + (wireframe ? 'Wireframe' : 'Shaded (Gouraud)') + (paused ? '  [PAUSED]' : ''),
+        'Triangles drawn: ' + lastTrisDrawn + ' / 12',
+        'W: wireframe  P: pause'
+      ];
+    }
+
+    if (!paused) {
+      ax += dt * 0.7;
+      ay += dt * 0.9;
+      az += dt * 0.35;
+      lightTime += dt;
+    }
+
+    // Rotation
+    const R = mul3(rotZ(az), mul3(rotY(ay), rotX(ax)));
+
+    // Transform vertices & normals
+    for (let i = 0; i < 8; i++) {
+      const v = verts[i], n = vnormals[i];
+      const x = R[0] * v[0] + R[1] * v[1] + R[2] * v[2];
+      const y = R[3] * v[0] + R[4] * v[1] + R[5] * v[2];
+      const z = R[6] * v[0] + R[7] * v[1] + R[8] * v[2] + CUBE_Z;
+      camPos[i * 3] = x; camPos[i * 3 + 1] = y; camPos[i * 3 + 2] = z;
+      camNrm[i * 3]     = R[0] * n[0] + R[1] * n[1] + R[2] * n[2];
+      camNrm[i * 3 + 1] = R[3] * n[0] + R[4] * n[1] + R[5] * n[2];
+      camNrm[i * 3 + 2] = R[6] * n[0] + R[7] * n[1] + R[8] * n[2];
+      const zz = z < NEAR ? NEAR : z;
+      scrX[i] = x * FOCAL / zz + CX;
+      scrY[i] = -y * FOCAL / zz + CY;
+      invZ[i] = 1 / zz;
+    }
+
+    // Moving point light orbiting the cube
+    const lx = 3.0 * Math.cos(lightTime * 0.8);
+    const ly = 1.6 * Math.sin(lightTime * 1.3);
+    const lz = CUBE_Z + 3.0 * Math.sin(lightTime * 0.8);
+
+    // Clear
+    buf32.set(bg);
+    zbuf.fill(0);
+
+    const wireTris = [];
+    let trisDrawn = 0;
+
+    for (let f = 0; f < faces.length; f++) {
+      const face = faces[f];
+      const q = face.idx;
+      const t1 = isVisible(q[0], q[1], q[2]);
+      const t2 = isVisible(q[0], q[2], q[3]);
+      if (!t1 && !t2) continue;
+
+      if (!wireframe) computeFaceColors(face, lx, ly, lz);
+
+      const tris = [];
+      if (t1) tris.push([0, 1, 2]);
+      if (t2) tris.push([0, 2, 3]);
+
+      for (let t = 0; t < tris.length; t++) {
+        const k0 = tris[t][0], k1 = tris[t][1], k2 = tris[t][2];
+        const a = q[k0], b = q[k1], c = q[k2];
+        if (camPos[a * 3 + 2] < NEAR || camPos[b * 3 + 2] < NEAR || camPos[c * 3 + 2] < NEAR) continue;
+        trisDrawn++;
+        if (wireframe) {
+          wireTris.push([a, b, c]);
+        } else {
+          rasterTriangle(
+            scrX[a], scrY[a], invZ[a], fvColor[k0 * 3], fvColor[k0 * 3 + 1], fvColor[k0 * 3 + 2],
+            scrX[b], scrY[b], invZ[b], fvColor[k1 * 3], fvColor[k1 * 3 + 1], fvColor[k1 * 3 + 2],
+            scrX[c], scrY[c], invZ[c], fvColor[k2 * 3], fvColor[k2 * 3 + 1], fvColor[k2 * 3 + 2]
+          );
+        }
+      }
+    }
+    lastTrisDrawn = trisDrawn;
+
+    // Present
+    octx.putImageData(imageData, 0, 0);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = '#05060a';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(off, ox, oy, BW * scale, BH * scale);
+
+    // Wireframe overlay
+    if (wireframe && wireTris.length) {
+      ctx.strokeStyle = '#3ff4ff';
+      ctx.lineWidth = 1.5;
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      const usedVerts = new Set();
+      for (let i = 0; i < wireTris.length; i++) {
+        const tri = wireTris[i];
+        ctx.moveTo(ox + scrX[tri[0]] * scale, oy + scrY[tri[0]] * scale);
+        ctx.lineTo(ox + scrX[tri[1]] * scale, oy + scrY[tri[1]] * scale);
+        ctx.lineTo(ox + scrX[tri[2]] * scale, oy + scrY[tri[2]] * scale);
+        ctx.closePath();
+        usedVerts.add(tri[0]); usedVerts.add(tri[1]); usedVerts.add(tri[2]);
+      }
+      ctx.stroke();
+      ctx.fillStyle = '#ffffff';
+      usedVerts.forEach(vi => {
+        ctx.beginPath();
+        ctx.arc(ox + scrX[vi] * scale, oy + scrY[vi] * scale, 3, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    // Light glow
+    if (lz > NEAR) {
+      const lsx = lx * FOCAL / lz + CX;
+      const lsy = -ly * FOCAL / lz + CY;
+      let occluded = false;
+      const bx = Math.floor(lsx), by = Math.floor(lsy);
+      if (!wireframe && bx >= 0 && bx < BW && by >= 0 && by < BH) {
+        if (zbuf[by * BW + bx] > 1 / lz) occluded = true;
+      }
+      const sx = ox + lsx * scale, sy = oy + lsy * scale;
+      const radius = Math.max(6, (0.35 * FOCAL / lz) * scale);
+      const alpha = occluded ? 0.25 : 1.0;
+      const grad = ctx.createRadialGradient(sx, sy, 0, sx, sy, radius);
+      grad.addColorStop(0, 'rgba(255,255,240,' + alpha + ')');
+      grad.addColorStop(0.2, 'rgba(255,240,190,' + (0.8 * alpha) + ')');
+      grad.addColorStop(0.5, 'rgba(255,200,120,' + (0.25 * alpha) + ')');
+      grad.addColorStop(1, 'rgba(255,180,80,0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(sx, sy, radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // HUD
+    ctx.font = '14px ui-monospace, Menlo, Consolas, monospace';
+    ctx.textBaseline = 'top';
+    const pad = 10, lh = 18;
+    let maxW = 0;
+    for (let i = 0; i < hudLines.length; i++) {
+      maxW = Math.max(maxW, ctx.measureText(hudLines[i]).width);
+    }
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(pad - 6, pad - 6, maxW + 12, hudLines.length * lh + 8);
+    ctx.fillStyle = '#d8f3ff';
+    for (let i = 0; i < hudLines.length; i++) {
+      ctx.fillText(hudLines[i], pad, pad + i * lh);
+    }
+
+    requestAnimationFrame(frame);
+  }
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#080e1b">
+  <title>Gouraud Cube — Canvas 2D</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      background: #080e1b;
+      color: #dcecf7;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .panel {
+      position: fixed;
+      z-index: 1;
+      pointer-events: none;
+      text-shadow: 0 1px 12px #080e1b;
+    }
+
+    .heading {
+      top: 24px;
+      left: 28px;
+    }
+
+    .eyebrow {
+      color: #76d9e8;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .24em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 9px 0 5px;
+      font-size: clamp(18px, 2.5vw, 26px);
+      font-weight: 500;
+      letter-spacing: -.045em;
+    }
+
+    .subtitle, .controls, .readout {
+      color: #8295ac;
+      font-size: 11px;
+      letter-spacing: .04em;
+      line-height: 1.7;
+    }
+
+    .readout {
+      top: 24px;
+      right: 28px;
+      text-align: right;
+    }
+
+    .readout strong {
+      color: #e3f8fb;
+      font-size: 16px;
+      font-weight: 500;
+    }
+
+    .readout .dot {
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      margin-right: 8px;
+      border-radius: 50%;
+      background: #69e0d3;
+      box-shadow: 0 0 10px #69e0d3;
+      vertical-align: 2px;
+    }
+
+    .controls {
+      bottom: 24px;
+      left: 28px;
+    }
+
+    kbd {
+      display: inline-block;
+      min-width: 19px;
+      padding: 0 4px;
+      border: 1px solid #466073;
+      border-radius: 3px;
+      color: #dcecf7;
+      font: inherit;
+      text-align: center;
+    }
+
+    .controls span { margin-right: 16px; }
+
+    .footer {
+      right: 28px;
+      bottom: 24px;
+      color: #5d7188;
+      font-size: 10px;
+      letter-spacing: .13em;
+      text-align: right;
+      text-transform: uppercase;
+    }
+
+    @media (max-width: 560px) {
+      .heading { top: 18px; left: 18px; }
+      .readout { top: 18px; right: 18px; }
+      .controls { bottom: 18px; left: 18px; }
+      .footer { right: 18px; bottom: 18px; font-size: 9px; }
+      .subtitle { max-width: 210px; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="scene" aria-label="Animated, Gouraud-shaded rotating cube"></canvas>
+
+  <header class="panel heading">
+    <div class="eyebrow">Canvas 2D / Software renderer</div>
+    <h1>Gouraud Cube</h1>
+    <div class="subtitle">Per-vertex light · Perspective projection</div>
+  </header>
+
+  <div class="panel readout" role="status" aria-live="off">
+    <div><span class="dot"></span><span id="state">RUNNING</span></div>
+    <div><strong id="fps">--</strong> FPS</div>
+    <div id="mode">SOLID / SHADED</div>
+  </div>
+
+  <div class="panel controls">
+    <span><kbd>W</kbd> wireframe</span>
+    <span><kbd>P</kbd> pause</span>
+  </div>
+
+  <div class="panel footer">08 vertices / 12 triangles<br>Lambert · RGB interpolation</div>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const canvas = document.getElementById("scene");
+      const ctx = canvas.getContext("2d", { alpha: false });
+      const fpsLabel = document.getElementById("fps");
+      const stateLabel = document.getElementById("state");
+      const modeLabel = document.getElementById("mode");
+
+      const vertices = [
+        [-1, -1, -1], [ 1, -1, -1], [ 1,  1, -1], [-1,  1, -1],
+        [-1, -1,  1], [ 1, -1,  1], [ 1,  1,  1], [-1,  1,  1]
+      ];
+
+      // Quad indices are outward-facing and counterclockwise in 3D.
+      const faces = [
+        { indices: [4, 5, 6, 7], normal: [ 0,  0,  1], color: [ 58, 231, 224] },
+        { indices: [1, 0, 3, 2], normal: [ 0,  0, -1], color: [ 73, 136, 248] },
+        { indices: [5, 1, 2, 6], normal: [ 1,  0,  0], color: [100, 157, 250] },
+        { indices: [0, 4, 7, 3], normal: [-1,  0,  0], color: [ 93, 211, 238] },
+        { indices: [7, 6, 2, 3], normal: [ 0,  1,  0], color: [176, 113, 246] },
+        { indices: [0, 1, 5, 4], normal: [ 0, -1,  0], color: [236, 106, 207] }
+      ];
+
+      const cornerNormals = vertices.map(v => normalize(v));
+      const cameraZ = 6.6;
+      let width = 0;
+      let height = 0;
+      let background;
+      let frame;
+      let wireframe = false;
+      let paused = false;
+      let time = 0;
+      let lastFrame = 0;
+      let fpsTime = 0;
+      let fpsFrames = 0;
+
+      function normalize(v) {
+        const length = Math.hypot(v[0], v[1], v[2]) || 1;
+        return [v[0] / length, v[1] / length, v[2] / length];
+      }
+
+      function dot(a, b) {
+        return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+      }
+
+      function multiply(a, b) {
+        const result = new Array(9);
+        for (let row = 0; row < 3; row++) {
+          for (let col = 0; col < 3; col++) {
+            result[row * 3 + col] =
+              a[row * 3] * b[col] +
+              a[row * 3 + 1] * b[col + 3] +
+              a[row * 3 + 2] * b[col + 6];
+          }
+        }
+        return result;
+      }
+
+      function transform(m, v) {
+        return [
+          m[0] * v[0] + m[1] * v[1] + m[2] * v[2],
+          m[3] * v[0] + m[4] * v[1] + m[5] * v[2],
+          m[6] * v[0] + m[7] * v[1] + m[8] * v[2]
+        ];
+      }
+
+      function rotationMatrix(t) {
+        const ax = -0.34 + t * 0.43;
+        const ay = 0.53 + t * 0.64;
+        const az = t * 0.13;
+        const cx = Math.cos(ax), sx = Math.sin(ax);
+        const cy = Math.cos(ay), sy = Math.sin(ay);
+        const cz = Math.cos(az), sz = Math.sin(az);
+        const rx = [1, 0, 0, 0, cx, -sx, 0, sx, cx];
+        const ry = [cy, 0, sy, 0, 1, 0, -sy, 0, cy];
+        const rz = [cz, -sz, 0, sz, cz, 0, 0, 0, 1];
+        return multiply(rz, multiply(ry, rx));
+      }
+
+      function resize() {
+        const scale = Math.min(
+          window.devicePixelRatio || 1,
+          1.7,
+          1440 / window.innerWidth,
+          900 / window.innerHeight,
+          Math.sqrt(1000000 / (window.innerWidth * window.innerHeight))
+        );
+        width = Math.max(1, Math.round(window.innerWidth * scale));
+        height = Math.max(1, Math.round(window.innerHeight * scale));
+        canvas.width = width;
+        canvas.height = height;
+
+        background = ctx.createImageData(width, height);
+        frame = ctx.createImageData(width, height);
+        const pixels = background.data;
+        for (let y = 0; y < height; y++) {
+          for (let x = 0; x < width; x++) {
+            const nx = (x - width * 0.5) / Math.max(width, height);
+            const ny = (y - height * 0.47) / Math.max(width, height);
+            const glow = Math.max(0, 1 - Math.hypot(nx * 1.7, ny * 1.8));
+            const grid = (x % Math.max(24, Math.round(width / 24)) === 0 ||
+                          y % Math.max(24, Math.round(width / 24)) === 0) ? 1 : 0;
+            const i = (y * width + x) * 4;
+            pixels[i] = 7 + glow * 8 + grid * 2;
+            pixels[i + 1] = 12 + glow * 13 + grid * 3;
+            pixels[i + 2] = 25 + glow * 20 + grid * 4;
+            pixels[i + 3] = 255;
+          }
+        }
+      }
+
+      function project(position) {
+        const depth = cameraZ - position[2];
+        const focal = Math.min(width * 1.12, height * 1.78);
+        return {
+          x: width * 0.5 + position[0] * focal / depth,
+          y: height * 0.51 - position[1] * focal / depth,
+          depth
+        };
+      }
+
+      function edge(a, b, x, y) {
+        return (x - a.x) * (b.y - a.y) - (y - a.y) * (b.x - a.x);
+      }
+
+      function rasterize(a, b, c, pixels) {
+        const area = edge(b, c, a.x, a.y);
+        if (Math.abs(area) < 0.00001) return;
+
+        const minX = Math.max(0, Math.ceil(Math.min(a.x, b.x, c.x) - 0.5));
+        const maxX = Math.min(width - 1, Math.floor(Math.max(a.x, b.x, c.x) - 0.5));
+        const minY = Math.max(0, Math.ceil(Math.min(a.y, b.y, c.y) - 0.5));
+        const maxY = Math.min(height - 1, Math.floor(Math.max(a.y, b.y, c.y) - 0.5));
+        const invArea = 1 / area;
+        const az = 1 / a.depth, bz = 1 / b.depth, cz = 1 / c.depth;
+
+        for (let y = minY; y <= maxY; y++) {
+          for (let x = minX; x <= maxX; x++) {
+            const px = x + 0.5, py = y + 0.5;
+            const w0 = edge(b, c, px, py) * invArea;
+            const w1 = edge(c, a, px, py) * invArea;
+            const w2 = edge(a, b, px, py) * invArea;
+            if (w0 < -0.000001 || w1 < -0.000001 || w2 < -0.000001) continue;
+
+            const k0 = w0 * az, k1 = w1 * bz, k2 = w2 * cz;
+            const depthWeight = 1 / (k0 + k1 + k2);
+            const i = (y * width + x) * 4;
+            pixels[i] = (k0 * a.color[0] + k1 * b.color[0] + k2 * c.color[0]) * depthWeight;
+            pixels[i + 1] = (k0 * a.color[1] + k1 * b.color[1] + k2 * c.color[1]) * depthWeight;
+            pixels[i + 2] = (k0 * a.color[2] + k1 * b.color[2] + k2 * c.color[2]) * depthWeight;
+          }
+        }
+      }
+
+      function drawOverlay(visibleFaces, light) {
+        const unit = Math.max(1, Math.min(width / window.innerWidth, height / window.innerHeight));
+        ctx.save();
+        ctx.lineWidth = Math.max(1, unit);
+        ctx.strokeStyle = "rgba(116, 177, 205, 0.23)";
+        const margin = 22 * unit;
+        const length = 14 * unit;
+        for (const [x, y, dx, dy] of [
+          [margin, margin, 1, 1],
+          [width - margin, margin, -1, 1],
+          [margin, height - margin, 1, -1],
+          [width - margin, height - margin, -1, -1]
+        ]) {
+          ctx.beginPath();
+          ctx.moveTo(x + dx * length, y);
+          ctx.lineTo(x, y);
+          ctx.lineTo(x, y + dy * length);
+          ctx.stroke();
+        }
+
+        if (wireframe) {
+          ctx.lineWidth = Math.max(1, unit * 1.1);
+          for (const face of visibleFaces) {
+            const v = face.corners;
+            ctx.strokeStyle = "rgba(213, 247, 255, 0.82)";
+            ctx.beginPath();
+            ctx.moveTo(v[0].x, v[0].y);
+            for (let i = 1; i < 4; i++) ctx.lineTo(v[i].x, v[i].y);
+            ctx.closePath();
+            ctx.stroke();
+            ctx.strokeStyle = "rgba(213, 247, 255, 0.38)";
+            ctx.beginPath();
+            ctx.moveTo(v[0].x, v[0].y);
+            ctx.lineTo(v[2].x, v[2].y);
+            ctx.stroke();
+          }
+        }
+
+        if (light.depth > 0 && light.x >= 0 && light.x < width &&
+            light.y >= 0 && light.y < height) {
+          const r = 5 * unit;
+          ctx.strokeStyle = "rgba(139, 245, 235, 0.7)";
+          ctx.fillStyle = "#c8fff1";
+          ctx.beginPath();
+          ctx.arc(light.x, light.y, r, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.arc(light.x, light.y, Math.max(1.5, 1.7 * unit), 0, Math.PI * 2);
+          ctx.fill();
+          ctx.beginPath();
+          ctx.moveTo(light.x - r * 2, light.y);
+          ctx.lineTo(light.x - r * 1.4, light.y);
+          ctx.moveTo(light.x + r * 1.4, light.y);
+          ctx.lineTo(light.x + r * 2, light.y);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      function render() {
+        frame.data.set(background.data);
+        const pixels = frame.data;
+        const rotation = rotationMatrix(time);
+        const positions = vertices.map(v => transform(rotation, v));
+        const projected = positions.map(project);
+        const rotatedCorners = cornerNormals.map(n => transform(rotation, n));
+        const lightPosition = [
+          3.7 * Math.cos(time * 0.83),
+          2.6 * Math.sin(time * 0.61) + 0.7,
+          2.8 + 2.2 * Math.sin(time * 0.83)
+        ];
+
+        const visibleFaces = [];
+        for (const face of faces) {
+          const normal = transform(rotation, face.normal);
+          const center = face.indices.reduce((sum, index) => [
+            sum[0] + positions[index][0] * 0.25,
+            sum[1] + positions[index][1] * 0.25,
+            sum[2] + positions[index][2] * 0.25
+          ], [0, 0, 0]);
+          if (dot(normal, [-center[0], -center[1], cameraZ - center[2]]) <= 0) continue;
+
+          const corners = face.indices.map(index => {
+            const position = positions[index];
+            const corner = rotatedCorners[index];
+            const shadingNormal = normalize([
+              normal[0] * 0.78 + corner[0] * 0.22,
+              normal[1] * 0.78 + corner[1] * 0.22,
+              normal[2] * 0.78 + corner[2] * 0.22
+            ]);
+            const offset = [
+              lightPosition[0] - position[0],
+              lightPosition[1] - position[1],
+              lightPosition[2] - position[2]
+            ];
+            const distance = Math.hypot(...offset);
+            const diffuse = Math.max(0, dot(shadingNormal, normalize(offset)));
+            const intensity = 0.27 + 0.73 * diffuse / (1 + 0.012 * distance * distance);
+            return {
+              ...projected[index],
+              color: face.color.map(channel => Math.min(255, channel * intensity))
+            };
+          });
+          visibleFaces.push({
+            corners,
+            depth: corners.reduce((sum, corner) => sum + corner.depth, 0) / 4
+          });
+        }
+
+        visibleFaces.sort((a, b) => b.depth - a.depth);
+        for (const face of visibleFaces) {
+          const [a, b, c, d] = face.corners;
+          rasterize(a, b, c, pixels);
+          rasterize(a, c, d, pixels);
+        }
+
+        ctx.putImageData(frame, 0, 0);
+        drawOverlay(visibleFaces, project(lightPosition));
+      }
+
+      function animate(now) {
+        if (lastFrame) {
+          const delta = Math.min((now - lastFrame) / 1000, 0.05);
+          if (!paused) time += delta;
+          fpsTime += now - lastFrame;
+          fpsFrames++;
+          if (fpsTime >= 500) {
+            fpsLabel.textContent = Math.round(fpsFrames * 1000 / fpsTime);
+            fpsTime = 0;
+            fpsFrames = 0;
+          }
+        }
+        lastFrame = now;
+        render();
+        requestAnimationFrame(animate);
+      }
+
+      window.addEventListener("resize", resize);
+      window.addEventListener("keydown", event => {
+        if (event.repeat || event.altKey || event.ctrlKey || event.metaKey) return;
+        if (event.key.toLowerCase() === "w") {
+          wireframe = !wireframe;
+          modeLabel.textContent = wireframe ? "WIREFRAME / SHADED" : "SOLID / SHADED";
+        } else if (event.key.toLowerCase() === "p") {
+          paused = !paused;
+          stateLabel.textContent = paused ? "PAUSED" : "RUNNING";
+        }
+      });
+
+      resize();
+      requestAnimationFrame(animate);
+    })();
+  </script>
+</body>
+</html>

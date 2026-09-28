@@ -1,0 +1,633 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#080c18">
+  <title>Gouraud Cube — Canvas 2D Study</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #080c18;
+      color: #edf3ff;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body { width: 100%; min-height: 100%; margin: 0; }
+
+    body { overflow: hidden; }
+
+    button { font: inherit; }
+
+    .app {
+      position: relative;
+      width: 100%;
+      height: 100vh;
+      height: 100dvh;
+      min-height: 480px;
+      overflow: hidden;
+      isolation: isolate;
+      background: #080c18;
+    }
+
+    #scene {
+      position: absolute;
+      inset: 0;
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .app::after {
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      pointer-events: none;
+      content: "";
+      background: radial-gradient(ellipse at center, transparent 35%, rgba(4, 7, 17, .52) 100%);
+    }
+
+    .header, .footer, .metrics, .side-note {
+      position: absolute;
+      z-index: 2;
+    }
+
+    .header {
+      top: 0;
+      left: 0;
+      right: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 30px clamp(24px, 5vw, 76px);
+      border-bottom: 1px solid rgba(177, 201, 255, .09);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+      min-width: 0;
+    }
+
+    .mark {
+      display: grid;
+      flex: none;
+      place-items: center;
+      width: 38px;
+      height: 38px;
+      border: 1px solid rgba(129, 190, 255, .45);
+      border-radius: 11px;
+      background: rgba(95, 153, 255, .09);
+      color: #a3d9ff;
+      font-size: 23px;
+      line-height: 1;
+      transform: rotate(-12deg);
+      box-shadow: inset 0 0 18px rgba(79, 157, 255, .09);
+    }
+
+    .eyebrow {
+      display: block;
+      margin-bottom: 4px;
+      color: #8c9bb9;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .22em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(16px, 1.55vw, 21px);
+      font-weight: 650;
+      letter-spacing: -.035em;
+      white-space: nowrap;
+    }
+
+    .live {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      padding: 9px 12px;
+      border: 1px solid rgba(104, 239, 186, .23);
+      border-radius: 100px;
+      background: rgba(37, 126, 103, .1);
+      color: #a5f3ce;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: .18em;
+    }
+
+    .live::before {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #68eeb3;
+      box-shadow: 0 0 12px #68eeb3;
+      content: "";
+    }
+
+    .metrics {
+      top: 46%;
+      left: clamp(24px, 5vw, 76px);
+      transform: translateY(-50%);
+      pointer-events: none;
+    }
+
+    .metrics .eyebrow { margin-bottom: 10px; }
+
+    .fps-line {
+      display: flex;
+      align-items: baseline;
+      gap: 9px;
+    }
+
+    #fps {
+      font-size: clamp(46px, 6vw, 82px);
+      font-weight: 300;
+      letter-spacing: -.09em;
+      line-height: 1;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .fps-unit {
+      color: #83e8d1;
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: .12em;
+    }
+
+    .metrics p, .side-note p {
+      margin: 14px 0 0;
+      color: #8291af;
+      font-size: 12px;
+      line-height: 1.7;
+    }
+
+    .side-note {
+      top: 48%;
+      right: clamp(24px, 5vw, 76px);
+      width: 130px;
+      transform: translateY(-50%);
+      pointer-events: none;
+    }
+
+    .side-note::before {
+      display: block;
+      width: 30px;
+      height: 1px;
+      margin-bottom: 15px;
+      background: #79d9e8;
+      content: "";
+    }
+
+    .side-note strong {
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: .03em;
+    }
+
+    .footer {
+      right: 0;
+      bottom: 0;
+      left: 0;
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 24px;
+      padding: 24px clamp(24px, 5vw, 76px) 30px;
+      border-top: 1px solid rgba(177, 201, 255, .09);
+      background: linear-gradient(0deg, rgba(6, 10, 23, .58), transparent);
+    }
+
+    .footer-copy p {
+      max-width: 410px;
+      margin: 0;
+      color: #a1acc4;
+      font-size: 12px;
+      line-height: 1.65;
+    }
+
+    .footer-copy .eyebrow { margin-bottom: 8px; }
+
+    .controls {
+      display: flex;
+      flex: none;
+      gap: 10px;
+    }
+
+    .control {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 44px;
+      padding: 8px 12px 8px 16px;
+      border: 1px solid rgba(163, 192, 250, .23);
+      border-radius: 10px;
+      background: rgba(20, 29, 50, .82);
+      color: #e5edff;
+      cursor: pointer;
+      transition: background .2s, border-color .2s, transform .2s;
+    }
+
+    .control:hover {
+      transform: translateY(-2px);
+      border-color: rgba(140, 218, 255, .6);
+      background: rgba(36, 53, 83, .95);
+    }
+
+    .control:focus-visible {
+      outline: 2px solid #91e8fa;
+      outline-offset: 3px;
+    }
+
+    .control[aria-pressed="true"] {
+      border-color: rgba(110, 228, 210, .55);
+      background: rgba(37, 107, 107, .32);
+    }
+
+    .control-label {
+      font-size: 12px;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+
+    kbd {
+      display: grid;
+      place-items: center;
+      width: 26px;
+      height: 26px;
+      border: 1px solid rgba(171, 197, 245, .2);
+      border-radius: 5px;
+      background: rgba(153, 181, 238, .09);
+      color: #bdcbed;
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    @media (max-width: 760px) {
+      .header { padding: 20px 22px; }
+      .side-note { display: none; }
+      .metrics {
+        top: 104px;
+        left: 24px;
+        transform: none;
+      }
+      #fps { font-size: 44px; }
+      .metrics p { display: none; }
+      .footer {
+        align-items: stretch;
+        flex-direction: column;
+        gap: 16px;
+        padding: 19px 22px 24px;
+      }
+      .footer-copy p { max-width: none; }
+      .controls { width: 100%; }
+      .control { justify-content: space-between; flex: 1; }
+    }
+
+    @media (max-width: 390px) {
+      .live { padding: 8px; font-size: 9px; }
+      .brand { gap: 9px; }
+      h1 { font-size: 15px; }
+      .mark { width: 32px; height: 32px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <canvas id="scene" aria-label="Animated, Gouraud-shaded rotating cube with an orbiting light"></canvas>
+
+    <header class="header">
+      <div class="brand">
+        <span class="mark" aria-hidden="true">◇</span>
+        <div>
+          <span class="eyebrow">Canvas experiments / 001</span>
+          <h1>Gouraud Cube</h1>
+        </div>
+      </div>
+      <span class="live">LIVE RENDER</span>
+    </header>
+
+    <section class="metrics" aria-label="Rendering performance">
+      <span class="eyebrow">Render performance</span>
+      <div class="fps-line"><span id="fps">--</span><span class="fps-unit">FPS</span></div>
+      <p>Software rasterized<br>in Canvas 2D.</p>
+    </section>
+
+    <aside class="side-note" aria-label="Rendering details">
+      <strong>Light in motion.</strong>
+      <p>Six faces. Twelve triangles. Every pixel calculated in real time.</p>
+    </aside>
+
+    <footer class="footer">
+      <div class="footer-copy">
+        <span class="eyebrow">Explore the render</span>
+        <p>Press <strong>W</strong> to show the visible triangle mesh. Press <strong>P</strong> to pause or resume the animation. You can also use the buttons.</p>
+      </div>
+      <div class="controls" aria-label="Animation controls">
+        <button class="control" id="wireButton" type="button" aria-pressed="false" aria-keyshortcuts="W">
+          <span class="control-label" id="wireLabel">Wireframe off</span><kbd aria-hidden="true">W</kbd>
+        </button>
+        <button class="control" id="pauseButton" type="button" aria-pressed="false" aria-keyshortcuts="P">
+          <span class="control-label" id="pauseLabel">Pause</span><kbd aria-hidden="true">P</kbd>
+        </button>
+      </div>
+    </footer>
+  </main>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const canvas = document.getElementById("scene");
+      const ctx = canvas.getContext("2d", { alpha: false });
+      const buffer = document.createElement("canvas");
+      const bufferCtx = buffer.getContext("2d");
+      const fpsDisplay = document.getElementById("fps");
+      const wireButton = document.getElementById("wireButton");
+      const pauseButton = document.getElementById("pauseButton");
+      const wireLabel = document.getElementById("wireLabel");
+      const pauseLabel = document.getElementById("pauseLabel");
+
+      const vertices = [
+        [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
+        [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]
+      ];
+      const faces = [
+        { indices: [4, 5, 6, 7], color: [80, 216, 255] },
+        { indices: [1, 0, 3, 2], color: [156, 130, 255] },
+        { indices: [5, 1, 2, 6], color: [255, 122, 182] },
+        { indices: [0, 4, 7, 3], color: [84, 237, 194] },
+        { indices: [7, 6, 2, 3], color: [255, 193, 110] },
+        { indices: [0, 1, 5, 4], color: [123, 158, 255] }
+      ];
+      const cameraZ = 5.4;
+      let image, pixels, depth, width, height;
+      let wireframe = false;
+      let paused = false;
+      let time = 0;
+      let lastFrame = performance.now();
+      let fpsStart = lastFrame;
+      let frameCount = 0;
+
+      const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+      const subtract = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+      const cross = (a, b) => [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0]
+      ];
+      const normalize = v => {
+        const length = Math.hypot(v[0], v[1], v[2]) || 1;
+        return [v[0] / length, v[1] / length, v[2] / length];
+      };
+      const edge = (ax, ay, bx, by, px, py) =>
+        (px - ax) * (by - ay) - (py - ay) * (bx - ax);
+
+      function resize() {
+        const rect = canvas.getBoundingClientRect();
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        const cw = Math.max(1, Math.round(rect.width * dpr));
+        const ch = Math.max(1, Math.round(rect.height * dpr));
+        if (canvas.width === cw && canvas.height === ch && image) return;
+
+        canvas.width = cw;
+        canvas.height = ch;
+        width = Math.max(1, Math.min(840, Math.round(rect.width * .9)));
+        height = Math.max(1, Math.min(680, Math.round(rect.height * .9)));
+        buffer.width = width;
+        buffer.height = height;
+        image = bufferCtx.createImageData(width, height);
+        pixels = image.data;
+        depth = new Float32Array(width * height);
+      }
+
+      function rotate(v, sx, cx, sy, cy, sz, cz) {
+        const y1 = v[1] * cx - v[2] * sx;
+        const z1 = v[1] * sx + v[2] * cx;
+        const x2 = v[0] * cy + z1 * sy;
+        const z2 = -v[0] * sy + z1 * cy;
+        return [x2 * cz - y1 * sz, x2 * sz + y1 * cz, z2];
+      }
+
+      function rasterize(a, b, c) {
+        const area = edge(a.x, a.y, b.x, b.y, c.x, c.y);
+        if (Math.abs(area) < .0001) return;
+        const sign = area < 0 ? -1 : 1;
+        const inverseArea = 1 / Math.abs(area);
+        const minX = Math.max(0, Math.floor(Math.min(a.x, b.x, c.x)));
+        const maxX = Math.min(width - 1, Math.ceil(Math.max(a.x, b.x, c.x)));
+        const minY = Math.max(0, Math.floor(Math.min(a.y, b.y, c.y)));
+        const maxY = Math.min(height - 1, Math.ceil(Math.max(a.y, b.y, c.y)));
+        const aR = a.r * a.inv, aG = a.g * a.inv, aB = a.b * a.inv;
+        const bR = b.r * b.inv, bG = b.g * b.inv, bB = b.b * b.inv;
+        const cR = c.r * c.inv, cG = c.g * c.inv, cB = c.b * c.inv;
+
+        for (let y = minY; y <= maxY; y++) {
+          for (let x = minX; x <= maxX; x++) {
+            const px = x + .5, py = y + .5;
+            const w0 = sign * edge(b.x, b.y, c.x, c.y, px, py);
+            const w1 = sign * edge(c.x, c.y, a.x, a.y, px, py);
+            const w2 = sign * edge(a.x, a.y, b.x, b.y, px, py);
+            if (w0 < 0 || w1 < 0 || w2 < 0) continue;
+
+            const u = w0 * inverseArea;
+            const v = w1 * inverseArea;
+            const w = w2 * inverseArea;
+            const inverseDepth = u * a.inv + v * b.inv + w * c.inv;
+            const index = y * width + x;
+            if (inverseDepth <= depth[index]) continue;
+            depth[index] = inverseDepth;
+
+            const offset = index * 4;
+            pixels[offset] = (u * aR + v * bR + w * cR) / inverseDepth;
+            pixels[offset + 1] = (u * aG + v * bG + w * cG) / inverseDepth;
+            pixels[offset + 2] = (u * aB + v * bB + w * cB) / inverseDepth;
+            pixels[offset + 3] = 255;
+          }
+        }
+      }
+
+      function background() {
+        const cw = canvas.width, ch = canvas.height;
+        ctx.fillStyle = "#080c18";
+        ctx.fillRect(0, 0, cw, ch);
+
+        const glow = ctx.createRadialGradient(cw / 2, ch / 2, 0, cw / 2, ch / 2, Math.min(cw, ch) * .62);
+        glow.addColorStop(0, "rgba(49, 71, 117, .24)");
+        glow.addColorStop(.55, "rgba(23, 37, 69, .14)");
+        glow.addColorStop(1, "rgba(8, 12, 24, 0)");
+        ctx.fillStyle = glow;
+        ctx.fillRect(0, 0, cw, ch);
+
+        const spacing = Math.max(32, Math.round(48 * Math.min(window.devicePixelRatio || 1, 2)));
+        ctx.beginPath();
+        for (let x = cw / 2 % spacing; x < cw; x += spacing) {
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x, ch);
+        }
+        for (let y = ch / 2 % spacing; y < ch; y += spacing) {
+          ctx.moveTo(0, y);
+          ctx.lineTo(cw, y);
+        }
+        ctx.strokeStyle = "rgba(139, 173, 231, .045)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(cw / 2, ch / 2, Math.min(cw, ch) * .34, 0, Math.PI * 2);
+        ctx.arc(cw / 2, ch / 2, Math.min(cw, ch) * .46, 0, Math.PI * 2);
+        ctx.strokeStyle = "rgba(140, 189, 255, .065)";
+        ctx.stroke();
+      }
+
+      function render() {
+        resize();
+        pixels.fill(0);
+        depth.fill(0);
+
+        const ax = .35 + time * .43;
+        const ay = .55 + time * .68;
+        const az = -.12 + time * .17;
+        const sx = Math.sin(ax), cx = Math.cos(ax);
+        const sy = Math.sin(ay), cy = Math.cos(ay);
+        const sz = Math.sin(az), cz = Math.cos(az);
+        const transformed = vertices.map(v => rotate(v, sx, cx, sy, cy, sz, cz));
+        const focal = Math.min(width, height) * 1.23;
+        const projected = transformed.map(v => {
+          const inv = 1 / (cameraZ - v[2]);
+          return { x: width / 2 + v[0] * focal * inv, y: height / 2 - v[1] * focal * inv, inv };
+        });
+        const light = [
+          Math.cos(time * 1.12) * 3.5,
+          Math.sin(time * .83) * 2.8,
+          3.1 + Math.sin(time * 1.27) * 1.8
+        ];
+        const visible = [];
+
+        for (const face of faces) {
+          const ids = face.indices;
+          const p0 = transformed[ids[0]];
+          const normal = normalize(cross(
+            subtract(transformed[ids[1]], p0),
+            subtract(transformed[ids[2]], p0)
+          ));
+          const center = [0, 0, 0];
+          for (const id of ids) {
+            center[0] += transformed[id][0] * .25;
+            center[1] += transformed[id][1] * .25;
+            center[2] += transformed[id][2] * .25;
+          }
+          if (dot(normal, [-center[0], -center[1], cameraZ - center[2]]) <= 0) continue;
+
+          const corners = ids.map(id => {
+            const position = transformed[id];
+            const cornerNormal = normalize(position);
+            const softened = normalize([
+              normal[0] * .72 + cornerNormal[0] * .28,
+              normal[1] * .72 + cornerNormal[1] * .28,
+              normal[2] * .72 + cornerNormal[2] * .28
+            ]);
+            const toLight = normalize(subtract(light, position));
+            const diffuse = Math.max(0, dot(softened, toLight));
+            const brightness = .25 + .94 * diffuse;
+            const projection = projected[id];
+            return {
+              x: projection.x, y: projection.y, inv: projection.inv,
+              r: Math.min(255, face.color[0] * brightness),
+              g: Math.min(255, face.color[1] * brightness),
+              b: Math.min(255, face.color[2] * brightness)
+            };
+          });
+          rasterize(corners[0], corners[1], corners[2]);
+          rasterize(corners[0], corners[2], corners[3]);
+          visible.push(ids);
+        }
+
+        bufferCtx.putImageData(image, 0, 0);
+        background();
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(buffer, 0, 0, canvas.width, canvas.height);
+
+        if (wireframe) {
+          const scaleX = canvas.width / width;
+          const scaleY = canvas.height / height;
+          ctx.save();
+          ctx.lineWidth = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
+          ctx.strokeStyle = "rgba(226, 249, 255, .86)";
+          ctx.fillStyle = "#e9fbff";
+          ctx.shadowColor = "#75dcff";
+          ctx.shadowBlur = 11;
+          for (const ids of visible) {
+            ctx.beginPath();
+            for (let i = 0; i < 4; i++) {
+              const point = projected[ids[i]];
+              if (i === 0) ctx.moveTo(point.x * scaleX, point.y * scaleY);
+              else ctx.lineTo(point.x * scaleX, point.y * scaleY);
+            }
+            ctx.closePath();
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.moveTo(projected[ids[0]].x * scaleX, projected[ids[0]].y * scaleY);
+            ctx.lineTo(projected[ids[2]].x * scaleX, projected[ids[2]].y * scaleY);
+            ctx.stroke();
+
+            for (const id of ids) {
+              const point = projected[id];
+              ctx.beginPath();
+              ctx.arc(point.x * scaleX, point.y * scaleY, ctx.lineWidth * 2.3, 0, Math.PI * 2);
+              ctx.fill();
+            }
+          }
+          ctx.restore();
+        }
+      }
+
+      function toggleWireframe() {
+        wireframe = !wireframe;
+        wireButton.setAttribute("aria-pressed", String(wireframe));
+        wireLabel.textContent = wireframe ? "Wireframe on" : "Wireframe off";
+      }
+
+      function togglePause() {
+        paused = !paused;
+        pauseButton.setAttribute("aria-pressed", String(paused));
+        pauseLabel.textContent = paused ? "Resume" : "Pause";
+      }
+
+      wireButton.addEventListener("click", toggleWireframe);
+      pauseButton.addEventListener("click", togglePause);
+      window.addEventListener("keydown", event => {
+        if (event.repeat || event.altKey || event.ctrlKey || event.metaKey) return;
+        const target = event.target;
+        if (target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
+        if (event.key.toLowerCase() === "w") toggleWireframe();
+        if (event.key.toLowerCase() === "p") togglePause();
+      });
+
+      function frame(now) {
+        const delta = Math.min((now - lastFrame) / 1000, .05);
+        lastFrame = now;
+        if (!paused) time += delta;
+        render();
+
+        frameCount++;
+        if (now - fpsStart >= 650) {
+          fpsDisplay.textContent = String(Math.round(frameCount * 1000 / (now - fpsStart)));
+          frameCount = 0;
+          fpsStart = now;
+        }
+        requestAnimationFrame(frame);
+      }
+
+      requestAnimationFrame(frame);
+    })();
+  </script>
+</body>
+</html>

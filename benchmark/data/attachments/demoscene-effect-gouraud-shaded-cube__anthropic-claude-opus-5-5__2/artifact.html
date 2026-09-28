@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Gouraud Shaded Cube - Canvas 2D</title>
+<style>
+  html,body{margin:0;height:100%;background:#000;overflow:hidden}
+  canvas{display:block;width:100vw;height:100vh;image-rendering:pixelated}
+  #hud{position:fixed;left:10px;top:8px;color:#9f9;font:14px monospace;text-shadow:1px 1px #000;pointer-events:none;white-space:pre}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud"></div>
+<script>
+"use strict";
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const hud = document.getElementById('hud');
+let W = 0, H = 0, img, buf32, zbuf;
+const SCALE = 2; // internal resolution divisor for speed
+
+function resize() {
+  W = Math.max(1, Math.floor(innerWidth / SCALE));
+  H = Math.max(1, Math.floor(innerHeight / SCALE));
+  canvas.width = W; canvas.height = H;
+  img = ctx.createImageData(W, H);
+  buf32 = new Uint32Array(img.data.buffer);
+  zbuf = new Float32Array(W * H);
+}
+addEventListener('resize', resize);
+resize();
+
+// ---------- Geometry ----------
+const V = [
+  [-1,-1,-1],[ 1,-1,-1],[ 1, 1,-1],[-1, 1,-1],
+  [-1,-1, 1],[ 1,-1, 1],[ 1, 1, 1],[-1, 1, 1]
+];
+// Faces as quads, counter-clockwise when seen from outside; each has a base color
+const FACES = [
+  {v:[4,5,6,7], c:[255, 80, 80]},  // +z
+  {v:[1,0,3,2], c:[ 80,255, 80]},  // -z
+  {v:[5,1,2,6], c:[ 80,120,255]},  // +x
+  {v:[0,4,7,3], c:[255,230, 70]},  // -x
+  {v:[7,6,2,3], c:[ 70,230,255]},  // +y
+  {v:[0,1,5,4], c:[255, 80,255]}   // -y
+];
+// Split quads into triangles
+const TRIS = [];
+for (const f of FACES) {
+  TRIS.push({v:[f.v[0], f.v[1], f.v[2]], c:f.c});
+  TRIS.push({v:[f.v[0], f.v[2], f.v[3]], c:f.c});
+}
+// Per-vertex normals: average of adjacent face normals (normalized corner direction for a cube)
+const VN = V.map(p => { const l = Math.hypot(p[0], p[1], p[2]); return [p[0]/l, p[1]/l, p[2]/l]; });
+
+// ---------- Math ----------
+function matMul(a, b) {
+  const r = new Array(9);
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++)
+    r[i*3+j] = a[i*3]*b[j] + a[i*3+1]*b[3+j] + a[i*3+2]*b[6+j];
+  return r;
+}
+const rotX = a => { const c=Math.cos(a), s=Math.sin(a); return [1,0,0, 0,c,-s, 0,s,c]; };
+const rotY = a => { const c=Math.cos(a), s=Math.sin(a); return [c,0,s, 0,1,0, -s,0,c]; };
+const rotZ = a => { const c=Math.cos(a), s=Math.sin(a); return [c,-s,0, s,c,0, 0,0,1]; };
+const xform = (m, p) => [m[0]*p[0]+m[1]*p[1]+m[2]*p[2], m[3]*p[0]+m[4]*p[1]+m[5]*p[2], m[6]*p[0]+m[7]*p[1]+m[8]*p[2]];
+
+// ---------- State ----------
+let wireframe = false, paused = false;
+let t = 0, last = performance.now();
+let fps = 0, frames = 0, fpsTime = last;
+const CAM_Z = 5;
+addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if (k === 'w') wireframe = !wireframe;
+  else if (k === 'p') paused = !paused;
+});
+
+// ---------- Rasterizer (edge functions + barycentric color & depth interpolation) ----------
+function rasterTri(a, b, c) {
+  // a,b,c: {x,y,z(1/w), r,g,b}
+  let minX = Math.max(0, Math.floor(Math.min(a.x, b.x, c.x)));
+  let maxX = Math.min(W - 1, Math.ceil(Math.max(a.x, b.x, c.x)));
+  let minY = Math.max(0, Math.floor(Math.min(a.y, b.y, c.y)));
+  let maxY = Math.min(H - 1, Math.ceil(Math.max(a.y, b.y, c.y)));
+  if (minX > maxX || minY > maxY) return;
+  const area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+  if (Math.abs(area) < 1e-9) return;
+  const inv = 1 / area;
+  for (let y = minY; y <= maxY; y++) {
+    const py = y + 0.5;
+    for (let x = minX; x <= maxX; x++) {
+      const px = x + 0.5;
+      const w0 = ((b.x - px) * (c.y - py) - (b.y - py) * (c.x - px)) * inv;
+      const w1 = ((c.x - px) * (a.y - py) - (c.y - py) * (a.x - px)) * inv;
+      const w2 = 1 - w0 - w1;
+      if (w0 < 0 || w1 < 0 || w2 < 0) continue;
+      const z = w0 * a.z + w1 * b.z + w2 * c.z; // 1/w, larger = closer
+      const idx = y * W + x;
+      if (z <= zbuf[idx]) continue;
+      zbuf[idx] = z;
+      // perspective-correct color interpolation
+      const q0 = w0 * a.z / z, q1 = w1 * b.z / z, q2 = w2 * c.z / z;
+      const r = (q0 * a.r + q1 * b.r + q2 * c.r) | 0;
+      const g = (q0 * a.g + q1 * b.g + q2 * c.g) | 0;
+      const bl = (q0 * a.b + q1 * b.b + q2 * c.b) | 0;
+      buf32[idx] = 0xff000000 | (bl << 16) | (g << 8) | r;
+    }
+  }
+}
+
+// ---------- Frame ----------
+function frame(now) {
+  const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  if (!paused) t += dt;
+  frames++;
+  if (now - fpsTime >= 500) { fps = frames * 1000 / (now - fpsTime); frames = 0; fpsTime = now; }
+
+  const m = matMul(rotZ(t * 0.3), matMul(rotY(t * 0.9), rotX(t * 0.6)));
+  // Moving point light in view space
+  const light = [Math.cos(t * 1.3) * 3.5, Math.sin(t * 0.9) * 2.5, CAM_Z - 3.5 + Math.sin(t * 1.7) * 1.5];
+  light[2] = -Math.abs(light[2]) + 1.5; // keep light mostly in front of cube (toward camera = negative z)
+  const ambient = 0.12;
+  const focal = Math.min(W, H) * 1.1;
+
+  // Transform, light, project vertices
+  const pv = V.map((p, i) => {
+    const v = xform(m, p); v[2] += CAM_Z;           // view space (camera at origin looking +z)
+    const n = xform(m, VN[i]);
+    let lx = light[0] - v[0], ly = light[1] - v[1], lz = light[2] - v[2];
+    const ll = Math.hypot(lx, ly, lz); lx /= ll; ly /= ll; lz /= ll;
+    const lambert = Math.max(0, n[0]*lx + n[1]*ly + n[2]*lz);
+    const iz = 1 / v[2];
+    return { view: v, lit: ambient + (1 - ambient) * lambert, x: W / 2 + v[0] * focal * iz, y: H / 2 - v[1] * focal * iz, z: iz };
+  });
+
+  // Clear
+  buf32.fill(0xff1a0f0f);
+  zbuf.fill(0);
+
+  const visible = [];
+  for (const tr of TRIS) {
+    const [A, B, C] = tr.v.map(i => pv[i]);
+    // Backface culling in screen space (y flipped => CCW becomes negative)
+    const cross = (B.x - A.x) * (C.y - A.y) - (B.y - A.y) * (C.x - A.x);
+    if (cross >= 0) continue;
+    visible.push([A, B, C]);
+    if (!wireframe) {
+      const col = P => ({ x:P.x, y:P.y, z:P.z,
+        r: Math.min(255, tr.c[0] * P.lit), g: Math.min(255, tr.c[1] * P.lit), b: Math.min(255, tr.c[2] * P.lit) });
+      rasterTri(col(A), col(B), col(C));
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+
+  if (wireframe) {
+    ctx.strokeStyle = '#7fff7f'; ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (const [A, B, C] of visible) {
+      ctx.moveTo(A.x, A.y); ctx.lineTo(B.x, B.y); ctx.lineTo(C.x, C.y); ctx.closePath();
+    }
+    ctx.stroke();
+  }
+
+  // Draw light source
+  if (light[2] > 0.1) {
+    const lx = W / 2 + light[0] * focal / light[2], ly = H / 2 - light[1] * focal / light[2];
+    const rad = Math.max(2, 12 / light[2]);
+    const g = ctx.createRadialGradient(lx, ly, 0, lx, ly, rad * 3);
+    g.addColorStop(0, 'rgba(255,255,220,1)'); g.addColorStop(1, 'rgba(255,255,200,0)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(lx, ly, rad * 3, 0, Math.PI * 2); ctx.fill();
+  }
+
+  hud.textContent = `FPS: ${fps.toFixed(1)}${paused ? '  [PAUSED]' : ''}\nMode: ${wireframe ? 'wireframe' : 'Gouraud'}\n[W] wireframe  [P] pause`;
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

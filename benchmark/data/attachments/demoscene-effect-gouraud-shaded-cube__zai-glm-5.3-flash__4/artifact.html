@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gouraud Cube — Canvas 2D</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#0c1018}
+canvas{display:block;width:100vw;height:100vh}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+'use strict';
+/* ============================================================================
+   Gouraud Cube — a realtime software-rendered rotating cube on Canvas 2D.
+
+   Minimal 3D pipeline, entirely in JavaScript (no WebGL, no libraries):
+     vertices -> 3x3 rotation matrices -> world transform -> per-vertex
+     Lambert lighting -> perspective projection -> backface culling ->
+     triangle rasterization with barycentric color interpolation (Gouraud).
+
+   The scene is rasterized into an ImageData framebuffer (aliased as both a
+   Uint8ClampedArray byte view and a Uint32Array for fast clears), then blit
+   to the canvas with a single putImageData call. Overlays (wireframe, light
+   marker, HUD) are drawn with regular Canvas 2D calls on top.
+
+   Keys: [W] toggle wireframe   [P] toggle pause
+   ========================================================================== */
+
+/* ============================================================================
+   SECTION 1 — setup and state
+   ========================================================================== */
+
+// Opaque context: the alpha channel is never used, which keeps compositing
+// cheap and lets the rasterizer skip writing alpha bytes entirely.
+const canvas=document.getElementById('c');
+const ctx=canvas.getContext('2d',{alpha:false});
+
+// Render at native device resolution, capped at 2x so very high-density
+// screens do not make the CPU rasterizer crawl.
+const dpr=Math.min(window.devicePixelRatio||1,2);
+
+// Framebuffer handles. pix8 is the RGBA byte view used per-pixel, pix32 is
+// an aliased 32-bit view used for fast whole-buffer clears.
+let W=0,H=0,imgData=null,pix8=null,pix32=null;
+
+// Opaque background rgb(12,16,24) packed as a little-endian ABGR uint32:
+// alpha 255 in the top byte, then blue 24, green 16, red 12.
+const BG32=((255<<24)|(24<<16)|(16<<8)|12)>>>0;
+
+// (Re)allocate the framebuffer to match the current window size.
+function resize(){
+  W=Math.max(2,Math.round(innerWidth*dpr));
+  H=Math.max(2,Math.round(innerHeight*dpr));
+  canvas.width=W;
+  canvas.height=H;
+  imgData=ctx.createImageData(W,H);
+  pix8=imgData.data;
+  pix32=new Uint32Array(pix8.buffer);
+  pix32.fill(BG32);
+}
+
+// Application state.
+let paused=false,wireframe=false,simTime=0,lastT=performance.now();
+
+// FPS meter: frames and real seconds accumulate continuously; every 0.5 s
+// of REAL time the running average is published into fpsValue for the HUD.
+let fpsFrames=0,fpsAccum=0,fpsValue=0;
+
+window.addEventListener('resize',resize);
+
+/* ============================================================================
+   SECTION 2 — small vector / matrix math
+   (vec3 = [x,y,z] arrays; 3x3 matrices = row-major 9-element arrays,
+   M[0..2] is the first row; JS numbers are float64)
+   ========================================================================== */
+
+// Dot product of two 3-vectors.
+function dot3(a,b){
+  return a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+}
+
+// a - b, returned as a new array.
+function sub3(a,b){
+  return [a[0]-b[0],a[1]-b[1],a[2]-b[2]];
+}
+
+// Cross product a x b, returned as a new array.
+function cross(a,b){
+  return [
+    a[1]*b[2]-a[2]*b[1],
+    a[2]*b[0]-a[0]*b[2],
+    a[0]*b[1]-a[1]*b[0]
+  ];
+}
+
+// Normalize into a new array; degenerate (near-zero) vectors are returned
+// unchanged so downstream code never divides by ~0.
+function norm3(v){
+  const len=Math.sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2]);
+  if(len<1e-9)return v;
+  const inv=1/len;
+  return [v[0]*inv,v[1]*inv,v[2]*inv];
+}
+
+// Apply a 3x3 matrix to a 3-vector, returning a new [x,y,z].
+function apply3(M,v){
+  return [
+    M[0]*v[0]+M[1]*v[1]+M[2]*v[2],
+    M[3]*v[0]+M[4]*v[1]+M[5]*v[2],
+    M[6]*v[0]+M[7]*v[1]+M[8]*v[2]
+  ];
+}
+
+// Standard 3x3 matrix product A*B, row-major:
+// Result[r*3+c] = sum_k A[r*3+k]*B[k*3+c].
+function mul3(A,B){
+  const R=new Array(9);
+  for(let r=0;r<3;r++){
+    for(let c=0;c<3;c++){
+      let s=0;
+      for(let k=0;k<3;k++)s+=A[r*3+k]*B[k*3+c];
+      R[r*3+c]=s;
+    }
+  }
+  return R;
+}
+
+// Rotation about the X axis by angle a (radians).
+function rotX(a){
+  const c=Math.cos(a),s=Math.sin(a);
+  return [1,0,0, 0,c,-s, 0,s,c];
+}
+
+// Rotation about the Y axis by angle a (radians).
+function rotY(a){
+  const c=Math.cos(a),s=Math.sin(a);
+  return [c,0,s, 0,1,0, -s,0,c];
+}
+
+// Rotation about the Z axis by angle a (radians).
+function rotZ(a){
+  const c=Math.cos(a),s=Math.sin(a);
+  return [c,-s,0, s,c,0, 0,0,1];
+}
+
+/* ============================================================================
+   SECTION 3 — cube model (exact tables)
+   ========================================================================== */
+
+// Cube center in world space; the camera sits at the origin looking down
+// -z, so the cube (and everything visible) lives at negative z here.
+const CENTER=[0,0,-4.2];
+
+// 8 cube corners of a unit cube centered at the local origin.
+const VERTS=[
+  [-1,-1,-1], // 0
+  [ 1,-1,-1], // 1
+  [ 1, 1,-1], // 2
+  [-1, 1,-1], // 3
+  [-1,-1, 1], // 4
+  [ 1,-1, 1], // 5
+  [ 1, 1, 1], // 6
+  [-1, 1, 1]  // 7
+];
+
+// 6 quads, CCW when viewed from outside. The outward normal of a quad is
+// cross(q1-q0, q2-q0).
+const QUADS=[
+  [4,5,6,7], // front
+  [1,0,3,2], // back
+  [5,1,2,6], // right
+  [0,4,7,3], // left
+  [3,7,6,2], // top
+  [0,1,5,4]  // bottom
+];
+
+// Per-face base colors (RGB, 0..255), one entry per quad above.
+const FACE_COLORS=[
+  [231,76,60],  // front  - red
+  [52,152,219], // back   - blue
+  [46,204,113], // right  - green
+  [241,196,15], // left   - yellow
+  [155,89,182], // top    - purple
+  [230,126,34]  // bottom - orange
+];
+
+// 12 cube edges, used by the wireframe overlay.
+const EDGES=[
+  [0,1],[1,2],[2,3],[3,0], // near square
+  [4,5],[5,6],[6,7],[7,4], // far square
+  [0,4],[1,5],[2,6],[3,7]  // connecting pillars
+];
+
+// Per-vertex scratch buffers, reused every frame (8 vertices, fixed size).
+const world=new Array(8);
+const sx=new Float64Array(8);
+const sy=new Float64Array(8);
+const IV=new Float64Array(8); // per-vertex light intensity
+
+/* ============================================================================
+   SECTION 4 — Gouraud triangle rasterizer
+   ========================================================================== */
+
+// Rasterize one triangle in device-pixel coordinates with per-vertex colors
+// (0..255 floats) interpolated barycentrically across the face. Winding-
+// independent: the inside test is normalized by the SIGNED area, so CW and
+// CCW triangles both fill correctly. Hot path — local variables only, no
+// per-pixel function calls.
+function fillTriangle(x0,y0,r0,g0,b0, x1,y1,r1,g1,b1, x2,y2,r2,g2,b2){
+  // Double signed area of the triangle; degenerate slivers are rejected.
+  const area=(x1-x0)*(y2-y0)-(y1-y0)*(x2-x0);
+  if(Math.abs(area)<1e-9)return;
+  const ia=1/area;
+
+  // Bounding box, clipped to the framebuffer.
+  const xs=Math.max(0,Math.floor(Math.min(x0,x1,x2)));
+  const xe=Math.min(W-1,Math.ceil(Math.max(x0,x1,x2)));
+  const ys=Math.max(0,Math.floor(Math.min(y0,y1,y2)));
+  const ye=Math.min(H-1,Math.ceil(Math.max(y0,y1,y2)));
+  if(xs>xe||ys>ye)return;
+
+  // Edge functions, evaluated at pixel sample (px,py):
+  //   w0(px,py)=(x2-x1)*(py-y1)-(y2-y1)*(px-x1)  weight of vertex 0
+  //   w1(px,py)=(x0-x2)*(py-y2)-(y0-y2)*(px-x2)  weight of vertex 1
+  //   w2(px,py)=(x1-x0)*(py-y0)-(y1-y0)*(px-x0)  weight of vertex 2
+  // Since w0+w1+w2 === area exactly, (w0,w1,w2)*ia are true barycentric
+  // coordinates. Each function is computed DIRECTLY at the first pixel of
+  // a row, then stepped incrementally along +x:
+  //   dW0/dpx=-(y2-y1), dW1/dpx=-(y0-y2), dW2/dpx=-(y1-y0).
+  const cx0=xs+0.5; // x sample of the row's first pixel
+  for(let py=ys;py<=ye;py++){
+    const cy=py+0.5; // sample at pixel CENTER
+    let w0=(x2-x1)*(cy-y1)-(y2-y1)*(cx0-x1);
+    let w1=(x0-x2)*(cy-y2)-(y0-y2)*(cx0-x2);
+    let w2=(x1-x0)*(cy-y0)-(y1-y0)*(cx0-x0);
+    let idx=(py*W+xs)*4; // byte offset of the first pixel in this row span
+    for(let px=xs;px<=xe;px++){
+      // Inside test — valid for either winding because we normalize by the
+      // signed area, so the weights carry the triangle's orientation sign.
+      if((w0*ia)>=-1e-7&&(w1*ia)>=-1e-7&&(w2*ia)>=-1e-7){
+        const r=(r0*w0+r1*w1+r2*w2)*ia;
+        const g=(g0*w0+g1*w1+g2*w2)*ia;
+        const b=(b0*w0+b1*w1+b2*w2)*ia;
+        // +0.5 biases toward the nearest integer before the implicit
+        // clamped-uint8 store rounds.
+        pix8[idx]=r+0.5;
+        pix8[idx+1]=g+0.5;
+        pix8[idx+2]=b+0.5;
+        // alpha is already 255 from the clear; do not touch it
+      }
+      // Incremental step to the next pixel along +x.
+      w0+=y1-y2;
+      w1+=y2-y0;
+      w2+=y0-y1;
+      idx+=4;
+    }
+  }
+}
+
+/* ============================================================================
+   SECTION 5 — render pipeline
+   ========================================================================== */
+
+// Pure drawing function: reads simTime and draws one complete frame. It must
+// never advance lastT/simTime itself — that is frame()'s job.
+function render(){
+  // 1) clear the framebuffer (fast 32-bit fill; also makes alpha 255)
+  pix32.fill(BG32);
+
+  // 3) model matrix: yaw and pitch spin over time with a fixed Z tilt so no
+  // face ever stays perfectly axis-aligned for long.
+  const yaw=simTime*0.7;
+  const pitch=simTime*0.45;
+  const M=mul3(rotY(yaw),mul3(rotX(pitch),rotZ(0.35)));
+
+  // 4) transform the 8 cube corners into world space (rotate, then add the
+  // cube's world center component-wise).
+  for(let v=0;v<8;v++){
+    const p=apply3(M,VERTS[v]);
+    world[v]=[p[0]+CENTER[0],p[1]+CENTER[1],p[2]+CENTER[2]];
+  }
+
+  // 5) moving light: orbits the cube horizontally while bobbing vertically.
+  const la=simTime*0.9;
+  const lightPos=[
+    CENTER[0]+Math.cos(la)*3.4,
+    1.3+Math.sin(simTime*1.3)*1.5,
+    CENTER[2]+Math.sin(la)*3.4
+  ];
+
+  // 6) per-vertex Lambert intensity. For a cube centered at CENTER, the
+  // outward normal at a corner is exactly (corner - center) normalized.
+  // L points from the vertex toward the light; negative lambert is clamped
+  // to 0 and an ambient floor of 0.22 keeps dark faces readable.
+  for(let v=0;v<8;v++){
+    const N=norm3(sub3(world[v],CENTER));
+    const L=norm3(sub3(lightPos,world[v]));
+    const lam=Math.max(0,dot3(N,L));
+    IV[v]=0.22+0.78*lam;
+  }
+
+  // 7) perspective projection with a 60° vertical fov: the focal length
+  // maps the frustum's half-height to H/2 device pixels.
+  const f=(H*0.5)/Math.tan(30*Math.PI/180);
+  for(let v=0;v<8;v++){
+    const zc=world[v][2];
+    const invz=f/(-zc);
+    sx[v]=W*0.5+world[v][0]*invz;
+    sy[v]=H*0.5-world[v][1]*invz; // screen y grows downward
+  }
+
+  // 8) for each quad, split into two triangles and rasterize visible ones.
+  const NEAR=0.1; // near-plane guard, in view depth units
+  for(let i=0;i<6;i++){
+    const q=QUADS[i];
+    const base=FACE_COLORS[i];
+    for(let t=0;t<2;t++){
+      // Each quad splits into triangles (q0,q1,q2) and (q0,q2,q3).
+      const a=q[0],b=(t===0)?q[1]:q[2],c=(t===0)?q[2]:q[3];
+
+      // BACKFACE CULL first: the camera sits at the origin, so the view
+      // vector toward the face IS its centroid. The face is visible only
+      // when its geometric normal points back at the camera (dot < 0).
+      const n=cross(sub3(world[b],world[a]),sub3(world[c],world[a]));
+      const cx=(world[a][0]+world[b][0]+world[c][0])/3;
+      const cy=(world[a][1]+world[b][1]+world[c][1])/3;
+      const cz=(world[a][2]+world[b][2]+world[c][2])/3;
+      if(dot3(n,[cx,cy,cz])>=0)continue;
+
+      // Near-plane guard: skip any triangle with a vertex too close to (or
+      // behind) the camera, where the projection would explode or flip.
+      if(-world[a][2]<NEAR||-world[b][2]<NEAR||-world[c][2]<NEAR)continue;
+
+      // In wireframe mode the fills are skipped; edges are drawn below.
+      if(wireframe)continue;
+
+      // Gouraud: each vertex carries its own lit color and the rasterizer
+      // interpolates across the triangle.
+      fillTriangle(
+        sx[a],sy[a],base[0]*IV[a],base[1]*IV[a],base[2]*IV[a],
+        sx[b],sy[b],base[0]*IV[b],base[1]*IV[b],base[2]*IV[b],
+        sx[c],sy[c],base[0]*IV[c],base[1]*IV[c],base[2]*IV[c]
+      );
+    }
+  }
+
+  // 9) blit the rasterized frame in one call.
+  ctx.putImageData(imgData,0,0);
+
+  // 10) overlays below are drawn in device pixels.
+  ctx.setTransform(1,0,0,1,0,0);
+
+  // 11) wireframe overlay: all 12 edges plus small vertex dots.
+  if(wireframe){
+    ctx.strokeStyle='rgba(235,240,250,0.9)';
+    ctx.lineWidth=1.25*dpr;
+    ctx.beginPath();
+    for(let e=0;e<EDGES.length;e++){
+      const a=EDGES[e][0],b=EDGES[e][1];
+      ctx.moveTo(sx[a],sy[a]);
+      ctx.lineTo(sx[b],sy[b]);
+    }
+    ctx.stroke();
+    ctx.fillStyle='#dfe8f5';
+    for(let v=0;v<8;v++){
+      ctx.fillRect(sx[v]-1.5*dpr,sy[v]-1.5*dpr,3*dpr,3*dpr);
+    }
+  }
+
+  // 12) light marker: a soft glowing dot at the light's projected position.
+  const zlc=lightPos[2];
+  if(-zlc>0.1){
+    const invzl=f/(-zlc);
+    const lx=W*0.5+lightPos[0]*invzl;
+    const ly=H*0.5-lightPos[1]*invzl;
+    const lr=14*dpr;
+    const grad=ctx.createRadialGradient(lx,ly,0,lx,ly,lr);
+    grad.addColorStop(0,'rgba(255,214,140,0.9)');
+    grad.addColorStop(1,'rgba(255,214,140,0)');
+    ctx.fillStyle=grad;
+    ctx.beginPath();
+    ctx.arc(lx,ly,lr,0,Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle='#ffe6b0';
+    ctx.beginPath();
+    ctx.arc(lx,ly,2.5*dpr,0,Math.PI*2);
+    ctx.fill();
+  }
+
+  // 13) HUD text (device pixels, top-left stack).
+  ctx.font=Math.round(13*dpr)+'px ui-monospace, Consolas, monospace';
+  ctx.textBaseline='top';
+  ctx.fillStyle='#8fa8c8';
+  ctx.fillText('Gouraud cube - Canvas 2D software rasterizer',10*dpr,8*dpr);
+  ctx.fillStyle='#8dffb0';
+  ctx.fillText('FPS: '+fpsValue.toFixed(1),10*dpr,(8+20)*dpr);
+  ctx.fillStyle='#cfe3ff';
+  ctx.fillText('[W] wireframe: '+(wireframe?'ON':'off')+'   [P] pause: '+(paused?'ON':'off'),10*dpr,(8+40)*dpr);
+}
+
+/* ============================================================================
+   SECTION 6 — input and main loop
+   ========================================================================== */
+
+// Keyboard toggles (case-insensitive, so Shift+W still works).
+window.addEventListener('keydown',e=>{
+  const k=e.key.toLowerCase();
+  if(k==='w')wireframe=!wireframe;
+  else if(k==='p')paused=!paused;
+});
+
+// Main loop: advance the FPS meter and the simulation clock, then draw.
+// All time updates live HERE — render() stays a pure drawing function.
+function frame(now){
+  const dtReal=(now-lastT)/1000; // real elapsed seconds (raw, feeds the FPS meter)
+  lastT=now;
+
+  // FPS meter: publish the average over each 0.5 s window of real time.
+  fpsFrames++;
+  fpsAccum+=dtReal;
+  if(fpsAccum>=0.5){
+    fpsValue=fpsFrames/fpsAccum;
+    fpsFrames=0;
+    fpsAccum=0;
+  }
+
+  // Advance the simulation clock, clamped so a long tab-switch stall does
+  // not make the cube teleport.
+  if(!paused)simTime+=Math.min(dtReal,0.05);
+
+  render(now);
+  requestAnimationFrame(frame);
+}
+
+// Boot: size the framebuffer once, then start the loop.
+resize();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

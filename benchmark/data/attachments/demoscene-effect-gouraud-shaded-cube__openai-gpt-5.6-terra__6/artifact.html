@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gouraud Cube — Canvas 2D</title>
+<style>
+    :root {
+        color-scheme: dark;
+    }
+
+    * {
+        box-sizing: border-box;
+    }
+
+    html,
+    body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: #071018;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+    }
+
+    .hud {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        padding: clamp(18px, 3vw, 42px);
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+    }
+
+    .panel {
+        width: min(390px, calc(100vw - 36px));
+        padding: 20px 22px;
+        border: 1px solid rgba(144, 202, 249, 0.18);
+        border-radius: 16px;
+        background: rgba(6, 16, 25, 0.76);
+        box-shadow: 0 18px 60px rgba(0, 0, 0, 0.28);
+        backdrop-filter: blur(14px);
+    }
+
+    .eyebrow {
+        margin: 0 0 8px;
+        color: #72d9ff;
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+    }
+
+    h1 {
+        margin: 0;
+        color: #f4fbff;
+        font-size: clamp(22px, 3vw, 30px);
+        font-weight: 720;
+        letter-spacing: -0.045em;
+    }
+
+    .description {
+        margin: 11px 0 18px;
+        color: #aabdc9;
+        font-size: 13px;
+        line-height: 1.55;
+    }
+
+    .status-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        padding: 7px 9px;
+        border: 1px solid rgba(174, 220, 240, 0.13);
+        border-radius: 7px;
+        color: #b9cbd5;
+        background: rgba(126, 182, 205, 0.06);
+        font-size: 11px;
+        font-weight: 650;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+    }
+
+    .chip strong {
+        color: #ecfaff;
+        font-size: 10px;
+    }
+
+    .lamp {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #ffcf70;
+        box-shadow: 0 0 10px #ffb13b;
+    }
+
+    .instructions {
+        margin: 16px 0 0;
+        padding-top: 15px;
+        border-top: 1px solid rgba(178, 215, 231, 0.11);
+        color: #8096a3;
+        font-size: 11px;
+        line-height: 1.7;
+    }
+
+    kbd {
+        display: inline-block;
+        min-width: 20px;
+        padding: 1px 5px;
+        border: 1px solid rgba(220, 239, 248, 0.22);
+        border-radius: 4px;
+        color: #e4f7ff;
+        background: rgba(220, 239, 248, 0.09);
+        font-family: inherit;
+        font-size: 10px;
+        font-weight: 800;
+        text-align: center;
+    }
+
+    .readout {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 14px;
+        border: 1px solid rgba(144, 202, 249, 0.18);
+        border-radius: 13px;
+        background: rgba(6, 16, 25, 0.76);
+        box-shadow: 0 14px 48px rgba(0, 0, 0, 0.22);
+        backdrop-filter: blur(14px);
+    }
+
+    .orbit {
+        position: relative;
+        width: 42px;
+        height: 42px;
+        border: 1px solid rgba(134, 207, 239, 0.28);
+        border-radius: 50%;
+    }
+
+    .orbit::before,
+    .orbit::after {
+        position: absolute;
+        content: "";
+        background: rgba(135, 211, 245, 0.25);
+    }
+
+    .orbit::before {
+        top: 50%;
+        left: 6px;
+        right: 6px;
+        height: 1px;
+    }
+
+    .orbit::after {
+        top: 6px;
+        bottom: 6px;
+        left: 50%;
+        width: 1px;
+    }
+
+    .orbit-dot {
+        position: absolute;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #ffe097;
+        box-shadow: 0 0 13px 3px rgba(255, 193, 74, 0.74);
+        transform: translate(-50%, -50%);
+    }
+
+    .fps-label {
+        color: #7f97a4;
+        font-size: 9px;
+        font-weight: 800;
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+    }
+
+    #fps {
+        margin-top: 2px;
+        color: #effbff;
+        font-size: 18px;
+        font-weight: 750;
+        line-height: 1;
+        letter-spacing: -0.04em;
+    }
+
+    @media (max-width: 650px) {
+        .hud {
+            align-items: flex-end;
+        }
+
+        .panel {
+            padding: 16px 17px;
+        }
+
+        .readout {
+            position: absolute;
+            top: 18px;
+            right: 18px;
+        }
+
+        .description {
+            margin-bottom: 13px;
+        }
+    }
+</style>
+</head>
+<body>
+<canvas id="canvas" aria-label="Rotating Gouraud-shaded cube"></canvas>
+
+<div class="hud">
+    <section class="panel">
+        <p class="eyebrow">Software rasterizer / Canvas 2D</p>
+        <h1>Gouraud Light Study</h1>
+        <p class="description">A rotating cube rendered with a minimal 3D pipeline, per-vertex Lambert lighting, and pixel-space RGB interpolation.</p>
+        <div class="status-row">
+            <span class="chip"><span class="lamp"></span>Light orbit</span>
+            <span class="chip">Wire <strong id="wireState">Off</strong></span>
+            <span class="chip">Motion <strong id="pauseState">Live</strong></span>
+        </div>
+        <p class="instructions">
+            <kbd>W</kbd> toggle wireframe overlay &nbsp; <kbd>P</kbd> pause or resume<br>
+            The moving light is evaluated independently at every transformed triangle vertex.
+        </p>
+    </section>
+
+    <aside class="readout" aria-label="Performance and light indicator">
+        <div class="orbit"><div class="orbit-dot" id="orbitDot"></div></div>
+        <div>
+            <div class="fps-label">Frame rate</div>
+            <div id="fps">-- FPS</div>
+        </div>
+    </aside>
+</div>
+
+<script>
+(() => {
+    "use strict";
+
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d", { alpha: false });
+    const fpsElement = document.getElementById("fps");
+    const wireState = document.getElementById("wireState");
+    const pauseState = document.getElementById("pauseState");
+    const orbitDot = document.getElementById("orbitDot");
+
+    let width = 1;
+    let height = 1;
+    let dpr = 1;
+    let wireframe = false;
+    let paused = false;
+    let elapsed = 0;
+    let lastTime = performance.now();
+    let fpsClock = lastTime;
+    let frames = 0;
+
+    const vertices = [
+        [-1.25, -1.25, -1.25], [ 1.25, -1.25, -1.25],
+        [ 1.25,  1.25, -1.25], [-1.25,  1.25, -1.25],
+        [-1.25, -1.25,  1.25], [ 1.25, -1.25,  1.25],
+        [ 1.25,  1.25,  1.25], [-1.25,  1.25,  1.25]
+    ];
+
+    const faceData = [
+        { indices: [4, 5, 6, 7], color: [66, 174, 255] },
+        { indices: [1, 0, 3, 2], color: [112, 92, 255] },
+        { indices: [5, 1, 2, 6], color: [255, 118, 103] },
+        { indices: [0, 4, 7, 3], color: [43, 208, 171] },
+        { indices: [7, 6, 2, 3], color: [255, 191, 82] },
+        { indices: [0, 1, 5, 4], color: [226, 75, 159] }
+    ];
+
+    const triangles = [];
+    for (const face of faceData) {
+        triangles.push({ indices: [face.indices[0], face.indices[1], face.indices[2]], color: face.color });
+        triangles.push({ indices: [face.indices[0], face.indices[2], face.indices[3]], color: face.color });
+    }
+
+    function resize() {
+        dpr = Math.min(window.devicePixelRatio || 1, 2);
+        width = Math.max(1, Math.floor(window.innerWidth * dpr));
+        height = Math.max(1, Math.floor(window.innerHeight * dpr));
+        canvas.width = width;
+        canvas.height = height;
+    }
+
+    function dot(a, b) {
+        return a.x * b.x + a.y * b.y + a.z * b.z;
+    }
+
+    function cross(a, b) {
+        return {
+            x: a.y * b.z - a.z * b.y,
+            y: a.z * b.x - a.x * b.z,
+            z: a.x * b.y - a.y * b.x
+        };
+    }
+
+    function subtract(a, b) {
+        return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z };
+    }
+
+    function normalize(v) {
+        const length = Math.hypot(v.x, v.y, v.z) || 1;
+        return { x: v.x / length, y: v.y / length, z: v.z / length };
+    }
+
+    // Pipeline phase 1: rotate local cube vertices, then translate them into camera space.
+    function transformVertex(vertex, ax, ay, az) {
+        let x = vertex[0];
+        let y = vertex[1];
+        let z = vertex[2];
+
+        const cy = Math.cos(ay);
+        const sy = Math.sin(ay);
+        const x1 = x * cy + z * sy;
+        const z1 = -x * sy + z * cy;
+
+        const cx = Math.cos(ax);
+        const sx = Math.sin(ax);
+        const y1 = y * cx - z1 * sx;
+        const z2 = y * sx + z1 * cx;
+
+        const cz = Math.cos(az);
+        const sz = Math.sin(az);
+
+        return {
+            x: x1 * cz - y1 * sz,
+            y: x1 * sz + y1 * cz,
+            z: z2 + 6.2
+        };
+    }
+
+    // Pipeline phase 2: perspective projection from camera space into canvas pixels.
+    function project(vertex) {
+        const focalLength = Math.min(width, height) * 0.74;
+        return {
+            x: width * 0.5 + vertex.x * focalLength / vertex.z,
+            y: height * 0.5 - vertex.y * focalLength / vertex.z
+        };
+    }
+
+    function drawBackground(time) {
+        ctx.fillStyle = "#071018";
+        ctx.fillRect(0, 0, width, height);
+
+        ctx.fillStyle = "#0b1d2a";
+        ctx.fillRect(0, height * 0.58, width, height * 0.42);
+
+        const drift = time * 0.00008;
+        for (let i = 0; i < 50; i++) {
+            const x = ((i * 257.7 + drift * (18 + i % 7)) % width + width) % width;
+            const y = (i * 113.9) % (height * 0.72);
+            const size = (i % 4 === 0 ? 1.5 : 0.8) * dpr;
+            ctx.fillStyle = i % 5 === 0 ? "rgba(120, 211, 255, 0.35)" : "rgba(180, 225, 242, 0.18)";
+            ctx.fillRect(x, y, size, size);
+        }
+
+        ctx.strokeStyle = "rgba(83, 161, 193, 0.10)";
+        ctx.lineWidth = dpr;
+        const horizon = height * 0.67;
+        for (let i = 1; i < 9; i++) {
+            const y = horizon + i * i * height * 0.008;
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(width, y);
+            ctx.stroke();
+        }
+    }
+
+    // Pipeline phase 4: rasterize a depth-sorted triangle with barycentric RGB interpolation.
+    function rasterizeTriangle(image, triangle, offsetX, offsetY) {
+        const a = triangle.points[0];
+        const b = triangle.points[1];
+        const c = triangle.points[2];
+
+        const minX = Math.max(0, Math.floor(Math.min(a.x, b.x, c.x) - offsetX));
+        const maxX = Math.min(image.width - 1, Math.ceil(Math.max(a.x, b.x, c.x) - offsetX));
+        const minY = Math.max(0, Math.floor(Math.min(a.y, b.y, c.y) - offsetY));
+        const maxY = Math.min(image.height - 1, Math.ceil(Math.max(a.y, b.y, c.y) - offsetY));
+
+        const denominator = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
+        if (Math.abs(denominator) < 0.00001) return;
+
+        const data = image.data;
+        for (let y = minY; y <= maxY; y++) {
+            const py = y + offsetY + 0.5;
+            for (let x = minX; x <= maxX; x++) {
+                const px = x + offsetX + 0.5;
+                const w0 = ((b.y - c.y) * (px - c.x) + (c.x - b.x) * (py - c.y)) / denominator;
+                const w1 = ((c.y - a.y) * (px - c.x) + (a.x - c.x) * (py - c.y)) / denominator;
+                const w2 = 1 - w0 - w1;
+
+                if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
+                    const pixel = (y * image.width + x) * 4;
+                    data[pixel] = w0 * triangle.colors[0][0] + w1 * triangle.colors[1][0] + w2 * triangle.colors[2][0];
+                    data[pixel + 1] = w0 * triangle.colors[0][1] + w1 * triangle.colors[1][1] + w2 * triangle.colors[2][1];
+                    data[pixel + 2] = w0 * triangle.colors[0][2] + w1 * triangle.colors[1][2] + w2 * triangle.colors[2][2];
+                    data[pixel + 3] = 255;
+                }
+            }
+        }
+    }
+
+    function render(time) {
+        drawBackground(time);
+
+        const ax = elapsed * 0.00073 + 0.48;
+        const ay = elapsed * 0.00103;
+        const az = elapsed * 0.00031;
+        const transformed = vertices.map(vertex => transformVertex(vertex, ax, ay, az));
+        const projected = transformed.map(project);
+
+        const light = {
+            x: Math.cos(elapsed * 0.0011) * 4.6,
+            y: 2.2 + Math.sin(elapsed * 0.0017) * 2.4,
+            z: 2.8 + Math.sin(elapsed * 0.0011) * 2.8
+        };
+
+        const visibleTriangles = [];
+
+        // Pipeline phase 3: cull backfaces, calculate Lambert light at each triangle vertex, and project.
+        for (const triangle of triangles) {
+            const p0 = transformed[triangle.indices[0]];
+            const p1 = transformed[triangle.indices[1]];
+            const p2 = transformed[triangle.indices[2]];
+            const edge1 = subtract(p1, p0);
+            const edge2 = subtract(p2, p0);
+            const normal = normalize(cross(edge1, edge2));
+            const center = {
+                x: (p0.x + p1.x + p2.x) / 3,
+                y: (p0.y + p1.y + p2.y) / 3,
+                z: (p0.z + p1.z + p2.z) / 3
+            };
+
+            if (dot(normal, { x: -center.x, y: -center.y, z: -center.z }) <= 0) continue;
+
+            const colors = triangle.indices.map(index => {
+                const vertex = transformed[index];
+                const lightVector = normalize(subtract(light, vertex));
+                const lambert = Math.max(0, dot(normal, lightVector));
+                const distance = Math.hypot(light.x - vertex.x, light.y - vertex.y, light.z - vertex.z);
+                const intensity = Math.min(1, 0.15 + lambert * (0.78 + Math.max(0, 1 - distance / 10) * 0.12));
+                return triangle.color.map(channel => Math.round(channel * intensity));
+            });
+
+            visibleTriangles.push({
+                points: triangle.indices.map(index => projected[index]),
+                colors,
+                depth: center.z
+            });
+        }
+
+        visibleTriangles.sort((a, b) => b.depth - a.depth);
+
+        if (visibleTriangles.length) {
+            let minX = width;
+            let minY = height;
+            let maxX = 0;
+            let maxY = 0;
+
+            for (const triangle of visibleTriangles) {
+                for (const point of triangle.points) {
+                    minX = Math.min(minX, point.x);
+                    minY = Math.min(minY, point.y);
+                    maxX = Math.max(maxX, point.x);
+                    maxY = Math.max(maxY, point.y);
+                }
+            }
+
+            const padding = Math.ceil(2 * dpr);
+            const startX = Math.max(0, Math.floor(minX) - padding);
+            const startY = Math.max(0, Math.floor(minY) - padding);
+            const endX = Math.min(width, Math.ceil(maxX) + padding);
+            const endY = Math.min(height, Math.ceil(maxY) + padding);
+            const image = ctx.createImageData(Math.max(1, endX - startX), Math.max(1, endY - startY));
+
+            for (const triangle of visibleTriangles) {
+                rasterizeTriangle(image, triangle, startX, startY);
+            }
+
+            ctx.putImageData(image, startX, startY);
+
+            if (wireframe) {
+                ctx.save();
+                ctx.strokeStyle = "rgba(232, 250, 255, 0.88)";
+                ctx.lineWidth = Math.max(1, dpr);
+                ctx.shadowColor = "rgba(79, 214, 255, 0.8)";
+                ctx.shadowBlur = 7 * dpr;
+                for (const triangle of visibleTriangles) {
+                    ctx.beginPath();
+                    ctx.moveTo(triangle.points[0].x, triangle.points[0].y);
+                    ctx.lineTo(triangle.points[1].x, triangle.points[1].y);
+                    ctx.lineTo(triangle.points[2].x, triangle.points[2].y);
+                    ctx.closePath();
+                    ctx.stroke();
+                }
+                ctx.restore();
+            }
+        }
+
+        const orbitX = 21 + Math.cos(elapsed * 0.0011) * 15;
+        const orbitY = 21 + Math.sin(elapsed * 0.0011) * 15;
+        orbitDot.style.left = `${orbitX}px`;
+        orbitDot.style.top = `${orbitY}px`;
+    }
+
+    function animate(now) {
+        const delta = Math.min(80, now - lastTime);
+        lastTime = now;
+
+        if (!paused) elapsed += delta;
+        render(now);
+
+        frames++;
+        if (now - fpsClock >= 500) {
+            const value = Math.round(frames * 1000 / (now - fpsClock));
+            fpsElement.textContent = `${value} FPS`;
+            frames = 0;
+            fpsClock = now;
+        }
+
+        requestAnimationFrame(animate);
+    }
+
+    window.addEventListener("resize", resize);
+
+    window.addEventListener("keydown", event => {
+        if (event.key.toLowerCase() === "w") {
+            wireframe = !wireframe;
+            wireState.textContent = wireframe ? "On" : "Off";
+        }
+
+        if (event.key.toLowerCase() === "p") {
+            paused = !paused;
+            pauseState.textContent = paused ? "Paused" : "Live";
+        }
+    });
+
+    resize();
+    requestAnimationFrame(animate);
+})();
+</script>
+</body>
+</html>

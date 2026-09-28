@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gouraud-Shaded Cube — Canvas 2D</title>
+<style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #080b12; }
+    canvas { display: block; width: 100%; height: 100%; }
+    .hud {
+        position: fixed;
+        top: 18px;
+        left: 18px;
+        padding: 10px 13px;
+        color: #dce7f8;
+        background: rgba(8, 12, 21, .68);
+        border: 1px solid rgba(167, 197, 239, .18);
+        border-radius: 8px;
+        font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        letter-spacing: .02em;
+        pointer-events: none;
+        user-select: none;
+        backdrop-filter: blur(8px);
+    }
+    .hud strong {
+        color: #ffffff;
+        font-weight: 600;
+    }
+    .keys {
+        color: #91b9ef;
+    }
+</style>
+</head>
+<body>
+<canvas id="canvas" aria-label="Animated Gouraud-shaded rotating cube"></canvas>
+<div class="hud">
+    <strong>GOURAUD CUBE</strong><br>
+    <span class="keys">W</span> wireframe &nbsp; <span class="keys">P</span> pause<br>
+    <span id="status">FPS: -- · RUNNING</span>
+</div>
+<script>
+(() => {
+    "use strict";
+
+    const canvas = document.getElementById("canvas");
+    const context = canvas.getContext("2d", { alpha: false });
+    const status = document.getElementById("status");
+
+    const vertices = [
+        [-1, -1, -1], [ 1, -1, -1], [ 1,  1, -1], [-1,  1, -1],
+        [-1, -1,  1], [ 1, -1,  1], [ 1,  1,  1], [-1,  1,  1]
+    ];
+
+    const faces = [
+        { indices: [0, 3, 2, 1], color: [ 93, 143, 241] },
+        { indices: [4, 5, 6, 7], color: [245, 108, 103] },
+        { indices: [0, 4, 7, 3], color: [103, 207, 177] },
+        { indices: [1, 2, 6, 5], color: [244, 186,  83] },
+        { indices: [0, 1, 5, 4], color: [164, 111, 225] },
+        { indices: [3, 7, 6, 2], color: [ 83, 192, 224] }
+    ];
+
+    let width = 0;
+    let height = 0;
+    let imageData;
+    let pixels;
+    let depthBuffer;
+    let wireframe = false;
+    let paused = false;
+    let angle = 0;
+    let elapsed = 0;
+    let lastTime = 0;
+    let fpsFrames = 0;
+    let fpsTime = 0;
+    let fps = 0;
+
+    function resize() {
+        const ratio = window.devicePixelRatio || 1;
+        width = Math.max(1, Math.round(window.innerWidth * ratio));
+        height = Math.max(1, Math.round(window.innerHeight * ratio));
+        canvas.width = width;
+        canvas.height = height;
+        imageData = context.createImageData(width, height);
+        pixels = imageData.data;
+        depthBuffer = new Float32Array(width * height);
+    }
+
+    function multiply(a, b) {
+        const out = new Array(9);
+        for (let row = 0; row < 3; row++) {
+            for (let column = 0; column < 3; column++) {
+                out[row * 3 + column] =
+                    a[row * 3] * b[column] +
+                    a[row * 3 + 1] * b[3 + column] +
+                    a[row * 3 + 2] * b[6 + column];
+            }
+        }
+        return out;
+    }
+
+    function rotationX(a) {
+        const c = Math.cos(a);
+        const s = Math.sin(a);
+        return [1, 0, 0, 0, c, -s, 0, s, c];
+    }
+
+    function rotationY(a) {
+        const c = Math.cos(a);
+        const s = Math.sin(a);
+        return [c, 0, s, 0, 1, 0, -s, 0, c];
+    }
+
+    function transform(matrix, point) {
+        return [
+            matrix[0] * point[0] + matrix[1] * point[1] + matrix[2] * point[2],
+            matrix[3] * point[0] + matrix[4] * point[1] + matrix[5] * point[2],
+            matrix[6] * point[0] + matrix[7] * point[1] + matrix[8] * point[2]
+        ];
+    }
+
+    function subtract(a, b) {
+        return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    }
+
+    function cross(a, b) {
+        return [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0]
+        ];
+    }
+
+    function dot(a, b) {
+        return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    }
+
+    function normalize(v) {
+        const length = Math.hypot(v[0], v[1], v[2]) || 1;
+        return [v[0] / length, v[1] / length, v[2] / length];
+    }
+
+    function project(point, focalLength) {
+        return {
+            x: width * 0.5 + point[0] * focalLength / point[2],
+            y: height * 0.5 - point[1] * focalLength / point[2],
+            z: point[2],
+            invZ: 1 / point[2]
+        };
+    }
+
+    function clearBuffer() {
+        const top = [8, 12, 22];
+        const bottom = [17, 25, 41];
+        let offset = 0;
+
+        for (let y = 0; y < height; y++) {
+            const blend = y / Math.max(1, height - 1);
+            const r = top[0] + (bottom[0] - top[0]) * blend;
+            const g = top[1] + (bottom[1] - top[1]) * blend;
+            const b = top[2] + (bottom[2] - top[2]) * blend;
+
+            for (let x = 0; x < width; x++) {
+                pixels[offset] = r;
+                pixels[offset + 1] = g;
+                pixels[offset + 2] = b;
+                pixels[offset + 3] = 255;
+                offset += 4;
+            }
+        }
+
+        depthBuffer.fill(0);
+    }
+
+    function rasterizeTriangle(a, b, c) {
+        const area =
+            (b.x - a.x) * (c.y - a.y) -
+            (b.y - a.y) * (c.x - a.x);
+
+        if (Math.abs(area) < 0.00001) return;
+
+        const minX = Math.max(0, Math.floor(Math.min(a.x, b.x, c.x)));
+        const maxX = Math.min(width - 1, Math.ceil(Math.max(a.x, b.x, c.x)));
+        const minY = Math.max(0, Math.floor(Math.min(a.y, b.y, c.y)));
+        const maxY = Math.min(height - 1, Math.ceil(Math.max(a.y, b.y, c.y)));
+        const inverseArea = 1 / area;
+
+        for (let y = minY; y <= maxY; y++) {
+            const py = y + 0.5;
+
+            for (let x = minX; x <= maxX; x++) {
+                const px = x + 0.5;
+                const w0 = ((b.x - px) * (c.y - py) - (b.y - py) * (c.x - px)) * inverseArea;
+                const w1 = ((c.x - px) * (a.y - py) - (c.y - py) * (a.x - px)) * inverseArea;
+                const w2 = 1 - w0 - w1;
+
+                if (w0 < 0 || w1 < 0 || w2 < 0) continue;
+
+                const inverseDepth = w0 * a.invZ + w1 * b.invZ + w2 * c.invZ;
+                const index = y * width + x;
+
+                if (inverseDepth <= depthBuffer[index]) continue;
+
+                depthBuffer[index] = inverseDepth;
+                const pixel = index * 4;
+                pixels[pixel] = w0 * a.r + w1 * b.r + w2 * c.r;
+                pixels[pixel + 1] = w0 * a.g + w1 * b.g + w2 * c.g;
+                pixels[pixel + 2] = w0 * a.b + w1 * b.b + w2 * c.b;
+            }
+        }
+    }
+
+    function drawWireframe(triangles) {
+        context.save();
+        context.strokeStyle = "rgba(233, 244, 255, 0.78)";
+        context.lineWidth = Math.max(1, window.devicePixelRatio || 1);
+        context.lineJoin = "round";
+        context.beginPath();
+
+        for (const triangle of triangles) {
+            context.moveTo(triangle[0].x, triangle[0].y);
+            context.lineTo(triangle[1].x, triangle[1].y);
+            context.lineTo(triangle[2].x, triangle[2].y);
+            context.closePath();
+        }
+
+        context.stroke();
+        context.restore();
+    }
+
+    function render(time) {
+        clearBuffer();
+
+        const matrix = multiply(rotationY(angle * 0.83), rotationX(angle * 0.57));
+        const transformed = vertices.map((vertex) => {
+            const point = transform(matrix, vertex);
+            return [point[0], point[1], point[2] + 5.3];
+        });
+
+        const focalLength = Math.min(width, height) * 0.88;
+        const light = [
+            Math.sin(time * 0.0011) * 3.4,
+            1.7 + Math.cos(time * 0.0017) * 2.1,
+            2.8 + Math.cos(time * 0.0011) * 2.0
+        ];
+        const wireTriangles = [];
+
+        for (const face of faces) {
+            const p0 = transformed[face.indices[0]];
+            const p1 = transformed[face.indices[1]];
+            const p2 = transformed[face.indices[2]];
+            const p3 = transformed[face.indices[3]];
+            const normal = normalize(cross(subtract(p1, p0), subtract(p2, p0)));
+            const center = [
+                (p0[0] + p1[0] + p2[0] + p3[0]) * 0.25,
+                (p0[1] + p1[1] + p2[1] + p3[1]) * 0.25,
+                (p0[2] + p1[2] + p2[2] + p3[2]) * 0.25
+            ];
+
+            if (dot(normal, [-center[0], -center[1], -center[2]]) <= 0) continue;
+
+            const projected = face.indices.map((vertexIndex) => {
+                const point = transformed[vertexIndex];
+                const toLight = subtract(light, point);
+                const distance = Math.hypot(toLight[0], toLight[1], toLight[2]) || 1;
+                const lambert = Math.max(0, dot(normal, [
+                    toLight[0] / distance,
+                    toLight[1] / distance,
+                    toLight[2] / distance
+                ]));
+                const attenuation = 0.72 + 0.28 * Math.min(1, 5 / distance);
+                const brightness = Math.min(1.15, (0.16 + lambert * 0.84) * attenuation);
+                const screen = project(point, focalLength);
+
+                screen.r = Math.min(255, face.color[0] * brightness);
+                screen.g = Math.min(255, face.color[1] * brightness);
+                screen.b = Math.min(255, face.color[2] * brightness);
+                return screen;
+            });
+
+            rasterizeTriangle(projected[0], projected[1], projected[2]);
+            rasterizeTriangle(projected[0], projected[2], projected[3]);
+
+            if (wireframe) {
+                wireTriangles.push(
+                    [projected[0], projected[1], projected[2]],
+                    [projected[0], projected[2], projected[3]]
+                );
+            }
+        }
+
+        context.putImageData(imageData, 0, 0);
+
+        if (wireframe) drawWireframe(wireTriangles);
+    }
+
+    function frame(time) {
+        if (!lastTime) lastTime = time;
+        const delta = Math.min(0.1, (time - lastTime) / 1000);
+        lastTime = time;
+
+        if (!paused) {
+            elapsed += delta;
+            angle += delta * 0.9;
+            render(time);
+        }
+
+        fpsFrames++;
+        if (time - fpsTime >= 500) {
+            fps = Math.round(fpsFrames * 1000 / (time - fpsTime || 1));
+            fpsFrames = 0;
+            fpsTime = time;
+            status.textContent = `FPS: ${fps} · ${paused ? "PAUSED" : wireframe ? "WIREFRAME" : "RUNNING"}`;
+        }
+
+        requestAnimationFrame(frame);
+    }
+
+    window.addEventListener("resize", () => {
+        resize();
+        render(performance.now());
+    });
+
+    window.addEventListener("keydown", (event) => {
+        if (event.key.toLowerCase() === "w") {
+            wireframe = !wireframe;
+            render(performance.now());
+        }
+
+        if (event.key.toLowerCase() === "p") {
+            paused = !paused;
+            if (!paused) lastTime = performance.now();
+            render(performance.now());
+        }
+    });
+
+    resize();
+    render(0);
+    requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

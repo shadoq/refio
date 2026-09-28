@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gouraud Cube</title>
+<style>
+    * { box-sizing: border-box; }
+    html, body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #020814;
+    }
+    canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+        cursor: crosshair;
+    }
+</style>
+</head>
+<body>
+<canvas id="canvas" aria-label="Animated Gouraud shaded rotating cube"></canvas>
+<script>
+(() => {
+    "use strict";
+
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d", { alpha: false });
+    let imageData;
+    let pixels;
+    let depthBuffer;
+    let width = 0;
+    let height = 0;
+    let dpr = 1;
+    let paused = false;
+    let wireframe = false;
+    let lastTime = performance.now();
+    let elapsed = 0;
+    let fps = 0;
+    let frameTimes = [];
+    let frameCount = 0;
+
+    const vertices = [
+        [-1, -1, -1], [ 1, -1, -1],
+        [ 1,  1, -1], [-1,  1, -1],
+        [-1, -1,  1], [ 1, -1,  1],
+        [ 1,  1,  1], [-1,  1,  1]
+    ];
+
+    const faces = [
+        [0, 3, 2, 1],
+        [4, 5, 6, 7],
+        [0, 4, 7, 3],
+        [1, 2, 6, 5],
+        [3, 7, 6, 2],
+        [0, 1, 5, 4]
+    ];
+
+    const vertexNormals = vertices.map(([x, y, z]) => {
+        const length = Math.hypot(x, y, z);
+        return [x / length, y / length, z / length];
+    });
+
+    const palette = {
+        ambient: 0.24,
+        red: 22,
+        green: 146,
+        blue: 235
+    };
+
+    function resize() {
+        dpr = Math.min(window.devicePixelRatio || 1, 2);
+        width = Math.max(1, Math.floor(window.innerWidth * dpr));
+        height = Math.max(1, Math.floor(window.innerHeight * dpr));
+        canvas.width = width;
+        canvas.height = height;
+        imageData = ctx.createImageData(width, height);
+        pixels = imageData.data;
+        depthBuffer = new Float32Array(width * height);
+        ctx.imageSmoothingEnabled = true;
+    }
+
+    function rotate(point, ax, ay, az) {
+        let [x, y, z] = point;
+
+        const cx = Math.cos(ax);
+        const sx = Math.sin(ax);
+        const y1 = y * cx - z * sx;
+        const z1 = y * sx + z * cx;
+        y = y1;
+        z = z1;
+
+        const cy = Math.cos(ay);
+        const sy = Math.sin(ay);
+        const x1 = x * cy + z * sy;
+        const z2 = -x * sy + z * cy;
+        x = x1;
+        z = z2;
+
+        const cz = Math.cos(az);
+        const sz = Math.sin(az);
+        const x2 = x * cz - y * sz;
+        const y2 = x * sz + y * cz;
+
+        return [x2, y2, z];
+    }
+
+    function normalize(v) {
+        const length = Math.hypot(v[0], v[1], v[2]) || 1;
+        return [v[0] / length, v[1] / length, v[2] / length];
+    }
+
+    function clearBackground(time) {
+        const topR = 2;
+        const topG = 10;
+        const topB = 26;
+        const bottomR = 4;
+        const bottomG = 25;
+        const bottomB = 52;
+        const pulse = Math.sin(time * 0.00035) * 4;
+
+        for (let y = 0; y < height; y++) {
+            const t = y / Math.max(1, height - 1);
+            const glow = Math.max(0, 1 - Math.abs(t - 0.48) * 1.9) * pulse;
+            const r = topR + (bottomR - topR) * t + glow * 0.15;
+            const g = topG + (bottomG - topG) * t + glow * 0.45;
+            const b = topB + (bottomB - topB) * t + glow;
+            let index = y * width * 4;
+
+            for (let x = 0; x < width; x++) {
+                const vignette = 1 - 0.25 * Math.pow((x / width - 0.5) * 2, 2);
+                pixels[index++] = r * vignette;
+                pixels[index++] = g * vignette;
+                pixels[index++] = b * vignette;
+                pixels[index++] = 255;
+            }
+        }
+
+        depthBuffer.fill(Infinity);
+    }
+
+    function rasterizeTriangle(a, b, c) {
+        const minX = Math.max(0, Math.floor(Math.min(a.x, b.x, c.x)));
+        const maxX = Math.min(width - 1, Math.ceil(Math.max(a.x, b.x, c.x)));
+        const minY = Math.max(0, Math.floor(Math.min(a.y, b.y, c.y)));
+        const maxY = Math.min(height - 1, Math.ceil(Math.max(a.y, b.y, c.y)));
+
+        const area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+        if (Math.abs(area) < 0.0001) return;
+
+        const inverseArea = 1 / area;
+        const positive = area > 0;
+
+        for (let y = minY; y <= maxY; y++) {
+            const py = y + 0.5;
+
+            for (let x = minX; x <= maxX; x++) {
+                const px = x + 0.5;
+                const w0 = ((b.x - px) * (c.y - py) - (b.y - py) * (c.x - px)) * inverseArea;
+                const w1 = ((c.x - px) * (a.y - py) - (c.y - py) * (a.x - px)) * inverseArea;
+                const w2 = 1 - w0 - w1;
+
+                if ((positive && w0 >= 0 && w1 >= 0 && w2 >= 0) || (!positive && w0 <= 0 && w1 <= 0 && w2 <= 0)) {
+                    const depth = w0 * a.z + w1 * b.z + w2 * c.z;
+                    const bufferIndex = y * width + x;
+
+                    if (depth < depthBuffer[bufferIndex]) {
+                        depthBuffer[bufferIndex] = depth;
+                        const pixelIndex = bufferIndex * 4;
+                        pixels[pixelIndex] = w0 * a.r + w1 * b.r + w2 * c.r;
+                        pixels[pixelIndex + 1] = w0 * a.g + w1 * b.g + w2 * c.g;
+                        pixels[pixelIndex + 2] = w0 * a.b + w1 * b.b + w2 * c.b;
+                        pixels[pixelIndex + 3] = 255;
+                    }
+                }
+            }
+        }
+    }
+
+    function drawWireframe(projectedFaces) {
+        ctx.save();
+        ctx.lineWidth = Math.max(1, dpr);
+        ctx.strokeStyle = "rgba(163, 240, 255, 0.82)";
+        ctx.shadowColor = "rgba(53, 202, 255, 0.7)";
+        ctx.shadowBlur = 8 * dpr;
+        ctx.beginPath();
+
+        for (const face of projectedFaces) {
+            const points = face.points;
+            ctx.moveTo(points[0].x, points[0].y);
+            for (let i = 1; i < points.length; i++) {
+                ctx.lineTo(points[i].x, points[i].y);
+            }
+            ctx.closePath();
+        }
+
+        ctx.stroke();
+        ctx.restore();
+    }
+
+    function drawHud(lightX, lightY) {
+        const scale = dpr;
+        const pad = 20 * scale;
+        const titleSize = 16 * scale;
+        const textSize = 11 * scale;
+
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.font = `600 ${titleSize}px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+        ctx.textBaseline = "top";
+        ctx.fillStyle = "rgba(207, 244, 255, 0.96)";
+        ctx.fillText("GOURAUD CUBE", pad, pad);
+
+        ctx.font = `500 ${textSize}px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+        ctx.fillStyle = "rgba(151, 203, 224, 0.85)";
+        ctx.fillText("Canvas 2D • per-vertex Lambert lighting", pad, pad + 25 * scale);
+        ctx.fillText(`W  wireframe  ${wireframe ? "ON" : "OFF"}   ·   P  ${paused ? "resume" : "pause"}`, pad, pad + 43 * scale);
+
+        const fpsText = `${Math.round(fps)} FPS`;
+        ctx.textAlign = "right";
+        ctx.font = `600 ${13 * scale}px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+        ctx.fillStyle = "rgba(209, 245, 255, 0.96)";
+        ctx.fillText(fpsText, width - pad, pad);
+
+        const indicatorX = width - pad - 10 * scale;
+        const indicatorY = pad + 38 * scale;
+        ctx.beginPath();
+        ctx.arc(indicatorX, indicatorY, 5 * scale, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(125, 239, 255, 0.95)";
+        ctx.shadowColor = "rgba(54, 213, 255, 0.95)";
+        ctx.shadowBlur = 12 * scale;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.font = `500 ${textSize}px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+        ctx.fillStyle = "rgba(151, 203, 224, 0.85)";
+        ctx.fillText("MOVING LIGHT", indicatorX - 12 * scale, indicatorY - 5 * scale);
+
+        if (paused) {
+            ctx.textAlign = "center";
+            ctx.font = `600 ${14 * scale}px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+            ctx.fillStyle = "rgba(221, 248, 255, 0.92)";
+            ctx.fillText("PAUSED", width / 2, height - 36 * scale);
+        }
+
+        ctx.restore();
+    }
+
+    function render(time) {
+        if (!paused) elapsed += time - lastTime;
+        const delta = time - lastTime;
+        lastTime = time;
+
+        if (!paused && delta > 0 && delta < 250) {
+            frameTimes.push(delta);
+            if (frameTimes.length > 60) frameTimes.shift();
+            fps = 1000 / (frameTimes.reduce((sum, value) => sum + value, 0) / frameTimes.length);
+        }
+
+        clearBackground(elapsed);
+
+        const angleX = elapsed * 0.00053;
+        const angleY = elapsed * 0.00071;
+        const angleZ = elapsed * 0.00019;
+        const cameraDistance = 5.2;
+        const focalLength = Math.min(width, height) * 0.82;
+        const centerX = width * 0.5;
+        const centerY = height * 0.51;
+        const light = [
+            Math.cos(elapsed * 0.0009) * 3.2,
+            2.2 + Math.sin(elapsed * 0.0013) * 1.5,
+            3.5 + Math.sin(elapsed * 0.0007) * 1.2
+        ];
+
+        const transformed = vertices.map((vertex, index) => {
+            const position = rotate(vertex, angleX, angleY, angleZ);
+            const normal = normalize(rotate(vertexNormals[index], angleX, angleY, angleZ));
+            const toLight = normalize([
+                light[0] - position[0],
+                light[1] - position[1],
+                light[2] - position[2]
+            ]);
+            const lambert = Math.max(0, normal[0] * toLight[0] + normal[1] * toLight[1] + normal[2] * toLight[2]);
+            const intensity = Math.min(1.15, palette.ambient + lambert * 0.92);
+            const cameraZ = position[2] + cameraDistance;
+
+            return {
+                world: position,
+                x: centerX + position[0] * focalLength / cameraZ,
+                y: centerY - position[1] * focalLength / cameraZ,
+                z: cameraZ,
+                r: Math.min(255, palette.red * intensity + 5),
+                g: Math.min(255, palette.green * intensity + 11),
+                b: Math.min(255, palette.blue * intensity + 13)
+            };
+        });
+
+        const visibleFaces = [];
+
+        for (const face of faces) {
+            const p0 = transformed[face[0]];
+            const p1 = transformed[face[1]];
+            const p2 = transformed[face[2]];
+            const edgeA = [
+                p1.world[0] - p0.world[0],
+                p1.world[1] - p0.world[1],
+                p1.world[2] - p0.world[2]
+            ];
+            const edgeB = [
+                p2.world[0] - p0.world[0],
+                p2.world[1] - p0.world[1],
+                p2.world[2] - p0.world[2]
+            ];
+            const normalZ = edgeA[0] * edgeB[1] - edgeA[1] * edgeB[0];
+            const normalX = edgeA[1] * edgeB[2] - edgeA[2] * edgeB[1];
+            const normalY = edgeA[2] * edgeB[0] - edgeA[0] * edgeB[2];
+            const viewDirection = [-p0.world[0], -p0.world[1], cameraDistance - p0.world[2]];
+
+            if (normalX * viewDirection[0] + normalY * viewDirection[1] + normalZ * viewDirection[2] <= 0) continue;
+
+            const points = face.map(index => transformed[index]);
+            rasterizeTriangle(points[0], points[1], points[2]);
+            rasterizeTriangle(points[0], points[2], points[3]);
+            visibleFaces.push({ points });
+        }
+
+        ctx.putImageData(imageData, 0, 0);
+
+        if (wireframe) drawWireframe(visibleFaces);
+        drawHud(light[0], light[1]);
+
+        frameCount++;
+        requestAnimationFrame(render);
+    }
+
+    window.addEventListener("resize", resize);
+
+    window.addEventListener("keydown", event => {
+        if (event.key.toLowerCase() === "w") {
+            event.preventDefault();
+            wireframe = !wireframe;
+        }
+
+        if (event.key.toLowerCase() === "p") {
+            event.preventDefault();
+            paused = !paused;
+            lastTime = performance.now();
+        }
+    });
+
+    resize();
+    requestAnimationFrame(render);
+})();
+</script>
+</body>
+</html>

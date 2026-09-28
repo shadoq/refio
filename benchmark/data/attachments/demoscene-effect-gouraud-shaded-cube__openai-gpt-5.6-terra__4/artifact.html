@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gouraud Shaded Cube · Canvas 2D</title>
+<style>
+    :root {
+        color-scheme: dark;
+    }
+
+    * {
+        box-sizing: border-box;
+    }
+
+    html,
+    body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: #030817;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    body {
+        background:
+            radial-gradient(circle at 50% 35%, #11315c 0%, #081a38 34%, #030817 78%),
+            linear-gradient(145deg, #07142d, #020611);
+    }
+
+    canvas {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+    }
+
+    .hud {
+        position: fixed;
+        top: 20px;
+        left: 20px;
+        min-width: 230px;
+        padding: 15px 17px;
+        border: 1px solid rgba(119, 211, 255, 0.22);
+        border-radius: 14px;
+        background: linear-gradient(135deg, rgba(6, 19, 43, 0.82), rgba(5, 12, 29, 0.64));
+        box-shadow: 0 12px 36px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+        backdrop-filter: blur(12px);
+        color: #e8f8ff;
+        pointer-events: none;
+        user-select: none;
+    }
+
+    .hud h1 {
+        margin: 0 0 8px;
+        color: #8ee8ff;
+        font-size: 12px;
+        font-weight: 750;
+        letter-spacing: 0.13em;
+        text-transform: uppercase;
+    }
+
+    .hud p {
+        margin: 4px 0;
+        color: rgba(225, 243, 255, 0.76);
+        font-size: 12px;
+        line-height: 1.45;
+    }
+
+    .hud strong {
+        color: #ffffff;
+        font-weight: 700;
+    }
+
+    .hud kbd {
+        display: inline-block;
+        min-width: 20px;
+        padding: 1px 5px;
+        border: 1px solid rgba(158, 226, 255, 0.36);
+        border-radius: 4px;
+        background: rgba(122, 211, 255, 0.12);
+        color: #a9edff;
+        font-family: inherit;
+        font-size: 10px;
+        font-weight: 800;
+        text-align: center;
+    }
+
+    .status {
+        margin-top: 9px !important;
+        padding-top: 8px;
+        border-top: 1px solid rgba(137, 211, 255, 0.15);
+        color: #a7eaff !important;
+    }
+
+    @media (max-width: 560px) {
+        .hud {
+            top: 12px;
+            left: 12px;
+            min-width: 0;
+            padding: 12px 14px;
+        }
+    }
+</style>
+</head>
+<body>
+<canvas id="canvas" role="img" aria-label="A rotating Gouraud-shaded blue cube rendered with a Canvas 2D software rasterizer."></canvas>
+
+<section class="hud" aria-label="Cube controls and performance">
+    <h1>Canvas 2D · Gouraud Cube</h1>
+    <p><kbd>W</kbd> Toggle wireframe &nbsp; <kbd>P</kbd> Pause animation</p>
+    <p>FPS <strong id="fps">0</strong> &nbsp;·&nbsp; <span id="mode">Shaded</span></p>
+    <p class="status" id="status" aria-live="polite">Animation running</p>
+</section>
+
+<script>
+(() => {
+    "use strict";
+
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d", { alpha: false });
+    const fpsElement = document.getElementById("fps");
+    const modeElement = document.getElementById("mode");
+    const statusElement = document.getElementById("status");
+
+    const vertices = [
+        [-1, -1, -1],
+        [ 1, -1, -1],
+        [ 1,  1, -1],
+        [-1,  1, -1],
+        [-1, -1,  1],
+        [ 1, -1,  1],
+        [ 1,  1,  1],
+        [-1,  1,  1]
+    ];
+
+    const faces = [
+        [0, 3, 2, 1],
+        [5, 6, 7, 4],
+        [4, 7, 3, 0],
+        [1, 2, 6, 5],
+        [3, 7, 6, 2],
+        [4, 0, 1, 5]
+    ];
+
+    const camera = { x: 0, y: 0, z: 6.2 };
+    const material = { r: 24, g: 174, b: 239 };
+    const ambient = 0.18;
+    let width = 1;
+    let height = 1;
+    let pixelRatio = 1;
+    let wireframe = false;
+    let paused = false;
+    let frozenTime = 0;
+    let pauseStarted = 0;
+    let lastFrame = performance.now();
+    let smoothFps = 60;
+
+    const vec3 = {
+        add: (a, b) => ({ x: a.x + b.x, y: a.y + b.y, z: a.z + b.z }),
+        sub: (a, b) => ({ x: a.x - b.x, y: a.y - b.y, z: a.z - b.z }),
+        scale: (v, s) => ({ x: v.x * s, y: v.y * s, z: v.z * s }),
+        dot: (a, b) => a.x * b.x + a.y * b.y + a.z * b.z,
+        cross: (a, b) => ({
+            x: a.y * b.z - a.z * b.y,
+            y: a.z * b.x - a.x * b.z,
+            z: a.x * b.y - a.y * b.x
+        }),
+        length: (v) => Math.hypot(v.x, v.y, v.z),
+        normalize: (v) => {
+            const length = Math.hypot(v.x, v.y, v.z) || 1;
+            return { x: v.x / length, y: v.y / length, z: v.z / length };
+        }
+    };
+
+    function rotateX(v, angle) {
+        const c = Math.cos(angle);
+        const s = Math.sin(angle);
+        return { x: v.x, y: v.y * c - v.z * s, z: v.y * s + v.z * c };
+    }
+
+    function rotateY(v, angle) {
+        const c = Math.cos(angle);
+        const s = Math.sin(angle);
+        return { x: v.x * c + v.z * s, y: v.y, z: -v.x * s + v.z * c };
+    }
+
+    function rotateZ(v, angle) {
+        const c = Math.cos(angle);
+        const s = Math.sin(angle);
+        return { x: v.x * c - v.y * s, y: v.x * s + v.y * c, z: v.z };
+    }
+
+    function resize() {
+        pixelRatio = Math.min(window.devicePixelRatio || 1, 1.5);
+        width = Math.max(1, Math.floor(window.innerWidth * pixelRatio));
+        height = Math.max(1, Math.floor(window.innerHeight * pixelRatio));
+        canvas.width = width;
+        canvas.height = height;
+    }
+
+    function project(point) {
+        const depth = camera.z - point.z;
+        const focalLength = Math.min(width, height) * 0.83;
+        return {
+            x: width * 0.5 + point.x * focalLength / depth,
+            y: height * 0.5 - point.y * focalLength / depth,
+            z: depth
+        };
+    }
+
+    function drawBackground(time) {
+        const glowX = width * (0.5 + Math.sin(time * 0.00018) * 0.08);
+        const glowY = height * 0.4;
+        const gradient = ctx.createRadialGradient(glowX, glowY, 0, glowX, glowY, Math.max(width, height) * 0.72);
+        gradient.addColorStop(0, "#123c6e");
+        gradient.addColorStop(0.34, "#0a2146");
+        gradient.addColorStop(0.76, "#040d20");
+        gradient.addColorStop(1, "#020611");
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, width, height);
+
+        const horizon = ctx.createLinearGradient(0, height * 0.58, 0, height);
+        horizon.addColorStop(0, "rgba(3, 10, 25, 0)");
+        horizon.addColorStop(1, "rgba(0, 2, 9, 0.52)");
+        ctx.fillStyle = horizon;
+        ctx.fillRect(0, height * 0.58, width, height * 0.42);
+    }
+
+    function rasterizeTriangle(image, triangle) {
+        const [a, b, c] = triangle;
+        const minX = Math.max(0, Math.floor(Math.min(a.x, b.x, c.x)));
+        const maxX = Math.min(width - 1, Math.ceil(Math.max(a.x, b.x, c.x)));
+        const minY = Math.max(0, Math.floor(Math.min(a.y, b.y, c.y)));
+        const maxY = Math.min(height - 1, Math.ceil(Math.max(a.y, b.y, c.y)));
+        const denominator = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
+
+        if (Math.abs(denominator) < 0.00001) {
+            return;
+        }
+
+        const data = image.data;
+        for (let y = minY; y <= maxY; y++) {
+            for (let x = minX; x <= maxX; x++) {
+                const px = x + 0.5;
+                const py = y + 0.5;
+                const u = ((b.y - c.y) * (px - c.x) + (c.x - b.x) * (py - c.y)) / denominator;
+                const v = ((c.y - a.y) * (px - c.x) + (a.x - c.x) * (py - c.y)) / denominator;
+                const w = 1 - u - v;
+
+                if (u >= 0 && v >= 0 && w >= 0) {
+                    const offset = (y * width + x) * 4;
+                    data[offset] = a.r * u + b.r * v + c.r * w;
+                    data[offset + 1] = a.g * u + b.g * v + c.g * w;
+                    data[offset + 2] = a.b * u + b.b * v + c.b * w;
+                    data[offset + 3] = 255;
+                }
+            }
+        }
+    }
+
+    function drawWireframe(triangles) {
+        ctx.save();
+        ctx.lineJoin = "round";
+        ctx.lineWidth = Math.max(1, pixelRatio);
+        ctx.strokeStyle = "rgba(178, 243, 255, 0.92)";
+        ctx.shadowColor = "rgba(0, 206, 255, 0.45)";
+        ctx.shadowBlur = 5 * pixelRatio;
+
+        for (const triangle of triangles) {
+            ctx.beginPath();
+            ctx.moveTo(triangle[0].x, triangle[0].y);
+            ctx.lineTo(triangle[1].x, triangle[1].y);
+            ctx.lineTo(triangle[2].x, triangle[2].y);
+            ctx.closePath();
+            ctx.stroke();
+        }
+
+        ctx.restore();
+    }
+
+    function render(now) {
+        const elapsed = paused ? frozenTime : now - pauseStarted;
+        const angleY = elapsed * 0.00063;
+        const angleX = elapsed * 0.00039 + 0.38;
+        const angleZ = elapsed * 0.00022;
+        const light = {
+            x: Math.cos(elapsed * 0.00115) * 3.5,
+            y: 2.1 + Math.sin(elapsed * 0.00167) * 1.6,
+            z: 3.7 + Math.sin(elapsed * 0.00083) * 1.25
+        };
+
+        const transformed = vertices.map((vertex) => {
+            let position = { x: vertex[0], y: vertex[1], z: vertex[2] };
+            position = rotateX(position, angleX);
+            position = rotateY(position, angleY);
+            position = rotateZ(position, angleZ);
+            position = vec3.scale(position, 1.35);
+
+            let normal = vec3.normalize({ x: vertex[0], y: vertex[1], z: vertex[2] });
+            normal = rotateX(normal, angleX);
+            normal = rotateY(normal, angleY);
+            normal = rotateZ(normal, angleZ);
+            normal = vec3.normalize(normal);
+
+            const lightDirection = vec3.normalize(vec3.sub(light, position));
+            const lambert = Math.max(0, vec3.dot(normal, lightDirection));
+            const intensity = Math.min(1, ambient + lambert * 0.88);
+            const projected = project(position);
+
+            return {
+                world: position,
+                normal,
+                x: projected.x,
+                y: projected.y,
+                z: projected.z,
+                r: Math.min(255, material.r * intensity + 5),
+                g: Math.min(255, material.g * intensity + 8),
+                b: Math.min(255, material.b * intensity + 10)
+            };
+        });
+
+        const triangles = [];
+
+        for (const face of faces) {
+            const a = transformed[face[0]];
+            const b = transformed[face[1]];
+            const c = transformed[face[2]];
+            const d = transformed[face[3]];
+            const edgeAB = vec3.sub(b.world, a.world);
+            const edgeAC = vec3.sub(c.world, a.world);
+            const faceNormal = vec3.normalize(vec3.cross(edgeAB, edgeAC));
+            const faceCenter = vec3.scale(vec3.add(vec3.add(a.world, b.world), vec3.add(c.world, d.world)), 0.25);
+            const viewDirection = vec3.normalize(vec3.sub(camera, faceCenter));
+
+            if (vec3.dot(faceNormal, viewDirection) <= 0) {
+                continue;
+            }
+
+            triangles.push([a, b, c]);
+            triangles.push([a, c, d]);
+        }
+
+        triangles.sort((first, second) => {
+            const firstDepth = (first[0].z + first[1].z + first[2].z) / 3;
+            const secondDepth = (second[0].z + second[1].z + second[2].z) / 3;
+            return secondDepth - firstDepth;
+        });
+
+        drawBackground(now);
+        const frame = ctx.getImageData(0, 0, width, height);
+
+        for (const triangle of triangles) {
+            rasterizeTriangle(frame, triangle);
+        }
+
+        ctx.putImageData(frame, 0, 0);
+
+        if (wireframe) {
+            drawWireframe(triangles);
+        }
+
+        const delta = Math.max(1, now - lastFrame);
+        const instantaneousFps = 1000 / delta;
+        smoothFps += (instantaneousFps - smoothFps) * 0.08;
+        lastFrame = now;
+        fpsElement.textContent = smoothFps.toFixed(1);
+
+        requestAnimationFrame(render);
+    }
+
+    window.addEventListener("resize", resize);
+
+    window.addEventListener("keydown", (event) => {
+        if (event.repeat) {
+            return;
+        }
+
+        if (event.key.toLowerCase() === "w") {
+            wireframe = !wireframe;
+            modeElement.textContent = wireframe ? "Shaded + wireframe" : "Shaded";
+            statusElement.textContent = wireframe ? "Wireframe overlay enabled" : "Wireframe overlay disabled";
+        }
+
+        if (event.key.toLowerCase() === "p") {
+            paused = !paused;
+
+            if (paused) {
+                frozenTime = performance.now() - pauseStarted;
+                statusElement.textContent = "Animation paused";
+            } else {
+                pauseStarted = performance.now() - frozenTime;
+                statusElement.textContent = "Animation running";
+            }
+        }
+    });
+
+    resize();
+    pauseStarted = performance.now();
+    requestAnimationFrame(render);
+})();
+</script>
+</body>
+</html>

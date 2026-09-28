@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Gouraud Shaded Cube</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: #0a0a0f;
+    overflow: hidden;
+  }
+  canvas {
+    display: block;
+    background: #000;
+  }
+  #hud {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    color: #e8e8e8;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 14px;
+    line-height: 1.5;
+    background: rgba(0, 0, 0, 0.45);
+    padding: 8px 14px;
+    border-radius: 6px;
+    pointer-events: none;
+    user-select: none;
+    white-space: pre;
+  }
+</style>
+</head>
+<body>
+
+<canvas id="c" width="800" height="600"></canvas>
+<div id="hud">FPS: --
+Mode: Shaded
+State: Running
+W: wireframe  |  P: pause</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---------------------------------------------------------------------
+  // Canvas / HUD setup
+  // ---------------------------------------------------------------------
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const hud = document.getElementById('hud');
+
+  let imageData = null;   // pixel buffer used for Gouraud-shaded rasterization
+  let zBuffer = null;     // per-pixel depth buffer (camera-space z, smaller = closer)
+
+  function resizeCanvas() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    imageData = ctx.createImageData(canvas.width, canvas.height);
+    zBuffer = new Float32Array(canvas.width * canvas.height);
+  }
+  window.addEventListener('resize', resizeCanvas);
+  resizeCanvas();
+
+  // ---------------------------------------------------------------------
+  // Small 3D vector helpers (plain arrays [x, y, z] — no matrix library)
+  // ---------------------------------------------------------------------
+  function sub(a, b) { return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; }
+  function cross(a, b) {
+    return [
+      a[1] * b[2] - a[2] * b[1],
+      a[2] * b[0] - a[0] * b[2],
+      a[0] * b[1] - a[1] * b[0]
+    ];
+  }
+  function dot(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+  function length(a) { return Math.sqrt(dot(a, a)); }
+  function normalize(a) {
+    const l = length(a) || 1e-6;
+    return [a[0] / l, a[1] / l, a[2] / l];
+  }
+  function clamp(v, min, max) { return v < min ? min : (v > max ? max : v); }
+
+  // ---------------------------------------------------------------------
+  // Geometry: cube defined by 8 vertices and 6 quad faces (outward-facing
+  // winding order using the right-hand rule: normal = (v1-v0) x (v2-v0)).
+  // Each face is split into 2 triangles for rasterization.
+  // ---------------------------------------------------------------------
+  const vertices = [
+    [-1, -1, -1], // 0
+    [ 1, -1, -1], // 1
+    [ 1,  1, -1], // 2
+    [-1,  1, -1], // 3
+    [-1, -1,  1], // 4
+    [ 1, -1,  1], // 5
+    [ 1,  1,  1], // 6
+    [-1,  1,  1]  // 7
+  ];
+
+  const faces = [
+    { idx: [0, 3, 2, 1], color: [220, 60, 60]  },  // front  (z = -1) - red
+    { idx: [4, 5, 6, 7], color: [60, 200, 90]  },  // back   (z = +1) - green
+    { idx: [1, 2, 6, 5], color: [60, 120, 220] },  // right  (x = +1) - blue
+    { idx: [0, 4, 7, 3], color: [230, 210, 60] },  // left   (x = -1) - yellow
+    { idx: [3, 7, 6, 2], color: [200, 80, 200] },  // top    (y = +1) - magenta
+    { idx: [0, 1, 5, 4], color: [80, 200, 200] }   // bottom (y = -1) - cyan
+  ];
+
+  // Precompute the 12 triangles (2 per quad face) once — static topology.
+  const triangleDefs = [];
+  faces.forEach(f => {
+    triangleDefs.push({ idx: [f.idx[0], f.idx[1], f.idx[2]], color: f.color });
+    triangleDefs.push({ idx: [f.idx[0], f.idx[2], f.idx[3]], color: f.color });
+  });
+
+  // ---------------------------------------------------------------------
+  // Rotation: apply rotation about X, then Y, then Z axes using direct
+  // trigonometric rotation formulas (equivalent to multiplying by the
+  // standard 3x3 rotation matrices Rz * Ry * Rx).
+  // ---------------------------------------------------------------------
+  function rotatePoint(p, ax, ay, az) {
+    let [x, y, z] = p;
+
+    // Rotate around X axis
+    const cosX = Math.cos(ax), sinX = Math.sin(ax);
+    let y1 = y * cosX - z * sinX;
+    let z1 = y * sinX + z * cosX;
+    y = y1; z = z1;
+
+    // Rotate around Y axis
+    const cosY = Math.cos(ay), sinY = Math.sin(ay);
+    let x2 = x * cosY + z * sinY;
+    let z2 = -x * sinY + z * cosY;
+    x = x2; z = z2;
+
+    // Rotate around Z axis
+    const cosZ = Math.cos(az), sinZ = Math.sin(az);
+    let x3 = x * cosZ - y * sinZ;
+    let y3 = x * sinZ + y * cosZ;
+    x = x3; y = y3;
+
+    return [x, y, z];
+  }
+
+  // ---------------------------------------------------------------------
+  // Simulation / animation state
+  // ---------------------------------------------------------------------
+  const camDistance = 4.5;   // how far the cube is pushed in front of the camera
+  let simTime = 0;           // accumulated simulation time (frozen while paused)
+  let paused = false;
+  let wireframe = false;
+
+  let lastTimestamp = null;
+  let frameAccum = 0;
+  let fpsTimer = 0;
+  let fps = 0;
+
+  // ---------------------------------------------------------------------
+  // Input handling
+  // ---------------------------------------------------------------------
+  window.addEventListener('keydown', (e) => {
+    const k = e.key.toLowerCase();
+    if (k === 'w') wireframe = !wireframe;
+    if (k === 'p') paused = !paused;
+  });
+
+  // ---------------------------------------------------------------------
+  // Edge function used for barycentric-coordinate triangle rasterization.
+  // ---------------------------------------------------------------------
+  function edgeFn(a, b, c) {
+    return (c.x - a.x) * (b.y - a.y) - (c.y - a.y) * (b.x - a.x);
+  }
+
+  // Rasterize a single triangle into the pixel/depth buffers using a
+  // bounding-box + barycentric-weight approach. Colors are linearly
+  // interpolated per pixel from the 3 vertex colors -> true Gouraud shading.
+  function rasterizeTriangle(pts, colors, data, zbuf, width, height) {
+    const [p0, p1, p2] = pts;
+
+    const minX = Math.max(0, Math.floor(Math.min(p0.x, p1.x, p2.x)));
+    const maxX = Math.min(width - 1, Math.ceil(Math.max(p0.x, p1.x, p2.x)));
+    const minY = Math.max(0, Math.floor(Math.min(p0.y, p1.y, p2.y)));
+    const maxY = Math.min(height - 1, Math.ceil(Math.max(p0.y, p1.y, p2.y)));
+    if (minX > maxX || minY > maxY) return;
+
+    const area = edgeFn(p0, p1, p2);
+    if (Math.abs(area) < 1e-9) return;
+
+    const c0 = colors[0], c1 = colors[1], c2 = colors[2];
+
+    for (let y = minY; y <= maxY; y++) {
+      for (let x = minX; x <= maxX; x++) {
+        const sample = { x: x + 0.5, y: y + 0.5 };
+
+        let b0 = edgeFn(p1, p2, sample);
+        let b1 = edgeFn(p2, p0, sample);
+        let b2 = edgeFn(p0, p1, sample);
+
+        // Pixel is inside the triangle if all barycentric weights share
+        // the same sign as the total triangle area.
+        if ((b0 >= 0 && b1 >= 0 && b2 >= 0) || (b0 <= 0 && b1 <= 0 && b2 <= 0)) {
+          b0 /= area; b1 /= area; b2 /= area;
+
+          // Depth test (z-buffer) using barycentric-interpolated camera-space z
+          const depth = b0 * p0.z + b1 * p1.z + b2 * p2.z;
+          const pixIdx = y * width + x;
+
+          if (depth < zbuf[pixIdx]) {
+            zbuf[pixIdx] = depth;
+
+            // Gouraud color interpolation: blend the 3 vertex colors
+            const r = b0 * c0[0] + b1 * c1[0] + b2 * c2[0];
+            const g = b0 * c0[1] + b1 * c1[1] + b2 * c2[1];
+            const bl = b0 * c0[2] + b1 * c1[2] + b2 * c2[2];
+
+            const off = pixIdx * 4;
+            data[off]     = r;
+            data[off + 1] = g;
+            data[off + 2] = bl;
+            data[off + 3] = 255;
+          }
+        }
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Per-frame pipeline: rotate -> project -> cull -> light -> (rasterize)
+  // ---------------------------------------------------------------------
+  function computeTriangles() {
+    const angleX = simTime * 0.6;
+    const angleY = simTime * 0.9;
+    const angleZ = simTime * 0.3;
+
+    // Transform vertices into camera space: rotate, then push in front of
+    // the camera by camDistance along +z (camera sits at origin looking +z).
+    const camVerts = vertices.map(v => {
+      const r = rotatePoint(v, angleX, angleY, angleZ);
+      return [r[0], r[1], r[2] + camDistance];
+    });
+
+    // Moving light source: orbits around the cube over time, independent
+    // animation driven by the same simulation clock (freezes when paused).
+    const lightAngle = simTime * 1.2;
+    const lightPos = [
+      Math.cos(lightAngle) * 4.0,
+      Math.sin(lightAngle * 0.8) * 2.5 + 0.5,
+      camDistance + Math.sin(lightAngle * 0.6) * 3.0
+    ];
+
+    const focal = Math.min(canvas.width, canvas.height) * 0.9;
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+
+    const ambient = 0.2;
+    const diffuseCoeff = 0.9;
+
+    const renderList = [];
+
+    for (const tri of triangleDefs) {
+      const [i0, i1, i2] = tri.idx;
+      const v0 = camVerts[i0], v1 = camVerts[i1], v2 = camVerts[i2];
+
+      // --- Backface culling ---
+      // Compute the triangle's normal in camera space from its edges.
+      const e1 = sub(v1, v0);
+      const e2 = sub(v2, v0);
+      const normal = cross(e1, e2);
+
+      // Camera looks down +z from the origin. A front-facing (visible)
+      // triangle has its outward normal pointing back toward the camera,
+      // i.e. a negative z component. Cull anything else.
+      if (normal[2] >= 0) continue;
+
+      const unitNormal = normalize(normal);
+
+      // --- Per-vertex Lambertian lighting (Gouraud) ---
+      // Intensity is computed independently for each vertex using that
+      // vertex's own position relative to the moving light source.
+      const verts3 = [v0, v1, v2];
+      const vertColors = verts3.map(vp => {
+        const toLight = normalize(sub(lightPos, vp));
+        const lambert = Math.max(0, dot(unitNormal, toLight));
+        const intensity = clamp(ambient + diffuseCoeff * lambert, 0, 1.3);
+        return [
+          clamp(tri.color[0] * intensity, 0, 255),
+          clamp(tri.color[1] * intensity, 0, 255),
+          clamp(tri.color[2] * intensity, 0, 255)
+        ];
+      });
+
+      // --- Perspective projection + viewport transform ---
+      const screen = verts3.map(v => ({
+        x: cx + (v[0] * focal) / v[2],
+        y: cy - (v[1] * focal) / v[2], // invert y for screen coordinates
+        z: v[2]
+      }));
+
+      renderList.push({ screen, colors: vertColors });
+    }
+
+    return renderList;
+  }
+
+  function renderFrame() {
+    const w = canvas.width, h = canvas.height;
+    const triangles = computeTriangles();
+
+    if (wireframe) {
+      // Wireframe mode: dark background, stroke only the edges of the
+      // front-facing (already-culled) triangles.
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, w, h);
+      ctx.strokeStyle = '#e6e6e6';
+      ctx.lineWidth = 1;
+
+      for (const t of triangles) {
+        ctx.beginPath();
+        ctx.moveTo(t.screen[0].x, t.screen[0].y);
+        ctx.lineTo(t.screen[1].x, t.screen[1].y);
+        ctx.lineTo(t.screen[2].x, t.screen[2].y);
+        ctx.closePath();
+        ctx.stroke();
+      }
+    } else {
+      // Gouraud-shaded fill mode: rasterize into a pixel buffer with a
+      // z-buffer for correct hidden-surface removal.
+      const data = imageData.data;
+      data.fill(0);
+      for (let i = 3; i < data.length; i += 4) data[i] = 255; // opaque
+      zBuffer.fill(Infinity);
+
+      for (const t of triangles) {
+        rasterizeTriangle(t.screen, t.colors, data, zBuffer, w, h);
+      }
+
+      ctx.putImageData(imageData, 0, 0);
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // HUD
+  // ---------------------------------------------------------------------
+  function updateHUD() {
+    hud.textContent =
+      "FPS: " + fps +
+      "\nMode: " + (wireframe ? "Wireframe" : "Shaded") +
+      "\nState: " + (paused ? "Paused" : "Running") +
+      "\nW: wireframe  |  P: pause";
+  }
+
+  // ---------------------------------------------------------------------
+  // Main loop: delta-time driven so pausing/resuming never causes a jump.
+  // ---------------------------------------------------------------------
+  function loop(now) {
+    if (lastTimestamp === null) lastTimestamp = now;
+    let dt = (now - lastTimestamp) / 1000;
+    lastTimestamp = now;
+    if (dt > 0.25) dt = 0.25; // clamp huge gaps (e.g. tab switch)
+
+    if (!paused) {
+      simTime += dt;
+
+      // FPS is only measured/updated while running, per spec.
+      frameAccum++;
+      fpsTimer += dt;
+      if (fpsTimer >= 0.5) {
+        fps = Math.round(frameAccum / fpsTimer);
+        frameAccum = 0;
+        fpsTimer = 0;
+      }
+    }
+
+    renderFrame();
+    updateHUD();
+
+    requestAnimationFrame(loop);
+  }
+
+  requestAnimationFrame(loop);
+})();
+</script>
+
+</body>
+</html>

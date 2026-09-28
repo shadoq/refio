@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Gouraud Shaded Rotating Cube - Canvas 2D</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: #0a0a0f;
+    overflow: hidden;
+    font-family: 'Segoe UI', Arial, sans-serif;
+  }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+  }
+  canvas {
+    background: #000000;
+    display: block;
+    box-shadow: 0 0 40px rgba(80, 120, 255, 0.15);
+    border-radius: 4px;
+  }
+</style>
+</head>
+<body>
+
+<canvas id="cubeCanvas"></canvas>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---------------------------------------------------------------------
+  // SETUP: canvas, context, offscreen pixel buffer (ImageData)
+  // ---------------------------------------------------------------------
+  const canvas = document.getElementById('cubeCanvas');
+  const ctx = canvas.getContext('2d');
+
+  let width = 0, height = 0;
+  let centerX = 0, centerY = 0;
+  let imageData = null;
+  let focalLength = 500;
+
+  const FOV_DEGREES = 60;
+  const CAMERA_DISTANCE = 4.2; // how far the cube center is pushed away from the camera along +Z
+
+  function resize() {
+    width  = Math.max(200, Math.floor(window.innerWidth  * 0.9));
+    height = Math.max(200, Math.floor(window.innerHeight * 0.85));
+
+    canvas.width  = width;
+    canvas.height = height;
+
+    centerX = width / 2;
+    centerY = height / 2;
+
+    // Recreate the offscreen pixel buffer to match the new canvas size.
+    imageData = ctx.createImageData(width, height);
+
+    // Recompute focal length from field-of-view so perspective looks consistent
+    // across different canvas sizes.
+    const fovRad = FOV_DEGREES * Math.PI / 180;
+    focalLength = (height / 2) / Math.tan(fovRad / 2);
+  }
+
+  window.addEventListener('resize', resize);
+
+  // ---------------------------------------------------------------------
+  // VECTOR MATH HELPERS
+  // ---------------------------------------------------------------------
+  function sub(a, b) { return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z }; }
+  function dot(a, b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+  function cross(a, b) {
+    return {
+      x: a.y * b.z - a.z * b.y,
+      y: a.z * b.x - a.x * b.z,
+      z: a.x * b.y - a.y * b.x
+    };
+  }
+  function length(a) { return Math.sqrt(dot(a, a)); }
+  function normalize(a) {
+    const len = length(a) || 1e-6;
+    return { x: a.x / len, y: a.y / len, z: a.z / len };
+  }
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+  // ---------------------------------------------------------------------
+  // ROTATION MATRICES (as pure functions performing the matrix multiply
+  // on a single vector). Angles are driven by elapsed simulation time,
+  // not by fixed per-frame increments, so rotation speed is frame-rate
+  // independent.
+  // ---------------------------------------------------------------------
+  function rotateX(v, angle) {
+    const c = Math.cos(angle), s = Math.sin(angle);
+    return { x: v.x, y: v.y * c - v.z * s, z: v.y * s + v.z * c };
+  }
+  function rotateY(v, angle) {
+    const c = Math.cos(angle), s = Math.sin(angle);
+    return { x: v.x * c + v.z * s, y: v.y, z: -v.x * s + v.z * c };
+  }
+  function rotateZ(v, angle) {
+    const c = Math.cos(angle), s = Math.sin(angle);
+    return { x: v.x * c - v.y * s, y: v.x * s + v.y * c, z: v.z };
+  }
+  function rotateVertex(v, ax, ay, az) {
+    let r = rotateZ(v, az);
+    r = rotateX(r, ax);
+    r = rotateY(r, ay);
+    return r;
+  }
+
+  // ---------------------------------------------------------------------
+  // CUBE GEOMETRY (model / local space). Side length ~1.5 (half-extent 0.75).
+  // ---------------------------------------------------------------------
+  const vertices = [
+    { x: -0.75, y: -0.75, z: -0.75 }, // 0
+    { x:  0.75, y: -0.75, z: -0.75 }, // 1
+    { x:  0.75, y:  0.75, z: -0.75 }, // 2
+    { x: -0.75, y:  0.75, z: -0.75 }, // 3
+    { x: -0.75, y: -0.75, z:  0.75 }, // 4
+    { x:  0.75, y: -0.75, z:  0.75 }, // 5
+    { x:  0.75, y:  0.75, z:  0.75 }, // 6
+    { x: -0.75, y:  0.75, z:  0.75 }  // 7
+  ];
+
+  // Each face is a quad of vertex indices, wound so that cross(edge1, edge2)
+  // points OUTWARD from the cube (verified analytically for this geometry).
+  const faces = [
+    { indices: [0, 3, 2, 1] }, // front  (z = -0.75), outward normal (0,0,-1)
+    { indices: [4, 5, 6, 7] }, // back   (z =  0.75), outward normal (0,0, 1)
+    { indices: [0, 4, 7, 3] }, // left   (x = -0.75), outward normal (-1,0,0)
+    { indices: [1, 2, 6, 5] }, // right  (x =  0.75), outward normal ( 1,0,0)
+    { indices: [0, 1, 5, 4] }, // top    (y = -0.75), outward normal (0,-1,0)
+    { indices: [3, 7, 6, 2] }  // bottom (y =  0.75), outward normal (0, 1,0)
+  ];
+
+  // Distinct hue per face for visual clarity.
+  function hslToRgb(h, s, l) {
+    const c = (1 - Math.abs(2 * l - 1)) * s;
+    const x = c * (1 - Math.abs((h / 60) % 2 - 1));
+    const m = l - c / 2;
+    let r = 0, g = 0, b = 0;
+    if (h < 60)       { r = c; g = x; b = 0; }
+    else if (h < 120) { r = x; g = c; b = 0; }
+    else if (h < 180) { r = 0; g = c; b = x; }
+    else if (h < 240) { r = 0; g = x; b = c; }
+    else if (h < 300) { r = x; g = 0; b = c; }
+    else              { r = c; g = 0; b = x; }
+    return [(r + m) * 255, (g + m) * 255, (b + m) * 255];
+  }
+
+  const faceColors = faces.map((f, i) => hslToRgb((i * 60) % 360, 0.65, 0.5));
+
+  // ---------------------------------------------------------------------
+  // PRECOMPUTE: flat face normals + smooth per-vertex normals.
+  // Per-vertex normals are built by summing the normals of every face
+  // that shares that vertex, then normalizing - this gives a smooth
+  // "Gouraud-friendly" normal per vertex instead of one flat normal
+  // per triangle.
+  // ---------------------------------------------------------------------
+  const vertexNormals = vertices.map(() => ({ x: 0, y: 0, z: 0 }));
+
+  faces.forEach((face) => {
+    const [a, b, c, d] = face.indices;
+    const va = vertices[a], vb = vertices[b], vc = vertices[c];
+    const e1 = sub(vb, va);
+    const e2 = sub(vc, va);
+    const n = normalize(cross(e1, e2));
+    face.normal = n;
+    [a, b, c, d].forEach((i) => {
+      vertexNormals[i].x += n.x;
+      vertexNormals[i].y += n.y;
+      vertexNormals[i].z += n.z;
+    });
+  });
+
+  for (let i = 0; i < vertexNormals.length; i++) {
+    vertexNormals[i] = normalize(vertexNormals[i]);
+  }
+
+  // Split each quad face into 2 triangles (fan), preserving winding order.
+  const triangles = [];
+  faces.forEach((face, faceIndex) => {
+    const [a, b, c, d] = face.indices;
+    triangles.push({ v: [a, b, c], face: faceIndex });
+    triangles.push({ v: [a, c, d], face: faceIndex });
+  });
+
+  // ---------------------------------------------------------------------
+  // SCANLINE RASTERIZER: fills a triangle into the pixel buffer with
+  // per-pixel linear color interpolation (true Gouraud shading), using
+  // edge-walking between the sorted vertices.
+  // ---------------------------------------------------------------------
+  function fillTriangleGouraud(data, bufW, bufH, p0, p1, p2) {
+    // Sort vertices by ascending Y.
+    if (p0.y > p1.y) { const t = p0; p0 = p1; p1 = t; }
+    if (p0.y > p2.y) { const t = p0; p0 = p2; p2 = t; }
+    if (p1.y > p2.y) { const t = p1; p1 = p2; p2 = t; }
+
+    const totalHeight = p2.y - p0.y;
+    if (totalHeight < 1e-6) return; // degenerate (zero-height) triangle
+
+    for (let y = 0; y < totalHeight; y++) {
+      const secondHalf = (y > (p1.y - p0.y)) || (p1.y === p0.y);
+      const segmentHeight = secondHalf ? (p2.y - p1.y) : (p1.y - p0.y);
+      if (segmentHeight < 1e-6) continue;
+
+      const alpha = y / totalHeight;
+      const beta = (y - (secondHalf ? (p1.y - p0.y) : 0)) / segmentHeight;
+
+      // Point A always interpolated along the long edge (p0 -> p2).
+      let Ax = p0.x + (p2.x - p0.x) * alpha;
+      let Ar = p0.r + (p2.r - p0.r) * alpha;
+      let Ag = p0.g + (p2.g - p0.g) * alpha;
+      let Ab = p0.b + (p2.b - p0.b) * alpha;
+
+      // Point B interpolated along the short edge (p0->p1 or p1->p2).
+      let Bx, Br, Bg, Bb;
+      if (secondHalf) {
+        Bx = p1.x + (p2.x - p1.x) * beta;
+        Br = p1.r + (p2.r - p1.r) * beta;
+        Bg = p1.g + (p2.g - p1.g) * beta;
+        Bb = p1.b + (p2.b - p1.b) * beta;
+      } else {
+        Bx = p0.x + (p1.x - p0.x) * beta;
+        Br = p0.r + (p1.r - p0.r) * beta;
+        Bg = p0.g + (p1.g - p0.g) * beta;
+        Bb = p0.b + (p1.b - p0.b) * beta;
+      }
+
+      if (Ax > Bx) {
+        let t;
+        t = Ax; Ax = Bx; Bx = t;
+        t = Ar; Ar = Br; Br = t;
+        t = Ag; Ag = Bg; Bg = t;
+        t = Ab; Ab = Bb; Bb = t;
+      }
+
+      const py = Math.round(p0.y + y);
+      if (py < 0 || py >= bufH) continue;
+
+      const xStart = Math.max(0, Math.ceil(Ax));
+      const xEnd = Math.min(bufW - 1, Math.floor(Bx));
+      const span = Bx - Ax;
+
+      for (let px = xStart; px <= xEnd; px++) {
+        const t = span > 1e-6 ? (px - Ax) / span : 0;
+        const r = Ar + (Br - Ar) * t;
+        const g = Ag + (Bg - Ag) * t;
+        const b = Ab + (Bb - Ab) * t;
+        const idx = (py * bufW + px) * 4;
+        data[idx]     = r;
+        data[idx + 1] = g;
+        data[idx + 2] = b;
+        data[idx + 3] = 255;
+      }
+    }
+  }
+
+  function clearBuffer(data, r, g, b) {
+    for (let i = 0; i < data.length; i += 4) {
+      data[i] = r;
+      data[i + 1] = g;
+      data[i + 2] = b;
+      data[i + 3] = 255;
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // STATE: rotation time, light orbit, toggles, FPS tracking
+  // ---------------------------------------------------------------------
+  let elapsedTime = 0;
+  let paused = false;
+  let wireframe = false;
+  let fps = 60;
+  let lastTime = performance.now();
+
+  const AMBIENT = 0.15;
+
+  window.addEventListener('keydown', (e) => {
+    const key = e.key.toLowerCase();
+    if (key === 'w') wireframe = !wireframe;
+    if (key === 'p') paused = !paused;
+  });
+
+  // ---------------------------------------------------------------------
+  // RENDER: full pipeline for one frame
+  // ---------------------------------------------------------------------
+  function render(t) {
+    const data = imageData.data;
+    clearBuffer(data, 8, 8, 16); // dark background
+
+    // --- Model -> World: rotation angles derived from elapsed time -----
+    const ax = t * 0.6;
+    const ay = t * 0.9;
+    const az = t * 0.3;
+
+    // --- Camera / view transform: rotate then push cube away along Z ---
+    const camVerts = vertices.map((v) => {
+      const r = rotateVertex(v, ax, ay, az);
+      return { x: r.x, y: r.y, z: r.z + CAMERA_DISTANCE };
+    });
+
+    // Rotate the precomputed smooth vertex normals the same way (no
+    // translation - normals are directions, not positions).
+    const camNormals = vertexNormals.map((n) => rotateVertex(n, ax, ay, az));
+
+    // --- Perspective projection: standard perspective divide ------------
+    const screenVerts = camVerts.map((v) => {
+      const scale = focalLength / v.z;
+      return { x: centerX + v.x * scale, y: centerY - v.y * scale, z: v.z };
+    });
+
+    // --- Moving point light: orbits around the cube's world position ---
+    const lightAngle = t * 0.8;
+    const light = {
+      x: Math.cos(lightAngle) * 2.5,
+      y: Math.sin(lightAngle * 0.6) * 1.8,
+      z: CAMERA_DISTANCE + Math.sin(lightAngle) * 2.5
+    };
+
+    // --- Backface culling + per-vertex Lambert lighting -----------------
+    const visible = [];
+    for (let i = 0; i < triangles.length; i++) {
+      const tri = triangles[i];
+      const [ia, ib, ic] = tri.v;
+      const wa = camVerts[ia], wb = camVerts[ib], wc = camVerts[ic];
+
+      // Face normal in camera space via cross product of two edges.
+      const e1 = sub(wb, wa);
+      const e2 = sub(wc, wa);
+      const faceNormalCam = normalize(cross(e1, e2));
+
+      // View vector: from a point on the triangle toward the camera (origin).
+      const viewDir = normalize({ x: -wa.x, y: -wa.y, z: -wa.z });
+      const facing = dot(faceNormalCam, viewDir);
+      if (facing <= 0) continue; // triangle faces away from camera - cull it
+
+      const base = faceColors[tri.face];
+      const worldPositions = [wa, wb, wc];
+      const vertexIdx = [ia, ib, ic];
+
+      const shaded = [0, 1, 2].map((k) => {
+        const pos = worldPositions[k];
+        const normal = camNormals[vertexIdx[k]];
+        const lightDir = normalize(sub(light, pos));
+        const lambert = Math.max(0, dot(normal, lightDir));
+        const intensity = clamp(lambert + AMBIENT, 0, 1);
+        return {
+          r: base[0] * intensity,
+          g: base[1] * intensity,
+          b: base[2] * intensity
+        };
+      });
+
+      const sa = screenVerts[ia], sb = screenVerts[ib], sc = screenVerts[ic];
+      const avgZ = (wa.z + wb.z + wc.z) / 3;
+
+      visible.push({
+        p: [
+          { x: sa.x, y: sa.y, r: shaded[0].r, g: shaded[0].g, b: shaded[0].b },
+          { x: sb.x, y: sb.y, r: shaded[1].r, g: shaded[1].g, b: shaded[1].b },
+          { x: sc.x, y: sc.y, r: shaded[2].r, g: shaded[2].g, b: shaded[2].b }
+        ],
+        avgZ
+      });
+    }
+
+    // --- Painter's algorithm: sort back-to-front by average depth ------
+    visible.sort((t1, t2) => t2.avgZ - t1.avgZ);
+
+    // --- Rasterize all visible triangles into the offscreen buffer -----
+    for (let i = 0; i < visible.length; i++) {
+      const tri = visible[i];
+      fillTriangleGouraud(
+        data, width, height,
+        { x: tri.p[0].x, y: tri.p[0].y, r: tri.p[0].r, g: tri.p[0].g, b: tri.p[0].b },
+        { x: tri.p[1].x, y: tri.p[1].y, r: tri.p[1].r, g: tri.p[1].g, b: tri.p[1].b },
+        { x: tri.p[2].x, y: tri.p[2].y, r: tri.p[2].r, g: tri.p[2].g, b: tri.p[2].b }
+      );
+    }
+
+    // Blit the shaded buffer to the visible canvas in one call.
+    ctx.putImageData(imageData, 0, 0);
+
+    // --- Optional wireframe overlay -------------------------------------
+    if (wireframe) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+      ctx.lineWidth = 1;
+      for (let i = 0; i < visible.length; i++) {
+        const p = visible[i].p;
+        ctx.beginPath();
+        ctx.moveTo(p[0].x, p[0].y);
+        ctx.lineTo(p[1].x, p[1].y);
+        ctx.lineTo(p[2].x, p[2].y);
+        ctx.closePath();
+        ctx.stroke();
+      }
+    }
+
+    // --- HUD: FPS + instructions ----------------------------------------
+    drawHudText(`FPS: ${Math.round(fps)}${paused ? '  (PAUSED)' : ''}`, 10, 22);
+    drawHudText('W: wireframe   P: pause', 10, height - 14);
+  }
+
+  function drawHudText(text, x, y) {
+    ctx.font = '15px Consolas, monospace';
+    ctx.fillStyle = 'rgba(0,0,0,0.8)';
+    ctx.fillText(text, x + 1, y + 1);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(text, x, y);
+  }
+
+  // ---------------------------------------------------------------------
+  // MAIN LOOP: requestAnimationFrame with delta-time based updates
+  // ---------------------------------------------------------------------
+  function animate(now) {
+    requestAnimationFrame(animate);
+
+    const dt = (now - lastTime) / 1000;
+    lastTime = now;
+
+    // Smoothed FPS via exponential moving average.
+    if (dt > 0) {
+      const instantFps = 1 / dt;
+      fps = fps * 0.9 + instantFps * 0.1;
+    }
+
+    // Simulation time only advances while not paused; rAF loop itself
+    // keeps running so FPS measurement stays live.
+    if (!paused) {
+      elapsedTime += dt;
+    }
+
+    render(elapsedTime);
+  }
+
+  resize();
+  requestAnimationFrame(animate);
+})();
+</script>
+
+</body>
+</html>

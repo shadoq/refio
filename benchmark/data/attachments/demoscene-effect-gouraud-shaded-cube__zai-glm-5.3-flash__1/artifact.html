@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gouraud-Shaded Rotating Cube — Canvas 2D</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #07090f; }
+  canvas { display: block; }
+  #hud {
+    position: fixed; top: 12px; left: 14px;
+    font: 13px/1.55 ui-monospace, Consolas, Menlo, monospace;
+    color: #9fb4d8; user-select: none; pointer-events: none; white-space: pre;
+    text-shadow: 0 1px 3px rgba(0,0,0,.9);
+  }
+  #hud .paused { color: #ffd166; font-weight: bold; }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<div id="hud"></div>
+<script>
+'use strict';
+/* =====================================================================
+   Realtime Gouraud-shaded rotating cube — pure Canvas 2D, no WebGL,
+   no libraries.
+
+   Minimal 3D pipeline:
+     model vertices -> rotation matrices -> perspective projection
+     -> backface culling (screen-space signed area of each triangle)
+     -> quads split into 2 triangles each
+     -> Lambert lighting computed PER VERTEX
+     -> triangle rasterized with color interpolated across the face
+        (Gouraud shading)
+
+   Gouraud rasterization note:
+     Per-vertex intensities i0..i2 define an affine intensity field
+     i(x,y) = a + b*x + c*y over each triangle (barycentric /
+     screen-linear interpolation). A Canvas2D linear gradient built
+     along grad(i) = (b, c), running from the iso-line i = 0 to the
+     iso-line i = 1, reproduces that field EXACTLY. Since each face
+     has a single base hue, vertex color = base * i, so the gradient
+     fill is mathematically exact Gouraud shading (fast, hardware
+     composited, no per-pixel JS loop).
+   ===================================================================== */
+
+const canvas = document.getElementById('scene');
+const ctx = canvas.getContext('2d');
+const hud = document.getElementById('hud');
+
+let W = 0, H = 0, DPR = 1, focal = 0, cx = 0, cy = 0;
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = canvas.width  = Math.max(1, Math.floor(innerWidth  * DPR));
+  H = canvas.height = Math.max(1, Math.floor(innerHeight * DPR));
+  canvas.style.width  = innerWidth  + 'px';
+  canvas.style.height = innerHeight + 'px';
+  focal = Math.min(W, H) * 0.92;   // focal length in device pixels
+  cx = W / 2;
+  cy = H / 2;
+}
+addEventListener('resize', resize);
+resize();
+
+/* ---------------- tiny vec3 helpers (arrays [x, y, z]) ---------------- */
+const sub   = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const cross = (a, b) => [a[1]*b[2] - a[2]*b[1], a[2]*b[0] - a[0]*b[2], a[0]*b[1] - a[1]*b[0]];
+const dot   = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+function normalize(a) {
+  const l = Math.hypot(a[0], a[1], a[2]) || 1;
+  return [a[0]/l, a[1]/l, a[2]/l];
+}
+
+/* ---------------- cube geometry (quads CCW seen from outside) ---------------- */
+const S = 1;                                     // cube half-size
+const VERTS = [                                  // 8 corners
+  [-S,-S,-S],[ S,-S,-S],[ S, S,-S],[-S, S,-S],
+  [-S,-S, S],[ S,-S, S],[ S, S, S],[-S, S, S],
+];
+const FACES = [                                  // outward normals via right-hand rule
+  { q: [4,5,6,7], base: [255, 84, 84] },         // +Z red
+  { q: [1,2,6,5], base: [110,232,120] },         // +X green
+  { q: [0,4,7,3], base: [255,158, 64] },         // -X orange
+  { q: [3,7,6,2], base: [224,102,255] },         // +Y magenta
+  { q: [0,1,5,4], base: [255,222, 74] },         // -Y yellow
+  { q: [0,3,2,1], base: [ 92,148,255] },         // -Z blue
+];
+
+/* ---------------- rotation matrices (3x3, row-major) ---------------- */
+function rotX(a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return [1,0,0,  0,c,-s,  0,s,c];
+}
+function rotY(a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return [c,0,s,  0,1,0,  -s,0,c];
+}
+function matMul(m, n) {
+  const r = new Array(9);
+  for (let i = 0; i < 3; i++)
+    for (let j = 0; j < 3; j++)
+      r[i*3+j] = m[i*3]*n[j] + m[i*3+1]*n[3+j] + m[i*3+2]*n[6+j];
+  return r;
+}
+function xform(m, v) {
+  return [m[0]*v[0] + m[1]*v[1] + m[2]*v[2],
+          m[3]*v[0] + m[4]*v[1] + m[5]*v[2],
+          m[6]*v[0] + m[7]*v[1] + m[8]*v[2]];
+}
+
+/* ---------------- perspective projection ---------------- */
+const CAM_DIST = 4.25;                           // eye at (0, 0, -CAM_DIST), +y up
+function project(v) {
+  const z = v[2] + CAM_DIST;
+  const s = focal / Math.max(z, 1e-4);
+  return [cx + v[0]*s, cy - v[1]*s];             // flip y: screen y grows downward
+}
+
+/* ---------------- Lambert lighting, computed per vertex ---------------- */
+const AMBIENT = 0.18, DIFFUSE = 0.82;            // AMBIENT + DIFFUSE = 1 -> i in [0,1]
+function lambert(n, l) {
+  return AMBIENT + DIFFUSE * Math.max(0, dot(n, l));
+}
+
+/* ---------------- Gouraud triangle rasterizer (exact affine gradient) ---------------- */
+function gouraudTriangle(p0, p1, p2, base, i0, i1, i2) {
+  const x0 = p0[0], y0 = p0[1], x1 = p1[0], y1 = p1[1], x2 = p2[0], y2 = p2[1];
+  const d = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);   // 2x signed area
+  if (Math.abs(d) < 1e-7) return;                            // degenerate sliver
+
+  // Solve i(x, y) = a + b*x + c*y through the three vertices (Cramer's rule)
+  const b = ((i1 - i0) * (y2 - y0) - (i2 - i0) * (y1 - y0)) / d;
+  const c = ((x1 - x0) * (i2 - i0) - (x2 - x0) * (i1 - i0)) / d;
+  const g2 = b*b + c*c;                                      // |grad(i)|^2
+
+  const R = base[0] | 0, G = base[1] | 0, B = base[2] | 0;
+  ctx.beginPath();
+  ctx.moveTo(x0, y0);
+  ctx.lineTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.closePath();
+
+  if (g2 < 1e-9) {
+    // Flat-colored triangle: constant color.
+    const col = 'rgb(' + ((R*i0)|0) + ',' + ((G*i0)|0) + ',' + ((B*i0)|0) + ')';
+    ctx.fillStyle = col;
+    ctx.strokeStyle = col;
+  } else {
+    // Endpoints where the field equals 0 and 1 along grad(i):
+    //   i(P0 + (b,c)*s) = i0 + s*g2  ->  s0 = -i0/g2, s1 = (1 - i0)/g2
+    const ax = x0 - b * i0 / g2,       ay = y0 - c * i0 / g2;        // i = 0
+    const bx = x0 + b * (1 - i0) / g2, by = y0 + c * (1 - i0) / g2;  // i = 1
+    const grad = ctx.createLinearGradient(ax, ay, bx, by);
+    grad.addColorStop(0, '#000000');                 // base * 0
+    grad.addColorStop(1, 'rgb(' + R + ',' + G + ',' + B + ')'); // base * 1
+    ctx.fillStyle = grad;
+    ctx.strokeStyle = grad;                          // same-gradient stroke covers AA seams
+  }
+  ctx.fill();
+  ctx.stroke();
+}
+
+/* ---------------- light source marker ---------------- */
+function drawLightMarker(lp) {
+  const p = project(lp);
+  const r = 9 * DPR;
+  const g = ctx.createRadialGradient(p[0], p[1], 0, p[0], p[1], r * 2.4);
+  g.addColorStop(0,    'rgba(255,255,235,0.95)');
+  g.addColorStop(0.25, 'rgba(255,240,180,0.55)');
+  g.addColorStop(1,    'rgba(255,220,120,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(p[0], p[1], r * 2.4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#fff8e0';
+  ctx.beginPath();
+  ctx.arc(p[0], p[1], r * 0.42, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+/* ---------------- render ---------------- */
+let simTime = 0, paused = false, wireframe = false;
+let fpsEMA = 60, hudClock = 0;
+
+function render() {
+  // Background: soft radial depth
+  const bg = ctx.createRadialGradient(cx, cy * 0.9, 0, cx, cy, Math.max(W, H) * 0.75);
+  bg.addColorStop(0, '#141a26');
+  bg.addColorStop(1, '#07090f');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+
+  // Model transform: Ry(yaw) * Rx(pitch)
+  const m = matMul(rotY(simTime * 0.7), rotX(simTime * 0.45));
+  const rv = VERTS.map(v => xform(m, v));
+
+  // Moving light source: tilted Lissajous orbit around the cube
+  const light = [
+    3.1 * Math.cos(simTime * 0.9),
+    2.3 * Math.sin(simTime * 1.4),
+    2.6 * Math.sin(simTime * 0.9) + 0.4,
+  ];
+
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = DPR;                             // device px; covers AA seams
+
+  for (const f of FACES) {
+    const q = f.q;
+    const a  = rv[q[0]], b  = rv[q[1]], c  = rv[q[2]], d  = rv[q[3]];
+    const n  = normalize(cross(sub(b, a), sub(c, a)));   // outward face normal
+    const sp = q.map(idx => project(rv[idx]));           // projected quad corners
+
+    if (wireframe) {
+      // Hidden-line style: only front-facing quads (normal-based backface cull)
+      const toEye = [-a[0], -a[1], -CAM_DIST - a[2]];
+      if (dot(n, toEye) <= 0) continue;
+      ctx.strokeStyle = 'rgba(226,236,255,0.92)';
+      ctx.beginPath();
+      ctx.moveTo(sp[0][0], sp[0][1]);
+      ctx.lineTo(sp[1][0], sp[1][1]);
+      ctx.lineTo(sp[2][0], sp[2][1]);
+      ctx.lineTo(sp[3][0], sp[3][1]);
+      ctx.closePath();
+      ctx.stroke();
+      continue;
+    }
+
+    // Per-vertex Lambert intensity at each of the quad's 4 corners
+    const li = q.map(idx => lambert(n, normalize(sub(light, rv[idx]))));
+
+    // Split quad into 2 triangles: (0,1,2) and (0,2,3)
+    for (const [i, j, k] of [[0, 1, 2], [0, 2, 3]]) {
+      const p0 = sp[i], p1 = sp[j], p2 = sp[k];
+      // Backface culling: screen-space signed area (screen y is down, so a
+      // camera-facing CCW-outward triangle has positive area here)
+      const area = (p1[0] - p0[0]) * (p2[1] - p0[1]) - (p2[0] - p0[0]) * (p1[1] - p0[1]);
+      if (area <= 0) continue;
+      gouraudTriangle(p0, p1, p2, f.base, li[i], li[j], li[k]);
+    }
+  }
+
+  drawLightMarker(light);
+}
+
+/* ---------------- HUD / FPS ---------------- */
+function updateHud() {
+  hud.innerHTML =
+    'GOURAUD CUBE — Canvas 2D\n' +
+    'FPS: ' + fpsEMA.toFixed(1) + '\n' +
+    '[W] wireframe ' + (wireframe ? 'ON' : 'OFF') +
+    '   [P] pause ' + (paused ? 'ON' : 'OFF') +
+    (paused ? '\n<span class="paused">&#9632; PAUSED</span>' : '');
+}
+
+addEventListener('keydown', e => {
+  if (e.repeat) return;
+  const k = e.key.toLowerCase();
+  if (k === 'w') wireframe = !wireframe;
+  else if (k === 'p') paused = !paused;
+  else return;
+  updateHud();
+});
+
+/* ---------------- main loop ---------------- */
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(now - last, 100);            // clamp tab-switch spikes
+  last = now;
+  fpsEMA += (1000 / Math.max(dt, 0.01) - fpsEMA) * 0.06;   // smoothed FPS
+  if (!paused) simTime += dt / 1000;               // freeze motion, keep rendering
+  render();
+  hudClock += dt;
+  if (hudClock >= 200) { hudClock = 0; updateHud(); }
+  requestAnimationFrame(frame);
+}
+updateHud();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

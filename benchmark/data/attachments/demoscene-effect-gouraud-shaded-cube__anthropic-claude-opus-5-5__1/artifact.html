@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Gouraud Shaded Cube - Canvas 2D</title>
+<style>html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:monospace}
+canvas{display:block;width:100vw;height:100vh;image-rendering:auto}
+#hud{position:fixed;left:10px;top:8px;color:#0f0;font-size:14px;text-shadow:0 0 3px #000;pointer-events:none;white-space:pre}</style>
+</head><body><canvas id="c"></canvas><div id="hud"></div>
+<script>
+"use strict";
+const cv=document.getElementById('c'),ctx=cv.getContext('2d'),hud=document.getElementById('hud');
+let W,H,img,buf,zbuf;
+function resize(){W=cv.width=Math.max(1,innerWidth>>0);H=cv.height=Math.max(1,innerHeight>>0);
+ img=ctx.createImageData(W,H);buf=new Uint32Array(img.data.buffer);zbuf=new Float32Array(W*H);}
+addEventListener('resize',resize);resize();
+
+// --- Geometry: 8 vertices, 6 quads (CCW seen from outside), split into 12 triangles
+const V=[[-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1],[-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1]];
+const Q=[[4,5,6,7],[1,0,3,2],[5,1,2,6],[0,4,7,3],[7,6,2,3],[0,1,5,4]];
+const COL=[[255,80,80],[80,255,80],[90,140,255],[255,230,70],[255,90,255],[70,240,240]];
+const TRIS=[];Q.forEach((q,f)=>{TRIS.push([q[0],q[1],q[2],f],[q[0],q[2],q[3],f]);});
+// Per-vertex normals: average of adjacent face normals (= normalized corner for a cube)
+const N=V.map(v=>{const l=Math.hypot(...v);return v.map(c=>c/l);});
+
+// --- Math
+function rotMat(ax,ay,az){const[a,b,c]=[Math.cos(ax),Math.cos(ay),Math.cos(az)],[d,e,f]=[Math.sin(ax),Math.sin(ay),Math.sin(az)];
+ const Rx=[[1,0,0],[0,a,-d],[0,d,a]],Ry=[[b,0,e],[0,1,0],[-e,0,b]],Rz=[[c,-f,0],[f,c,0],[0,0,1]];return mul(Rz,mul(Ry,Rx));}
+function mul(A,B){const R=[[0,0,0],[0,0,0],[0,0,0]];for(let i=0;i<3;i++)for(let j=0;j<3;j++)R[i][j]=A[i][0]*B[0][j]+A[i][1]*B[1][j]+A[i][2]*B[2][j];return R;}
+function tf(M,v){return[M[0][0]*v[0]+M[0][1]*v[1]+M[0][2]*v[2],M[1][0]*v[0]+M[1][1]*v[1]+M[1][2]*v[2],M[2][0]*v[0]+M[2][1]*v[1]+M[2][2]*v[2]];}
+const CAMZ=5;
+function project(p){const z=p[2]+CAMZ,f=Math.min(W,H)*0.9/z;return[W/2+p[0]*f,H/2-p[1]*f,z];}
+
+// --- Rasterizer: barycentric with per-vertex color interpolation + z-buffer
+function tri(a,b,c,ca,cb,cc){
+ const area=(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);if(area>=0)return;// backface culled earlier; safety
+ const inv=1/area;
+ let x0=Math.max(0,Math.floor(Math.min(a[0],b[0],c[0]))),x1=Math.min(W-1,Math.ceil(Math.max(a[0],b[0],c[0])));
+ let y0=Math.max(0,Math.floor(Math.min(a[1],b[1],c[1]))),y1=Math.min(H-1,Math.ceil(Math.max(a[1],b[1],c[1])));
+ for(let y=y0;y<=y1;y++){const py=y+.5;
+  for(let x=x0;x<=x1;x++){const px=x+.5;
+   const w0=((b[0]-px)*(c[1]-py)-(b[1]-py)*(c[0]-px))*inv,w1=((c[0]-px)*(a[1]-py)-(c[1]-py)*(a[0]-px))*inv,w2=1-w0-w1;
+   if(w0<0||w1<0||w2<0)continue;
+   const z=w0*a[2]+w1*b[2]+w2*c[2],i=y*W+x;if(z>=zbuf[i])continue;zbuf[i]=z;
+   const r=w0*ca[0]+w1*cb[0]+w2*cc[0],g=w0*ca[1]+w1*cb[1]+w2*cc[1],bl=w0*ca[2]+w1*cb[2]+w2*cc[2];
+   buf[i]=0xff000000|(bl<<16)|(g<<8)|r;}}}
+
+// --- State
+let wire=false,paused=false,t=0,last=performance.now(),fps=0,fc=0,ft=last;
+addEventListener('keydown',e=>{const k=e.key.toLowerCase();if(k==='w')wire=!wire;if(k==='p')paused=!paused;});
+
+function frame(now){
+ const dt=Math.min(.1,(now-last)/1000);last=now;if(!paused)t+=dt;
+ fc++;if(now-ft>=500){fps=fc*1000/(now-ft);fc=0;ft=now;}
+ // background
+ for(let i=0;i<buf.length;i++){buf[i]=0xff140a0a;}zbuf.fill(1e9);
+ const M=rotMat(t*.7,t*1.1,t*.4);
+ const P=V.map(v=>tf(M,v)),S=P.map(project),Nw=N.map(n=>tf(M,n));
+ // moving light (world space, orbits the cube)
+ const L=[Math.cos(t*1.3)*3,Math.sin(t*.9)*2,Math.sin(t*1.3)*3-1.5];
+ const edges=[];
+ for(const[i0,i1,i2,f]of TRIS){
+  const a=S[i0],b=S[i1],c=S[i2];
+  if((b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0])>=0)continue;// backface culling (screen winding)
+  const cols=[i0,i1,i2].map(i=>{// per-vertex Lambert
+   const p=P[i];let lx=L[0]-p[0],ly=L[1]-p[1],lz=L[2]-p[2];const ll=Math.hypot(lx,ly,lz);
+   const d=Math.max(0,(Nw[i][0]*lx+Nw[i][1]*ly+Nw[i][2]*lz)/ll),k=.15+.85*d;
+   return COL[f].map(ch=>Math.min(255,ch*k)|0);});
+  if(!wire)tri(a,b,c,cols[0],cols[1],cols[2]);
+  edges.push([a,b],[b,c],[c,a]);
+ }
+ ctx.putImageData(img,0,0);
+ if(wire){ctx.strokeStyle='#0f8';ctx.lineWidth=1.2;ctx.beginPath();for(const[p,q]of edges){ctx.moveTo(p[0],p[1]);ctx.lineTo(q[0],q[1]);}ctx.stroke();}
+ // draw light
+ const ls=project(L);if(ls[2]>0.2){const r=Math.max(3,60/ls[2]);const g=ctx.createRadialGradient(ls[0],ls[1],0,ls[0],ls[1],r*2);
+  g.addColorStop(0,'rgba(255,255,220,1)');g.addColorStop(1,'rgba(255,255,150,0)');ctx.fillStyle=g;ctx.beginPath();ctx.arc(ls[0],ls[1],r*2,0,7);ctx.fill();}
+ hud.textContent=`FPS: ${fps.toFixed(1)}\n[W] wireframe: ${wire?'ON':'OFF'}\n[P] pause: ${paused?'ON':'OFF'}`;
+ requestAnimationFrame(frame);}
+requestAnimationFrame(frame);
+</script></body></html>

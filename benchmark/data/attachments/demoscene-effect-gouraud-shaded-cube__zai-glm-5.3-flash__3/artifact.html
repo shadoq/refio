@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gouraud-shaded rotating cube — Canvas 2D</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #0b0e14;
+      overflow: hidden;
+    }
+    canvas#scene {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="scene"></canvas>
+  <script>
+    'use strict';
+    (function () {
+      // ------------------------------------------------------------------
+      // Canvas setup and shared state
+      // ------------------------------------------------------------------
+      const hasDom = typeof document !== 'undefined';
+      const canvas = hasDom ? document.getElementById('scene') : null;
+      const ctx = canvas && typeof canvas.getContext === 'function' ? canvas.getContext('2d') : null;
+
+      const BG = { r: 11, g: 14, b: 20 };
+      // Background pixel pre-packed for the little-endian RGBA byte layout.
+      const BG_PACKED = (255 << 24) | (BG.b << 16) | (BG.g << 8) | BG.r;
+
+      let img = null;   // offscreen ImageData used as the software frame buffer
+      let u32 = null;   // Uint32 view over img.data for fast background clears
+      let canvasW = 0;
+      let canvasH = 0;
+
+      const state = {
+        t: 0,               // animation clock in seconds (frozen while paused)
+        paused: false,
+        wireframe: false,
+        emaFps: 0,          // exponential moving average of the frame rate
+        lightPos: { x: 0, y: 0, z: 0 },
+        lastVisible: []     // stats for every triangle rendered last frame
+      };
+
+      // ------------------------------------------------------------------
+      // Small math library: 3x3 matrices (row-major) and 3-vectors.
+      // Matrix convention: column vectors, v' = M·v.
+      // ------------------------------------------------------------------
+      const mat3 = {
+        identity() {
+          return [1, 0, 0, 0, 1, 0, 0, 0, 1];
+        },
+        multiply(a, b) {
+          const out = new Array(9);
+          for (let row = 0; row < 3; row++) {
+            for (let col = 0; col < 3; col++) {
+              let sum = 0;
+              for (let k = 0; k < 3; k++) {
+                sum += a[row * 3 + k] * b[k * 3 + col];
+              }
+              out[row * 3 + col] = sum;
+            }
+          }
+          return out;
+        },
+        rotationX(angle) {
+          const c = Math.cos(angle);
+          const s = Math.sin(angle);
+          return [1, 0, 0, 0, c, -s, 0, s, c];
+        },
+        rotationY(angle) {
+          const c = Math.cos(angle);
+          const s = Math.sin(angle);
+          return [c, 0, s, 0, 1, 0, -s, 0, c];
+        }
+      };
+
+      const vec3 = {
+        dot(a, b) {
+          return a.x * b.x + a.y * b.y + a.z * b.z;
+        },
+        cross(a, b) {
+          return {
+            x: a.y * b.z - a.z * b.y,
+            y: a.z * b.x - a.x * b.z,
+            z: a.x * b.y - a.y * b.x
+          };
+        },
+        length(a) {
+          return Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
+        },
+        sub(a, b) {
+          return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z };
+        },
+        normalize(a) {
+          const len = vec3.length(a);
+          if (len === 0) return { x: 0, y: 0, z: 0 };
+          return { x: a.x / len, y: a.y / len, z: a.z / len };
+        }
+      };
+
+      // ------------------------------------------------------------------
+      // Cube geometry: 8 corners, 6 colored quads, 12 triangles.
+      // ------------------------------------------------------------------
+      const CUBE_VERTICES = [
+        { x: -1, y: -1, z: -1 }, // 0
+        { x: 1, y: -1, z: -1 },  // 1
+        { x: 1, y: 1, z: -1 },   // 2
+        { x: -1, y: 1, z: -1 },  // 3
+        { x: -1, y: -1, z: 1 },  // 4
+        { x: 1, y: -1, z: 1 },   // 5
+        { x: 1, y: 1, z: 1 },    // 6
+        { x: -1, y: 1, z: 1 }    // 7
+      ];
+
+      const CUBE_QUADS = [
+        { indices: [0, 1, 2, 3], color: [230, 57, 70] },   // front  (z = -1) red
+        { indices: [1, 5, 6, 2], color: [42, 157, 244] },  // right  (x = +1) blue
+        { indices: [5, 4, 7, 6], color: [66, 190, 120] },  // back   (z = +1) green
+        { indices: [4, 0, 3, 7], color: [255, 183, 60] },  // left   (x = -1) amber
+        { indices: [3, 2, 6, 7], color: [155, 110, 230] }, // top    (y = +1) purple
+        { indices: [4, 5, 1, 0], color: [70, 200, 210] }   // bottom (y = -1) teal
+      ];
+
+      // Split each quad into two triangles: [a,b,c] and [a,c,d].
+      const CUBE_TRIANGLES = [];
+      for (const quad of CUBE_QUADS) {
+        const a = quad.indices[0];
+        const b = quad.indices[1];
+        const c = quad.indices[2];
+        const d = quad.indices[3];
+        CUBE_TRIANGLES.push({ indices: [a, b, c], color: quad.color });
+        CUBE_TRIANGLES.push({ indices: [a, c, d], color: quad.color });
+      }
+
+      const CUBE_CENTER = { x: 0, y: 0, z: 3.6 }; // cube floats in front of the camera
+
+      // ------------------------------------------------------------------
+      // Frame buffer management
+      // ------------------------------------------------------------------
+      function resize() {
+        if (!canvas) return;
+        const clientW = canvas.clientWidth || (typeof window !== 'undefined' ? window.innerWidth : 0);
+        const clientH = canvas.clientHeight || (typeof window !== 'undefined' ? window.innerHeight : 0);
+        if (clientW <= 0 || clientH <= 0) return; // guard against a zero-size layout
+        const dpr = Math.min((typeof window !== 'undefined' && window.devicePixelRatio) || 1, 1.5);
+        canvasW = Math.max(1, Math.floor(clientW * dpr));
+        canvasH = Math.max(1, Math.floor(clientH * dpr));
+        canvas.width = canvasW;
+        canvas.height = canvasH;
+        if (ctx && typeof ctx.createImageData === 'function') {
+          img = ctx.createImageData(canvasW, canvasH);
+          u32 = new Uint32Array(img.data.buffer);
+        }
+      }
+
+      function clearBuffer() {
+        if (u32) u32.fill(BG_PACKED);
+      }
+
+      // ------------------------------------------------------------------
+      // Software triangle rasterizer with Gouraud intensity interpolation.
+      // ------------------------------------------------------------------
+      function rasterTriangle(img, w, h, x0, y0, x1, y1, x2, y2, i0, i1, i2, r, g, b) {
+        // Sort the vertices by ascending y, carrying the intensities along.
+        let tx, ty, ti;
+        if (y1 < y0) { tx = x0; x0 = x1; x1 = tx; ty = y0; y0 = y1; y1 = ty; ti = i0; i0 = i1; i1 = ti; }
+        if (y2 < y0) { tx = x0; x0 = x2; x2 = tx; ty = y0; y0 = y2; y2 = ty; ti = i0; i0 = i2; i2 = ti; }
+        if (y2 < y1) { tx = x1; x1 = x2; x2 = tx; ty = y1; y1 = y2; y2 = ty; ti = i1; i1 = i2; i2 = ti; }
+
+        const data = img.data;
+        const yStart = Math.max(0, Math.ceil(y0));
+        const yEnd = Math.min(h - 1, Math.floor(y2));
+        const longDy = y2 - y0;
+
+        for (let y = yStart; y <= yEnd; y++) {
+          // Long edge v0 -> v2 spans every scanline of the triangle.
+          const tLong = longDy === 0 ? 0 : (y - y0) / longDy;
+          const xa = x0 + (x2 - x0) * tLong;
+          const ia = i0 + (i2 - i0) * tLong;
+
+          // Active short edge: v0 -> v1 above the middle vertex, v1 -> v2 below.
+          let xb, ib;
+          if (y < y1) {
+            const dy = y1 - y0;
+            if (dy === 0) { xb = x1; ib = i1; }
+            else {
+              const t = (y - y0) / dy;
+              xb = x0 + (x1 - x0) * t;
+              ib = i0 + (i1 - i0) * t;
+            }
+          } else {
+            const dy = y2 - y1;
+            if (dy === 0) { xb = x2; ib = i2; }
+            else {
+              const t = (y - y1) / dy;
+              xb = x1 + (x2 - x1) * t;
+              ib = i1 + (i2 - i1) * t;
+            }
+          }
+
+          // Order the span endpoints so xl <= xr (intensity follows its vertex).
+          let xl, il, xr, ir;
+          if (xa <= xb) { xl = xa; il = ia; xr = xb; ir = ib; }
+          else { xl = xb; il = ib; xr = xa; ir = ia; }
+
+          const xs = Math.max(0, Math.ceil(xl));
+          const xe = Math.min(w - 1, Math.floor(xr));
+          const spanDx = xr - xl;
+          const di = spanDx === 0 ? 0 : (ir - il) / spanDx;
+          let intensity = il + (xs - xl) * di;
+
+          for (let x = xs; x <= xe; x++, intensity += di) {
+            const idx = (y * w + x) * 4;
+            if (idx + 3 >= data.length) break; // clamp the pixel to buffer bounds
+            const ci = intensity < 0 ? 0 : intensity > 1 ? 1 : intensity;
+            data[idx] = r * ci;
+            data[idx + 1] = g * ci;
+            data[idx + 2] = b * ci;
+            data[idx + 3] = 255;
+          }
+        }
+      }
+
+      // ------------------------------------------------------------------
+      // Pipeline helpers
+      // ------------------------------------------------------------------
+      // Row-major product rotationY(ry) · rotationX(rx).
+      function buildRotationYX(rx, ry) {
+        return mat3.multiply(mat3.rotationY(ry), mat3.rotationX(rx));
+      }
+
+      // Apply a 3x3 row-major matrix to a point.
+      function transformPoint(m, v) {
+        return {
+          x: m[0] * v.x + m[1] * v.y + m[2] * v.z,
+          y: m[3] * v.x + m[4] * v.y + m[5] * v.z,
+          z: m[6] * v.x + m[7] * v.y + m[8] * v.z
+        };
+      }
+
+      // Perspective projection; camera at the origin looking down +Z.
+      function projectPoint(x, y, z) {
+        const focal = 0.95 * Math.min(canvasW, canvasH);
+        return {
+          x: canvasW / 2 + (focal * x) / z,
+          y: canvasH / 2 - (focal * y) / z,
+          visible: z > 0.2
+        };
+      }
+
+      // The light orbits the cube on a Lissajous-like path.
+      function lightPosition(t) {
+        return {
+          x: 3.0 * Math.cos(0.9 * t),
+          y: 2.4 * Math.sin(1.3 * t) + 0.3,
+          z: 2.2 + 1.5 * Math.sin(0.6 * t)
+        };
+      }
+
+      // Geometric normal forced to point away from the cube center, so the
+      // winding order can never flip the shading or the culling decision.
+      function outwardNormal(a, b, c, centroid) {
+        const nrm = vec3.normalize(vec3.cross(vec3.sub(b, a), vec3.sub(c, a)));
+        if (vec3.dot(nrm, vec3.sub(centroid, CUBE_CENTER)) < 0) {
+          return { x: -nrm.x, y: -nrm.y, z: -nrm.z };
+        }
+        return nrm;
+      }
+
+      // Per-vertex Lambert intensity with distance attenuation.
+      function vertexIntensity(worldVert, nrm, light) {
+        const toLight = vec3.sub(light, worldVert);
+        const d = vec3.length(toLight);
+        const l = d > 0
+          ? { x: toLight.x / d, y: toLight.y / d, z: toLight.z / d }
+          : { x: 0, y: 0, z: 1 };
+        const atten = 1 / (1 + 0.035 * d * d);
+        const raw = 0.16 + 1.05 * Math.max(0, vec3.dot(nrm, l)) * atten;
+        return raw < 0 ? 0 : raw > 1 ? 1 : raw;
+      }
+
+      function centroidOf(points) {
+        let cx = 0, cy = 0, cz = 0;
+        for (const p of points) {
+          cx += p.x; cy += p.y; cz += p.z;
+        }
+        const n = points.length;
+        return { x: cx / n, y: cy / n, z: cz / n };
+      }
+
+      // ------------------------------------------------------------------
+      // Render passes
+      // ------------------------------------------------------------------
+      function render() {
+        if (!ctx || !img) return;
+        state.lightPos = lightPosition(state.t);
+        state.lastVisible.length = 0;
+
+        // Rotate the cube around the origin, then translate it into view.
+        const rotation = buildRotationYX(0.42 * state.t, 0.6 * state.t);
+        const worldVerts = CUBE_VERTICES.map((v) => {
+          const p = transformPoint(rotation, v);
+          return {
+            x: p.x + CUBE_CENTER.x,
+            y: p.y + CUBE_CENTER.y,
+            z: p.z + CUBE_CENTER.z
+          };
+        });
+        const projected = worldVerts.map((v) => projectPoint(v.x, v.y, v.z));
+
+        if (state.wireframe) {
+          renderWireframe(worldVerts, projected);
+        } else {
+          renderSolid(worldVerts, projected);
+        }
+
+        drawHud();
+        drawLightMarker();
+      }
+
+      // Gouraud path: rasterize the visible triangles into the pixel buffer.
+      function renderSolid(worldVerts, projected) {
+        clearBuffer();
+        for (const tri of CUBE_TRIANGLES) {
+          const a = worldVerts[tri.indices[0]];
+          const b = worldVerts[tri.indices[1]];
+          const c = worldVerts[tri.indices[2]];
+          const pa = projected[tri.indices[0]];
+          const pb = projected[tri.indices[1]];
+          const pc = projected[tri.indices[2]];
+          if (!pa.visible || !pb.visible || !pc.visible) continue; // near-plane guard
+
+          const centroid = centroidOf([a, b, c]);
+          const nrm = outwardNormal(a, b, c, centroid);
+          // Backface cull: the camera sits at the origin, so a face stays
+          // visible only while its outward normal points back toward it.
+          if (vec3.dot(nrm, centroid) >= 0) continue;
+
+          const i0 = vertexIntensity(a, nrm, state.lightPos);
+          const i1 = vertexIntensity(b, nrm, state.lightPos);
+          const i2 = vertexIntensity(c, nrm, state.lightPos);
+          rasterTriangle(img, canvasW, canvasH,
+            pa.x, pa.y, pb.x, pb.y, pc.x, pc.y,
+            i0, i1, i2,
+            tri.color[0], tri.color[1], tri.color[2]);
+
+          state.lastVisible.push({
+            nx: nrm.x, ny: nrm.y, nz: nrm.z,
+            cx: centroid.x, cy: centroid.y, cz: centroid.z,
+            i: [i0, i1, i2]
+          });
+        }
+        ctx.putImageData(img, 0, 0);
+      }
+
+      // Wireframe path: stroke the camera-facing quads in their base colors.
+      function renderWireframe(worldVerts, projected) {
+        ctx.fillStyle = 'rgb(' + BG.r + ',' + BG.g + ',' + BG.b + ')';
+        ctx.fillRect(0, 0, canvasW, canvasH);
+        ctx.lineWidth = 1.5;
+        for (const quad of CUBE_QUADS) {
+          const i0 = quad.indices[0];
+          const i1 = quad.indices[1];
+          const i2 = quad.indices[2];
+          const i3 = quad.indices[3];
+          const quadCentroid = centroidOf([
+            worldVerts[i0], worldVerts[i1], worldVerts[i2], worldVerts[i3]
+          ]);
+          // Same forced-outward normal, built from the quad's first triangle.
+          const nrm = outwardNormal(worldVerts[i0], worldVerts[i1], worldVerts[i2], quadCentroid);
+          if (vec3.dot(nrm, quadCentroid) >= 0) continue; // hide back-facing quads
+          ctx.strokeStyle = 'rgb(' + quad.color[0] + ',' + quad.color[1] + ',' + quad.color[2] + ')';
+          ctx.beginPath();
+          ctx.moveTo(projected[i0].x, projected[i0].y);
+          ctx.lineTo(projected[i1].x, projected[i1].y);
+          ctx.lineTo(projected[i2].x, projected[i2].y);
+          ctx.lineTo(projected[i3].x, projected[i3].y);
+          ctx.closePath();
+          ctx.stroke();
+        }
+      }
+
+      // ------------------------------------------------------------------
+      // HUD and light marker
+      // ------------------------------------------------------------------
+      function drawHud() {
+        ctx.textBaseline = 'alphabetic';
+        ctx.font = '15px Consolas, ui-monospace, monospace';
+        ctx.fillStyle = '#e8eef5';
+        ctx.fillText('FPS ' + state.emaFps.toFixed(1), 14, 26);
+
+        ctx.font = '13px Consolas, ui-monospace, monospace';
+        ctx.fillStyle = '#9fb0c0';
+        const controls = '[W] wireframe: ' + (state.wireframe ? 'ON' : 'OFF') +
+          '   [P] pause: ' + (state.paused ? 'ON' : 'OFF');
+        ctx.fillText(controls, 14, 48);
+        if (state.paused) {
+          ctx.fillStyle = '#ff6b6b';
+          ctx.fillText('  (PAUSED)', 14 + ctx.measureText(controls).width, 48);
+        }
+      }
+
+      function drawLightMarker() {
+        const light = state.lightPos;
+        if (light.z <= 0.5) return; // behind the camera or too close to project
+        const p = projectPoint(light.x, light.y, light.z);
+        const glow = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 16);
+        glow.addColorStop(0, 'rgba(255, 255, 255, 0.95)');
+        glow.addColorStop(1, 'rgba(255, 255, 255, 0)');
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 16, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // ------------------------------------------------------------------
+      // Mode toggles and input
+      // ------------------------------------------------------------------
+      function toggleWireframe() {
+        state.wireframe = !state.wireframe;
+        return state.wireframe;
+      }
+
+      function togglePause() {
+        state.paused = !state.paused;
+        return state.paused;
+      }
+
+      if (canvas && typeof document.addEventListener === 'function') {
+        document.addEventListener('keydown', (event) => {
+          if (event.key === 'w' || event.key === 'W') toggleWireframe();
+          else if (event.key === 'p' || event.key === 'P') togglePause();
+        });
+      }
+      if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+        window.addEventListener('resize', resize);
+      }
+
+      // ------------------------------------------------------------------
+      // Main loop
+      // ------------------------------------------------------------------
+      function frame(dt) {
+        if (!state.paused) state.t += dt;
+        const dtClamped = Math.min(0.1, Math.max(1 / 240, dt));
+        const instantFps = 1 / dtClamped;
+        state.emaFps = state.emaFps ? state.emaFps * 0.9 + instantFps * 0.1 : instantFps;
+        render();
+      }
+
+      // Autostart only in a real browser environment.
+      if (typeof requestAnimationFrame === 'function' && !globalThis.__CUBE_NO_AUTOSTART) {
+        resize();
+        let previousNow = typeof performance !== 'undefined' && performance.now ? performance.now() : 0;
+        const loop = (now) => {
+          const dt = previousNow > 0 ? (now - previousNow) / 1000 : 1 / 60;
+          previousNow = now;
+          frame(dt);
+          requestAnimationFrame(loop);
+        };
+        requestAnimationFrame(loop);
+      }
+
+      // ------------------------------------------------------------------
+      // Test hooks
+      // ------------------------------------------------------------------
+      globalThis.__cubeApp = {
+        state: state,
+        resize: resize,
+        frame: frame,
+        rasterTriangle: rasterTriangle,
+        buildRotationYX: buildRotationYX,
+        transformPoint: transformPoint,
+        projectPoint: projectPoint,
+        toggleWireframe: toggleWireframe,
+        togglePause: togglePause
+      };
+    })();
+  </script>
+</body>
+</html>

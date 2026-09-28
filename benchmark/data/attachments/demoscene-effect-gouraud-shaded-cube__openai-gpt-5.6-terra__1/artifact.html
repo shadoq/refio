@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gouraud Cube — Canvas 2D</title>
+<style>
+    :root {
+        color-scheme: dark;
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+
+    * {
+        box-sizing: border-box;
+    }
+
+    html,
+    body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: #030a10;
+    }
+
+    canvas {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+    }
+
+    .hud {
+        position: fixed;
+        top: 22px;
+        left: 22px;
+        width: min(370px, calc(100vw - 44px));
+        padding: 16px 17px 15px;
+        border: 1px solid rgba(92, 211, 235, 0.25);
+        border-radius: 12px;
+        background: linear-gradient(135deg, rgba(5, 21, 32, 0.89), rgba(4, 12, 22, 0.76));
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.36), inset 0 1px 0 rgba(172, 240, 255, 0.08);
+        backdrop-filter: blur(12px);
+        user-select: none;
+    }
+
+    .eyebrow {
+        color: #65dceb;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.18em;
+    }
+
+    h1 {
+        margin: 6px 0 8px;
+        color: #e1fbff;
+        font-size: 18px;
+        font-weight: 700;
+        letter-spacing: 0.03em;
+    }
+
+    .description {
+        margin: 0 0 14px;
+        color: #93acb7;
+        font-size: 11px;
+        line-height: 1.55;
+    }
+
+    .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+        margin-bottom: 13px;
+    }
+
+    .chip {
+        padding: 5px 7px;
+        border: 1px solid rgba(94, 186, 205, 0.19);
+        border-radius: 5px;
+        color: #a9c9d0;
+        background: rgba(64, 154, 174, 0.08);
+        font-size: 10px;
+        line-height: 1;
+        white-space: nowrap;
+    }
+
+    .chip strong {
+        color: #d4fbff;
+        font-weight: 700;
+    }
+
+    .controls {
+        display: flex;
+        gap: 8px;
+    }
+
+    button {
+        min-height: 30px;
+        padding: 6px 10px;
+        border: 1px solid rgba(94, 211, 233, 0.35);
+        border-radius: 6px;
+        color: #d7faff;
+        background: rgba(21, 115, 137, 0.18);
+        font: inherit;
+        font-size: 10px;
+        cursor: pointer;
+        transition: background 0.15s ease, border-color 0.15s ease;
+    }
+
+    button:hover,
+    button:focus-visible {
+        border-color: #72e9fa;
+        background: rgba(31, 151, 177, 0.32);
+        outline: none;
+    }
+
+    kbd {
+        margin-right: 5px;
+        padding: 1px 4px;
+        border: 1px solid rgba(215, 250, 255, 0.3);
+        border-radius: 3px;
+        color: #f0feff;
+        background: rgba(255, 255, 255, 0.08);
+        font-family: inherit;
+        font-size: 9px;
+    }
+
+    .corner-label {
+        position: fixed;
+        right: 22px;
+        bottom: 20px;
+        color: rgba(151, 212, 224, 0.42);
+        font-size: 10px;
+        letter-spacing: 0.14em;
+        pointer-events: none;
+        user-select: none;
+    }
+
+    @media (max-width: 520px) {
+        .hud {
+            top: 12px;
+            left: 12px;
+            width: calc(100vw - 24px);
+        }
+
+        .corner-label {
+            right: 12px;
+            bottom: 12px;
+        }
+    }
+</style>
+</head>
+<body>
+<canvas id="canvas" aria-label="Animated Gouraud-shaded rotating cube"></canvas>
+
+<section class="hud" aria-label="Renderer controls and status">
+    <div class="eyebrow">CANVAS 2D / SOFTWARE RASTERIZER</div>
+    <h1>Gouraud Shaded Cube</h1>
+    <p class="description">Per-vertex Lambert illumination, interpolated pixel color, painter-sorted triangles, and a live orbiting light.</p>
+    <div class="chips">
+        <div class="chip">FPS <strong id="fps">--</strong></div>
+        <div class="chip">LIGHT <strong id="light">0.00, 0.00, 0.00</strong></div>
+        <div class="chip">STATE <strong id="state">RUNNING</strong></div>
+        <div class="chip">WIREFRAME <strong id="wire">OFF</strong></div>
+    </div>
+    <div class="controls">
+        <button id="wireButton" type="button" aria-pressed="false"><kbd>W</kbd>Wireframe</button>
+        <button id="pauseButton" type="button" aria-pressed="false"><kbd>P</kbd>Pause</button>
+    </div>
+</section>
+
+<div class="corner-label">GOURAUD / LAMBERT / RGB INTERPOLATION</div>
+
+<script>
+(() => {
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const bufferCanvas = document.createElement("canvas");
+    const bufferCtx = bufferCanvas.getContext("2d");
+
+    const fpsElement = document.getElementById("fps");
+    const lightElement = document.getElementById("light");
+    const stateElement = document.getElementById("state");
+    const wireElement = document.getElementById("wire");
+    const wireButton = document.getElementById("wireButton");
+    const pauseButton = document.getElementById("pauseButton");
+
+    let width = 0;
+    let height = 0;
+    let dpr = 1;
+    let imageData;
+    let pixels;
+    let wireframe = false;
+    let paused = false;
+    let elapsed = 0;
+    let lastTime = performance.now();
+    let fpsFrames = 0;
+    let fpsTimer = 0;
+    let currentFps = 0;
+
+    const vertices = [
+        { x: -1, y: -1, z: -1 }, { x: 1, y: -1, z: -1 },
+        { x: 1, y: 1, z: -1 }, { x: -1, y: 1, z: -1 },
+        { x: -1, y: -1, z: 1 }, { x: 1, y: -1, z: 1 },
+        { x: 1, y: 1, z: 1 }, { x: -1, y: 1, z: 1 }
+    ];
+
+    const faces = [
+        [4, 5, 6, 7], [1, 0, 3, 2], [5, 1, 2, 6],
+        [0, 4, 7, 3], [7, 6, 2, 3], [0, 1, 5, 4]
+    ];
+
+    const faceNormals = [
+        { x: 0, y: 0, z: 1 }, { x: 0, y: 0, z: -1 },
+        { x: 1, y: 0, z: 0 }, { x: -1, y: 0, z: 0 },
+        { x: 0, y: 1, z: 0 }, { x: 0, y: -1, z: 0 }
+    ];
+
+    const vertexNormals = vertices.map((vertex, index) => {
+        const normal = { x: 0, y: 0, z: 0 };
+        faces.forEach((face, faceIndex) => {
+            if (face.includes(index)) {
+                normal.x += faceNormals[faceIndex].x;
+                normal.y += faceNormals[faceIndex].y;
+                normal.z += faceNormals[faceIndex].z;
+            }
+        });
+        return normalize(normal);
+    });
+
+    function normalize(v) {
+        const length = Math.hypot(v.x, v.y, v.z) || 1;
+        return { x: v.x / length, y: v.y / length, z: v.z / length };
+    }
+
+    function dot(a, b) {
+        return a.x * b.x + a.y * b.y + a.z * b.z;
+    }
+
+    function rotate(v, ax, ay, az) {
+        const cx = Math.cos(ax);
+        const sx = Math.sin(ax);
+        const cy = Math.cos(ay);
+        const sy = Math.sin(ay);
+        const cz = Math.cos(az);
+        const sz = Math.sin(az);
+
+        let x = v.x;
+        let y = v.y * cx - v.z * sx;
+        let z = v.y * sx + v.z * cx;
+
+        const nextX = x * cy + z * sy;
+        z = -x * sy + z * cy;
+        x = nextX;
+
+        const finalX = x * cz - y * sz;
+        y = x * sz + y * cz;
+
+        return { x: finalX, y, z };
+    }
+
+    function project(v) {
+        const focalLength = Math.min(width, height) * 0.92;
+        return {
+            x: width * 0.5 + (v.x / v.z) * focalLength,
+            y: height * 0.5 - (v.y / v.z) * focalLength,
+            z: v.z
+        };
+    }
+
+    function edge(ax, ay, bx, by, px, py) {
+        return (px - ax) * (by - ay) - (py - ay) * (bx - ax);
+    }
+
+    function resize() {
+        dpr = Math.min(window.devicePixelRatio || 1, 2);
+        width = Math.floor(window.innerWidth * dpr);
+        height = Math.floor(window.innerHeight * dpr);
+        canvas.width = width;
+        canvas.height = height;
+        bufferCanvas.width = width;
+        bufferCanvas.height = height;
+        imageData = bufferCtx.createImageData(width, height);
+        pixels = imageData.data;
+    }
+
+    function drawBackground(time) {
+        const gradient = ctx.createRadialGradient(
+            width * 0.5, height * 0.45, 0,
+            width * 0.5, height * 0.5, Math.max(width, height) * 0.75
+        );
+        gradient.addColorStop(0, "#0a2631");
+        gradient.addColorStop(0.45, "#06131d");
+        gradient.addColorStop(1, "#02070c");
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, width, height);
+
+        const gridSize = Math.max(42 * dpr, Math.min(width, height) / 15);
+        ctx.save();
+        ctx.strokeStyle = "rgba(74, 170, 188, 0.08)";
+        ctx.lineWidth = 1;
+        for (let x = (width * 0.5) % gridSize; x < width; x += gridSize) {
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, height);
+            ctx.stroke();
+        }
+        for (let y = (height * 0.5) % gridSize; y < height; y += gridSize) {
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(width, y);
+            ctx.stroke();
+        }
+
+        ctx.fillStyle = "rgba(173, 236, 255, 0.35)";
+        for (let i = 0; i < 72; i++) {
+            const x = ((i * 167.13) % width + width) % width;
+            const y = ((i * 83.71 + Math.sin(time * 0.0003 + i) * 18) % height + height) % height;
+            const size = i % 5 === 0 ? 1.4 * dpr : 0.7 * dpr;
+            ctx.fillRect(x, y, size, size);
+        }
+        ctx.restore();
+    }
+
+    function rasterizeTriangle(a, b, c) {
+        const area = edge(a.x, a.y, b.x, b.y, c.x, c.y);
+        if (Math.abs(area) < 0.0001) {
+            return;
+        }
+
+        const minX = Math.max(0, Math.floor(Math.min(a.x, b.x, c.x)));
+        const maxX = Math.min(width - 1, Math.ceil(Math.max(a.x, b.x, c.x)));
+        const minY = Math.max(0, Math.floor(Math.min(a.y, b.y, c.y)));
+        const maxY = Math.min(height - 1, Math.ceil(Math.max(a.y, b.y, c.y)));
+        const positive = area > 0;
+        const inverseArea = 1 / area;
+
+        for (let y = minY; y <= maxY; y++) {
+            for (let x = minX; x <= maxX; x++) {
+                const px = x + 0.5;
+                const py = y + 0.5;
+                const w0 = edge(b.x, b.y, c.x, c.y, px, py);
+                const w1 = edge(c.x, c.y, a.x, a.y, px, py);
+                const w2 = edge(a.x, a.y, b.x, b.y, px, py);
+
+                if ((positive && w0 >= 0 && w1 >= 0 && w2 >= 0) ||
+                    (!positive && w0 <= 0 && w1 <= 0 && w2 <= 0)) {
+                    const alpha = w0 * inverseArea;
+                    const beta = w1 * inverseArea;
+                    const gamma = w2 * inverseArea;
+                    const offset = (y * width + x) * 4;
+
+                    pixels[offset] = alpha * a.r + beta * b.r + gamma * c.r;
+                    pixels[offset + 1] = alpha * a.g + beta * b.g + gamma * c.g;
+                    pixels[offset + 2] = alpha * a.b + beta * b.b + gamma * c.b;
+                    pixels[offset + 3] = 255;
+                }
+            }
+        }
+    }
+
+    function drawWireframe(triangles) {
+        ctx.save();
+        ctx.lineWidth = Math.max(1, dpr);
+        ctx.strokeStyle = "rgba(175, 249, 255, 0.72)";
+        ctx.shadowColor = "rgba(49, 212, 237, 0.8)";
+        ctx.shadowBlur = 6 * dpr;
+
+        for (const triangle of triangles) {
+            ctx.beginPath();
+            ctx.moveTo(triangle[0].x, triangle[0].y);
+            ctx.lineTo(triangle[1].x, triangle[1].y);
+            ctx.lineTo(triangle[2].x, triangle[2].y);
+            ctx.closePath();
+            ctx.stroke();
+        }
+        ctx.restore();
+    }
+
+    function drawLightMarker(light) {
+        const point = project(light);
+        if (point.z <= 0) {
+            return;
+        }
+
+        const radius = 5 * dpr;
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        ctx.fillStyle = "rgba(90, 233, 255, 0.16)";
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, radius * 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#d4ffff";
+        ctx.shadowColor = "#57e9ff";
+        ctx.shadowBlur = 16 * dpr;
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+    }
+
+    function render(time) {
+        drawBackground(time);
+        pixels.fill(0);
+
+        const angleX = elapsed * 0.00073;
+        const angleY = elapsed * 0.00091;
+        const angleZ = elapsed * 0.00038;
+        const light = {
+            x: Math.cos(elapsed * 0.0011) * 3.5,
+            y: Math.sin(elapsed * 0.0017) * 2.5,
+            z: 3.2 + Math.sin(elapsed * 0.0008) * 1.2
+        };
+
+        const transformed = vertices.map((vertex, index) => {
+            const position = rotate(vertex, angleX, angleY, angleZ);
+            position.z += 5.3;
+            const normal = normalize(rotate(vertexNormals[index], angleX, angleY, angleZ));
+            const lightDirection = normalize({
+                x: light.x - position.x,
+                y: light.y - position.y,
+                z: light.z - position.z
+            });
+            const lambert = Math.max(0, dot(normal, lightDirection));
+            const intensity = 0.16 + lambert * 0.84;
+            const projected = project(position);
+
+            return {
+                ...position,
+                normal,
+                x: projected.x,
+                y: projected.y,
+                r: Math.min(255, 18 + 40 * intensity),
+                g: Math.min(255, 83 + 128 * intensity),
+                b: Math.min(255, 105 + 139 * intensity)
+            };
+        });
+
+        const triangles = [];
+        for (const face of faces) {
+            const a = transformed[face[0]];
+            const b = transformed[face[1]];
+            const c = transformed[face[2]];
+            const d = transformed[face[3]];
+            const faceCenter = {
+                x: (a.x + b.x + c.x + d.x) * 0.25,
+                y: (a.y + b.y + c.y + d.y) * 0.25,
+                z: (a.z + b.z + c.z + d.z) * 0.25
+            };
+            const faceNormal = normalize({
+                x: a.normal.x + b.normal.x + c.normal.x + d.normal.x,
+                y: a.normal.y + b.normal.y + c.normal.y + d.normal.y,
+                z: a.normal.z + b.normal.z + c.normal.z + d.normal.z
+            });
+
+            if (dot(faceNormal, faceCenter) <= 0) {
+                continue;
+            }
+
+            triangles.push([a, b, c], [a, c, d]);
+        }
+
+        triangles.sort((left, right) => {
+            const leftDepth = (left[0].z + left[1].z + left[2].z) / 3;
+            const rightDepth = (right[0].z + right[1].z + right[2].z) / 3;
+            return rightDepth - leftDepth;
+        });
+
+        for (const triangle of triangles) {
+            rasterizeTriangle(triangle[0], triangle[1], triangle[2]);
+        }
+
+        bufferCtx.putImageData(imageData, 0, 0);
+        ctx.drawImage(bufferCanvas, 0, 0);
+
+        if (wireframe) {
+            drawWireframe(triangles);
+        }
+
+        drawLightMarker(light);
+        lightElement.textContent = `${light.x.toFixed(2)}, ${light.y.toFixed(2)}, ${light.z.toFixed(2)}`;
+    }
+
+    function updateStatus() {
+        wireElement.textContent = wireframe ? "ON" : "OFF";
+        stateElement.textContent = paused ? "PAUSED" : "RUNNING";
+        wireButton.setAttribute("aria-pressed", String(wireframe));
+        pauseButton.setAttribute("aria-pressed", String(paused));
+        pauseButton.innerHTML = paused ? "<kbd>P</kbd>Resume" : "<kbd>P</kbd>Pause";
+    }
+
+    function toggleWireframe() {
+        wireframe = !wireframe;
+        updateStatus();
+    }
+
+    function togglePause() {
+        paused = !paused;
+        lastTime = performance.now();
+        updateStatus();
+    }
+
+    function animate(now) {
+        const delta = Math.min(now - lastTime, 100);
+        lastTime = now;
+
+        if (!paused) {
+            elapsed += delta;
+            render(now);
+            fpsFrames++;
+            fpsTimer += delta;
+
+            if (fpsTimer >= 500) {
+                currentFps = Math.round((fpsFrames * 1000) / fpsTimer);
+                fpsElement.textContent = currentFps;
+                fpsFrames = 0;
+                fpsTimer = 0;
+            }
+        }
+
+        requestAnimationFrame(animate);
+    }
+
+    wireButton.addEventListener("click", toggleWireframe);
+    pauseButton.addEventListener("click", togglePause);
+    window.addEventListener("keydown", (event) => {
+        if (event.key.toLowerCase() === "w") {
+            event.preventDefault();
+            toggleWireframe();
+        }
+        if (event.key.toLowerCase() === "p") {
+            event.preventDefault();
+            togglePause();
+        }
+    });
+
+    window.addEventListener("resize", resize);
+    resize();
+    updateStatus();
+    render(0);
+    requestAnimationFrame(animate);
+})();
+</script>
+</body>
+</html>

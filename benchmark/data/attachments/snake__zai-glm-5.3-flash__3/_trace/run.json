@@ -1,0 +1,171 @@
+{
+  "schemaVersion": 1,
+  "run": {
+    "debugLevel": "STANDARD",
+    "durationMs": 579816,
+    "startedAt": 1790541672880,
+    "endedAt": 1790542252696
+  },
+  "session": {
+    "id": "4013b4f1-9b05-4437-8b36-0fe9f868e3c5",
+    "name": "headless-1790541672866",
+    "mode": "AGENT",
+    "executionMode": "INTERACTIVE",
+    "model": "glm-5.3-flash",
+    "provider": "zai",
+    "status": "SUCCESS",
+    "tokensIn": 37893,
+    "tokensOut": 34211,
+    "costUsd": 0.02137633
+  },
+  "metrics": {
+    "durationMs": 579816,
+    "tokensIn": 37893,
+    "tokensOut": 34211,
+    "costUsd": 0.02137633,
+    "apiCallCount": 4,
+    "toolCallCount": 1,
+    "iterations": 2,
+    "maxIterations": 200,
+    "stopReason": "COMPLETED",
+    "contextOverflow": false,
+    "verification": {
+      "ran": false,
+      "attempts": 0,
+      "timedOut": false,
+      "attributionUncertain": false,
+      "notRunReason": "no verify.command configured and no known project marker detected"
+    },
+    "guardrails": {
+      "consolidationNudges": 0,
+      "regenerationNudges": 0,
+      "subagentInvokeNudges": 0,
+      "formatRetryNudges": 0,
+      "guardianReentries": 0,
+      "maxRepeatedCall": 1,
+      "toolErrorRate": 0.0,
+      "noopWrites": 0
+    },
+    "context": {
+      "budgetTokens": 81680,
+      "usedTokens": 4580,
+      "droppedMessages": 0,
+      "droppedSteps": 0,
+      "drops": {
+        "WORKING_MEMORY": 1,
+        "USER_CONTEXT": 2
+      }
+    },
+    "filesWritten": [
+      {
+        "path": "snake_zai-glm-5.3-flash_01.html",
+        "writes": 1,
+        "netChanged": true
+      }
+    ]
+  },
+  "finalOutput": "The game is complete. **`snake_zai-glm-5.3-flash_01.html`** (600 lines, ~19 KB) was created as a single self-contained file — HTML + CSS + JS, no external dependencies.\n\n## What was built\n\n**Core game (30×30 grid, 600×600 canvas, 20px cells)**\n- Snakes move continuously on a fixed-step loop (~100 ms/tick via `requestAnimationFrame` accumulator)\n- Eating food grows the snake and respawns food on a free cell; **hitting a wall or any snake body ends the game**\n- Simultaneous two-snake step with correct tail-vacating semantics: a cell the tail leaves this tick is passable, and head-to-head collisions kill both snakes (draw)\n\n**Three game modes** (selectable in the start menu via ↑/↓ + Enter/Space, or hot-keys 1/2/3 to start instantly):\n1. **Human vs Human** — P1: arrow keys · P2: WASD\n2. **CPU vs Human** — P1 is CPU; the human (P2) can use *both* WASD and arrows\n3. **CPU vs CPU** — spectate two AIs\n\n**CPU AI** (\"automatically searches for food\"): each tick it evaluates all non-reversing directions, filters out moves into occupied cells (tails excluded since they vacate), then scores candidates by flood-fill reachable-space (avoids self-trapping dead ends), Manhattan distance to food, a penalty for cells adjacent to the opponent's head (avoids head-ons), and a small bonus for keeping its current direction.\n\n**UI & flow**\n- **HUD** above the canvas: live P1/P2 scores with color chips + current mode name\n- **Start menu** overlay: title, mode list with highlighted selection, controls legend\n- **Game over** overlay: winner (\"Player 1 wins!\" / \"Player 2 wins!\" / \"Draw!\"), final scores\n- **Restart with a keypress**: `R` or `Enter`/`Space` restarts the current mode (from game over or mid-game); `M` returns to the menu; arrow/space key page-scroll is prevented\n- Dark modern styling: gradient background, glowing canvas, rounded snake segments with directional eyes, pulsing food, kbd-styled key hints\n\nOpen the file directly in any browser to play.",
+  "subtasks": [
+    {
+      "orderIndex": 0,
+      "kind": "ADVANCE_CODE_EDITING",
+      "status": "SUCCESS",
+      "description": "advance_code_editing: snake_zai-glm-5.3-flash_01.html",
+      "tokensIn": 2289,
+      "tokensOut": 25033,
+      "costUsd": 0.012859849999999999,
+      "latencyMs": 346463,
+      "model": "glm-5.3-flash",
+      "provider": "zai"
+    }
+  ],
+  "conversation": [
+    {
+      "role": "USER",
+      "contentPreview": "Write a snake game in javascript, css, html in one file. Build a classic Snake game on a 30x30 grid. The snake moves continuously in one of four directions and grows when eating food. If it hits a wall or itself, the game ends. Implement keyboard controls for player movement. Add a CPU-controlled snake mode that automatically searches for food. Add the three game modes: human vs human, cpu vs human, cpu vs cpu. Display the score during gameplay. Include a start menu and game over screen. Allow restarting the game with a keypress. Use file name \"snake_zai-glm-5.3-flash_01.html\"",
+      "toolCalls": [],
+      "toolCallDetails": [],
+      "createdAt": 1790541673002
+    },
+    {
+      "role": "ASSISTANT",
+      "contentPreview": "The user wants a complete snake game in one HTML file. This is a static, self-contained HTML file. Per my instructions, for large files (>50 lines), I should use `advance_code_editing` instead of `create_new_file` to keep my agent response small.\n\nLet me plan the requirements:\n1. Classic Snake game on 30x30 grid\n2. Snake moves continuously in one of four directions, grows when eating food\n3. Game ends if hits wall or itself\n4. Keyboard controls for player movement\n5. CPU-controlled snake mode that automatically searches for food\n6. Three game modes: human vs human, cpu vs human, cpu vs cpu\n7. Display score during gameplay\n8. Start menu and game over screen\n9. Restart with a keypress\n10. File name: \"snake_zai-glm-5.3-flash_01.html\"\n\nDesign decisions:\n- Two snakes: Player 1 (arrows or WASD) and Player 2 (WASD or IJKL). For human vs human: P1 uses arrow keys, P2 uses WASD.\n- CPU mode: greedy pathfinding toward food with collision avoidance — simple AI: move toward food (prefer reducing distance in one axis), avoid immediate collisions by checking candidate directions. Maybe add a small lookahead/safety check to avoid trapping itself.\n- Food: one food item per snake? Or shared? Typically in battle-snake, there's one food that both compete for. Let me think — \"Display the score during gameplay\" suggests each snake has a score. I'll have a single food; each snake competes for it. When a snake eats, score +1 and new food spawns. Actually maybe two separate foods could be simpler, but shared single food makes \"vs\" meaningful. I'll go with one shared food item.\n\nWait — but in cpu vs cpu mode, if there's one food, both chase it. That's fine.\n\nAlternatively, each snake has its own food to make gameplay smoother. Hmm. Classic \"snake game\" with modes human vs human — many implementations give each player their own food. But single shared food is also common. I'll go with a single shared food — simpler and competitive. Actually, let me reconsider: with a single food in a 30x30 gr… [+23635 chars]",
+      "toolCalls": [
+        "advance_code_editing"
+      ],
+      "toolCallDetails": [
+        {
+          "name": "advance_code_editing",
+          "arguments": "{\"path\":\"snake_zai-glm-5.3-flash_01.html\",\"edit_description\":\"Create a NEW self-contained HTML5 file (HTML + CSS + JS in one file, no external resources, works offline) implementing a two-snake battle game on a 30x30 grid. All code comments and UI text in English. The file must be complete and run without console errors in a modern browser.\\n\\nPAGE STRUCTURE\\n- <!DOCTYPE html>, <html lang=\\\"en\\\">, <head> with meta charset + viewport, <title>Snake — Battle Arena</title>, one <style> block.\\n- Body: centered layout. A .hud bar ABOVE the canvas, a .stage container (position:relative, 600x600) holding <canvas id=\\\"game\\\" width=\\\"600\\\" height=\\\"600\\\"> plus two absolutely-positioned overlay divs (#menu, #gameover, both initially hidden except menu), and a small #hint line BELOW the stage.\\n\\nCSS (dark modern theme)\\n- body: min-height:100vh; flex center; background: linear-gradient(135deg,#0b1220,#111f38,#0b1220); color:#e2e8f0; system font stack.\\n- .hud: flex, spaced; two score chips (colored dot + \\\"P1\\\"/\\\"P2\\\" + score number) and a centered mode label.\\n- canvas: background #0d1526; border:1px solid #223; border-radius:10px; box-shadow soft cyan glow.\\n- Overlays: absolute inset 0, flex column center, background rgba(8,12,22,.85), backdrop-filter blur(3px), rounded corners, text-align center.\\n- .mode-option list items; .selected state with bright border/background highlight. <kbd> styled key chips. .hidden { display:none }.\\n- Title \\\"SNAKE\\\" large, bold, gradient text (background-clip:text).\\n\\nGAME LOGIC (single <script> at end of body)\\nConstants: COLS=30, ROWS=30, CELL=20, STEP_MS=100.\\nDirection map DIRS with {dx,dy} and opposites.\\nGame state machine: 'menu' | 'playing' | 'over'.\\nModes array: [{id:'hvh',label:'Human vs Human',p1:'human',p2:'human'}, {id:'cvh',label:'CPU vs Human',p1:'cpu',p2:'human'}, {id:'cvc',label:'CPU vs CPU',p1:'cpu',p2:'cpu'}]. Menu selection index 0..2.\\n\\nSnakes: two objects {body:[{x,y},...] head first, dir, pendingDir, alive, score, isCpu}. Spawn: P1 head at (6,15) moving right (body extends left, length 3), P2 head at (23,15) moving left (length 3). One shared food item on a random free cell (never on any snake segment); if no free cell exists → end game, winner by higher score (practically unreachable).\\n\\nMain loop: requestAnimationFrame with a time accumulator; one simulation step per STEP_MS. render() every frame (for food pulse animation).\\n\\nStep logic (both snakes move simultaneously):\\n1. For each alive snake resolve direction: humans use pendingDir (ignored if it is the exact opposite of current dir); CPU uses AI (below).\\n2. Compute newHead for each alive snake; eating = newHead equals food cell (head-to-head on food is impossible because heads coincide → death).\\n3. Build preview occupancy per snake: its current segments MINUS the tail cell when it is not eating (tail vacates this tick).\\n4. Deaths: (a) newHead out of 0..29 bounds; (b) newHead in own preview cells; (c) if both new heads are equal → BOTH die; (d) newHead inside the OTHER snake's preview cells (its head cell excluded — covered by (c)).\\n5. Apply for survivors: unshift newHead; if eating → score++ and spawnFood(); else pop tail. Dead snakes stop moving (rendered gray).\\n6. If any snake died → state 'over', show game-over overlay; winner = the surviving snake, or draw if none/both died.\\n\\nCPU AI (aiChooseDir(snake, other)): candidates = 4 directions except reverse of current dir. Build occupied set = union of both snake bodies minus own tail (approximation of tail vacating). Safe candidates = target in bounds and not occupied. If none safe → keep current dir (will die). Score each safe candidate: flood-fill BFS free-space count from the candidate cell (treat occupied as blocked, cap at 120 expansions) weighted heavily (avoid self-trapping), minus Manhattan distance to food (go get it), small penalty if the cell is orthogonally adjacent to the opponent's head (avoid head-on), tiny bonus for continuing straight (less jitter). Pick the highest score. (In CPU vs Human mode P1 is the CPU, P2 is the human; in CPU vs CPU both are CPU.)\\n\\nRendering per frame: clear; subtle grid lines (or faint checker); food as a pulsing red circle (#ef4444) with a darker rim, radius oscillates via performance.now(); each snake: segments as rounded rects (implement a small manual rounded-rect path helper — do NOT rely on ctx.roundRect), body color slightly transparent toward tail, head brighter with two white eye dots offset by current direction. P1 = green (#3ddc84), P2 = orange (#ff9f43). Dead snake drawn desaturated gray. HUD score numbers and mode label updated every frame.\\n\\nINPUT (window keydown; preventDefault for Arrow keys and Space to stop page scrolling):\\n- state 'menu': ArrowUp/ArrowDown (and w/s) move the highlighted mode option (wrapping); digit keys 1/2/3 immediately select and START that mode; Enter or Space starts the selected mode.\\n- state 'playing': in 'hvh' Arrow keys steer P1 and W/A/S/D steer P2; in 'cvh' BOTH arrow keys and WASD steer the human P2 (P1 is CPU); in 'cvc' movement keys are ignored. R restarts the current mode instantly; M returns to the menu.\\n- state 'over': Enter, Space, or R restarts the same mode; M returns to the menu.\\n\\nUI CONTENT\\n- Menu overlay: title \\\"SNAKE\\\", tagline, the three mode options (showing which snake is CPU where relevant), controls legend: \\\"P1: Arrow Keys · P2: W A S D · R: Restart · M: Menu\\\", and \\\"Press Enter / Space to start\\\".\\n- HUD: \\\"P1\\\" chip + score, mode label center, \\\"P2\\\" chip + score.\\n- Game-over overlay: winner headline (\\\"Player 1 wins!\\\", \\\"Player 2 wins!\\\", or \\\"Draw!\\\") colored by winner, final score line (e.g. \\\"P1 12 — 8 P2\\\"), and \\\"Press Enter / R to play again · M for menu\\\".\\n- Hint line under canvas: \\\"P1: ↑ ← ↓ →   ·   P2: W A S D   ·   R Restart   ·   M Menu\\\".\\n\\nQUALITY: valid HTML5, clean structured JS with comments, no external fonts/libraries/images, no syntax errors, no console errors.\"}",
+          "ok": true
+        }
+      ],
+      "tokensIn": 12437,
+      "tokensOut": 7876,
+      "createdAt": 1790541864381
+    },
+    {
+      "role": "TOOL",
+      "contentPreview": "Created snake_zai-glm-5.3-flash_01.html (+599/-0)\n```diff\n--- a/snake_zai-glm-5.3-flash_01.html\n+++ b/snake_zai-glm-5.3-flash_01.html\n@@ -1,1 +1,600 @@\n+ <!DOCTYPE html>\n+ <html lang=\"en\">\n+ <head>\n+ <meta charset=\"UTF-8\">\n+ <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n+ <title>Snake — Battle Arena</title>\n+ <style>\n+   * { margin: 0; padding: 0; box-sizing: border-box; }\n  \n+   body {\n+     min-height: 100vh;\n+     display: flex;\n+     flex-direction: column;\n+     align-items: center;\n+     justify-content: center;\n+     gap: 14px;\n+     background: linear-gradient(135deg, #0b1220, #111f38, #0b1220);\n+     color: #e2e8f0;\n+     font-family: system-ui, -apple-system, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif;\n+   }\n+ \n+   /* HUD bar above the canvas */\n+   .hud {\n+     width: 600px;\n+     display: flex;\n+     align-items: center;\n+     justify-content: space-between;\n+     gap: 16px;\n+   }\n+ \n+   .chip {\n+     display: flex;\n+     align-items: center;\n+     gap: 8px;\n+     padding: 6px 14px;\n+     background: rgba(255, 255, 255, 0.05);\n+     border: 1px solid #223;\n+     border-radius: 999px;\n+     font-size: 14px;\n+     font-weight: 600;\n+   }\n+ \n+   .chip .dot { width: 10px; height: 10px; border-radius: 50%; }\n+   .chip.p1 .dot { background: #3ddc84; }\n+   .chip.p2 .dot { background: #ff9f43; }\n+ \n+   #modeLabel {\n+     font-size: 12px;\n+     letter-spacing: 2px;\n+     text-transform: uppercase;\n+     color: #94a3b8;\n+     text-align: center;\n+   }\n+ \n+   /* Stage + canvas */\n+   .stage { position: relative; width: 600px; height: 600px; }\n+ \n+   canvas {\n+     display: block;\n+     background: #0d1526;\n+     border: 1px solid #223;\n+     border-radius: 10px;\n+     box-shadow: 0 0 25px rgba(56, 189, 248, 0.18), 0 0 70px rgba(56, 189, 248, 0.07);\n+   }\n+ \n+   /* Overlays */\n+   .overlay {\n+     position: absolute;\n+     inset: 0;\n+     display: flex;\n+     flex-direction: column;\n+     align-items: center;\n+     justify-content: cen… [+18376 chars]",
+      "toolCalls": [],
+      "toolCallDetails": [],
+      "metadata": "{\"path\":\"snake_zai-glm-5.3-flash_01.html\",\"mode\":\"llm_assisted\",\"diff_lines\":604,\"added_lines\":599,\"removed_lines\":0,\"noop\":false,\"edit_description\":\"Create a NEW self-contained HTML5 file (HTML + CSS + JS in one file, no external resources, works offline) implementing a two-snake battle game on a 30x30 grid. All code comments and UI text in English. The file must be complete and run without console errors in a modern browser.\\n\\nPAGE STRUCTURE\\n- <!DOCTYPE html>, <html lang=\\\"en\\\">, <head> with meta charset + viewport, <title>Snake — Battle Arena</title>, one <style> block.\\n- Body: centered layout. A .hud bar ABOVE the canvas, a .stage container (position:relative, 600x600) holding <canvas id=\\\"game\\\" width=\\\"600\\\" height=\\\"600\\\"> plus two absolutely-positioned overlay divs (#menu, #gameover, both initially hidden except menu), and a small #hint line BELOW the stage.\\n\\nCSS (dark modern theme)\\n- body: min-height:100vh; flex center; background: linear-gradient(135deg,#0b1220,#111f38,#0b1220); color:#e2e8f0; system font stack.\\n- .hud: flex, spaced; two score chips (colored dot + \\\"P1\\\"/\\\"P2\\\" + score number) and a centered mode label.\\n- canvas: background #0d1526; border:1px solid #223; border-radius:10px; box-shadow soft cyan glow.\\n- Overlays: absolute inset 0, flex column center, background rgba(8,12,22,.85), backdrop-filter blur(3px), rounded corners, text-align center.\\n- .mode-option list items; .selected state with bright border/background highlight. <kbd> styled key chips. .hidden { display:none }.\\n- Title \\\"SNAKE\\\" large, bold, gradient text (background-clip:text).\\n\\nGAME LOGIC (single <script> at end of body)\\nConstants: COLS=30, ROWS=30, CELL=20, STEP_MS=100.\\nDirection map DIRS with {dx,dy} and opposites.\\nGame state machine: 'menu' | 'playing' | 'over'.\\nModes array: [{id:'hvh',label:'Human vs Human',p1:'human',p2:'human'}, {id:'cvh',label:'CPU vs Human',p1:'cpu',p2:'human'}, {id:'cvc',label:'CPU vs CPU',p1:'cpu',p2:'cpu'}]. Menu selection index 0..2.\\n\\nSnakes: two objects {body:[{x,y},...] head first, dir, pendingDir, alive, score, isCpu}. Spawn: P1 head at (6,15) moving right (body extends left, length 3), P2 head at (23,15) moving left (length 3). One shared food item on a random free cell (never on any snake segment); if no free cell exists → end game, winner by higher score (practically unreachable).\\n\\nMain loop: requestAnimationFrame with a time accumulator; one simulation step per STEP_MS. render() every frame (for food pulse animation).\\n\\nStep logic (both snakes move simultaneously):\\n1. For each alive snake resolve direction: humans use pendingDir (ignored if it is the exact opposite of current dir); CPU uses AI (below).\\n2. Compute newHead for each alive snake; eating = newHead equals food cell (head-to-head on food is impossible because heads coincide → death).\\n3. Build preview occupancy per snake: its current segments MINUS the tail cell when it is not eating (tail vacates this tick).\\n4. Deaths: (a) newHead out of 0..29 bounds; (b) newHead in own preview cells; (c) if both new heads are equal → BOTH die; (d) newHead inside the OTHER snake's preview cells (its head cell excluded — covered by (c)).\\n5. Apply for survivors: unshift newHead; if eating → score++ and spawnFood(); else pop tail. Dead snakes stop moving (rendered gray).\\n6. If any snake died → state 'over', show game-over overlay; winner = the surviving snake, or draw if none/both died.\\n\\nCPU AI (aiChooseDir(snake, other)): candidates = 4 directions except reverse of current dir. Build occupied set = union of both snake bodies minus own tail (approximation of tail vacating). Safe candidates = target in bounds and not occupied. If none safe → keep current dir (will die). Score each safe candidate: flood-fill BFS free-space count from the candidate cell (treat occupied as blocked, cap at 120 expansions) weighted heavily (avoid self-trapping), minus Manhattan distance to food (go get it), small penalty if the cell is orthogonally adjacent to the opponent's head (avoid head-on), tiny bonus for continuing straight (less jitter). Pick the highest score. (In CPU vs Human mode P1 is the CPU, P2 is the human; in CPU vs CPU both are CPU.)\\n\\nRendering per frame: clear; subtle grid lines (or faint checker); food as a pulsing red circle (#ef4444) with a darker rim, radius oscillates via performance.now(); each snake: segments as rounded rects (implement a small manual rounded-rect path helper — do NOT rely on ctx.roundRect), body color slightly transparent toward tail, head brighter with two white eye dots offset by current direction. P1 = green (#3ddc84), P2 = orange (#ff9f43). Dead snake drawn desaturated gray. HUD score numbers and mode label updated every frame.\\n\\nINPUT (window keydown; preventDefault for Arrow keys and Space to stop page scrolling):\\n- state 'menu': ArrowUp/ArrowDown (and w/s) move the highlighted mode option (wrapping); digit keys 1/2/3 immediately select and START that mode; Enter or Space starts the selected mode.\\n- state 'playing': in 'hvh' Arrow keys steer P1 and W/A/S/D steer P2; in 'cvh' BOTH arrow keys and WASD steer the human P2 (P1 is CPU); in 'cvc' movement keys are ignored. R restarts the current mode instantly; M returns to the menu.\\n- state 'over': Enter, Space, or R restarts the same mode; M returns to the menu.\\n\\nUI CONTENT\\n- Menu overlay: title \\\"SNAKE\\\", tagline, the three mode options (showing which snake is CPU where relevant), controls legend: \\\"P1: Arrow Keys · P2: W A S D · R: Restart · M: Menu\\\", and \\\"Press Enter / Space to start\\\".\\n- HUD: \\\"P1\\\" chip + score, mode label center, \\\"P2\\\" chip + score.\\n- Game-over overlay: winner headline (\\\"Player 1 wins!\\\", \\\"Player 2 wins!\\\", or \\\"Draw!\\\") colored by winner, final score line (e.g. \\\"P1 12 — 8 P2\\\"), and \\\"Press Enter / R to play again · M for menu\\\".\\n- Hint line under canvas: \\\"P1: ↑ ← ↓ →   ·   P2: W A S D   ·   R Restart   ·   M Menu\\\".\\n\\nQUALITY: valid HTML5, clean structured JS with comments, no external fonts/libraries/images, no syntax errors, no console errors.\",\"model\":\"glm-5.3-flash\",\"provider\":\"zai\",\"tokens_in\":2289,\"tokens_out\":25033,\"cost_usd\":0.012859849999999999,\"tool_name\":\"advance_code_editing\"}",
+      "tokensIn": 2289,
+      "tokensOut": 25033,
+      "createdAt": 1790542211401
+    },
+    {
+      "role": "ASSISTANT",
+      "contentPreview": "The game is complete. **`snake_zai-glm-5.3-flash_01.html`** (600 lines, ~19 KB) was created as a single self-contained file — HTML + CSS + JS, no external dependencies.\n\n## What was built\n\n**Core game (30×30 grid, 600×600 canvas, 20px cells)**\n- Snakes move continuously on a fixed-step loop (~100 ms/tick via `requestAnimationFrame` accumulator)\n- Eating food grows the snake and respawns food on a free cell; **hitting a wall or any snake body ends the game**\n- Simultaneous two-snake step with correct tail-vacating semantics: a cell the tail leaves this tick is passable, and head-to-head collisions kill both snakes (draw)\n\n**Three game modes** (selectable in the start menu via ↑/↓ + Enter/Space, or hot-keys 1/2/3 to start instantly):\n1. **Human vs Human** — P1: arrow keys · P2: WASD\n2. **CPU vs Human** — P1 is CPU; the human (P2) can use *both* WASD and arrows\n3. **CPU vs CPU** — spectate two AIs\n\n**CPU AI** (\"automatically searches for food\"): each tick it evaluates all non-reversing directions, filters out moves into occupied cells (tails excluded since they vacate), then scores candidates by flood-fill reachable-space (avoids self-trapping dead ends), Manhattan distance to food, a penalty for cells adjacent to the opponent's head (avoids head-ons), and a small bonus for keeping its current direction.\n\n**UI & flow**\n- **HUD** above the canvas: live P1/P2 scores with color chips + current mode name\n- **Start menu** overlay: title, mode list with highlighted selection, controls legend\n- **Game over** overlay: winner (\"Player 1 wins!\" / \"Player 2 wins!\" / \"Draw!\"), final scores\n- **Restart with a keypress**: `R` or `Enter`/`Space` restarts the current mode (from game over or mid-game); `M` returns to the menu; arrow/space key page-scroll is prevented\n- Dark modern styling: gradient background, glowing canvas, rounded snake segments with directional eyes, pulsing food, kbd-styled key hints\n\nOpen the file directly in any browser to play.",
+      "toolCalls": [],
+      "toolCallDetails": [],
+      "tokensIn": 21162,
+      "tokensOut": 872,
+      "createdAt": 1790542252572
+    }
+  ],
+  "apiLogs": [
+    {
+      "provider": "zai",
+      "model": "glm-5.3-flash",
+      "requestSource": "NextSpeakerJudge",
+      "httpStatus": 200,
+      "inputTokens": 2005,
+      "outputTokens": 430,
+      "costUsd": 5.157499999999999E-4,
+      "latencyMs": 14640
+    },
+    {
+      "provider": "zai",
+      "model": "glm-5.3-flash",
+      "requestSource": "AgentTurnLoop:AGENT",
+      "httpStatus": 200,
+      "inputTokens": 21162,
+      "outputTokens": 872,
+      "costUsd": 0.0036103000000000003,
+      "latencyMs": 25297
+    },
+    {
+      "provider": "zai",
+      "model": "glm-5.3-flash",
+      "requestSource": "AdvCodeEditor",
+      "httpStatus": 200,
+      "inputTokens": 2289,
+      "outputTokens": 25033,
+      "costUsd": 0.012859849999999999,
+      "latencyMs": 346319
+    },
+    {
+      "provider": "zai",
+      "model": "glm-5.3-flash",
+      "requestSource": "AgentTurnLoop:AGENT",
+      "httpStatus": 200,
+      "inputTokens": 12437,
+      "outputTokens": 7876,
+      "costUsd": 0.00439043,
+      "latencyMs": 188170
+    }
+  ],
+  "errors": [],
+  "warnings": []
+}

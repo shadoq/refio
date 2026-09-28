@@ -1,0 +1,766 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#080c14">
+  <title>Gouraud — A Canvas 2D Study</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #080c14;
+      color: #edf2fc;
+      font-synthesis: none;
+      text-rendering: optimizeLegibility;
+      -webkit-font-smoothing: antialiased;
+      --muted: #8995aa;
+      --line: rgba(179, 197, 229, .13);
+      --accent: #79d9ff;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+    }
+
+    body {
+      min-width: 320px;
+      background:
+        radial-gradient(ellipse at 50% 47%, rgba(24, 42, 67, .52), transparent 54%),
+        #080c14;
+    }
+
+    canvas {
+      position: fixed;
+      inset: 0;
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .hud {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+    }
+
+    .topbar {
+      position: absolute;
+      top: clamp(22px, 4.5vh, 48px);
+      left: clamp(22px, 5vw, 72px);
+      right: clamp(22px, 5vw, 72px);
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 24px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 13px;
+    }
+
+    .brand-mark {
+      width: 34px;
+      height: 34px;
+      border: 1px solid rgba(121, 217, 255, .42);
+      border-radius: 10px;
+      display: grid;
+      place-items: center;
+      color: var(--accent);
+      background: rgba(121, 217, 255, .06);
+      box-shadow: inset 0 0 18px rgba(121, 217, 255, .07);
+    }
+
+    .brand-mark svg {
+      width: 19px;
+      height: 19px;
+    }
+
+    .eyebrow {
+      color: #a8b4c8;
+      font-size: 10px;
+      font-weight: 650;
+      letter-spacing: .2em;
+      text-transform: uppercase;
+    }
+
+    .brand-title {
+      margin-top: 3px;
+      font-size: 14px;
+      font-weight: 560;
+      letter-spacing: .015em;
+    }
+
+    .readout {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 9px 12px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: rgba(12, 18, 29, .66);
+      color: #d6deec;
+      font-size: 11px;
+      letter-spacing: .04em;
+      backdrop-filter: blur(12px);
+    }
+
+    .live-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #75e1b0;
+      box-shadow: 0 0 11px rgba(117, 225, 176, .7);
+    }
+
+    .readout.paused .live-dot {
+      background: #f2bd72;
+      box-shadow: 0 0 11px rgba(242, 189, 114, .6);
+    }
+
+    .fps-value {
+      min-width: 31px;
+      color: #f4f7fc;
+      font-variant-numeric: tabular-nums;
+      text-align: right;
+    }
+
+    .caption {
+      position: absolute;
+      left: clamp(22px, 5vw, 72px);
+      bottom: clamp(25px, 5vh, 54px);
+    }
+
+    .caption h1 {
+      margin: 0;
+      color: #eef3fc;
+      font-size: clamp(22px, 3.1vw, 36px);
+      font-weight: 480;
+      letter-spacing: -.045em;
+    }
+
+    .caption p {
+      max-width: 340px;
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.65;
+    }
+
+    .controls {
+      position: absolute;
+      right: clamp(22px, 5vw, 72px);
+      bottom: clamp(25px, 5vh, 54px);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      pointer-events: auto;
+    }
+
+    button {
+      min-height: 38px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 9px;
+      padding: 0 13px;
+      border: 1px solid rgba(179, 197, 229, .16);
+      border-radius: 8px;
+      background: rgba(15, 22, 34, .82);
+      color: #c8d2e2;
+      font: inherit;
+      font-size: 11px;
+      cursor: pointer;
+      transition: color .18s ease, border-color .18s ease, background .18s ease, transform .18s ease;
+      backdrop-filter: blur(12px);
+    }
+
+    button:hover {
+      border-color: rgba(121, 217, 255, .45);
+      color: #f2f8ff;
+      background: rgba(23, 35, 51, .92);
+    }
+
+    button:active {
+      transform: translateY(1px);
+    }
+
+    button:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 3px;
+    }
+
+    button[aria-pressed="true"] {
+      border-color: rgba(121, 217, 255, .44);
+      color: var(--accent);
+      background: rgba(121, 217, 255, .09);
+    }
+
+    .key {
+      min-width: 20px;
+      height: 20px;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(179, 197, 229, .19);
+      border-radius: 4px;
+      color: #9caac0;
+      font-size: 10px;
+      line-height: 1;
+    }
+
+    .divider {
+      width: 1px;
+      height: 23px;
+      margin: 0 4px;
+      background: var(--line);
+    }
+
+    .hint {
+      position: absolute;
+      top: 50%;
+      right: clamp(22px, 5vw, 72px);
+      transform: translateY(-50%);
+      color: rgba(151, 165, 188, .6);
+      font-size: 10px;
+      letter-spacing: .11em;
+      text-transform: uppercase;
+      writing-mode: vertical-rl;
+    }
+
+    @media (max-width: 640px) {
+      .topbar {
+        top: 20px;
+      }
+
+      .hint {
+        display: none;
+      }
+
+      .caption {
+        bottom: 94px;
+      }
+
+      .caption p {
+        max-width: 250px;
+        font-size: 11px;
+      }
+
+      .controls {
+        right: 22px;
+        bottom: 25px;
+      }
+
+      button {
+        min-height: 36px;
+        padding: 0 10px;
+      }
+
+      .brand-title {
+        font-size: 13px;
+      }
+    }
+
+    @media (max-width: 390px) {
+      .brand-mark {
+        width: 30px;
+        height: 30px;
+      }
+
+      .readout {
+        padding: 8px 9px;
+      }
+
+      .controls {
+        gap: 6px;
+      }
+
+      button {
+        gap: 6px;
+        padding: 0 8px;
+        font-size: 10px;
+      }
+
+      .caption p {
+        max-width: 205px;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        scroll-behavior: auto !important;
+        transition-duration: .01ms !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="canvas" aria-label="A rotating, Gouraud-shaded 3D cube rendered with Canvas 2D"></canvas>
+
+  <main class="hud">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none">
+            <path d="M12 3.5 20 8v8l-8 4.5L4 16V8l8-4.5Z" stroke="currentColor" stroke-width="1.2"/>
+            <path d="m4.4 8.2 7.6 4.3 7.6-4.3M12 12.5v7.7M8 5.8l8 4.5v4.2" stroke="currentColor" stroke-width="1.1" opacity=".7"/>
+          </svg>
+        </div>
+        <div>
+          <div class="eyebrow">Realtime render study</div>
+          <div class="brand-title">Canvas / Gouraud</div>
+        </div>
+      </div>
+
+      <div class="readout" id="readout" role="status" aria-live="polite">
+        <span class="live-dot" aria-hidden="true"></span>
+        <span id="statusText">LIVE</span>
+        <span class="divider" aria-hidden="true"></span>
+        <span class="fps-value" id="fpsValue">60</span>
+        <span>FPS</span>
+      </div>
+    </header>
+
+    <div class="hint" aria-hidden="true">Lambert · Per-pixel depth</div>
+
+    <section class="caption" aria-label="About this render">
+      <h1>Light, in motion.</h1>
+      <p>A tiny software renderer. Vertex lighting, barycentric color, and a little perspective.</p>
+    </section>
+
+    <nav class="controls" aria-label="Rendering controls">
+      <button id="wireButton" type="button" aria-pressed="false" aria-label="Toggle wireframe overlay, keyboard shortcut W">
+        <span class="key" aria-hidden="true">W</span>
+        <span>Wireframe</span>
+      </button>
+      <button id="pauseButton" type="button" aria-pressed="false" aria-label="Pause animation, keyboard shortcut P">
+        <span class="key" aria-hidden="true">P</span>
+        <span id="pauseLabel">Pause</span>
+      </button>
+    </nav>
+  </main>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const canvas = document.getElementById("canvas");
+      const ctx = canvas.getContext("2d", { alpha: false });
+      const fpsValue = document.getElementById("fpsValue");
+      const readout = document.getElementById("readout");
+      const statusText = document.getElementById("statusText");
+      const wireButton = document.getElementById("wireButton");
+      const pauseButton = document.getElementById("pauseButton");
+      const pauseLabel = document.getElementById("pauseLabel");
+
+      const vertices = [
+        [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
+        [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]
+      ];
+
+      const faces = [
+        { indices: [4, 5, 6, 7], normal: [0, 0, 1], color: [64, 181, 224] },
+        { indices: [1, 0, 3, 2], normal: [0, 0, -1], color: [108, 104, 217] },
+        { indices: [5, 1, 2, 6], normal: [1, 0, 0], color: [66, 204, 176] },
+        { indices: [0, 4, 7, 3], normal: [-1, 0, 0], color: [67, 139, 210] },
+        { indices: [3, 7, 6, 2], normal: [0, 1, 0], color: [119, 158, 237] },
+        { indices: [0, 1, 5, 4], normal: [0, -1, 0], color: [49, 159, 190] }
+      ];
+
+      const cameraDistance = 5.2;
+      const nearPlane = 0.18;
+      let width = 1;
+      let height = 1;
+      let imageData;
+      let pixels;
+      let depthBuffer;
+      let backgroundData;
+      let scale = 1;
+      let focalLength = 1;
+      let pixelRatio = 1;
+      let angleX = -0.34;
+      let angleY = 0.55;
+      let angleZ = 0.12;
+      let elapsed = 0;
+      let paused = false;
+      let wireframe = false;
+      let lastFrame = 0;
+      let fpsSmooth = 60;
+      let fpsCounter = 0;
+      let fpsClock = 0;
+
+      function resize() {
+        pixelRatio = Math.min(window.devicePixelRatio || 1, 1.4);
+        width = Math.max(1, Math.round(window.innerWidth * pixelRatio));
+        height = Math.max(1, Math.round(window.innerHeight * pixelRatio));
+        canvas.width = width;
+        canvas.height = height;
+        scale = Math.min(width, height);
+        focalLength = scale * 0.94;
+        imageData = ctx.createImageData(width, height);
+        pixels = imageData.data;
+        depthBuffer = new Float32Array(width * height);
+        drawBackground();
+      }
+
+      function drawBackground() {
+        const gradient = ctx.createRadialGradient(
+          width * 0.51, height * 0.45, scale * 0.02,
+          width * 0.51, height * 0.45, scale * 0.78
+        );
+        gradient.addColorStop(0, "#152238");
+        gradient.addColorStop(0.42, "#0e1726");
+        gradient.addColorStop(1, "#080c14");
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, width, height);
+
+        const glow = ctx.createRadialGradient(
+          width * 0.51, height * 0.44, 0,
+          width * 0.51, height * 0.44, scale * 0.35
+        );
+        glow.addColorStop(0, "rgba(74, 139, 184, .11)");
+        glow.addColorStop(1, "rgba(74, 139, 184, 0)");
+        ctx.fillStyle = glow;
+        ctx.fillRect(0, 0, width, height);
+
+        ctx.save();
+        ctx.strokeStyle = "rgba(125, 160, 203, .055)";
+        ctx.lineWidth = Math.max(1, pixelRatio);
+        const horizon = height * 0.66;
+        const spacing = Math.max(34, scale * 0.065);
+        for (let x = width * 0.5, i = 0; x < width; x += spacing, i++) {
+          const alpha = Math.max(0.012, 0.055 - i * 0.004);
+          ctx.strokeStyle = `rgba(125, 160, 203, ${alpha})`;
+          ctx.beginPath();
+          ctx.moveTo(x, horizon);
+          ctx.lineTo(width * 0.5 + (x - width * 0.5) * 2.2, height);
+          ctx.stroke();
+          if (x !== width * 0.5) {
+            ctx.beginPath();
+            ctx.moveTo(width - x, horizon);
+            ctx.lineTo(width * 0.5 - (x - width * 0.5) * 2.2, height);
+            ctx.stroke();
+          }
+        }
+        for (let i = 0; i < 9; i++) {
+          const t = i / 8;
+          const y = horizon + (height - horizon) * t * t;
+          ctx.globalAlpha = 0.13 * (1 - t) + 0.025;
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(width, y);
+          ctx.stroke();
+        }
+        ctx.restore();
+
+        backgroundData = ctx.getImageData(0, 0, width, height).data;
+      }
+
+      function rotate(point, ax, ay, az) {
+        const [x, y, z] = point;
+        const cosX = Math.cos(ax);
+        const sinX = Math.sin(ax);
+        const cosY = Math.cos(ay);
+        const sinY = Math.sin(ay);
+        const cosZ = Math.cos(az);
+        const sinZ = Math.sin(az);
+
+        const y1 = y * cosX - z * sinX;
+        const z1 = y * sinX + z * cosX;
+        const x2 = x * cosY + z1 * sinY;
+        const z2 = -x * sinY + z1 * cosY;
+
+        return [
+          x2 * cosZ - y1 * sinZ,
+          x2 * sinZ + y1 * cosZ,
+          z2
+        ];
+      }
+
+      function project(point) {
+        const cameraZ = cameraDistance - point[2];
+        if (cameraZ <= nearPlane) {
+          return null;
+        }
+        return {
+          x: width * 0.5 + point[0] * focalLength / cameraZ,
+          y: height * 0.49 - point[1] * focalLength / cameraZ,
+          z: cameraZ
+        };
+      }
+
+      function transformedLight(time) {
+        return [
+          Math.sin(time * 0.72) * 2.55,
+          1.75 + Math.sin(time * 0.91) * 0.55,
+          2.05 + Math.cos(time * 0.63) * 0.55
+        ];
+      }
+
+      function vertexColor(position, normal, light, material) {
+        const dx = light[0] - position[0];
+        const dy = light[1] - position[1];
+        const dz = light[2] - position[2];
+        const distanceSquared = dx * dx + dy * dy + dz * dz;
+        const inverseDistance = 1 / Math.sqrt(distanceSquared);
+        const lambert = Math.max(0, (normal[0] * dx + normal[1] * dy + normal[2] * dz) * inverseDistance);
+        const attenuation = 1 / (1 + distanceSquared * 0.035);
+        const intensity = 0.19 + lambert * attenuation * 1.05;
+
+        return [
+          Math.min(255, material[0] * intensity + 5),
+          Math.min(255, material[1] * intensity + 5),
+          Math.min(255, material[2] * intensity + 7)
+        ];
+      }
+
+      function rasterizeTriangle(a, b, c, colorA, colorB, colorC) {
+        if (!a || !b || !c || a.z <= nearPlane || b.z <= nearPlane || c.z <= nearPlane) {
+          return;
+        }
+
+        const area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+        if (Math.abs(area) < 1e-8) {
+          return;
+        }
+
+        const minX = Math.max(0, Math.floor(Math.min(a.x, b.x, c.x)));
+        const maxX = Math.min(width - 1, Math.ceil(Math.max(a.x, b.x, c.x)));
+        const minY = Math.max(0, Math.floor(Math.min(a.y, b.y, c.y)));
+        const maxY = Math.min(height - 1, Math.ceil(Math.max(a.y, b.y, c.y)));
+        const inverseArea = 1 / area;
+
+        for (let y = minY; y <= maxY; y++) {
+          const py = y + 0.5;
+          for (let x = minX; x <= maxX; x++) {
+            const px = x + 0.5;
+            const w0 = ((b.x - px) * (c.y - py) - (b.y - py) * (c.x - px)) * inverseArea;
+            const w1 = ((c.x - px) * (a.y - py) - (c.y - py) * (a.x - px)) * inverseArea;
+            const w2 = 1 - w0 - w1;
+
+            if (w0 < -1e-7 || w1 < -1e-7 || w2 < -1e-7) {
+              continue;
+            }
+
+            const inverseZ = w0 / a.z + w1 / b.z + w2 / c.z;
+            const index = y * width + x;
+            if (inverseZ <= depthBuffer[index]) {
+              continue;
+            }
+
+            depthBuffer[index] = inverseZ;
+            const red = (w0 * colorA[0] / a.z + w1 * colorB[0] / b.z + w2 * colorC[0] / c.z) / inverseZ;
+            const green = (w0 * colorA[1] / a.z + w1 * colorB[1] / b.z + w2 * colorC[1] / c.z) / inverseZ;
+            const blue = (w0 * colorA[2] / a.z + w1 * colorB[2] / b.z + w2 * colorC[2] / c.z) / inverseZ;
+            const pixelIndex = index * 4;
+            pixels[pixelIndex] = red;
+            pixels[pixelIndex + 1] = green;
+            pixels[pixelIndex + 2] = blue;
+            pixels[pixelIndex + 3] = 255;
+          }
+        }
+      }
+
+      function renderLight(light) {
+        const projected = project(light);
+        if (!projected) {
+          return;
+        }
+
+        const radius = 5 * pixelRatio;
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        const halo = ctx.createRadialGradient(projected.x, projected.y, 0, projected.x, projected.y, radius * 5);
+        halo.addColorStop(0, "rgba(255, 239, 190, .45)");
+        halo.addColorStop(0.28, "rgba(255, 205, 124, .14)");
+        halo.addColorStop(1, "rgba(255, 205, 124, 0)");
+        ctx.fillStyle = halo;
+        ctx.beginPath();
+        ctx.arc(projected.x, projected.y, radius * 5, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.strokeStyle = "rgba(255, 225, 164, .68)";
+        ctx.lineWidth = 1 * pixelRatio;
+        ctx.beginPath();
+        ctx.arc(projected.x, projected.y, radius * 1.8, 0, Math.PI * 2);
+        ctx.stroke();
+
+        ctx.fillStyle = "#fff0c9";
+        ctx.beginPath();
+        ctx.arc(projected.x, projected.y, radius * 0.72, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      function render() {
+        pixels.set(backgroundData);
+        depthBuffer.fill(0);
+
+        const rotatedVertices = vertices.map(vertex => rotate(vertex, angleX, angleY, angleZ));
+        const projectedVertices = rotatedVertices.map(project);
+        const light = transformedLight(elapsed);
+
+        for (const face of faces) {
+          const normal = rotate(face.normal, angleX, angleY, angleZ);
+          const indices = face.indices;
+          const center = [0, 0, 0];
+          for (const index of indices) {
+            center[0] += rotatedVertices[index][0] * 0.25;
+            center[1] += rotatedVertices[index][1] * 0.25;
+            center[2] += rotatedVertices[index][2] * 0.25;
+          }
+
+          const toCamera = [-center[0], -center[1], cameraDistance - center[2]];
+          if (normal[0] * toCamera[0] + normal[1] * toCamera[1] + normal[2] * toCamera[2] <= 0) {
+            continue;
+          }
+
+          const colors = indices.map(index =>
+            vertexColor(rotatedVertices[index], normal, light, face.color)
+          );
+          const points = indices.map(index => projectedVertices[index]);
+
+          rasterizeTriangle(points[0], points[1], points[2], colors[0], colors[1], colors[2]);
+          rasterizeTriangle(points[0], points[2], points[3], colors[0], colors[2], colors[3]);
+
+          if (wireframe && points.every(Boolean)) {
+            ctx.beginPath();
+            ctx.moveTo(points[0].x, points[0].y);
+            for (let i = 1; i < points.length; i++) {
+              ctx.lineTo(points[i].x, points[i].y);
+            }
+            ctx.closePath();
+            ctx.strokeStyle = "rgba(213, 241, 255, .72)";
+            ctx.lineWidth = 1 * pixelRatio;
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.moveTo(points[0].x, points[0].y);
+            ctx.lineTo(points[2].x, points[2].y);
+            ctx.strokeStyle = "rgba(213, 241, 255, .23)";
+            ctx.lineWidth = 0.8 * pixelRatio;
+            ctx.stroke();
+          }
+        }
+
+        ctx.putImageData(imageData, 0, 0);
+        if (wireframe) {
+          for (const face of faces) {
+            const normal = rotate(face.normal, angleX, angleY, angleZ);
+            const indices = face.indices;
+            const center = [0, 0, 0];
+            for (const index of indices) {
+              center[0] += rotatedVertices[index][0] * 0.25;
+              center[1] += rotatedVertices[index][1] * 0.25;
+              center[2] += rotatedVertices[index][2] * 0.25;
+            }
+            const toCamera = [-center[0], -center[1], cameraDistance - center[2]];
+            if (normal[0] * toCamera[0] + normal[1] * toCamera[1] + normal[2] * toCamera[2] <= 0) {
+              continue;
+            }
+
+            const points = indices.map(index => projectedVertices[index]);
+            if (!points.every(Boolean)) {
+              continue;
+            }
+            ctx.beginPath();
+            ctx.moveTo(points[0].x, points[0].y);
+            for (let i = 1; i < points.length; i++) {
+              ctx.lineTo(points[i].x, points[i].y);
+            }
+            ctx.closePath();
+            ctx.strokeStyle = "rgba(213, 241, 255, .72)";
+            ctx.lineWidth = 1 * pixelRatio;
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(points[0].x, points[0].y);
+            ctx.lineTo(points[2].x, points[2].y);
+            ctx.strokeStyle = "rgba(213, 241, 255, .23)";
+            ctx.lineWidth = 0.8 * pixelRatio;
+            ctx.stroke();
+          }
+        }
+        renderLight(light);
+      }
+
+      function animate(timestamp) {
+        if (!lastFrame) {
+          lastFrame = timestamp;
+          fpsClock = timestamp;
+        }
+
+        const delta = Math.min((timestamp - lastFrame) / 1000, 0.05);
+        lastFrame = timestamp;
+
+        if (!paused) {
+          elapsed += delta;
+          angleX += delta * 0.29;
+          angleY += delta * 0.47;
+          angleZ += delta * 0.11;
+        }
+
+        render();
+
+        fpsCounter++;
+        if (timestamp - fpsClock >= 450) {
+          const measured = fpsCounter * 1000 / (timestamp - fpsClock);
+          fpsSmooth += (measured - fpsSmooth) * 0.35;
+          fpsValue.textContent = String(Math.round(fpsSmooth));
+          fpsCounter = 0;
+          fpsClock = timestamp;
+        }
+
+        requestAnimationFrame(animate);
+      }
+
+      function setWireframe(enabled) {
+        wireframe = enabled;
+        wireButton.setAttribute("aria-pressed", String(enabled));
+      }
+
+      function setPaused(enabled) {
+        paused = enabled;
+        pauseButton.setAttribute("aria-pressed", String(enabled));
+        pauseButton.setAttribute("aria-label", `${enabled ? "Resume" : "Pause"} animation, keyboard shortcut P`);
+        pauseLabel.textContent = enabled ? "Resume" : "Pause";
+        statusText.textContent = enabled ? "PAUSED" : "LIVE";
+        readout.classList.toggle("paused", enabled);
+      }
+
+      wireButton.addEventListener("click", () => setWireframe(!wireframe));
+      pauseButton.addEventListener("click", () => setPaused(!paused));
+
+      window.addEventListener("keydown", event => {
+        const target = event.target;
+        if (
+          target instanceof HTMLElement &&
+          (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(target.tagName))
+        ) {
+          return;
+        }
+
+        if (event.key.toLowerCase() === "w") {
+          setWireframe(!wireframe);
+        } else if (event.key.toLowerCase() === "p") {
+          setPaused(!paused);
+        }
+      });
+
+      window.addEventListener("resize", resize, { passive: true });
+      resize();
+      requestAnimationFrame(animate);
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="ARTIFACT: Museum Night — a cinematic after-hours museum event in Warsaw on 18 October 2026.">
+  <meta property="og:title" content="ARTIFACT: Museum Night">
+  <meta property="og:description" content="A cinematic after-hours museum event with exhibitions, performances, talks, and guided tours.">
+  <meta property="og:image" content="https://source.unsplash.com/featured/2400x1400?museum,night">
+  <meta property="og:type" content="website">
+  <title>ARTIFACT: Museum Night — 18 October 2026</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%23070506'/%3E%3Cpath d='M12 48 30 12h5l17 36h-9l-3-8H23l-3 8h-8Zm14-15h11l-5.5-14L26 33Z' fill='%23d6ad60'/%3E%3C/svg%3E">
+  <style>
+    :root {
+      --bg: #070506;
+      --velvet: #1a0710;
+      --burgundy: #3a0f1d;
+      --navy: #07111f;
+      --gold: #d6ad60;
+      --soft-gold: #f3d79b;
+      --ivory: #f8efe2;
+      --muted: #b9a999;
+      --panel: rgba(255, 244, 220, .06);
+      --border: rgba(214, 173, 96, .28);
+      --serif: Georgia, "Times New Roman", serif;
+      --sans: Inter, system-ui, "Segoe UI", sans-serif;
+      --shadow: 0 24px 70px rgba(0, 0, 0, .38);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ivory);
+      background: var(--bg);
+      font-family: var(--sans);
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+    body.modal-open { overflow: hidden; }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      pointer-events: none;
+      opacity: .075;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.8'/%3E%3C/svg%3E");
+      mix-blend-mode: screen;
+    }
+    a { color: inherit; text-decoration: none; }
+    button, input, select { font: inherit; }
+    button { cursor: pointer; }
+    img { display: block; max-width: 100%; }
+    :focus-visible { outline: 2px solid var(--soft-gold); outline-offset: 4px; }
+
+    .skip-link {
+      position: fixed;
+      top: -5rem;
+      left: 1rem;
+      z-index: 100;
+      padding: .65rem 1rem;
+      color: var(--bg);
+      background: var(--soft-gold);
+    }
+    .skip-link:focus { top: 1rem; }
+    .container { width: min(1160px, calc(100% - 3rem)); margin: 0 auto; }
+    .section { padding: 7.5rem 0; position: relative; }
+    .eyebrow {
+      display: flex;
+      align-items: center;
+      gap: .7rem;
+      color: var(--soft-gold);
+      font-size: .7rem;
+      font-weight: 700;
+      letter-spacing: .18em;
+      text-transform: uppercase;
+    }
+    .eyebrow::before { content: ""; width: 2rem; height: 1px; background: var(--gold); }
+    h1, h2, h3, p { margin-top: 0; }
+    h1, h2, h3 { font-family: var(--serif); font-weight: 400; line-height: 1.03; }
+    h2 { font-size: clamp(2.5rem, 5vw, 4.7rem); letter-spacing: -.045em; }
+    .section-heading { max-width: 720px; margin-bottom: 3.5rem; }
+    .section-heading p { max-width: 570px; color: var(--muted); margin-bottom: 0; }
+    .gold-line { width: 100%; height: 1px; background: linear-gradient(90deg, transparent, var(--border), transparent); }
+
+    .nav {
+      position: sticky;
+      top: 0;
+      z-index: 30;
+      height: 78px;
+      border-bottom: 1px solid transparent;
+      background: rgba(7, 5, 6, .78);
+      backdrop-filter: blur(15px);
+      transition: border-color .25s, background .25s;
+    }
+    .nav.scrolled { border-color: var(--border); background: rgba(7, 5, 6, .92); }
+    .nav-inner { height: 100%; display: flex; align-items: center; justify-content: space-between; gap: 2rem; }
+    .logo { font-family: var(--serif); font-size: 1.35rem; font-weight: 700; letter-spacing: .18em; }
+    .logo span { color: var(--gold); }
+    .nav-links { display: flex; align-items: center; gap: 1.65rem; }
+    .nav-links a { color: var(--muted); font-size: .78rem; letter-spacing: .08em; text-transform: uppercase; transition: color .2s; }
+    .nav-links a:hover, .nav-links a.active { color: var(--soft-gold); }
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 48px;
+      padding: .8rem 1.25rem;
+      border: 1px solid var(--gold);
+      color: var(--bg);
+      background: var(--gold);
+      font-size: .75rem;
+      font-weight: 700;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      transition: transform .2s, background .2s, color .2s, box-shadow .2s;
+    }
+    .button:hover { transform: translateY(-2px); background: var(--soft-gold); box-shadow: 0 8px 28px rgba(214, 173, 96, .2); }
+    .button-outline { color: var(--soft-gold); background: transparent; border-color: var(--border); }
+    .button-outline:hover { color: var(--bg); background: var(--soft-gold); }
+    .nav .button { min-height: 39px; padding: .55rem .9rem; }
+    .menu-button { display: none; color: var(--ivory); background: none; border: 0; padding: .5rem; }
+    .menu-button span { display: block; width: 24px; height: 1px; margin: 5px 0; background: currentColor; }
+
+    .hero {
+      position: relative;
+      min-height: calc(100vh - 78px);
+      display: grid;
+      align-items: end;
+      isolation: isolate;
+      overflow: hidden;
+      background: var(--velvet);
+    }
+    .hero::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: -2;
+      background: linear-gradient(90deg, rgba(7, 5, 6, .93) 0%, rgba(7, 5, 6, .62) 48%, rgba(7, 5, 6, .4)), linear-gradient(0deg, var(--bg) 0%, transparent 35%), url("https://source.unsplash.com/featured/2400x1400?museum,night") center/cover;
+    }
+    .hero::after {
+      content: "";
+      position: absolute;
+      width: 70vw;
+      height: 70vw;
+      top: -46vw;
+      right: -4vw;
+      z-index: -1;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(243, 215, 155, .18), rgba(214, 173, 96, .05) 30%, transparent 67%);
+      transform: rotate(-18deg);
+      pointer-events: none;
+    }
+    .hero-inner { width: min(1160px, calc(100% - 3rem)); margin: 0 auto; padding: 8rem 0 5.2rem; }
+    .hero-content { max-width: 780px; }
+    .hero h1 { max-width: 730px; margin: .8rem 0 1.6rem; font-size: clamp(4rem, 9vw, 8.4rem); }
+    .hero-copy { max-width: 510px; color: #dfd1c0; font-size: 1.05rem; }
+    .event-details { display: flex; flex-wrap: wrap; gap: .65rem; margin: 2rem 0; }
+    .event-details span {
+      padding: .48rem .72rem;
+      border: 1px solid var(--border);
+      background: rgba(7, 5, 6, .48);
+      color: var(--soft-gold);
+      font-size: .78rem;
+    }
+    .hero-actions { display: flex; flex-wrap: wrap; gap: .8rem; }
+    .hero-aside {
+      position: absolute;
+      right: max(1.5rem, calc((100% - 1160px) / 2));
+      bottom: 4.8rem;
+      width: 205px;
+      padding: 1.15rem;
+      border: 1px solid var(--border);
+      background: rgba(8, 9, 12, .65);
+      backdrop-filter: blur(12px);
+      box-shadow: var(--shadow);
+    }
+    .hero-aside .number { font-family: var(--serif); color: var(--soft-gold); font-size: 2.8rem; line-height: 1; }
+    .hero-aside p { margin: .45rem 0 0; color: var(--muted); font-size: .78rem; }
+
+    .intro { background: radial-gradient(ellipse at 12% 30%, rgba(58, 15, 29, .55), transparent 45%), var(--bg); }
+    .intro-grid { display: grid; grid-template-columns: 1.05fr .95fr; gap: 5rem; align-items: center; }
+    .intro-copy p { color: var(--muted); max-width: 580px; font-size: 1.08rem; }
+    .features { display: grid; gap: 1rem; }
+    .feature-card, .artist-card, .ticket-card, .venue-copy {
+      border: 1px solid var(--border);
+      background: var(--panel);
+      backdrop-filter: blur(10px);
+    }
+    .feature-card { padding: 1.5rem; transition: transform .25s, border-color .25s, background .25s; }
+    .feature-card:hover { transform: translateX(7px); border-color: var(--gold); background: rgba(255, 244, 220, .09); }
+    .feature-num { color: var(--gold); font-size: .72rem; letter-spacing: .14em; }
+    .feature-card h3 { margin: .45rem 0 0; font-size: 1.45rem; }
+
+    .program { background: linear-gradient(135deg, var(--navy), var(--bg) 58%, var(--velvet)); }
+    .timeline { position: relative; max-width: 850px; margin: 0 auto; }
+    .timeline::before { content: ""; position: absolute; top: 0; bottom: 0; left: 112px; width: 1px; background: var(--border); }
+    .timeline-item { display: grid; grid-template-columns: 90px 1fr; gap: 2rem; position: relative; padding: 0 0 2rem; }
+    .timeline-time { color: var(--soft-gold); font-family: var(--serif); font-size: 1.2rem; }
+    .timeline-content { position: relative; padding: 0 0 0 1.5rem; }
+    .timeline-content::before { content: ""; position: absolute; left: -5px; top: .55rem; width: 10px; height: 10px; border: 2px solid var(--gold); border-radius: 50%; background: var(--navy); }
+    .timeline-content h3 { margin: 0 0 .25rem; font-size: 1.35rem; }
+    .timeline-content p { margin: 0 0 .55rem; color: var(--muted); }
+    .tag { display: inline-block; padding: .18rem .5rem; border: 1px solid var(--border); color: var(--soft-gold); font-size: .67rem; letter-spacing: .08em; text-transform: uppercase; }
+
+    .artists-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; }
+    .artist-card { overflow: hidden; transition: transform .25s, border-color .25s; }
+    .artist-card:hover { transform: translateY(-6px); border-color: var(--gold); }
+    .artist-card img { width: 100%; height: 235px; object-fit: cover; filter: saturate(.7) contrast(1.08); }
+    .artist-info { padding: 1.1rem; }
+    .artist-info h3 { margin: 0 0 .25rem; font-size: 1.35rem; }
+    .artist-role { color: var(--gold); font-size: .71rem; letter-spacing: .1em; text-transform: uppercase; }
+    .artist-info p { min-height: 3.9em; margin: .7rem 0 1rem; color: var(--muted); font-size: .87rem; }
+    .text-button { padding: 0; color: var(--soft-gold); border: 0; background: none; font-size: .72rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+    .text-button:hover { color: var(--gold); }
+
+    .venue { background: radial-gradient(ellipse at 90% 30%, rgba(58, 15, 29, .56), transparent 44%), var(--bg); }
+    .venue-grid { display: grid; grid-template-columns: .88fr 1.12fr; gap: 2rem; align-items: stretch; }
+    .venue-copy { padding: 2rem; }
+    .venue-copy h3 { margin: .45rem 0 1.25rem; font-size: 2rem; }
+    .venue-copy p, .venue-copy li { color: var(--muted); }
+    .venue-copy ul { padding-left: 1.1rem; margin-bottom: 0; }
+    .map { min-height: 450px; border: 1px solid var(--border); background: #0c1016; }
+    .map svg { width: 100%; height: 100%; min-height: 450px; }
+
+    .tickets { background: linear-gradient(160deg, var(--velvet), var(--bg) 60%); }
+    .tickets-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.2rem; align-items: stretch; }
+    .ticket-card { position: relative; display: flex; flex-direction: column; padding: 2rem; transition: transform .25s, border-color .25s; }
+    .ticket-card:hover { transform: translateY(-7px); border-color: var(--gold); }
+    .ticket-card.recommended { border-color: var(--gold); background: linear-gradient(145deg, rgba(214, 173, 96, .14), var(--panel)); }
+    .recommended-label { position: absolute; top: 0; right: 1rem; padding: .35rem .65rem; color: var(--bg); background: var(--gold); font-size: .64rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+    .ticket-card h3 { margin: 0; font-size: 1.8rem; }
+    .price { margin: .6rem 0 1.4rem; color: var(--soft-gold); font-family: var(--serif); font-size: 3.5rem; line-height: 1; }
+    .price small { font-family: var(--sans); font-size: .9rem; }
+    .ticket-card ul { flex: 1; padding: 0; margin: 0 0 1.7rem; list-style: none; }
+    .ticket-card li { padding: .55rem 0; border-top: 1px solid rgba(214, 173, 96, .16); color: var(--muted); font-size: .9rem; }
+    .ticket-card li::before { content: "✦"; margin-right: .5rem; color: var(--gold); }
+
+    .faq { background: var(--navy); }
+    .faq-list { max-width: 850px; margin: 0 auto; border-top: 1px solid var(--border); }
+    .faq-item { border-bottom: 1px solid var(--border); }
+    .faq-question { display: flex; justify-content: space-between; width: 100%; padding: 1.3rem 0; color: var(--ivory); border: 0; background: none; font-family: var(--serif); font-size: 1.3rem; text-align: left; }
+    .faq-question span:last-child { color: var(--gold); transition: transform .2s; }
+    .faq-question[aria-expanded="true"] span:last-child { transform: rotate(45deg); }
+    .faq-answer { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .25s; }
+    .faq-answer > div { overflow: hidden; }
+    .faq-answer p { margin: 0; padding: 0 2rem 1.3rem 0; color: var(--muted); }
+    .faq-question[aria-expanded="true"] + .faq-answer { grid-template-rows: 1fr; }
+
+    .newsletter { padding: 5.5rem 0; background: radial-gradient(ellipse at 50% 0%, rgba(214, 173, 96, .12), transparent 54%), var(--bg); text-align: center; }
+    .newsletter .section-heading { margin: 0 auto 1.6rem; }
+    .newsletter p { color: var(--muted); }
+    .signup-form { display: flex; width: min(520px, 100%); margin: 0 auto; gap: .6rem; }
+    .signup-form input, .form-group input, .form-group select {
+      width: 100%;
+      min-height: 48px;
+      padding: .75rem .85rem;
+      color: var(--ivory);
+      border: 1px solid var(--border);
+      outline: 0;
+      background: rgba(255, 244, 220, .06);
+    }
+    .signup-form input::placeholder, input::placeholder { color: #95877a; }
+    .field-error { min-height: 1.2rem; margin: .35rem 0 0; color: #ed9a9a; font-size: .76rem; text-align: left; }
+
+    footer { padding: 3rem 0 2rem; border-top: 1px solid var(--border); }
+    .footer-top { display: flex; justify-content: space-between; gap: 2rem; align-items: flex-start; }
+    .footer-meta { color: var(--muted); font-size: .85rem; }
+    .socials { display: flex; gap: 1.1rem; color: var(--soft-gold); font-size: .75rem; letter-spacing: .08em; text-transform: uppercase; }
+    .footer-bottom { display: flex; justify-content: space-between; gap: 1rem; margin-top: 3rem; padding-top: 1.2rem; border-top: 1px solid rgba(214, 173, 96, .16); color: var(--muted); font-size: .72rem; }
+
+    .modal { position: fixed; inset: 0; z-index: 60; display: none; place-items: center; padding: 1rem; background: rgba(0, 0, 0, .78); }
+    .modal.open { display: grid; }
+    .modal-dialog { position: relative; width: min(700px, 100%); max-height: min(850px, calc(100vh - 2rem)); overflow-y: auto; border: 1px solid var(--border); background: #110b0d; box-shadow: var(--shadow); }
+    .modal-close { position: absolute; top: .75rem; right: .75rem; z-index: 2; width: 38px; height: 38px; color: var(--ivory); border: 1px solid var(--border); border-radius: 50%; background: rgba(7, 5, 6, .7); font-size: 1.4rem; line-height: 1; }
+    .modal-close:hover { color: var(--bg); background: var(--soft-gold); }
+    .artist-modal-image { width: 100%; height: 290px; object-fit: cover; }
+    .modal-content { padding: 2rem; }
+    .modal-content h2 { margin: .5rem 0; font-size: 3rem; }
+    .modal-content p { color: var(--muted); }
+    .session-time { color: var(--soft-gold) !important; font-size: .82rem; letter-spacing: .1em; text-transform: uppercase; }
+    .checkout-dialog { width: min(560px, 100%); }
+    .checkout-dialog .modal-content { padding: 2.2rem; }
+    .checkout-dialog h2 { font-size: 2.5rem; }
+    .checkout-tier { margin-bottom: 1.5rem; padding: .9rem; border-left: 2px solid var(--gold); background: var(--panel); }
+    .checkout-tier strong { color: var(--soft-gold); }
+    .checkout-form { display: grid; gap: .9rem; }
+    .form-group label { display: block; margin-bottom: .35rem; color: var(--muted); font-size: .77rem; letter-spacing: .06em; text-transform: uppercase; }
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; }
+    .check-row { display: flex; align-items: flex-start; gap: .6rem; color: var(--muted); font-size: .83rem; }
+    .check-row input { margin-top: .25rem; accent-color: var(--gold); }
+    .total { display: flex; justify-content: space-between; padding: 1rem 0; border-top: 1px solid var(--border); color: var(--muted); }
+    .total strong { color: var(--soft-gold); font-family: var(--serif); font-size: 1.6rem; }
+    .no-payment { margin: 0; color: var(--muted); font-size: .76rem; text-align: center; }
+
+    .toast-region { position: fixed; right: 1rem; bottom: 1rem; z-index: 80; display: grid; gap: .6rem; width: min(360px, calc(100% - 2rem)); }
+    .toast { padding: 1rem 1.15rem; border: 1px solid var(--gold); color: var(--ivory); background: #17100e; box-shadow: var(--shadow); animation: toast-in .3s ease both; font-size: .87rem; }
+    @keyframes toast-in { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+    .reveal { opacity: 0; transform: translateY(25px); transition: opacity .7s ease, transform .7s ease; }
+    .reveal.visible { opacity: 1; transform: translateY(0); }
+
+    @media (max-width: 900px) {
+      .nav-links { position: absolute; top: 78px; left: 0; right: 0; display: none; flex-direction: column; align-items: stretch; gap: 0; padding: .8rem 1.5rem 1.5rem; border-bottom: 1px solid var(--border); background: #100a0c; }
+      .nav-links.open { display: flex; }
+      .nav-links a { padding: .9rem 0; }
+      .nav-links .button { margin-top: .7rem; }
+      .menu-button { display: block; }
+      .nav-cta { display: none; }
+      .hero-aside { display: none; }
+      .intro-grid, .venue-grid { grid-template-columns: 1fr; gap: 2rem; }
+      .artists-grid { grid-template-columns: repeat(2, 1fr); }
+      .tickets-grid { grid-template-columns: 1fr; max-width: 530px; margin: auto; }
+    }
+    @media (max-width: 560px) {
+      .container, .hero-inner { width: min(100% - 2rem, 1160px); }
+      .section { padding: 5rem 0; }
+      .hero-inner { padding: 6rem 0 4rem; }
+      .hero h1 { font-size: clamp(3.3rem, 17vw, 5rem); }
+      .artists-grid { grid-template-columns: 1fr; }
+      .artist-card img { height: 275px; }
+      .timeline::before { left: 67px; }
+      .timeline-item { grid-template-columns: 52px 1fr; gap: 1rem; }
+      .timeline-time { font-size: 1rem; }
+      .timeline-content { padding-left: 1rem; }
+      .signup-form, .footer-top, .footer-bottom { flex-direction: column; }
+      .signup-form .button { width: 100%; }
+      .form-row { grid-template-columns: 1fr; }
+      .map, .map svg { min-height: 350px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
+      .reveal { opacity: 1; transform: none; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="nav" id="top">
+    <div class="container nav-inner">
+      <a class="logo" href="#top" aria-label="ARTIFACT home">ARTI<span>F</span>ACT</a>
+      <button class="menu-button" type="button" aria-label="Toggle navigation menu" aria-expanded="false" aria-controls="nav-links">
+        <span></span><span></span><span></span>
+      </button>
+      <nav class="nav-links" id="nav-links" aria-label="Main navigation">
+        <a href="#program">Program</a>
+        <a href="#artists">Artists</a>
+        <a href="#venue">Venue</a>
+        <a href="#tickets">Tickets</a>
+        <a href="#faq">FAQ</a>
+        <a class="button" href="#tickets">Get Tickets</a>
+      </nav>
+      <a class="button nav-cta" href="#tickets">Get Tickets</a>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-inner">
+        <div class="hero-content reveal">
+          <div class="eyebrow">ARTIFACT: Museum Night</div>
+          <h1 id="hero-title">Museum Night,<br>Reimagined</h1>
+          <p class="hero-copy">One unhurried evening inside The Old Gallery, where shadow, sound, and the collection reveal a different kind of after-hours ritual.</p>
+          <div class="event-details" aria-label="Event details">
+            <span>18 October 2026</span>
+            <span>19:00–02:00</span>
+            <span>The Old Gallery, Warsaw</span>
+          </div>
+          <div class="hero-actions">
+            <a class="button" href="#tickets">Get Tickets</a>
+            <button class="button button-outline" id="calendar-button" type="button">Save to Calendar</button>
+          </div>
+        </div>
+        <aside class="hero-aside" aria-label="Event highlight">
+          <div class="number">07</div>
+          <p>hours of art, sound, and rooms usually left unseen.</p>
+        </aside>
+      </div>
+    </section>
+
+    <section class="section intro" aria-labelledby="concept-title">
+      <div class="container intro-grid">
+        <div class="intro-copy reveal">
+          <div class="eyebrow">The invitation</div>
+          <h2 id="concept-title">When the gallery exhales.</h2>
+          <p>ARTIFACT is an after-dark encounter with the museum at its most intimate. Wander through illuminated collections, pause for live interventions, and follow curators beyond the familiar route.</p>
+          <p>Designed for attentive looking rather than hurried viewing, this is a single night of art held in a slower, stranger light.</p>
+        </div>
+        <div class="features reveal" aria-label="Event features">
+          <article class="feature-card">
+            <div class="feature-num">01 / EXPERIENCE</div>
+            <h3>After-hours exhibitions</h3>
+          </article>
+          <article class="feature-card">
+            <div class="feature-num">02 / EXPERIENCE</div>
+            <h3>Live performances</h3>
+          </article>
+          <article class="feature-card">
+            <div class="feature-num">03 / EXPERIENCE</div>
+            <h3>Guided hidden-room tours</h3>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section program" id="program" aria-labelledby="program-title">
+      <div class="container">
+        <div class="section-heading reveal">
+          <div class="eyebrow">One night, in sequence</div>
+          <h2 id="program-title">The program</h2>
+          <p>Move through the night at your own tempo. Timed moments are invitations, not interruptions.</p>
+        </div>
+        <div class="timeline reveal">
+          <article class="timeline-item"><div class="timeline-time">19:00</div><div class="timeline-content"><h3>Doors Open</h3><p>Enter through the candlelit atrium and collect your evening map.</p><span class="tag">Grand Atrium</span></div></article>
+          <article class="timeline-item"><div class="timeline-time">19:30</div><div class="timeline-content"><h3>Curator Welcome</h3><p>An opening reflection on the night’s objects, echoes, and encounters.</p><span class="tag">East Hall</span></div></article>
+          <article class="timeline-item"><div class="timeline-time">20:00</div><div class="timeline-content"><h3>Hidden Collection Tour</h3><p>A small-group passage through the archive rooms below the gallery.</p><span class="tag">Lower Archive</span></div></article>
+          <article class="timeline-item"><div class="timeline-time">21:00</div><div class="timeline-content"><h3>Live Ambient Performance</h3><p>A slow-build composition for voice, brass, and found resonance.</p><span class="tag">Winter Garden</span></div></article>
+          <article class="timeline-item"><div class="timeline-time">22:00</div><div class="timeline-content"><h3>Sculpture Hall Projection</h3><p>Light studies unfold across marble forms and vaulted walls.</p><span class="tag">Sculpture Hall</span></div></article>
+          <article class="timeline-item"><div class="timeline-time">23:00</div><div class="timeline-content"><h3>Artist Talk</h3><p>A conversation on memory, material, and making work after midnight.</p><span class="tag">Lecture Room</span></div></article>
+          <article class="timeline-item"><div class="timeline-time">00:00</div><div class="timeline-content"><h3>Midnight Gallery Walk</h3><p>A silent, self-guided walk led only by a score of soft light.</p><span class="tag">North Galleries</span></div></article>
+          <article class="timeline-item"><div class="timeline-time">01:00</div><div class="timeline-content"><h3>Closing Sound Session</h3><p>Gather for the final immersive sound piece before the doors close.</p><span class="tag">Grand Atrium</span></div></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="artists" aria-labelledby="artists-title">
+      <div class="container">
+        <div class="section-heading reveal">
+          <div class="eyebrow">Voices in the rooms</div>
+          <h2 id="artists-title">Artists &amp; speakers</h2>
+          <p>Eight practitioners and guides reshape the gallery across one extraordinary evening.</p>
+        </div>
+        <div class="artists-grid">
+          <article class="artist-card reveal"><img src="https://source.unsplash.com/featured/1200x900?gallery,art" alt="Contemporary gallery interior" loading="lazy"><div class="artist-info"><h3>Elena Varga</h3><div class="artist-role">Curator</div><p>Collecting traces of forgotten gestures and overlooked frames.</p><button class="text-button artist-details" type="button" data-artist="elena">View details</button></div></article>
+          <article class="artist-card reveal"><img src="https://source.unsplash.com/featured/1200x900?exhibition,lights" alt="Light installation in an exhibition" loading="lazy"><div class="artist-info"><h3>Malik Okafor</h3><div class="artist-role">Light Artist</div><p>Architect of luminous, site-responsive interventions.</p><button class="text-button artist-details" type="button" data-artist="malik">View details</button></div></article>
+          <article class="artist-card reveal"><img src="https://source.unsplash.com/featured/1200x900?sculpture,museum" alt="Museum sculpture on display" loading="lazy"><div class="artist-info"><h3>Sofia Lenz</h3><div class="artist-role">Sculptor</div><p>Material studies where stone appears almost weightless.</p><button class="text-button artist-details" type="button" data-artist="sofia">View details</button></div></article>
+          <article class="artist-card reveal"><img src="https://source.unsplash.com/featured/1200x900?museum,crowd" alt="Visitors moving through a museum" loading="lazy"><div class="artist-info"><h3>Jan Kowalski</h3><div class="artist-role">Museum Historian</div><p>A Warsaw voice on collections, cities, and public memory.</p><button class="text-button artist-details" type="button" data-artist="jan">View details</button></div></article>
+          <article class="artist-card reveal"><img src="https://source.unsplash.com/featured/1200x900?art,installation" alt="Immersive art installation" loading="lazy"><div class="artist-info"><h3>Amara Bell</h3><div class="artist-role">Installation Artist</div><p>Building intimate worlds from sound, fabric, and found matter.</p><button class="text-button artist-details" type="button" data-artist="amara">View details</button></div></article>
+          <article class="artist-card reveal"><img src="https://source.unsplash.com/featured/1200x900?theater,stage" alt="Theatre stage under dramatic light" loading="lazy"><div class="artist-info"><h3>Leo Moretti</h3><div class="artist-role">Composer</div><p>Composing nocturnes for rooms, bodies, and old architecture.</p><button class="text-button artist-details" type="button" data-artist="leo">View details</button></div></article>
+          <article class="artist-card reveal"><img src="https://source.unsplash.com/featured/1200x900?gallery,art" alt="Artwork displayed in a gallery" loading="lazy"><div class="artist-info"><h3>Nadia Rahman</h3><div class="artist-role">Performance Artist</div><p>Quiet choreographies that turn spectators into witnesses.</p><button class="text-button artist-details" type="button" data-artist="nadia">View details</button></div></article>
+          <article class="artist-card reveal"><img src="https://source.unsplash.com/featured/1200x900?exhibition,lights" alt="Abstract illuminated exhibition space" loading="lazy"><div class="artist-info"><h3>Tomás Ibarra</h3><div class="artist-role">Sound Designer</div><p>Listening closely to the hidden acoustics of public rooms.</p><button class="text-button artist-details" type="button" data-artist="tomas">View details</button></div></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section venue" id="venue" aria-labelledby="venue-title">
+      <div class="container">
+        <div class="section-heading reveal">
+          <div class="eyebrow">Find the entrance</div>
+          <h2 id="venue-title">The Old Gallery, Warsaw</h2>
+        </div>
+        <div class="venue-grid">
+          <div class="venue-copy reveal">
+            <h3>Plac Sztuki 12<br>00-123 Warsaw</h3>
+            <p>Enter through the historic east doors on Plac Sztuki. Doors open at 19:00; please allow a little time for cloakroom and security.</p>
+            <ul>
+              <li><strong>Public transport:</strong> Metro M2, Rondo ONZ station, is an 8-minute walk. Buses 107 and 160 stop at Plac Sztuki.</li>
+              <li><strong>Parking:</strong> Limited paid street parking is available after 18:00; the Centrum underground car park is 350 metres away.</li>
+              <li><strong>Accessibility:</strong> Step-free entry, lifts to every level, accessible toilets, seating in all galleries, and assistance animals are welcome. Please contact us in advance for a companion ticket or tailored assistance.</li>
+              <li><strong>Travel tip:</strong> Bring a light layer—the sculpture hall is beautifully cool after dark.</li>
+            </ul>
+          </div>
+          <div class="map reveal" role="img" aria-label="Illustrated map showing The Old Gallery, nearby streets, metro, bus stop, entrance and route">
+            <svg viewBox="0 0 700 450" xmlns="http://www.w3.org/2000/svg">
+              <rect width="700" height="450" fill="#0b111a"/>
+              <g stroke="#34404e" stroke-width="13" opacity=".8"><path d="M-20 82 720 145"/><path d="M130-30 215 480"/><path d="M-30 355 735 280"/><path d="M510-20 455 470"/></g>
+              <g stroke="#657080" stroke-width="1.5" opacity=".8"><path d="M-20 82 720 145"/><path d="M130-30 215 480"/><path d="M-30 355 735 280"/><path d="M510-20 455 470"/></g>
+              <path d="M82 345 C175 332 170 255 282 251 S410 190 510 199" fill="none" stroke="#d6ad60" stroke-width="5" stroke-linecap="round"/>
+              <circle cx="82" cy="345" r="12" fill="#d6ad60"/><circle cx="82" cy="345" r="4" fill="#070506"/>
+              <rect x="410" y="120" width="190" height="145" rx="3" fill="#30242a" stroke="#d6ad60" stroke-width="2"/>
+              <rect x="435" y="145" width="55" height="42" fill="#171c26"/><rect x="512" y="145" width="60" height="42" fill="#171c26"/><rect x="435" y="205" width="137" height="35" fill="#171c26"/>
+              <path d="M496 265v20" stroke="#f3d79b" stroke-width="4"/><path d="M481 285h30" stroke="#f3d79b" stroke-width="3"/>
+              <circle cx="82" cy="345" r="21" fill="#07111f" stroke="#d6ad60" stroke-width="2"/><text x="82" y="350" text-anchor="middle" font-family="Arial" font-size="16" fill="#f3d79b">M</text>
+              <circle cx="285" cy="250" r="16" fill="#3a0f1d" stroke="#d6ad60" stroke-width="2"/><text x="285" y="255" text-anchor="middle" font-family="Arial" font-size="12" fill="#f3d79b">BUS</text>
+              <text x="505" y="108" text-anchor="middle" font-family="Georgia" font-size="19" fill="#f3d79b">THE OLD GALLERY</text>
+              <text x="505" y="307" text-anchor="middle" font-family="Arial" font-size="12" fill="#b9a999">EAST ENTRANCE</text>
+              <text x="68" y="385" font-family="Arial" font-size="13" fill="#b9a999">RONDO ONZ</text>
+              <text x="25" y="61" font-family="Arial" font-size="12" fill="#b9a999">MARSZAŁKOWSKA</text>
+              <text x="535" y="340" font-family="Arial" font-size="12" fill="#b9a999">PLAC SZTUKI</text>
+            </svg>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section tickets" id="tickets" aria-labelledby="tickets-title">
+      <div class="container">
+        <div class="section-heading reveal">
+          <div class="eyebrow">Choose your passage</div>
+          <h2 id="tickets-title">Tickets</h2>
+          <p>All passes include an evening in the museum. Choose how closely you would like to enter the story.</p>
+        </div>
+        <div class="tickets-grid">
+          <article class="ticket-card reveal"><h3>Night Pass</h3><div class="price">€29</div><ul><li>Entry after 19:00</li><li>Main exhibition access</li><li>Program access</li></ul><button class="button button-outline select-ticket" type="button" data-tier="Night Pass" data-price="29">Select tier</button></article>
+          <article class="ticket-card recommended reveal"><div class="recommended-label">Recommended</div><h3>Curator Pass</h3><div class="price">€59</div><ul><li>Everything in Night Pass</li><li>Hidden collection tour</li><li>Reserved artist talk seating</li></ul><button class="button select-ticket" type="button" data-tier="Curator Pass" data-price="59">Select tier</button></article>
+          <article class="ticket-card reveal"><h3>Patron Pass</h3><div class="price">€129</div><ul><li>Everything in Curator Pass</li><li>VIP lounge access</li><li>Signed event print</li><li>Priority entrance</li></ul><button class="button button-outline select-ticket" type="button" data-tier="Patron Pass" data-price="129">Select tier</button></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section faq" id="faq" aria-labelledby="faq-title">
+      <div class="container">
+        <div class="section-heading reveal">
+          <div class="eyebrow">Useful notes</div>
+          <h2 id="faq-title">Questions, answered</h2>
+        </div>
+        <div class="faq-list reveal">
+          <article class="faq-item"><button class="faq-question" aria-expanded="false" aria-controls="answer-1">Is payment processed on this page? <span>+</span></button><div class="faq-answer" id="answer-1"><div><p>No. This is a demonstration reservation experience only. No payment is collected or processed on this page.</p></div></div></article>
+          <article class="faq-item"><button class="faq-question" aria-expanded="false" aria-controls="answer-2">Can I arrive late? <span>+</span></button><div class="faq-answer" id="answer-2"><div><p>Yes. Your pass is valid throughout the evening, though selected timed sessions may have limited late entry for the comfort of performers and guests.</p></div></div></article>
+          <article class="faq-item"><button class="faq-question" aria-expanded="false" aria-controls="answer-3">Are photos allowed? <span>+</span></button><div class="faq-answer" id="answer-3"><div><p>Personal non-flash photography is welcome in most galleries. Please follow room signage and do not photograph performances unless invited.</p></div></div></article>
+          <article class="faq-item"><button class="faq-question" aria-expanded="false" aria-controls="answer-4">Is the venue accessible? <span>+</span></button><div class="faq-answer" id="answer-4"><div><p>Yes. The Old Gallery has step-free access, lifts, accessible toilets, gallery seating, and welcomes assistance animals. See venue details for more information.</p></div></div></article>
+          <article class="faq-item"><button class="faq-question" aria-expanded="false" aria-controls="answer-5">Can I change my ticket tier? <span>+</span></button><div class="faq-answer" id="answer-5"><div><p>For this demo, simply make a new selection. For a live event, tier changes would be subject to availability and the difference in price.</p></div></div></article>
+          <article class="faq-item"><button class="faq-question" aria-expanded="false" aria-controls="answer-6">How do I save the event to my calendar? <span>+</span></button><div class="faq-answer" id="answer-6"><div><p>Use the “Save to Calendar” button near the top of this page to download an ICS calendar file you can open in your preferred calendar app.</p></div></div></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="newsletter" aria-labelledby="newsletter-title">
+      <div class="container reveal">
+        <div class="section-heading">
+          <div class="eyebrow">Stay after dark</div>
+          <h2 id="newsletter-title">Letters from ARTIFACT</h2>
+          <p>Occasional invitations, new commissions, and notes from the gallery.</p>
+        </div>
+        <form class="signup-form" id="newsletter-form" novalidate>
+          <label class="visually-hidden" for="newsletter-email">Email address</label>
+          <input id="newsletter-email" type="email" placeholder="Your email address" autocomplete="email" aria-describedby="newsletter-error">
+          <button class="button" type="submit">Subscribe</button>
+        </form>
+        <p class="field-error" id="newsletter-error" role="alert"></p>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="container">
+      <div class="footer-top">
+        <div><a class="logo" href="#top">ARTI<span>F</span>ACT</a><p class="footer-meta">Museum Night · 18 October 2026<br>Produced by the ARTIFACT Cultural Office.</p></div>
+        <div class="socials"><a href="#top">Instagram</a><a href="#top">Journal</a><a href="#top">Contact</a></div>
+      </div>
+      <div class="footer-bottom"><span>© 2026 ARTIFACT. All rights reserved.</span><span>Demo landing page — no real ticket purchase.</span></div>
+    </div>
+  </footer>
+
+  <div class="modal" id="artist-modal" aria-hidden="true">
+    <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="artist-modal-name">
+      <button class="modal-close" type="button" aria-label="Close artist details">×</button>
+      <img class="artist-modal-image" id="artist-modal-image" src="" alt="">
+      <div class="modal-content"><div class="eyebrow" id="artist-modal-role"></div><h2 id="artist-modal-name"></h2><p class="session-time" id="artist-modal-time"></p><p id="artist-modal-bio"></p></div>
+    </div>
+  </div>
+
+  <div class="modal" id="ticket-modal" aria-hidden="true">
+    <div class="modal-dialog checkout-dialog" role="dialog" aria-modal="true" aria-labelledby="checkout-title">
+      <button class="modal-close" type="button" aria-label="Close reservation form">×</button>
+      <div class="modal-content">
+        <div class="eyebrow">Reservation request</div>
+        <h2 id="checkout-title">Reserve your place</h2>
+        <div class="checkout-tier"><strong id="selected-tier">Night Pass</strong><br><span id="selected-price">€29 per ticket</span></div>
+        <form class="checkout-form" id="checkout-form" novalidate>
+          <div class="form-group"><label for="attendee-name">Attendee name</label><input id="attendee-name" type="text" autocomplete="name"><p class="field-error" id="name-error"></p></div>
+          <div class="form-group"><label for="attendee-email">Email address</label><input id="attendee-email" type="email" autocomplete="email"><p class="field-error" id="email-error"></p></div>
+          <div class="form-group"><label for="ticket-quantity">Number of tickets</label><select id="ticket-quantity"><option value="1">1 ticket</option><option value="2">2 tickets</option><option value="3">3 tickets</option><option value="4">4 tickets</option></select></div>
+          <div class="total"><span>Reservation total</span><strong id="ticket-total">€29</strong></div>
+          <label class="check-row"><input type="checkbox" id="terms"><span>I agree to the event terms and understand that no payment is processed on this page.</span></label>
+          <p class="field-error" id="terms-error"></p>
+          <button class="button" type="submit">Confirm reservation</button>
+          <p class="no-payment">No payment is processed. This is a reservation mock-up.</p>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
+
+  <script>
+    const artists = {
+      elena: { name: "Elena Varga", role: "Curator", time: "19:30 · East Hall", image: "https://source.unsplash.com/featured/1200x900?gallery,art", bio: "Elena Varga is a Warsaw-based independent curator whose work considers the museum as a living archive. Her welcome opens the evening with a close reading of works that have quietly shaped The Old Gallery’s collection." },
+      malik: { name: "Malik Okafor", role: "Light Artist", time: "22:00 · Sculpture Hall", image: "https://source.unsplash.com/featured/1200x900?exhibition,lights", bio: "Malik Okafor works with projected light, architecture, and duration. For ARTIFACT, he has created a projection that slowly redraws the Sculpture Hall as the evening deepens." },
+      sofia: { name: "Sofia Lenz", role: "Sculptor", time: "20:00 · Lower Archive", image: "https://source.unsplash.com/featured/1200x900?sculpture,museum", bio: "Sofia Lenz makes sculptures that attend to pressure, balance, and the passage of time. She joins the hidden collection tour to discuss the material lives of objects kept behind the scenes." },
+      jan: { name: "Jan Kowalski", role: "Museum Historian", time: "19:30 · East Hall", image: "https://source.unsplash.com/featured/1200x900?museum,crowd", bio: "Jan Kowalski researches the social history of Warsaw’s cultural institutions. His stories connect this building’s changing rooms to the city that has moved around it for more than a century." },
+      amara: { name: "Amara Bell", role: "Installation Artist", time: "00:00 · North Galleries", image: "https://source.unsplash.com/featured/1200x900?art,installation", bio: "Amara Bell combines textile, field recording, and delicate mechanical movement. Her installation is encountered during the Midnight Gallery Walk, where it responds to the presence of visitors." },
+      leo: { name: "Leo Moretti", role: "Composer", time: "21:00 · Winter Garden", image: "https://source.unsplash.com/featured/1200x900?theater,stage", bio: "Composer Leo Moretti creates spatial works for unusual listening conditions. His live ambient performance lets brass, breath, and the garden’s glass roof become one slow instrument." },
+      nadia: { name: "Nadia Rahman", role: "Performance Artist", time: "23:00 · Lecture Room", image: "https://source.unsplash.com/featured/1200x900?gallery,art", bio: "Nadia Rahman’s performances create generous spaces for attention. In the artist talk, she reflects on spectatorship and on the small acts that make a room feel briefly transformed." },
+      tomas: { name: "Tomás Ibarra", role: "Sound Designer", time: "01:00 · Grand Atrium", image: "https://source.unsplash.com/featured/1200x900?exhibition,lights", bio: "Tomás Ibarra is a sound designer and deep listener. His closing session draws from recordings made inside the gallery after closing, returning the museum’s own nocturnal voice to its atrium." }
+    };
+
+    const toastRegion = document.getElementById("toast-region");
+    function showToast(message) {
+      const toast = document.createElement("div");
+      toast.className = "toast";
+      toast.textContent = message;
+      toastRegion.appendChild(toast);
+      setTimeout(() => toast.remove(), 4500);
+    }
+
+    const menuButton = document.querySelector(".menu-button");
+    const navLinks = document.getElementById("nav-links");
+    menuButton.addEventListener("click", () => {
+      const open = navLinks.classList.toggle("open");
+      menuButton.setAttribute("aria-expanded", open);
+    });
+    navLinks.querySelectorAll("a").forEach(link => link.addEventListener("click", () => {
+      navLinks.classList.remove("open");
+      menuButton.setAttribute("aria-expanded", "false");
+    }));
+
+    const nav = document.querySelector(".nav");
+    const navAnchors = [...document.querySelectorAll(".nav-links a[href^='#']")];
+    const sections = [...document.querySelectorAll("main section[id]")];
+    window.addEventListener("scroll", () => nav.classList.toggle("scrolled", window.scrollY > 12), { passive: true });
+    const activeObserver = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) navAnchors.forEach(link => link.classList.toggle("active", link.getAttribute("href") === "#" + entry.target.id));
+      });
+    }, { rootMargin: "-35% 0px -55% 0px" });
+    sections.forEach(section => activeObserver.observe(section));
+
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const revealObserver = new IntersectionObserver(entries => {
+      entries.forEach(entry => { if (entry.isIntersecting) { entry.target.classList.add("visible"); revealObserver.unobserve(entry.target); } });
+    }, { threshold: .12 });
+    document.querySelectorAll(".reveal").forEach(el => reduceMotion ? el.classList.add("visible") : revealObserver.observe(el));
+
+    document.querySelectorAll(".faq-question").forEach(button => button.addEventListener("click", () => {
+      const expanded = button.getAttribute("aria-expanded") === "true";
+      document.querySelectorAll(".faq-question").forEach(item => item.setAttribute("aria-expanded", "false"));
+      button.setAttribute("aria-expanded", String(!expanded));
+    }));
+
+    let lastFocused;
+    function openModal(modal, trigger) {
+      lastFocused = trigger || document.activeElement;
+      modal.classList.add("open");
+      modal.setAttribute("aria-hidden", "false");
+      modal.querySelector(".modal-close").focus();
+      document.body.classList.add("modal-open");
+    }
+    function closeModal(modal) {
+      modal.classList.remove("open");
+      modal.setAttribute("aria-hidden", "true");
+      document.body.classList.remove("modal-open");
+      if (lastFocused) lastFocused.focus();
+    }
+    document.querySelectorAll(".modal").forEach(modal => {
+      modal.addEventListener("click", event => { if (event.target === modal) closeModal(modal); });
+      modal.querySelector(".modal-close").addEventListener("click", () => closeModal(modal));
+      modal.addEventListener("keydown", event => {
+        if (event.key !== "Tab") return;
+        const focusable = [...modal.querySelectorAll("button, input, select, [href]")].filter(el => !el.disabled);
+        const first = focusable[0], last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+        if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+      });
+    });
+    document.addEventListener("keydown", event => {
+      if (event.key === "Escape") document.querySelectorAll(".modal.open").forEach(closeModal);
+    });
+
+    const artistModal = document.getElementById("artist-modal");
+    document.querySelectorAll(".artist-details").forEach(button => button.addEventListener("click", () => {
+      const artist = artists[button.dataset.artist];
+      document.getElementById("artist-modal-name").textContent = artist.name;
+      document.getElementById("artist-modal-role").textContent = artist.role;
+      document.getElementById("artist-modal-time").textContent = artist.time;
+      document.getElementById("artist-modal-bio").textContent = artist.bio;
+      const image = document.getElementById("artist-modal-image");
+      image.src = artist.image;
+      image.alt = artist.name + ", " + artist.role;
+      openModal(artistModal, button);
+    }));
+
+    const ticketModal = document.getElementById("ticket-modal");
+    let currentPrice = 29;
+    function updateTotal() {
+      document.getElementById("ticket-total").textContent = "€" + (currentPrice * Number(document.getElementById("ticket-quantity").value));
+    }
+    document.querySelectorAll(".select-ticket").forEach(button => button.addEventListener("click", () => {
+      currentPrice = Number(button.dataset.price);
+      document.getElementById("selected-tier").textContent = button.dataset.tier;
+      document.getElementById("selected-price").textContent = "€" + currentPrice + " per ticket";
+      document.getElementById("checkout-form").reset();
+      ["name-error", "email-error", "terms-error"].forEach(id => document.getElementById(id).textContent = "");
+      updateTotal();
+      openModal(ticketModal, button);
+    }));
+    document.getElementById("ticket-quantity").addEventListener("change", updateTotal);
+    document.getElementById("checkout-form").addEventListener("submit", event => {
+      event.preventDefault();
+      const name = document.getElementById("attendee-name").value.trim();
+      const email = document.getElementById("attendee-email").value.trim();
+      const terms = document.getElementById("terms").checked;
+      let valid = true;
+      document.getElementById("name-error").textContent = name ? "" : "Please enter your name.";
+      document.getElementById("email-error").textContent = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? "" : "Please enter a valid email address.";
+      document.getElementById("terms-error").textContent = terms ? "" : "Please accept the terms to continue.";
+      if (!name || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !terms) valid = false;
+      if (valid) {
+        closeModal(ticketModal);
+        showToast("Reservation requested for " + name + ". No payment has been processed.");
+      }
+    });
+
+    document.getElementById("newsletter-form").addEventListener("submit", event => {
+      event.preventDefault();
+      const input = document.getElementById("newsletter-email");
+      const error = document.getElementById("newsletter-error");
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.value.trim())) {
+        error.textContent = "Please enter a valid email address.";
+        input.focus();
+      } else {
+        error.textContent = "";
+        input.value = "";
+        showToast("Thank you — your ARTIFACT letter is on its way.");
+      }
+    });
+
+    document.getElementById("calendar-button").addEventListener("click", () => {
+      const ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//ARTIFACT//Museum Night//EN\r\nBEGIN:VEVENT\r\nUID:artifact-museum-night-2026@artifact.example\r\nDTSTAMP:20260101T000000Z\r\nDTSTART:20261018T190000\r\nDTEND:20261019T020000\r\nSUMMARY:ARTIFACT: Museum Night\r\nLOCATION:The Old Gallery, Warsaw\r\nDESCRIPTION:A cinematic after-hours museum event with exhibitions, performances, talks, and guided tours.\r\nEND:VEVENT\r\nEND:VCALENDAR";
+      const url = URL.createObjectURL(new Blob([ics], { type: "text/calendar;charset=utf-8" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "artifact-museum-night.ics";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      showToast("Calendar file downloaded.");
+    });
+  </script>
+</body>
+</html>

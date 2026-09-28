@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#090d17">
+  <title>Gouraud Cube — Canvas 2D</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #090d17;
+      color: #e8edf8;
+      font-synthesis: none;
+      text-rendering: optimizeLegibility;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+    }
+
+    body {
+      background:
+        radial-gradient(ellipse at 50% 48%, rgba(27, 44, 77, 0.42), transparent 57%),
+        linear-gradient(145deg, #0b1020, #090d17 62%);
+    }
+
+    canvas {
+      position: fixed;
+      inset: 0;
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .grain {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.12;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.92' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.22'/%3E%3C/svg%3E");
+      mix-blend-mode: soft-light;
+    }
+
+    .interface {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: clamp(20px, 4vw, 48px);
+      pointer-events: none;
+    }
+
+    .topbar,
+    .footer {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 24px;
+    }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      color: #8da6d3;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.19em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(23px, 3vw, 36px);
+      font-weight: 550;
+      letter-spacing: -0.045em;
+      line-height: 1.1;
+    }
+
+    .subtitle {
+      margin: 10px 0 0;
+      color: #98a4bb;
+      font-size: 13px;
+      letter-spacing: 0.015em;
+    }
+
+    .stats {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 15px;
+      border: 1px solid rgba(164, 189, 235, 0.15);
+      border-radius: 12px;
+      background: rgba(13, 20, 35, 0.64);
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.16);
+      backdrop-filter: blur(14px);
+    }
+
+    .live-dot {
+      width: 8px;
+      height: 8px;
+      flex: 0 0 auto;
+      border-radius: 50%;
+      background: #68e0b2;
+      box-shadow: 0 0 12px rgba(104, 224, 178, 0.7);
+    }
+
+    .live-dot.paused {
+      background: #f0b86a;
+      box-shadow: 0 0 12px rgba(240, 184, 106, 0.55);
+    }
+
+    .stat-label {
+      display: block;
+      margin-bottom: 3px;
+      color: #8e9bb2;
+      font-size: 10px;
+      font-weight: 650;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .stat-value {
+      min-width: 66px;
+      color: #eff4ff;
+      font-size: 16px;
+      font-variant-numeric: tabular-nums;
+      font-weight: 600;
+    }
+
+    .footer {
+      align-items: flex-end;
+    }
+
+    .hint {
+      max-width: 360px;
+      color: #98a4bb;
+      font-size: 12px;
+      line-height: 1.8;
+    }
+
+    kbd {
+      display: inline-block;
+      min-width: 23px;
+      margin: 0 3px 0 8px;
+      padding: 1px 6px;
+      border: 1px solid rgba(173, 194, 231, 0.2);
+      border-radius: 5px;
+      background: rgba(18, 27, 45, 0.8);
+      color: #dce7fb;
+      font: inherit;
+      font-size: 11px;
+      line-height: 1.6;
+      text-align: center;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 9px;
+      pointer-events: auto;
+    }
+
+    button {
+      min-height: 40px;
+      padding: 0 14px;
+      border: 1px solid rgba(164, 189, 235, 0.17);
+      border-radius: 9px;
+      background: rgba(17, 25, 42, 0.78);
+      color: #dbe5f7;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 150ms ease, border-color 150ms ease, transform 150ms ease;
+      backdrop-filter: blur(12px);
+    }
+
+    button:hover {
+      border-color: rgba(164, 189, 235, 0.42);
+      background: rgba(31, 44, 69, 0.9);
+    }
+
+    button:active {
+      transform: translateY(1px);
+    }
+
+    button:focus-visible {
+      outline: 2px solid #88b5ff;
+      outline-offset: 3px;
+    }
+
+    button[aria-pressed="true"] {
+      border-color: rgba(128, 173, 255, 0.48);
+      background: rgba(54, 83, 132, 0.42);
+      color: #eff5ff;
+    }
+
+    @media (max-width: 600px) {
+      .interface {
+        padding: 22px 20px;
+      }
+
+      .topbar {
+        align-items: flex-start;
+      }
+
+      .subtitle {
+        max-width: 220px;
+        line-height: 1.5;
+      }
+
+      .stats {
+        gap: 9px;
+        padding: 10px 11px;
+      }
+
+      .footer {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 14px;
+      }
+
+      .controls {
+        justify-content: flex-start;
+      }
+
+      button {
+        min-height: 38px;
+        padding: 0 11px;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="scene" aria-label="Realtime, rotating cube rendered with interpolated Gouraud shading"></canvas>
+  <div class="grain" aria-hidden="true"></div>
+
+  <main class="interface">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Canvas 2D · Software renderer</p>
+        <h1>Gouraud Cube</h1>
+        <p class="subtitle">A little light, a lot of triangles.</p>
+      </div>
+      <div class="stats" aria-label="Render status">
+        <span class="live-dot" id="statusDot" aria-hidden="true"></span>
+        <div>
+          <span class="stat-label" id="statusLabel">Rendering</span>
+          <span class="stat-value" id="fps" aria-label="Frames per second">— FPS</span>
+        </div>
+      </div>
+    </header>
+
+    <footer class="footer">
+      <div class="hint" aria-label="Keyboard shortcuts">
+        Drag-free viewing, just watch the light move.
+        <br><kbd>W</kbd> Wireframe <kbd>P</kbd> Pause <kbd>R</kbd> Restart
+      </div>
+      <div class="controls" aria-label="Animation controls">
+        <button id="wireButton" type="button" aria-pressed="false" aria-label="Toggle wireframe overlay">Wireframe: off</button>
+        <button id="pauseButton" type="button" aria-pressed="false" aria-label="Pause animation">Pause</button>
+        <button id="restartButton" type="button" aria-label="Restart animation">Restart</button>
+      </div>
+    </footer>
+  </main>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const canvas = document.getElementById("scene");
+      const ctx = canvas.getContext("2d");
+      const fpsDisplay = document.getElementById("fps");
+      const statusLabel = document.getElementById("statusLabel");
+      const statusDot = document.getElementById("statusDot");
+      const wireButton = document.getElementById("wireButton");
+      const pauseButton = document.getElementById("pauseButton");
+      const restartButton = document.getElementById("restartButton");
+
+      const vertices = [
+        [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
+        [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]
+      ];
+
+      const faces = [
+        { indices: [4, 5, 6, 7], color: [66, 148, 232] },
+        { indices: [1, 0, 3, 2], color: [102, 117, 224] },
+        { indices: [5, 1, 2, 6], color: [63, 194, 191] },
+        { indices: [0, 4, 7, 3], color: [90, 119, 196] },
+        { indices: [3, 7, 6, 2], color: [130, 160, 240] },
+        { indices: [0, 1, 5, 4], color: [73, 104, 178] }
+      ];
+
+      const cameraDistance = 5.4;
+      let width = 0;
+      let height = 0;
+      let imageData;
+      let depthBuffer;
+      let pixelRatio = 1;
+      let elapsed = 0;
+      let paused = false;
+      let wireframe = false;
+      let previousTime = 0;
+      let fpsTime = 0;
+      let fpsFrames = 0;
+
+      const resize = () => {
+        const dpr = Math.min(window.devicePixelRatio || 1, 1.35);
+        width = Math.max(1, Math.floor(window.innerWidth * dpr));
+        height = Math.max(1, Math.floor(window.innerHeight * dpr));
+        pixelRatio = dpr;
+        canvas.width = width;
+        canvas.height = height;
+        imageData = ctx.createImageData(width, height);
+        depthBuffer = new Float32Array(width * height);
+      };
+
+      const rotate = (point, angleX, angleY) => {
+        const cosX = Math.cos(angleX);
+        const sinX = Math.sin(angleX);
+        const cosY = Math.cos(angleY);
+        const sinY = Math.sin(angleY);
+        const x1 = point[0];
+        const y1 = point[1] * cosX - point[2] * sinX;
+        const z1 = point[1] * sinX + point[2] * cosX;
+
+        return [
+          x1 * cosY + z1 * sinY,
+          y1,
+          -x1 * sinY + z1 * cosY
+        ];
+      };
+
+      const subtract = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+
+      const cross = (a, b) => [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0]
+      ];
+
+      const normalize = (v) => {
+        const length = Math.hypot(v[0], v[1], v[2]) || 1;
+        return [v[0] / length, v[1] / length, v[2] / length];
+      };
+
+      const project = (point) => {
+        const depth = cameraDistance - point[2];
+        const focalLength = Math.min(width, height) * 0.88;
+        const inverseDepth = 1 / depth;
+
+        return {
+          x: width * 0.5 + point[0] * focalLength * inverseDepth,
+          y: height * 0.5 - point[1] * focalLength * inverseDepth,
+          depth,
+          inverseDepth
+        };
+      };
+
+      const edge = (ax, ay, bx, by, px, py) =>
+        (px - ax) * (by - ay) - (py - ay) * (bx - ax);
+
+      const rasterizeTriangle = (a, b, c) => {
+        const minX = Math.max(0, Math.floor(Math.min(a.x, b.x, c.x)));
+        const maxX = Math.min(width - 1, Math.ceil(Math.max(a.x, b.x, c.x)));
+        const minY = Math.max(0, Math.floor(Math.min(a.y, b.y, c.y)));
+        const maxY = Math.min(height - 1, Math.ceil(Math.max(a.y, b.y, c.y)));
+        const area = edge(a.x, a.y, b.x, b.y, c.x, c.y);
+
+        if (Math.abs(area) < 0.0001) {
+          return;
+        }
+
+        const inverseArea = 1 / area;
+        const pixels = imageData.data;
+        const colorA = a.color;
+        const colorB = b.color;
+        const colorC = c.color;
+        const invA = a.inverseDepth;
+        const invB = b.inverseDepth;
+        const invC = c.inverseDepth;
+
+        for (let y = minY; y <= maxY; y++) {
+          const py = y + 0.5;
+          for (let x = minX; x <= maxX; x++) {
+            const px = x + 0.5;
+            const wA = edge(b.x, b.y, c.x, c.y, px, py) * inverseArea;
+            const wB = edge(c.x, c.y, a.x, a.y, px, py) * inverseArea;
+            const wC = 1 - wA - wB;
+
+            if (wA < -0.0001 || wB < -0.0001 || wC < -0.0001) {
+              continue;
+            }
+
+            const inverseDepth = wA * invA + wB * invB + wC * invC;
+            const index = y * width + x;
+
+            if (inverseDepth <= 0 || 1 / inverseDepth >= depthBuffer[index]) {
+              continue;
+            }
+
+            depthBuffer[index] = 1 / inverseDepth;
+            const red = (wA * colorA[0] * invA + wB * colorB[0] * invB + wC * colorC[0] * invC) / inverseDepth;
+            const green = (wA * colorA[1] * invA + wB * colorB[1] * invB + wC * colorC[1] * invC) / inverseDepth;
+            const blue = (wA * colorA[2] * invA + wB * colorB[2] * invB + wC * colorC[2] * invC) / inverseDepth;
+            const pixel = index * 4;
+
+            pixels[pixel] = Math.min(255, red);
+            pixels[pixel + 1] = Math.min(255, green);
+            pixels[pixel + 2] = Math.min(255, blue);
+            pixels[pixel + 3] = 255;
+          }
+        }
+      };
+
+      const render = () => {
+        const angleX = elapsed * 0.62 + 0.38;
+        const angleY = elapsed * 0.82 + 0.48;
+        const transformed = vertices.map((vertex) => rotate(vertex, angleX, angleY));
+        const projected = transformed.map(project);
+        const light = [
+          2.5 * Math.cos(elapsed * 0.78),
+          1.9 * Math.sin(elapsed * 0.61 + 0.5),
+          2.2 * Math.sin(elapsed * 0.78 + 0.8)
+        ];
+
+        imageData.data.fill(0);
+        depthBuffer.fill(Infinity);
+
+        const visibleFaces = [];
+
+        for (const face of faces) {
+          const indices = face.indices;
+          const p0 = transformed[indices[0]];
+          const p1 = transformed[indices[1]];
+          const p2 = transformed[indices[2]];
+          const normal = normalize(cross(subtract(p1, p0), subtract(p2, p0)));
+          const center = [
+            (p0[0] + p1[0] + transformed[indices[2]][0] + transformed[indices[3]][0]) * 0.25,
+            (p0[1] + p1[1] + transformed[indices[2]][1] + transformed[indices[3]][1]) * 0.25,
+            (p0[2] + p1[2] + transformed[indices[2]][2] + transformed[indices[3]][2]) * 0.25
+          ];
+          const toCamera = [ -center[0], -center[1], cameraDistance - center[2] ];
+
+          if (normal[0] * toCamera[0] + normal[1] * toCamera[1] + normal[2] * toCamera[2] <= 0) {
+            continue;
+          }
+
+          const shaded = indices.map((index) => {
+            const point = transformed[index];
+            const towardLight = subtract(light, point);
+            const distance = Math.hypot(towardLight[0], towardLight[1], towardLight[2]) || 1;
+            const diffuse = Math.max(
+              0,
+              (normal[0] * towardLight[0] + normal[1] * towardLight[1] + normal[2] * towardLight[2]) / distance
+            );
+            const attenuation = 1 / (1 + 0.055 * distance * distance);
+            const intensity = 0.19 + diffuse * 1.02 * attenuation;
+            const color = face.color.map((channel) => Math.min(255, channel * intensity + 3));
+
+            return { ...projected[index], color };
+          });
+
+          rasterizeTriangle(shaded[0], shaded[1], shaded[2]);
+          rasterizeTriangle(shaded[0], shaded[2], shaded[3]);
+          visibleFaces.push(indices);
+        }
+
+        ctx.putImageData(imageData, 0, 0);
+
+        if (wireframe) {
+          ctx.save();
+          ctx.beginPath();
+          for (const indices of visibleFaces) {
+            for (let i = 0; i < indices.length; i++) {
+              const start = projected[indices[i]];
+              const end = projected[indices[(i + 1) % indices.length]];
+              ctx.moveTo(start.x, start.y);
+              ctx.lineTo(end.x, end.y);
+            }
+          }
+          ctx.strokeStyle = "rgba(222, 238, 255, 0.78)";
+          ctx.lineWidth = Math.max(1, pixelRatio);
+          ctx.lineJoin = "round";
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        const lightPoint = project(light);
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(lightPoint.x, lightPoint.y, 9 * pixelRatio, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(114, 204, 255, 0.12)";
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(lightPoint.x, lightPoint.y, 3 * pixelRatio, 0, Math.PI * 2);
+        ctx.fillStyle = "#c8f0ff";
+        ctx.shadowColor = "#69caff";
+        ctx.shadowBlur = 16 * pixelRatio;
+        ctx.fill();
+        ctx.restore();
+      };
+
+      const updateButtons = () => {
+        wireButton.setAttribute("aria-pressed", String(wireframe));
+        wireButton.textContent = `Wireframe: ${wireframe ? "on" : "off"}`;
+        pauseButton.setAttribute("aria-pressed", String(paused));
+        pauseButton.textContent = paused ? "Resume" : "Pause";
+        pauseButton.setAttribute("aria-label", paused ? "Resume animation" : "Pause animation");
+        statusLabel.textContent = paused ? "Paused" : "Rendering";
+        statusDot.classList.toggle("paused", paused);
+      };
+
+      const toggleWireframe = () => {
+        wireframe = !wireframe;
+        wireButton.setAttribute("aria-pressed", String(wireframe));
+        wireButton.textContent = `Wireframe: ${wireframe ? "on" : "off"}`;
+        render();
+      };
+
+      const togglePause = () => {
+        paused = !paused;
+        updateButtons();
+      };
+
+      const restart = () => {
+        elapsed = 0;
+        previousTime = 0;
+        fpsTime = 0;
+        fpsFrames = 0;
+        render();
+      };
+
+      const animate = (time) => {
+        if (!previousTime) {
+          previousTime = time;
+          fpsTime = time;
+        }
+
+        const delta = Math.min((time - previousTime) / 1000, 0.05);
+        previousTime = time;
+
+        if (!paused) {
+          elapsed += delta;
+          render();
+        }
+
+        fpsFrames++;
+        if (time - fpsTime >= 500) {
+          fpsDisplay.textContent = `${Math.round(fpsFrames * 1000 / (time - fpsTime))} FPS`;
+          fpsFrames = 0;
+          fpsTime = time;
+        }
+
+        requestAnimationFrame(animate);
+      };
+
+      wireButton.addEventListener("click", toggleWireframe);
+      pauseButton.addEventListener("click", togglePause);
+      restartButton.addEventListener("click", restart);
+
+      window.addEventListener("keydown", (event) => {
+        if (event.altKey || event.ctrlKey || event.metaKey || event.repeat) {
+          return;
+        }
+
+        const target = event.target;
+        if (target instanceof HTMLElement && (target.isContentEditable || ["BUTTON", "INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))) {
+          return;
+        }
+
+        const key = event.key.toLowerCase();
+        if (key === "w") {
+          toggleWireframe();
+        } else if (key === "p") {
+          togglePause();
+        } else if (key === "r") {
+          restart();
+        }
+      });
+
+      window.addEventListener("resize", () => {
+        resize();
+        render();
+      });
+
+      resize();
+      render();
+      requestAnimationFrame(animate);
+    })();
+  </script>
+</body>
+</html>

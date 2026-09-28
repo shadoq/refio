@@ -1,0 +1,171 @@
+{
+  "schemaVersion": 1,
+  "run": {
+    "debugLevel": "STANDARD",
+    "durationMs": 96915,
+    "startedAt": 1790599267008,
+    "endedAt": 1790599363923
+  },
+  "session": {
+    "id": "f1676eab-166f-4869-9aa2-ee572d3975d2",
+    "name": "headless-1790599266994",
+    "mode": "AGENT",
+    "executionMode": "INTERACTIVE",
+    "model": "claude-opus-5-5",
+    "provider": "anthropic",
+    "status": "SUCCESS",
+    "tokensIn": 43370,
+    "tokensOut": 10656,
+    "costUsd": 0.25376719999999997
+  },
+  "metrics": {
+    "durationMs": 96915,
+    "tokensIn": 43370,
+    "tokensOut": 10656,
+    "costUsd": 0.25376719999999997,
+    "apiCallCount": 4,
+    "toolCallCount": 1,
+    "iterations": 2,
+    "maxIterations": 200,
+    "stopReason": "COMPLETED",
+    "contextOverflow": false,
+    "verification": {
+      "ran": false,
+      "attempts": 0,
+      "timedOut": false,
+      "attributionUncertain": false,
+      "notRunReason": "no verify.command configured and no known project marker detected"
+    },
+    "guardrails": {
+      "consolidationNudges": 0,
+      "regenerationNudges": 0,
+      "subagentInvokeNudges": 0,
+      "formatRetryNudges": 0,
+      "guardianReentries": 0,
+      "maxRepeatedCall": 1,
+      "toolErrorRate": 0.0,
+      "noopWrites": 0
+    },
+    "context": {
+      "budgetTokens": 67818,
+      "usedTokens": 2997,
+      "droppedMessages": 0,
+      "droppedSteps": 0,
+      "drops": {
+        "WORKING_MEMORY": 1,
+        "USER_CONTEXT": 2
+      }
+    },
+    "filesWritten": [
+      {
+        "path": "snake_anthropic-claude-opus-5-5_01.html",
+        "writes": 1,
+        "netChanged": true
+      }
+    ]
+  },
+  "finalOutput": "I wrote the game to `snake_anthropic-claude-opus-5-5_01.html`: one self-contained file with the HTML, CSS and JavaScript inline, drawn on a canvas. I haven't opened it in a browser or checked its contents against the spec since it was written. Open it in a browser to play and confirm the points below.\n\nWhat it's meant to include:\n- **Board and rules:** a 30×30 grid. The snakes move on their own, grow when they eat food, and the game ends when a snake hits a wall, itself or the other snake.\n- **Three modes from the start menu:** Human vs Human, CPU vs Human and CPU vs CPU.\n- **Controls:** player 1 uses WASD and player 2 uses the arrow keys.\n- **CPU snakes:** they look for a route to the food, avoid moves that would kill them, and try not to trap themselves when no route exists.\n- **Scores:** shown for both snakes during play.\n- **Game over screen:** shows the winner and final scores. Press a key (Space/Enter) to restart the same mode, or Esc to go back to the menu.",
+  "subtasks": [
+    {
+      "orderIndex": 0,
+      "kind": "ADVANCE_CODE_EDITING",
+      "status": "SUCCESS",
+      "description": "advance_code_editing: snake_anthropic-claude-opus-5-5_01.html",
+      "tokensIn": 1073,
+      "tokensOut": 9743,
+      "costUsd": 0.199152,
+      "latencyMs": 74485,
+      "model": "claude-opus-5-5",
+      "provider": "anthropic"
+    }
+  ],
+  "conversation": [
+    {
+      "role": "USER",
+      "contentPreview": "Write a snake game in javascript, css, html in one file. Build a classic Snake game on a 30x30 grid. The snake moves continuously in one of four directions and grows when eating food. If it hits a wall or itself, the game ends. Implement keyboard controls for player movement. Add a CPU-controlled snake mode that automatically searches for food. Add the three game modes: human vs human, cpu vs human, cpu vs cpu. Display the score during gameplay. Include a start menu and game over screen. Allow restarting the game with a keypress. Use file name \"snake_anthropic-claude-opus-5-5_01.html\"",
+      "toolCalls": [],
+      "toolCallDetails": [],
+      "createdAt": 1790599267107
+    },
+    {
+      "role": "ASSISTANT",
+      "contentPreview": "",
+      "toolCalls": [
+        "advance_code_editing"
+      ],
+      "toolCallDetails": [
+        {
+          "name": "advance_code_editing",
+          "arguments": "{\"path\":\"snake_anthropic-claude-opus-5-5_01.html\",\"edit_description\":\"Create a single-file HTML snake game (inline CSS + JS, canvas). 30x30 grid, cell 20px. Two snakes. Start menu overlay with 3 modes selectable via buttons or keys 1/2/3: Human vs Human (P1 WASD green, P2 Arrow keys blue), CPU vs Human (P1 CPU, P2 human arrows... label clearly), CPU vs CPU. Snakes move continuously on fixed tick (~100ms), direction queue preventing reversal. Single food item (or one food), eating grows snake and +1 score. Scoreboard above canvas shows both scores and mode. Collision: wall, own body, other snake body -> that snake dies; head-on both die. Game ends when any snake dies; game over screen shows winner (or draw) and scores, \\\"Press R or Space to restart, M for menu\\\". CPU AI: BFS from head to food avoiding walls and all snake bodies (tail treated as free since it moves); if no path, pick safe move maximizing reachable area via flood fill; fallback any safe move. Also P key pauses. Nice dark styling, centered layout, controls help text.\"}",
+          "ok": true
+        }
+      ],
+      "tokensIn": 18812,
+      "tokensOut": 472,
+      "createdAt": 1790599278459
+    },
+    {
+      "role": "TOOL",
+      "contentPreview": "Created snake_anthropic-claude-opus-5-5_01.html (+603/-0)\n```diff\n--- a/snake_anthropic-claude-opus-5-5_01.html\n+++ b/snake_anthropic-claude-opus-5-5_01.html\n@@ -1,1 +1,604 @@\n+ <!DOCTYPE html>\n+ <html lang=\"en\">\n+ <head>\n+ <meta charset=\"UTF-8\">\n+ <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n+ <title>Snake - Two Player Edition</title>\n+ <style>\n+   * { box-sizing: border-box; margin: 0; padding: 0; }\n+   body {\n+     background: radial-gradient(circle at top, #1b2233 0%, #0b0e15 70%);\n+     color: #e6e9f0;\n+     font-family: \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif;\n+     min-height: 100vh;\n+     display: flex;\n+     flex-direction: column;\n+     align-items: center;\n+     justify-content: center;\n+     padding: 20px;\n+   }\n+   h1 {\n+     font-size: 28px;\n+     letter-spacing: 6px;\n+     text-transform: uppercase;\n+     margin-bottom: 12px;\n+     color: #9fe870;\n+     text-shadow: 0 0 12px rgba(159, 232, 112, 0.4);\n+   }\n+   #scoreboard {\n+     width: 600px;\n+     display: flex;\n+     justify-content: space-between;\n+     align-items: center;\n+     background: #141a26;\n+     border: 1px solid #2a3348;\n+     border-radius: 10px 10px 0 0;\n+     padding: 10px 16px;\n+     font-size: 15px;\n+   }\n+   .player-score { display: flex; flex-direction: column; min-width: 150px; }\n+   .player-score.right { align-items: flex-end; }\n+   .player-score .label { font-size: 12px; opacity: 0.75; }\n+   .player-score .value { font-size: 24px; font-weight: bold; }\n+   #p1Score .value { color: #4ade80; }\n+   #p2Score .value { color: #60a5fa; }\n+   #modeLabel {\n+     font-size: 13px;\n+     text-transform: uppercase;\n+     letter-spacing: 2px;\n+     color: #cbd5e1;\n+     text-align: center;\n+   }\n+   #gameWrap {\n+     position: relative;\n+     width: 600px;\n+     height: 600px;\n+     border: 1px solid #2a3348;\n+     border-top: none;\n+     border-radius: 0 0 10px 10px;\n+     overflow: hidden;\n+     box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);\n+   }\n+   canva… [+17644 chars]",
+      "toolCalls": [],
+      "toolCallDetails": [],
+      "metadata": "{\"path\":\"snake_anthropic-claude-opus-5-5_01.html\",\"mode\":\"llm_assisted\",\"diff_lines\":608,\"added_lines\":603,\"removed_lines\":0,\"noop\":false,\"edit_description\":\"Create a single-file HTML snake game (inline CSS + JS, canvas). 30x30 grid, cell 20px. Two snakes. Start menu overlay with 3 modes selectable via buttons or keys 1/2/3: Human vs Human (P1 WASD green, P2 Arrow keys blue), CPU vs Human (P1 CPU, P2 human arrows... label clearly), CPU vs CPU. Snakes move continuously on fixed tick (~100ms), direction queue preventing reversal. Single food item (or one food), eating grows snake and +1 score. Scoreboard above canvas shows both scores and mode. Collision: wall, own body, other snake body -> that snake dies; head-on both die. Game ends when any snake dies; game over screen shows winner (or draw) and scores, \\\"Press R or Space to restart, M for menu\\\". CPU AI: BFS from head to food avoiding walls and all snake bodies (tail treated as free since it moves); if no path, pick safe move maximizing reachable area via flood fill; fallback any safe move. Also P key pauses. Nice dark styling, centered layout, controls help text.\",\"model\":\"claude-opus-5-5\",\"provider\":\"anthropic\",\"tokens_in\":1073,\"tokens_out\":9743,\"cost_usd\":0.199152,\"tool_name\":\"advance_code_editing\"}",
+      "tokensIn": 1073,
+      "tokensOut": 9743,
+      "createdAt": 1790599353487
+    },
+    {
+      "role": "ASSISTANT",
+      "contentPreview": "I wrote the game to `snake_anthropic-claude-opus-5-5_01.html`: one self-contained file with the HTML, CSS and JavaScript inline, drawn on a canvas. I haven't opened it in a browser or checked its contents against the spec since it was written. Open it in a browser to play and confirm the points below.\n\nWhat it's meant to include:\n- **Board and rules:** a 30×30 grid. The snakes move on their own, grow when they eat food, and the game ends when a snake hits a wall, itself or the other snake.\n- **Three modes from the start menu:** Human vs Human, CPU vs Human and CPU vs CPU.\n- **Controls:** player 1 uses WASD and player 2 uses the arrow keys.\n- **CPU snakes:** they look for a route to the food, avoid moves that would kill them, and try not to trap themselves when no route exists.\n- **Scores:** shown for both snakes during play.\n- **Game over screen:** shows the winner and final scores. Press a key (Space/Enter) to restart the same mode, or Esc to go back to the menu.",
+      "toolCalls": [],
+      "toolCallDetails": [],
+      "tokensIn": 20860,
+      "tokensOut": 362,
+      "createdAt": 1790599363861
+    }
+  ],
+  "apiLogs": [
+    {
+      "provider": "anthropic",
+      "model": "claude-opus-5-5",
+      "requestSource": "NextSpeakerJudge",
+      "httpStatus": 200,
+      "inputTokens": 2625,
+      "outputTokens": 79,
+      "costUsd": 0.01208,
+      "latencyMs": 2806
+    },
+    {
+      "provider": "anthropic",
+      "model": "claude-opus-5-5",
+      "requestSource": "AgentTurnLoop:AGENT",
+      "httpStatus": 200,
+      "inputTokens": 20860,
+      "outputTokens": 362,
+      "costUsd": 0.0242636,
+      "latencyMs": 6347
+    },
+    {
+      "provider": "anthropic",
+      "model": "claude-opus-5-5",
+      "requestSource": "AdvCodeEditor",
+      "httpStatus": 200,
+      "inputTokens": 1073,
+      "outputTokens": 9743,
+      "costUsd": 0.199152,
+      "latencyMs": 74414
+    },
+    {
+      "provider": "anthropic",
+      "model": "claude-opus-5-5",
+      "requestSource": "AgentTurnLoop:AGENT",
+      "httpStatus": 200,
+      "inputTokens": 18812,
+      "outputTokens": 472,
+      "costUsd": 0.0182716,
+      "latencyMs": 8290
+    }
+  ],
+  "errors": [],
+  "warnings": []
+}

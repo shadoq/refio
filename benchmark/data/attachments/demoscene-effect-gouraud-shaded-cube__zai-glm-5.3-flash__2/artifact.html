@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Gouraud Cube — Canvas 2D</title>
+<style>
+* {
+  box-sizing: border-box
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #0b0d13;
+  color: #dfe7f5;
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif
+}
+
+canvas#scene {
+  position: fixed;
+  inset: 0;
+  display: block
+}
+
+.hud {
+  position: fixed;
+  top: 18px;
+  left: 18px;
+  z-index: 2;
+  padding: 14px 18px 12px;
+  border-radius: 14px;
+  background: rgba(13, 17, 27, .72);
+  border: 1px solid rgba(255, 255, 255, .09);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  user-select: none;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, .35)
+}
+
+.hud h1 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: .35em;
+  text-transform: uppercase;
+  background: linear-gradient(90deg, #7ee0ff, #c39bff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent
+}
+
+.fps-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px
+}
+
+.fps {
+  font-size: 32px;
+  font-weight: 700;
+  color: #8affc1;
+  font-variant-numeric: tabular-nums;
+  line-height: 1
+}
+
+.fps-label {
+  font-size: 11px;
+  letter-spacing: .25em;
+  text-transform: uppercase;
+  color: #7c8aa5
+}
+
+.status {
+  margin-top: 6px;
+  font-size: 12.5px;
+  color: #9fb0c8
+}
+
+.hint {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11.5px;
+  color: #7c8aa5
+}
+
+.chip {
+  cursor: pointer;
+  padding: 3px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, .10);
+  transition: background .15s
+}
+
+.chip:hover {
+  background: rgba(255, 255, 255, .07)
+}
+
+kbd {
+  font: inherit;
+  border: 1px solid rgba(255, 255, 255, .25);
+  border-radius: 5px;
+  padding: 1px 7px;
+  background: rgba(255, 255, 255, .07);
+  margin-right: 4px
+}
+
+.cap {
+  margin-left: auto;
+  opacity: .8
+}
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<div class="hud">
+  <h1>Gouraud Cube</h1>
+  <div class="fps-row"><span id="fps" class="fps">—</span><span class="fps-label">fps</span></div>
+  <div class="status" id="status"></div>
+  <div class="hint"><span class="chip" id="btnWire"><kbd>W</kbd> wireframe</span><span class="chip" id="btnPause"><kbd>P</kbd> pause</span><span class="cap">moving light · 12 triangles · canvas 2d</span></div>
+</div>
+<script>
+// ============================================================
+// Gouraud Cube — realtime software-rendered 3D on Canvas 2D.
+// Minimal pipeline: rotation matrices, perspective projection,
+// backface culling, per-vertex Lambert lighting, and a scanline
+// rasterizer that interpolates colors (Gouraud shading).
+// No WebGL, no external libraries.
+// ============================================================
+
+'use strict';
+
+/* ---------- geometry & constants ---------- */
+
+// Eight cube corners in model space (unit cube centered at origin).
+const CUBE_VERTS = [
+  [-1, -1, -1], [ 1, -1, -1], [ 1,  1, -1], [-1,  1, -1],
+  [-1, -1,  1], [ 1, -1,  1], [ 1,  1,  1], [-1,  1,  1]
+];
+
+// Quad faces: vertex indices CCW seen from outside + base RGB color.
+// Each quad is split into two triangles at rasterization time.
+const FACES = [
+  { q: [4, 5, 6, 7], col: [ 77, 163, 255] },  // +Z front  blue
+  { q: [1, 0, 3, 2], col: [155,  93, 255] },  // -Z back   purple
+  { q: [5, 1, 2, 6], col: [255,  93, 126] },  // +X right  pink
+  { q: [0, 4, 7, 3], col: [255, 158,  61] },  // -X left   orange
+  { q: [7, 6, 2, 3], col: [ 61, 220, 151] },  // +Y top    green
+  { q: [0, 1, 5, 4], col: [255, 217,  61] }   // -Y bottom yellow
+];
+
+// Camera sits at (0, 0, CAM_Z), looking toward +z.
+const CAM_Z = -4.6;
+
+// Pre-packed little-endian ABGR word for rgb(16, 14, 24).
+const BG32 = (255 << 24) | (24 << 16) | (14 << 8) | 16;
+
+/* ---------- canvas setup & resize ---------- */
+
+const canvas = document.getElementById('scene');
+const ctx = canvas.getContext('2d');
+
+// Pixels are written directly into an ImageData buffer;
+// buf32 gives a fast 32-bit path for clearing.
+let W = 0, H = 0, img = null, data = null, buf32 = null, focal = 0;
+
+function resize() {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+  img = ctx.createImageData(W, H);
+  data = img.data;
+  buf32 = new Uint32Array(data.buffer);
+  focal = Math.min(W, H) * 1.35;
+}
+
+window.addEventListener('resize', resize);
+resize();
+
+/* ---------- state, HUD refs & input ---------- */
+
+let simTime = 0.85, paused = false, wireframe = false; // start mid-rotation: three faces visible at once
+
+const fpsEl = document.getElementById('fps');
+const statusEl = document.getElementById('status');
+const btnWire = document.getElementById('btnWire');
+const btnPause = document.getElementById('btnPause');
+
+function toggleWireframe() { wireframe = !wireframe; updateStatus(); }
+function togglePaused() { paused = !paused; updateStatus(); }
+
+function updateStatus() {
+  statusEl.textContent =
+    'wireframe ' + (wireframe ? 'ON' : 'OFF') + ' · ' +
+    (paused ? 'paused' : 'running') + ' · keys W / P';
+}
+
+// Clickable HUD chips mirror the keyboard shortcuts.
+btnWire.addEventListener('click', toggleWireframe);
+btnPause.addEventListener('click', togglePaused);
+
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'w' || e.key === 'W') toggleWireframe();
+  else if (e.key === 'p' || e.key === 'P') togglePaused();
+});
+
+/* ---------- Gouraud scanline triangle rasterizer ---------- */
+// Pixel-center sampling. Vertex colors are interpolated along the
+// two active edges, then linearly across each horizontal span.
+function drawTriangle(v0, v1, v2) {
+  // Sort vertices so that a.y <= b.y <= c.y.
+  let a = v0, b = v1, c = v2, t;
+  if (a.y > b.y) { t = a; a = b; b = t; }
+  if (b.y > c.y) { t = b; b = c; c = t; }
+  if (a.y > b.y) { t = a; a = b; b = t; }
+
+  if (c.y - a.y < 1e-6) return; // degenerate: zero height
+
+  const invH = 1 / (c.y - a.y);
+  const yS = Math.max(0, Math.ceil(a.y - 0.5));
+  const yE = Math.min(H - 1, Math.ceil(c.y - 0.5) - 1);
+
+  for (let py = yS; py <= yE; py++) {
+    const sy = py + 0.5; // pixel-center sample row
+
+    // Long edge a -> c: interpolated position and color.
+    const ta = Math.min(1, Math.max(0, (sy - a.y) * invH));
+    let xl = a.x + (c.x - a.x) * ta;
+    let rl = a.r + (c.r - a.r) * ta;
+    let gl = a.g + (c.g - a.g) * ta;
+    let bl = a.b + (c.b - a.b) * ta;
+
+    // Short edge: a -> b above the middle vertex, b -> c below it.
+    let xr, rr, gr, br;
+    if (sy < b.y) {
+      if (b.y - a.y < 1e-6) continue;
+      const tb = (sy - a.y) / (b.y - a.y);
+      xr = a.x + (b.x - a.x) * tb;
+      rr = a.r + (b.r - a.r) * tb;
+      gr = a.g + (b.g - a.g) * tb;
+      br = a.b + (b.b - a.b) * tb;
+    } else {
+      if (c.y - b.y < 1e-6) continue;
+      const tb = (sy - b.y) / (c.y - b.y);
+      xr = b.x + (c.x - b.x) * tb;
+      rr = b.r + (c.r - b.r) * tb;
+      gr = b.g + (c.g - b.g) * tb;
+      br = b.b + (c.b - b.b) * tb;
+    }
+
+    // Make xl/xr the left/right pair of the span (swap colors too).
+    if (xl > xr) {
+      let s;
+      s = xl; xl = xr; xr = s;
+      s = rl; rl = rr; rr = s;
+      s = gl; gl = gr; gr = s;
+      s = bl; bl = br; br = s;
+    }
+
+    const dx = xr - xl;
+    const xS = Math.max(0, Math.ceil(xl - 0.5));
+    const xE = Math.min(W - 1, Math.ceil(xr + 1e-4 - 0.5) - 1);
+    let i = (py * W + xS) * 4;
+
+    // Walk the span, blending the edge colors across it.
+    for (let px = xS; px <= xE; px++, i += 4) {
+      const s = dx > 1e-6 ? (px + 0.5 - xl) / dx : 0;
+      data[i] = rl + (rr - rl) * s;
+      data[i + 1] = gl + (gr - gl) * s;
+      data[i + 2] = bl + (br - bl) * s;
+      data[i + 3] = 255;
+    }
+  }
+}
+
+/* ---------- 3D pipeline: rotate, project, cull, light ---------- */
+
+function renderScene() {
+  // Clear the framebuffer to the background color.
+  buf32.fill(BG32);
+
+  // Rotation matrices: R = Ry(ay) * Rx(ax), stored flat.
+  const ax = simTime * 0.55, ay = simTime * 0.85;
+  const cxA = Math.cos(ax), sxA = Math.sin(ax);
+  const cyA = Math.cos(ay), syA = Math.sin(ay);
+  const m00 = cyA, m01 = syA * sxA, m02 = syA * cxA,
+        m10 = 0, m11 = cxA, m12 = -sxA,
+        m20 = -syA, m21 = cyA * sxA, m22 = cyA * cxA;
+
+  // Transform vertices: model -> world -> screen (perspective).
+  const world = [], screen = [];
+  for (let i = 0; i < 8; i++) {
+    const v = CUBE_VERTS[i];
+
+    // Rotate the model-space corner into world space.
+    const wx = m00 * v[0] + m01 * v[1] + m02 * v[2];
+    const wy = m10 * v[0] + m11 * v[1] + m12 * v[2];
+    const wz = m20 * v[0] + m21 * v[1] + m22 * v[2];
+
+    // Perspective-project onto the screen plane.
+    const vz = wz - CAM_Z; // positive depth in front of the camera
+    world.push({ x: wx, y: wy, z: wz });
+    screen.push({ x: W / 2 + wx * focal / vz, y: H / 2 - wy * focal / vz, vz: vz });
+  }
+
+  // Moving point light orbiting the cube (world space).
+  // The z-term is biased toward the camera side so visible faces stay lit.
+  const lx = 3.4 * Math.sin(simTime * 0.7);
+  const ly = 1.8 * Math.sin(simTime * 1.1 + 1.2);
+  const lz = 1.9 * Math.cos(simTime * 0.7) - 2.1;
+
+  // Per face: world-space normal, backface culling, depth sort.
+  const visible = [];
+  for (const f of FACES) {
+    const A = world[f.q[0]], B = world[f.q[1]], C = world[f.q[2]];
+    let nx = (B.y - A.y) * (C.z - A.z) - (B.z - A.z) * (C.y - A.y);
+    let ny = (B.z - A.z) * (C.x - A.x) - (B.x - A.x) * (C.z - A.z);
+    let nz = (B.x - A.x) * (C.y - A.y) - (B.y - A.y) * (C.x - A.x);
+    const nl = Math.hypot(nx, ny, nz);
+    nx /= nl; ny /= nl; nz /= nl;
+    const vx = A.x - 0, vy = A.y - 0, vzz = A.z - CAM_Z; // view vector vertex->camera
+    if (nx * vx + ny * vy + nz * vzz >= 0) continue; // backface cull (dot(normal, toCamera) < 0 required)
+    const depth = (screen[f.q[0]].vz + screen[f.q[1]].vz + screen[f.q[2]].vz + screen[f.q[3]].vz) / 4;
+    visible.push({ f, n: [nx, ny, nz], depth });
+  }
+  visible.sort((p, q) => q.depth - p.depth); // painter: far first
+
+  // Per-triangle Gouraud: Lambert lighting at each vertex, then rasterize.
+  const AMBIENT = 0.16, DIFFUSE = 0.9;
+  for (const item of visible) {
+    const f = item.f, n = item.n;
+    // Split the quad along its diagonal into two triangles.
+    const tris = [[f.q[0], f.q[1], f.q[2]], [f.q[0], f.q[2], f.q[3]]];
+    for (const tri of tris) {
+      const tv = [];
+      for (const id of tri) {
+        const p = world[id], s = screen[id];
+
+        // Unit vector from this vertex toward the light.
+        let Lx = lx - p.x, Ly = ly - p.y, Lz = lz - p.z;
+        const ll = Math.hypot(Lx, Ly, Lz);
+        Lx /= ll; Ly /= ll; Lz /= ll;
+
+        // Lambert term, clamped to the lit hemisphere.
+        const d = Math.max(0, n[0] * Lx + n[1] * Ly + n[2] * Lz);
+        const I = AMBIENT + DIFFUSE * d;
+        tv.push({ x: s.x, y: s.y, r: f.col[0] * I, g: f.col[1] * I, b: f.col[2] * I });
+      }
+      drawTriangle(tv[0], tv[1], tv[2]);
+    }
+  }
+
+  // Blit the finished framebuffer to the canvas.
+  ctx.putImageData(img, 0, 0);
+
+  // Wireframe overlay (shows the triangle split incl. diagonals).
+  if (wireframe) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.30)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (const item of visible) {
+      const q = item.f.q;
+      ctx.moveTo(screen[q[0]].x, screen[q[0]].y);
+      ctx.lineTo(screen[q[1]].x, screen[q[1]].y);
+      ctx.lineTo(screen[q[2]].x, screen[q[2]].y);
+      ctx.lineTo(screen[q[3]].x, screen[q[3]].y);
+      ctx.closePath();
+      ctx.moveTo(screen[q[0]].x, screen[q[0]].y);
+      ctx.lineTo(screen[q[2]].x, screen[q[2]].y);
+    }
+    ctx.stroke();
+  }
+
+  // Glowing marker at the light position.
+  const lvz = lz - CAM_Z;
+  if (lvz > 0.2) {
+    const msx = W / 2 + lx * focal / lvz, msy = H / 2 - ly * focal / lvz;
+    const g = ctx.createRadialGradient(msx, msy, 0, msx, msy, 30);
+    g.addColorStop(0, 'rgba(255,240,200,0.85)');
+    g.addColorStop(1, 'rgba(255,240,200,0)');
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(msx, msy, 30, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalCompositeOperation = 'source-over';
+  }
+}
+
+/* ---------- main loop & FPS counter ---------- */
+
+let last = 0, fpsLast = 0, fpsFrames = 0;
+
+function frame(ts) {
+  if (!last) last = ts;
+  const dt = Math.min(0.05, (ts - last) / 1000);
+  last = ts;
+
+  // Advance simulation time only while unpaused.
+  if (!paused) simTime += dt;
+
+  renderScene();
+
+  // FPS readout refreshes every 500 ms.
+  fpsFrames++;
+  if (!fpsLast) {
+    fpsLast = ts;
+  } else if (ts - fpsLast >= 500) {
+    fpsEl.textContent = String(Math.round(fpsFrames * 1000 / (ts - fpsLast)));
+    fpsFrames = 0;
+    fpsLast = ts;
+  }
+
+  requestAnimationFrame(frame);
+}
+
+updateStatus();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

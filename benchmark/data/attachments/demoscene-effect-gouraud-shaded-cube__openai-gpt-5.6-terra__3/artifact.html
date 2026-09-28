@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gouraud Cube</title>
+<style>
+    :root {
+        color-scheme: dark;
+    }
+
+    * {
+        box-sizing: border-box;
+    }
+
+    html,
+    body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: #030713;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+    }
+
+    .hud {
+        position: fixed;
+        top: 20px;
+        left: 20px;
+        z-index: 1;
+        width: min(310px, calc(100vw - 40px));
+        padding: 15px 17px;
+        color: #d9f8ff;
+        background: linear-gradient(135deg, rgba(8, 18, 46, 0.82), rgba(13, 8, 42, 0.68));
+        border: 1px solid rgba(101, 225, 255, 0.3);
+        border-radius: 14px;
+        box-shadow: 0 12px 38px rgba(0, 0, 0, 0.35), inset 0 1px rgba(255, 255, 255, 0.08);
+        backdrop-filter: blur(12px);
+        user-select: none;
+    }
+
+    .hud h1 {
+        margin: 0 0 8px;
+        color: #8ff6ff;
+        font-size: 18px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+    }
+
+    .hud p {
+        margin: 0;
+        color: #afc5df;
+        font-size: 13px;
+        line-height: 1.55;
+    }
+
+    .hud kbd {
+        display: inline-block;
+        min-width: 20px;
+        padding: 1px 5px;
+        color: #e9fdff;
+        font: 700 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+        text-align: center;
+        background: rgba(87, 210, 255, 0.15);
+        border: 1px solid rgba(133, 231, 255, 0.4);
+        border-radius: 4px;
+    }
+
+    .stats {
+        display: flex;
+        gap: 16px;
+        margin-top: 11px;
+        padding-top: 10px;
+        border-top: 1px solid rgba(137, 228, 255, 0.18);
+        color: #79e7ff;
+        font: 600 12px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+        letter-spacing: 0.04em;
+    }
+
+    .stats span:last-child {
+        color: #caadff;
+    }
+</style>
+</head>
+<body>
+<canvas id="canvas" role="img" aria-label="Animated Gouraud-shaded rotating cube"></canvas>
+
+<section class="hud" aria-label="Gouraud Cube controls">
+    <h1>Gouraud Cube</h1>
+    <p>Software-rendered Canvas 2D lighting.</p>
+    <p><kbd>W</kbd> wireframe &nbsp; <kbd>P</kbd> pause / resume</p>
+    <div class="stats" aria-live="polite">
+        <span id="fps">FPS 0</span>
+        <span id="state">RUNNING</span>
+    </div>
+</section>
+
+<script>
+(() => {
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const fpsElement = document.getElementById("fps");
+    const stateElement = document.getElementById("state");
+
+    const layer = document.createElement("canvas");
+    const layerCtx = layer.getContext("2d");
+
+    const vertices = [
+        [-1, -1, -1], [ 1, -1, -1], [ 1,  1, -1], [-1,  1, -1],
+        [-1, -1,  1], [ 1, -1,  1], [ 1,  1,  1], [-1,  1,  1]
+    ];
+
+    const vertexNormals = vertices.map(([x, y, z]) => {
+        const length = Math.hypot(x, y, z);
+        return [x / length, y / length, z / length];
+    });
+
+    const faces = [
+        { indices: [4, 5, 6, 7], color: [46, 215, 255] },
+        { indices: [1, 0, 3, 2], color: [65, 106, 255] },
+        { indices: [5, 1, 2, 6], color: [116, 85, 255] },
+        { indices: [0, 4, 7, 3], color: [35, 149, 239] },
+        { indices: [3, 7, 6, 2], color: [130, 104, 255] },
+        { indices: [0, 1, 5, 4], color: [23, 132, 205] }
+    ];
+
+    let width = 0;
+    let height = 0;
+    let imageData;
+    let pixels;
+    let depthBuffer;
+    let wireframe = false;
+    let paused = false;
+    let rotation = 0;
+    let lastTime = performance.now();
+    let fpsTime = lastTime;
+    let frameCount = 0;
+    let displayedFps = 0;
+
+    function resize() {
+        const scale = Math.min(window.devicePixelRatio || 1, 2);
+        width = Math.max(1, Math.floor(window.innerWidth * scale));
+        height = Math.max(1, Math.floor(window.innerHeight * scale));
+
+        canvas.width = width;
+        canvas.height = height;
+        layer.width = width;
+        layer.height = height;
+
+        imageData = layerCtx.createImageData(width, height);
+        pixels = imageData.data;
+        depthBuffer = new Float32Array(width * height);
+        draw();
+    }
+
+    function rotationX(angle) {
+        const c = Math.cos(angle);
+        const s = Math.sin(angle);
+        return [
+            [1, 0, 0],
+            [0, c, -s],
+            [0, s, c]
+        ];
+    }
+
+    function rotationY(angle) {
+        const c = Math.cos(angle);
+        const s = Math.sin(angle);
+        return [
+            [c, 0, s],
+            [0, 1, 0],
+            [-s, 0, c]
+        ];
+    }
+
+    function multiplyMatrices(a, b) {
+        return [
+            [
+                a[0][0] * b[0][0] + a[0][1] * b[1][0] + a[0][2] * b[2][0],
+                a[0][0] * b[0][1] + a[0][1] * b[1][1] + a[0][2] * b[2][1],
+                a[0][0] * b[0][2] + a[0][1] * b[1][2] + a[0][2] * b[2][2]
+            ],
+            [
+                a[1][0] * b[0][0] + a[1][1] * b[1][0] + a[1][2] * b[2][0],
+                a[1][0] * b[0][1] + a[1][1] * b[1][1] + a[1][2] * b[2][1],
+                a[1][0] * b[0][2] + a[1][1] * b[1][2] + a[1][2] * b[2][2]
+            ],
+            [
+                a[2][0] * b[0][0] + a[2][1] * b[1][0] + a[2][2] * b[2][0],
+                a[2][0] * b[0][1] + a[2][1] * b[1][1] + a[2][2] * b[2][1],
+                a[2][0] * b[0][2] + a[2][1] * b[1][2] + a[2][2] * b[2][2]
+            ]
+        ];
+    }
+
+    function transformVector(matrix, vector) {
+        return [
+            matrix[0][0] * vector[0] + matrix[0][1] * vector[1] + matrix[0][2] * vector[2],
+            matrix[1][0] * vector[0] + matrix[1][1] * vector[1] + matrix[1][2] * vector[2],
+            matrix[2][0] * vector[0] + matrix[2][1] * vector[1] + matrix[2][2] * vector[2]
+        ];
+    }
+
+    function perspectiveProject(point) {
+        const focalLength = Math.min(width, height) * 0.78;
+        return {
+            x: width * 0.5 + point[0] * focalLength / point[2],
+            y: height * 0.5 - point[1] * focalLength / point[2],
+            z: point[2]
+        };
+    }
+
+    function edgeFunction(a, b, x, y) {
+        return (x - a.x) * (b.y - a.y) - (y - a.y) * (b.x - a.x);
+    }
+
+    function rasterizeTriangle(a, b, c) {
+        const area = edgeFunction(a, b, c.x, c.y);
+        if (Math.abs(area) < 0.0001) {
+            return;
+        }
+
+        const minX = Math.max(0, Math.floor(Math.min(a.x, b.x, c.x)));
+        const maxX = Math.min(width - 1, Math.ceil(Math.max(a.x, b.x, c.x)));
+        const minY = Math.max(0, Math.floor(Math.min(a.y, b.y, c.y)));
+        const maxY = Math.min(height - 1, Math.ceil(Math.max(a.y, b.y, c.y)));
+        const positiveArea = area > 0;
+
+        for (let y = minY; y <= maxY; y++) {
+            for (let x = minX; x <= maxX; x++) {
+                const px = x + 0.5;
+                const py = y + 0.5;
+                const w0 = edgeFunction(b, c, px, py);
+                const w1 = edgeFunction(c, a, px, py);
+                const w2 = edgeFunction(a, b, px, py);
+
+                if (positiveArea ? (w0 < 0 || w1 < 0 || w2 < 0) : (w0 > 0 || w1 > 0 || w2 > 0)) {
+                    continue;
+                }
+
+                const alpha = w0 / area;
+                const beta = w1 / area;
+                const gamma = w2 / area;
+                const z = alpha * a.z + beta * b.z + gamma * c.z;
+                const bufferIndex = y * width + x;
+
+                if (z >= depthBuffer[bufferIndex]) {
+                    continue;
+                }
+
+                depthBuffer[bufferIndex] = z;
+                const pixelIndex = bufferIndex * 4;
+
+                pixels[pixelIndex] = alpha * a.r + beta * b.r + gamma * c.r;
+                pixels[pixelIndex + 1] = alpha * a.g + beta * b.g + gamma * c.g;
+                pixels[pixelIndex + 2] = alpha * a.b + beta * b.b + gamma * c.b;
+                pixels[pixelIndex + 3] = 255;
+            }
+        }
+    }
+
+    function drawBackground() {
+        const background = ctx.createRadialGradient(
+            width * 0.5, height * 0.38, 0,
+            width * 0.5, height * 0.5, Math.max(width, height) * 0.76
+        );
+        background.addColorStop(0, "#102252");
+        background.addColorStop(0.44, "#07142f");
+        background.addColorStop(1, "#02040d");
+        ctx.fillStyle = background;
+        ctx.fillRect(0, 0, width, height);
+
+        const horizon = height * 0.72;
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, horizon, width, height - horizon);
+        ctx.clip();
+        ctx.strokeStyle = "rgba(73, 151, 221, 0.09)";
+        ctx.lineWidth = 1;
+
+        const spacing = Math.max(36, Math.round(width / 26));
+        for (let x = -width; x < width * 2; x += spacing) {
+            ctx.beginPath();
+            ctx.moveTo(width * 0.5, horizon);
+            ctx.lineTo(x, height);
+            ctx.stroke();
+        }
+
+        for (let y = horizon + 14; y < height; y += Math.max(18, (y - horizon) * 0.17)) {
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(width, y);
+            ctx.stroke();
+        }
+        ctx.restore();
+    }
+
+    function draw() {
+        if (!pixels) {
+            return;
+        }
+
+        pixels.fill(0);
+        depthBuffer.fill(Infinity);
+
+        const matrix = multiplyMatrices(rotationY(rotation), rotationX(rotation * 0.67));
+        const transformedVertices = vertices.map((vertex) => {
+            const point = transformVector(matrix, vertex);
+            return [point[0], point[1], point[2] + 5.8];
+        });
+
+        const transformedNormals = vertexNormals.map((normal) => transformVector(matrix, normal));
+        const light = [
+            Math.cos(rotation * 1.4) * 3.7,
+            2.4 + Math.sin(rotation * 1.9) * 1.5,
+            3.2 + Math.sin(rotation * 0.9) * 1.4
+        ];
+
+        const projected = transformedVertices.map(perspectiveProject);
+        const shadedVertices = projected.map((point, index) => {
+            const position = transformedVertices[index];
+            const normal = transformedNormals[index];
+            const lx = light[0] - position[0];
+            const ly = light[1] - position[1];
+            const lz = light[2] - position[2];
+            const lightLength = Math.hypot(lx, ly, lz);
+            const lambert = Math.max(0, (normal[0] * lx + normal[1] * ly + normal[2] * lz) / lightLength);
+            return { ...point, light: 0.22 + lambert * 0.78 };
+        });
+
+        const wireTriangles = [];
+
+        for (const face of faces) {
+            const [i0, i1, i2, i3] = face.indices;
+            const p0 = transformedVertices[i0];
+            const p1 = transformedVertices[i1];
+            const p2 = transformedVertices[i2];
+
+            const ux = p1[0] - p0[0];
+            const uy = p1[1] - p0[1];
+            const uz = p1[2] - p0[2];
+            const vx = p2[0] - p0[0];
+            const vy = p2[1] - p0[1];
+            const vz = p2[2] - p0[2];
+            const nx = uy * vz - uz * vy;
+            const ny = uz * vx - ux * vz;
+            const nz = ux * vy - uy * vx;
+            const centerX = (p0[0] + p1[0] + p2[0] + transformedVertices[i3][0]) * 0.25;
+            const centerY = (p0[1] + p1[1] + p2[1] + transformedVertices[i3][1]) * 0.25;
+            const centerZ = (p0[2] + p1[2] + p2[2] + transformedVertices[i3][2]) * 0.25;
+
+            if (nx * centerX + ny * centerY + nz * centerZ >= 0) {
+                continue;
+            }
+
+            const triangles = [[i0, i1, i2], [i0, i2, i3]];
+
+            for (const triangle of triangles) {
+                const triangleVertices = triangle.map((index) => {
+                    const vertex = shadedVertices[index];
+                    return {
+                        x: vertex.x,
+                        y: vertex.y,
+                        z: vertex.z,
+                        r: face.color[0] * vertex.light,
+                        g: face.color[1] * vertex.light,
+                        b: face.color[2] * vertex.light
+                    };
+                });
+
+                rasterizeTriangle(triangleVertices[0], triangleVertices[1], triangleVertices[2]);
+                wireTriangles.push(triangleVertices);
+            }
+        }
+
+        drawBackground();
+        layerCtx.putImageData(imageData, 0, 0);
+        ctx.drawImage(layer, 0, 0);
+
+        if (wireframe) {
+            ctx.save();
+            ctx.strokeStyle = "rgba(222, 253, 255, 0.88)";
+            ctx.lineWidth = Math.max(1, Math.min(width, height) / 800);
+            ctx.shadowColor = "rgba(56, 225, 255, 0.9)";
+            ctx.shadowBlur = 8;
+
+            for (const triangle of wireTriangles) {
+                ctx.beginPath();
+                ctx.moveTo(triangle[0].x, triangle[0].y);
+                ctx.lineTo(triangle[1].x, triangle[1].y);
+                ctx.lineTo(triangle[2].x, triangle[2].y);
+                ctx.closePath();
+                ctx.stroke();
+            }
+            ctx.restore();
+        }
+    }
+
+    function animate(time) {
+        if (paused) {
+            return;
+        }
+
+        const delta = Math.min(0.05, (time - lastTime) / 1000);
+        lastTime = time;
+        rotation += delta * 0.8;
+        frameCount++;
+
+        if (time - fpsTime >= 500) {
+            displayedFps = Math.round(frameCount * 1000 / (time - fpsTime));
+            fpsElement.textContent = `FPS ${displayedFps}`;
+            frameCount = 0;
+            fpsTime = time;
+        }
+
+        draw();
+        requestAnimationFrame(animate);
+    }
+
+    window.addEventListener("resize", resize);
+
+    window.addEventListener("keydown", (event) => {
+        if (event.key.toLowerCase() === "w") {
+            wireframe = !wireframe;
+            draw();
+        }
+
+        if (event.key.toLowerCase() === "p") {
+            paused = !paused;
+            stateElement.textContent = paused ? "PAUSED" : "RUNNING";
+            if (!paused) {
+                lastTime = performance.now();
+                fpsTime = lastTime;
+                frameCount = 0;
+                requestAnimationFrame(animate);
+            }
+            draw();
+        }
+    });
+
+    resize();
+    requestAnimationFrame(animate);
+})();
+</script>
+</body>
+</html>

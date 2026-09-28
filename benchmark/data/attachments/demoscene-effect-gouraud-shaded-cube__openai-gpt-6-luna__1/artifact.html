@@ -1,0 +1,736 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#080e18">
+  <meta name="description" content="A real-time Canvas 2D Gouraud-shaded cube in a quiet digital observatory.">
+  <title>Gouraud Cube — Field Observatory</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #080e18;
+      --ink: #e3effa;
+      --muted: #8497ad;
+      --faint: #53667c;
+      --line: rgba(143, 176, 205, 0.16);
+      --cyan: #68e6ef;
+      --blue: #5e9dff;
+      --panel: rgba(11, 20, 33, 0.78);
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+    }
+
+    body {
+      overflow: hidden;
+      color: var(--ink);
+      background:
+        radial-gradient(ellipse at 50% 48%, rgba(21, 44, 69, 0.27), transparent 58%),
+        var(--bg);
+    }
+
+    .observatory {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      min-height: 480px;
+      isolation: isolate;
+      overflow: hidden;
+      background-image: radial-gradient(rgba(156, 193, 222, 0.2) 0.7px, transparent 0.8px);
+      background-size: 32px 32px;
+      background-position: 16px 14px;
+    }
+
+    .observatory::before,
+    .observatory::after {
+      position: absolute;
+      z-index: -1;
+      content: "";
+      pointer-events: none;
+    }
+
+    .observatory::before {
+      inset: 0;
+      background:
+        linear-gradient(rgba(116, 157, 194, 0.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(116, 157, 194, 0.025) 1px, transparent 1px);
+      background-size: 96px 96px;
+      mask-image: radial-gradient(ellipse at center, black, transparent 78%);
+    }
+
+    .observatory::after {
+      width: min(74vmin, 780px);
+      aspect-ratio: 1;
+      left: 50%;
+      top: 50%;
+      border: 1px solid rgba(117, 176, 208, 0.07);
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      box-shadow:
+        0 0 0 36px rgba(117, 176, 208, 0.018),
+        0 0 0 92px rgba(117, 176, 208, 0.014);
+    }
+
+    canvas {
+      position: absolute;
+      inset: 0;
+      display: block;
+      width: 100%;
+      height: 100%;
+      outline: none;
+    }
+
+    canvas:focus-visible {
+      outline: 1px solid rgba(104, 230, 239, 0.65);
+      outline-offset: -5px;
+    }
+
+    .hud {
+      position: absolute;
+      z-index: 1;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: clamp(20px, 4vw, 48px);
+      pointer-events: none;
+    }
+
+    .topline,
+    .bottomline {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 24px;
+    }
+
+    .identity {
+      max-width: 390px;
+    }
+
+    .eyebrow,
+    .readout-label,
+    .panel-title,
+    .footer-note {
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 400;
+      letter-spacing: 0.16em;
+      line-height: 1.5;
+      text-transform: uppercase;
+    }
+
+    .eyebrow {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      margin: 0 0 12px;
+    }
+
+    .eyebrow::before {
+      width: 18px;
+      height: 1px;
+      content: "";
+      background: var(--cyan);
+      box-shadow: 0 0 10px rgba(104, 230, 239, 0.7);
+    }
+
+    h1 {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, sans-serif;
+      font-size: clamp(24px, 3vw, 38px);
+      font-weight: 400;
+      letter-spacing: -0.055em;
+      line-height: 1.08;
+    }
+
+    .description {
+      max-width: 320px;
+      margin: 12px 0 0;
+      color: #9aacc0;
+      font-family: ui-sans-serif, system-ui, sans-serif;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .telemetry {
+      display: flex;
+      gap: clamp(18px, 3vw, 40px);
+      padding-top: 4px;
+    }
+
+    .readout {
+      min-width: 66px;
+    }
+
+    .readout-label {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 9px;
+    }
+
+    .readout-value {
+      color: #d5e8f7;
+      font-size: 15px;
+      letter-spacing: 0.04em;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .readout-value.accent {
+      color: var(--cyan);
+    }
+
+    .bottomline {
+      align-items: flex-end;
+    }
+
+    .panel {
+      width: min(100%, 320px);
+      padding: 16px 18px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+      backdrop-filter: blur(12px);
+      pointer-events: auto;
+    }
+
+    .panel-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding-bottom: 13px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .panel-title {
+      margin: 0;
+      font-size: 9px;
+    }
+
+    .live-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: #9bb0c3;
+      font-size: 9px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .live-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--cyan);
+      box-shadow: 0 0 9px rgba(104, 230, 239, 0.8);
+    }
+
+    .live-indicator.paused .live-dot {
+      background: #8191a3;
+      box-shadow: none;
+    }
+
+    .controls {
+      display: flex;
+      gap: 8px;
+      margin-top: 13px;
+    }
+
+    button {
+      min-height: 34px;
+      padding: 0 10px;
+      border: 1px solid rgba(144, 175, 204, 0.2);
+      border-radius: 2px;
+      color: #c1d0df;
+      background: rgba(21, 35, 51, 0.65);
+      font: inherit;
+      font-size: 10px;
+      cursor: pointer;
+      transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease;
+    }
+
+    button:hover,
+    button[aria-pressed="true"] {
+      border-color: rgba(104, 230, 239, 0.52);
+      color: #e5fcff;
+      background: rgba(36, 73, 88, 0.48);
+    }
+
+    button:focus-visible {
+      outline: 2px solid var(--cyan);
+      outline-offset: 3px;
+    }
+
+    .key {
+      display: inline-grid;
+      min-width: 17px;
+      height: 17px;
+      margin-right: 7px;
+      place-items: center;
+      border: 1px solid rgba(164, 191, 216, 0.25);
+      color: var(--cyan);
+      font-size: 9px;
+      line-height: 1;
+    }
+
+    .panel-note {
+      margin: 12px 0 0;
+      color: #8295aa;
+      font-size: 9px;
+      line-height: 1.6;
+    }
+
+    .footer-note {
+      margin: 0;
+      color: #74879b;
+      text-align: right;
+      font-size: 9px;
+    }
+
+    .footer-note span {
+      color: #b8cad9;
+    }
+
+    @media (max-width: 620px) {
+      .observatory {
+        min-height: 420px;
+      }
+
+      .hud {
+        padding: 22px 20px;
+      }
+
+      .topline {
+        flex-direction: column;
+        gap: 20px;
+      }
+
+      .description {
+        max-width: 290px;
+        margin-top: 9px;
+        font-size: 12px;
+      }
+
+      .telemetry {
+        gap: 26px;
+      }
+
+      .bottomline {
+        align-items: flex-end;
+      }
+
+      .panel {
+        width: min(100%, 286px);
+        padding: 13px 14px;
+      }
+
+      .footer-note {
+        max-width: 110px;
+        font-size: 8px;
+        line-height: 1.7;
+      }
+    }
+
+    @media (max-width: 380px) {
+      .hud {
+        padding: 18px 15px;
+      }
+
+      .footer-note {
+        display: none;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="observatory">
+    <canvas id="scene" tabindex="0" role="img" aria-label="A rotating, Gouraud-shaded cube rendered in real time. Use W to toggle wireframe and P to pause."></canvas>
+
+    <div class="hud">
+      <header class="topline">
+        <div class="identity">
+          <p class="eyebrow">Field observatory / 03</p>
+          <h1>Gouraud Cube</h1>
+          <p class="description">A study in light, motion, and interpolated color — rendered entirely on a 2D canvas.</p>
+        </div>
+
+        <section class="telemetry" aria-label="Render telemetry">
+          <div class="readout">
+            <span class="readout-label">Frame rate</span>
+            <span class="readout-value accent" id="fps">— FPS</span>
+          </div>
+          <div class="readout">
+            <span class="readout-label">Pipeline</span>
+            <span class="readout-value" id="mode">GOURAUD</span>
+          </div>
+          <div class="readout">
+            <span class="readout-label">Display</span>
+            <span class="readout-value" id="state">RUNNING</span>
+          </div>
+        </section>
+      </header>
+
+      <footer class="bottomline">
+        <section class="panel" aria-label="Scene controls">
+          <div class="panel-heading">
+            <h2 class="panel-title">Scene controls</h2>
+            <span class="live-indicator" id="liveIndicator"><span class="live-dot"></span><span id="liveText">Live render</span></span>
+          </div>
+          <div class="controls">
+            <button id="wireButton" type="button" aria-pressed="false"><span class="key" aria-hidden="true">W</span>Wireframe</button>
+            <button id="pauseButton" type="button" aria-pressed="false"><span class="key" aria-hidden="true">P</span>Pause</button>
+          </div>
+          <p class="panel-note">Lambert diffuse · moving point source · perspective projection</p>
+        </section>
+        <p class="footer-note"><span>Canvas 2D</span> / software rasterizer<br>Drag not required — just observe</p>
+      </footer>
+    </div>
+  </main>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const canvas = document.getElementById("scene");
+      const ctx = canvas.getContext("2d", { alpha: true });
+      const fpsDisplay = document.getElementById("fps");
+      const modeDisplay = document.getElementById("mode");
+      const stateDisplay = document.getElementById("state");
+      const liveIndicator = document.getElementById("liveIndicator");
+      const liveText = document.getElementById("liveText");
+      const wireButton = document.getElementById("wireButton");
+      const pauseButton = document.getElementById("pauseButton");
+
+      const vertices = [
+        [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
+        [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]
+      ];
+
+      const faces = [
+        { indices: [0, 3, 2, 1], color: [38, 111, 172] },
+        { indices: [4, 5, 6, 7], color: [51, 183, 201] },
+        { indices: [0, 4, 7, 3], color: [41, 105, 184] },
+        { indices: [1, 2, 6, 5], color: [57, 145, 218] },
+        { indices: [0, 1, 5, 4], color: [32, 87, 149] },
+        { indices: [3, 7, 6, 2], color: [75, 165, 212] }
+      ];
+
+      let width = 1;
+      let height = 1;
+      let bufferWidth = 1;
+      let bufferHeight = 1;
+      let imageData;
+      let wireframe = false;
+      let paused = false;
+      let angleX = -0.42;
+      let angleY = 0.58;
+      let angleZ = 0.08;
+      let elapsed = 0;
+      let lastTime = 0;
+      let lastFpsTime = 0;
+      let frameCount = 0;
+      let smoothedFps = 0;
+
+      const cameraDistance = 4.6;
+      const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
+
+      function resize() {
+        const rect = canvas.getBoundingClientRect();
+        width = Math.max(1, rect.width);
+        height = Math.max(1, rect.height);
+
+        const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+        let scale = dpr * 0.68;
+        const areaLimit = 820000;
+        scale = Math.min(scale, Math.sqrt(areaLimit / (width * height)));
+
+        bufferWidth = Math.max(1, Math.round(width * scale));
+        bufferHeight = Math.max(1, Math.round(height * scale));
+        canvas.width = bufferWidth;
+        canvas.height = bufferHeight;
+        imageData = ctx.createImageData(bufferWidth, bufferHeight);
+      }
+
+      function rotate(point, ax, ay, az) {
+        const [x, y, z] = point;
+        const sinX = Math.sin(ax);
+        const cosX = Math.cos(ax);
+        const sinY = Math.sin(ay);
+        const cosY = Math.cos(ay);
+        const sinZ = Math.sin(az);
+        const cosZ = Math.cos(az);
+
+        const y1 = y * cosX - z * sinX;
+        const z1 = y * sinX + z * cosX;
+        const x2 = x * cosY + z1 * sinY;
+        const z2 = -x * sinY + z1 * cosY;
+
+        return [
+          x2 * cosZ - y1 * sinZ,
+          x2 * sinZ + y1 * cosZ,
+          z2
+        ];
+      }
+
+      function subtract(a, b) {
+        return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+      }
+
+      function cross(a, b) {
+        return [
+          a[1] * b[2] - a[2] * b[1],
+          a[2] * b[0] - a[0] * b[2],
+          a[0] * b[1] - a[1] * b[0]
+        ];
+      }
+
+      function dot(a, b) {
+        return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+      }
+
+      function normalize(vector) {
+        const length = Math.hypot(vector[0], vector[1], vector[2]) || 1;
+        return [vector[0] / length, vector[1] / length, vector[2] / length];
+      }
+
+      function project(point) {
+        const depth = cameraDistance - point[2];
+        const focalLength = Math.min(width, height) * 1.48;
+        return {
+          x: (width * 0.5 + point[0] * focalLength / depth) * (bufferWidth / width),
+          y: (height * 0.5 - point[1] * focalLength / depth) * (bufferHeight / height),
+          depth
+        };
+      }
+
+      function rasterizeTriangle(a, b, c) {
+        const ax = a.x;
+        const ay = a.y;
+        const bx = b.x;
+        const by = b.y;
+        const cx = c.x;
+        const cy = c.y;
+        const area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+
+        if (Math.abs(area) < 0.0001) {
+          return;
+        }
+
+        const minX = clamp(Math.floor(Math.min(ax, bx, cx)), 0, bufferWidth - 1);
+        const maxX = clamp(Math.ceil(Math.max(ax, bx, cx)), 0, bufferWidth - 1);
+        const minY = clamp(Math.floor(Math.min(ay, by, cy)), 0, bufferHeight - 1);
+        const maxY = clamp(Math.ceil(Math.max(ay, by, cy)), 0, bufferHeight - 1);
+        const invArea = 1 / area;
+        const data = imageData.data;
+
+        for (let y = minY; y <= maxY; y++) {
+          const py = y + 0.5;
+          for (let x = minX; x <= maxX; x++) {
+            const px = x + 0.5;
+            const wa = ((bx - px) * (cy - py) - (by - py) * (cx - px)) * invArea;
+            const wb = ((cx - px) * (ay - py) - (cy - py) * (ax - px)) * invArea;
+            const wc = 1 - wa - wb;
+
+            if (wa >= -0.0001 && wb >= -0.0001 && wc >= -0.0001) {
+              const offset = (y * bufferWidth + x) * 4;
+              data[offset] = clamp(Math.round(wa * a.r + wb * b.r + wc * c.r), 0, 255);
+              data[offset + 1] = clamp(Math.round(wa * a.g + wb * b.g + wc * c.g), 0, 255);
+              data[offset + 2] = clamp(Math.round(wa * a.b + wb * b.b + wc * c.b), 0, 255);
+              data[offset + 3] = 255;
+            }
+          }
+        }
+      }
+
+      function setControls() {
+        wireButton.setAttribute("aria-pressed", String(wireframe));
+        pauseButton.setAttribute("aria-pressed", String(paused));
+        modeDisplay.textContent = wireframe ? "WIREFRAME" : "GOURAUD";
+        stateDisplay.textContent = paused ? "PAUSED" : "RUNNING";
+        liveIndicator.classList.toggle("paused", paused);
+        liveText.textContent = paused ? "Render paused" : "Live render";
+        pauseButton.innerHTML = `<span class="key" aria-hidden="true">P</span>${paused ? "Resume" : "Pause"}`;
+      }
+
+      function render() {
+        const rotation = vertices.map(vertex => rotate(vertex, angleX, angleY, angleZ));
+        const projected = rotation.map(project);
+        const light = [
+          Math.cos(elapsed * 0.73) * 2.7,
+          1.7 + Math.sin(elapsed * 0.91) * 0.55,
+          2.6 + Math.sin(elapsed * 0.61) * 1.1
+        ];
+        const triangles = [];
+        const visibleFaces = [];
+
+        for (const face of faces) {
+          const indices = face.indices;
+          const p0 = rotation[indices[0]];
+          const p1 = rotation[indices[1]];
+          const p2 = rotation[indices[2]];
+          const normal = normalize(cross(subtract(p1, p0), subtract(p2, p0)));
+          const center = [
+            (p0[0] + p1[0] + rotation[indices[2]][0] + rotation[indices[3]][0]) * 0.25,
+            (p0[1] + p1[1] + rotation[indices[2]][1] + rotation[indices[3]][1]) * 0.25,
+            (p0[2] + rotation[indices[2]][2] + rotation[indices[3]][2]) * 0.25
+          ];
+          const toCamera = [ -center[0], -center[1], cameraDistance - center[2] ];
+
+          if (dot(normal, toCamera) <= 0) {
+            continue;
+          }
+
+          const shaded = indices.map(index => {
+            const vertex = rotation[index];
+            const toLight = subtract(light, vertex);
+            const distance = Math.hypot(toLight[0], toLight[1], toLight[2]) || 1;
+            const direction = [toLight[0] / distance, toLight[1] / distance, toLight[2] / distance];
+            const lambert = Math.max(0, dot(normal, direction));
+            const attenuation = 1 / (1 + distance * 0.035);
+            const intensity = 0.25 + 0.9 * lambert * attenuation;
+            const screen = projected[index];
+
+            return {
+              x: screen.x,
+              y: screen.y,
+              depth: screen.depth,
+              r: face.color[0] * intensity,
+              g: face.color[1] * intensity,
+              b: face.color[2] * intensity
+            };
+          });
+
+          const depth = shaded.reduce((sum, point) => sum + point.depth, 0) / 4;
+          visibleFaces.push({ points: indices.map(index => projected[index]), depth });
+
+          triangles.push({ a: shaded[0], b: shaded[1], c: shaded[2], depth: (shaded[0].depth + shaded[1].depth + shaded[2].depth) / 3 });
+          triangles.push({ a: shaded[0], b: shaded[2], c: shaded[3], depth: (shaded[0].depth + shaded[2].depth + shaded[3].depth) / 3 });
+        }
+
+        if (!wireframe) {
+          imageData.data.fill(0);
+          triangles.sort((a, b) => b.depth - a.depth);
+          for (const triangle of triangles) {
+            rasterizeTriangle(triangle.a, triangle.b, triangle.c);
+          }
+          ctx.putImageData(imageData, 0, 0);
+        } else {
+          ctx.clearRect(0, 0, bufferWidth, bufferHeight);
+        }
+
+        visibleFaces.sort((a, b) => b.depth - a.depth);
+        const scaleX = bufferWidth / width;
+        const scaleY = bufferHeight / height;
+        ctx.save();
+        ctx.scale(scaleX, scaleY);
+        ctx.lineJoin = "round";
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = wireframe ? "rgba(104, 230, 239, 0.9)" : "rgba(144, 226, 245, 0.38)";
+        ctx.shadowColor = wireframe ? "rgba(71, 219, 239, 0.28)" : "transparent";
+        ctx.shadowBlur = wireframe ? 9 : 0;
+
+        for (const face of visibleFaces) {
+          ctx.beginPath();
+          ctx.moveTo(face.points[0].x, face.points[0].y);
+          for (let i = 1; i < face.points.length; i++) {
+            ctx.lineTo(face.points[i].x, face.points[i].y);
+          }
+          ctx.closePath();
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      function frame(timestamp) {
+        if (!lastTime) {
+          lastTime = timestamp;
+          lastFpsTime = timestamp;
+        }
+
+        const dt = Math.min((timestamp - lastTime) / 1000, 0.1);
+        lastTime = timestamp;
+
+        if (!paused) {
+          elapsed += dt;
+          angleX += dt * 0.43;
+          angleY += dt * 0.68;
+          angleZ += dt * 0.19;
+        }
+
+        render();
+
+        frameCount++;
+        const fpsElapsed = timestamp - lastFpsTime;
+        if (fpsElapsed >= 500) {
+          const currentFps = frameCount * 1000 / fpsElapsed;
+          smoothedFps = smoothedFps ? smoothedFps * 0.72 + currentFps * 0.28 : currentFps;
+          fpsDisplay.textContent = `${Math.round(smoothedFps)} FPS`;
+          frameCount = 0;
+          lastFpsTime = timestamp;
+        }
+
+        requestAnimationFrame(frame);
+      }
+
+      wireButton.addEventListener("click", () => {
+        wireframe = !wireframe;
+        setControls();
+      });
+
+      pauseButton.addEventListener("click", () => {
+        paused = !paused;
+        setControls();
+      });
+
+      window.addEventListener("keydown", event => {
+        if (event.altKey || event.ctrlKey || event.metaKey || event.repeat) {
+          return;
+        }
+
+        const target = event.target;
+        if (target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) {
+          return;
+        }
+
+        const key = event.key.toLowerCase();
+        if (key === "w") {
+          event.preventDefault();
+          wireframe = !wireframe;
+          setControls();
+        } else if (key === "p") {
+          event.preventDefault();
+          paused = !paused;
+          setControls();
+        }
+      });
+
+      const resizeObserver = new ResizeObserver(resize);
+      resizeObserver.observe(canvas);
+      window.addEventListener("resize", resize, { passive: true });
+      resize();
+      setControls();
+      requestAnimationFrame(frame);
+    })();
+  </script>
+</body>
+</html>

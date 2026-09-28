@@ -1,0 +1,665 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#090f1b">
+  <title>Gouraud Cube — Canvas 2D Lab</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #090f1b;
+      color: #e8f2f5;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      min-width: 0;
+      margin: 0;
+      background: radial-gradient(ellipse at 50% 0%, #15283a 0%, #090f1b 55%);
+    }
+
+    button { font: inherit; }
+
+    .page {
+      width: min(1180px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 35px 0 30px;
+    }
+
+    .header, .header-brand, .header-tag, .eyebrow, .status, .metric,
+    .controls, .control, .footer {
+      display: flex;
+      align-items: center;
+    }
+
+    .header {
+      justify-content: space-between;
+      gap: 20px;
+      margin-bottom: 34px;
+    }
+
+    .header-brand { gap: 13px; }
+
+    .mark {
+      display: grid;
+      width: 34px;
+      height: 34px;
+      place-items: center;
+      border: 1px solid #55dbd399;
+      border-radius: 10px;
+      color: #84f5e7;
+      box-shadow: inset 0 0 16px #3dcfc51c, 0 0 25px #3dcfc51c;
+      font-size: 20px;
+      line-height: 1;
+    }
+
+    .brand-name {
+      font-size: 13px;
+      font-weight: 750;
+      letter-spacing: .13em;
+      text-transform: uppercase;
+    }
+
+    .brand-sub, .header-tag, .eyebrow, .stage-label, .stage-corner,
+    .metric-label, .control-key, .footer {
+      color: #8aa3b2;
+      font-size: 11px;
+      letter-spacing: .11em;
+      text-transform: uppercase;
+    }
+
+    .brand-sub { margin-top: 3px; font-size: 10px; }
+
+    .header-tag {
+      gap: 9px;
+      white-space: nowrap;
+    }
+
+    .header-tag::before, .status-dot {
+      width: 6px;
+      height: 6px;
+      flex: none;
+      border-radius: 50%;
+      background: #73ead6;
+      box-shadow: 0 0 12px #73ead6;
+      content: "";
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.55fr) minmax(270px, .85fr);
+      gap: 24px;
+      align-items: stretch;
+    }
+
+    .stage, .panel {
+      min-width: 0;
+      overflow: hidden;
+      border: 1px solid #284054;
+      border-radius: 17px;
+      background: #0c1624;
+      box-shadow: 0 24px 70px #0005, inset 0 1px #ffffff0a;
+    }
+
+    .stage {
+      position: relative;
+      aspect-ratio: 1.31;
+      isolation: isolate;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .stage-label, .stage-corner {
+      position: absolute;
+      z-index: 1;
+      pointer-events: none;
+    }
+
+    .stage-label { top: 22px; left: 23px; }
+
+    .stage-corner {
+      right: 23px;
+      bottom: 20px;
+      text-align: right;
+      line-height: 1.7;
+    }
+
+    .panel {
+      display: flex;
+      flex-direction: column;
+      padding: clamp(23px, 3vw, 38px);
+    }
+
+    .eyebrow { gap: 10px; color: #83ded3; font-weight: 700; }
+
+    .eyebrow::before {
+      width: 17px;
+      height: 1px;
+      background: currentColor;
+      content: "";
+    }
+
+    h1 {
+      max-width: 340px;
+      margin: 24px 0 14px;
+      font-size: clamp(34px, 3.9vw, 53px);
+      font-weight: 650;
+      letter-spacing: -.055em;
+      line-height: 1.06;
+    }
+
+    h1 span { color: #80e9db; }
+
+    .intro {
+      max-width: 360px;
+      margin: 0;
+      color: #a6b9c5;
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .status {
+      gap: 9px;
+      width: fit-content;
+      margin-top: 25px;
+      padding: 8px 11px;
+      border: 1px solid #31534f;
+      border-radius: 6px;
+      background: #65dfc910;
+      color: #a3efe1;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+    }
+
+    .status.paused {
+      border-color: #806944;
+      background: #d4a95e12;
+      color: #f2ce91;
+    }
+
+    .status.paused .status-dot {
+      background: #e9bd75;
+      box-shadow: 0 0 12px #e9bd75;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 19px 14px;
+      margin: auto 0 0;
+      padding: 32px 0 25px;
+    }
+
+    .metric {
+      min-width: 0;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 7px;
+    }
+
+    .metric-value {
+      max-width: 100%;
+      overflow: hidden;
+      color: #ecf8f7;
+      font-size: 22px;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -.03em;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .metric-label { font-size: 10px; }
+
+    .controls {
+      gap: 10px;
+      padding-top: 22px;
+      border-top: 1px solid #294050;
+    }
+
+    .control {
+      min-width: 0;
+      flex: 1;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 12px 11px;
+      border: 1px solid #395465;
+      border-radius: 8px;
+      background: #172a39;
+      color: #e7f5f4;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 650;
+      transition: background .2s, border-color .2s;
+    }
+
+    .control:hover { border-color: #71c9c2; background: #203c48; }
+    .control:focus-visible { outline: 2px solid #91f5e8; outline-offset: 3px; }
+    .control[aria-pressed="true"] { border-color: #6acbc0; background: #1c4247; }
+
+    .control-key {
+      padding: 3px 6px;
+      border: 1px solid #55717a;
+      border-radius: 4px;
+      color: #b8d2d2;
+      font-size: 10px;
+    }
+
+    .hint {
+      margin: 13px 0 0;
+      color: #91a8b5;
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    .footer {
+      justify-content: space-between;
+      gap: 15px;
+      margin-top: 20px;
+      font-size: 10px;
+      line-height: 1.6;
+    }
+
+    @media (max-width: 800px) {
+      .layout { grid-template-columns: 1fr; }
+      .stage { aspect-ratio: 1.45; }
+      .panel { min-height: 0; }
+      h1 { max-width: none; margin-top: 17px; }
+      .metrics { margin-top: 6px; }
+    }
+
+    @media (max-width: 480px) {
+      .page { width: calc(100% - 24px); padding-top: 19px; }
+      .header { margin-bottom: 20px; }
+      .header-tag { font-size: 0; }
+      .stage { aspect-ratio: 1.05; }
+      .stage-label { top: 15px; left: 15px; }
+      .stage-corner { right: 15px; bottom: 13px; }
+      .footer { align-items: flex-start; flex-direction: column; gap: 2px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="header">
+      <div class="header-brand">
+        <div class="mark" aria-hidden="true">◇</div>
+        <div>
+          <div class="brand-name">Lumen Lab</div>
+          <div class="brand-sub">Interactive rendering studies</div>
+        </div>
+      </div>
+      <div class="header-tag">Canvas 2D · Software rendered</div>
+    </header>
+
+    <div class="layout">
+      <section class="stage" aria-label="Animated, Gouraud-shaded 3D cube">
+        <canvas id="scene" role="img" aria-label="Rotating cube with interpolated vertex lighting and an orbiting light source"></canvas>
+        <div class="stage-label">FIG 01 / LIGHT &amp; FORM</div>
+        <div class="stage-corner">CAMERA 0, 0, 5<br>POINT LIGHT / ORBITAL</div>
+      </section>
+
+      <section class="panel" aria-label="Scene information and controls">
+        <div class="eyebrow">Realtime study 001</div>
+        <h1>Light across <span>every pixel.</span></h1>
+        <p class="intro">A rotating cube built from triangles, lit at each corner, and shaded pixel by pixel—entirely on the CPU.</p>
+        <div class="status" id="status"><span class="status-dot"></span><span id="statusText">Rendering live</span></div>
+
+        <div class="metrics" aria-label="Rendering statistics">
+          <div class="metric"><span class="metric-value" id="fps">—</span><span class="metric-label">Frames / second</span></div>
+          <div class="metric"><span class="metric-value" id="triangles">0 / 12</span><span class="metric-label">Visible triangles</span></div>
+          <div class="metric"><span class="metric-value" id="resolution">—</span><span class="metric-label">Raster resolution</span></div>
+          <div class="metric"><span class="metric-value">ImageData</span><span class="metric-label">Canvas 2D pipeline</span></div>
+        </div>
+
+        <div class="controls">
+          <button class="control" id="wireButton" type="button" aria-label="Toggle wireframe overlay" aria-pressed="false"><span>Wireframe</span><span class="control-key">W</span></button>
+          <button class="control" id="pauseButton" type="button" aria-label="Pause animation" aria-pressed="false"><span id="pauseText">Pause</span><span class="control-key">P</span></button>
+        </div>
+        <p class="hint">Press W for edges and the light marker · P to pause or resume.</p>
+      </section>
+    </div>
+
+    <footer class="footer">
+      <span>GOURAUD SHADING / BARYCENTRIC RGB INTERPOLATION</span>
+      <span>NO WEBGL · NO EXTERNAL LIBRARIES</span>
+    </footer>
+  </main>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const canvas = document.getElementById("scene");
+      const stage = canvas.parentElement;
+      const ctx = canvas.getContext("2d", { alpha: false });
+      const fpsReadout = document.getElementById("fps");
+      const trianglesReadout = document.getElementById("triangles");
+      const resolutionReadout = document.getElementById("resolution");
+      const status = document.getElementById("status");
+      const statusText = document.getElementById("statusText");
+      const wireButton = document.getElementById("wireButton");
+      const pauseButton = document.getElementById("pauseButton");
+      const pauseText = document.getElementById("pauseText");
+
+      const vertices = [
+        [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
+        [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]
+      ];
+      // Each quad is wound counterclockwise as seen from outside.
+      const faces = [
+        { corners: [4, 5, 6, 7], normal: [0, 0, 1], color: [91, 218, 216] },
+        { corners: [1, 0, 3, 2], normal: [0, 0, -1], color: [90, 151, 218] },
+        { corners: [5, 1, 2, 6], normal: [1, 0, 0], color: [119, 186, 232] },
+        { corners: [0, 4, 7, 3], normal: [-1, 0, 0], color: [88, 201, 181] },
+        { corners: [7, 6, 2, 3], normal: [0, 1, 0], color: [164, 222, 216] },
+        { corners: [0, 1, 5, 4], normal: [0, -1, 0], color: [108, 143, 199] }
+      ];
+      const cornerNormals = vertices.map(([x, y, z]) => {
+        const scale = 1 / Math.sqrt(3);
+        return [x * scale, y * scale, z * scale];
+      });
+
+      let image;
+      let background;
+      let depthBuffer;
+      let width = 0;
+      let height = 0;
+      let time = 0;
+      let previousFrame = 0;
+      let fpsElapsed = 0;
+      let fpsFrames = 0;
+      let paused = false;
+      let wireframe = false;
+      let dirty = true;
+
+      function multiply(a, b) {
+        return [
+          a[0] * b[0] + a[1] * b[3] + a[2] * b[6],
+          a[0] * b[1] + a[1] * b[4] + a[2] * b[7],
+          a[0] * b[2] + a[1] * b[5] + a[2] * b[8],
+          a[3] * b[0] + a[4] * b[3] + a[5] * b[6],
+          a[3] * b[1] + a[4] * b[4] + a[5] * b[7],
+          a[3] * b[2] + a[4] * b[5] + a[5] * b[8],
+          a[6] * b[0] + a[7] * b[3] + a[8] * b[6],
+          a[6] * b[1] + a[7] * b[4] + a[8] * b[7],
+          a[6] * b[2] + a[7] * b[5] + a[8] * b[8]
+        ];
+      }
+
+      function transform(matrix, point) {
+        const [x, y, z] = point;
+        return [
+          matrix[0] * x + matrix[1] * y + matrix[2] * z,
+          matrix[3] * x + matrix[4] * y + matrix[5] * z,
+          matrix[6] * x + matrix[7] * y + matrix[8] * z
+        ];
+      }
+
+      function resize() {
+        const rect = stage.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        const scale = Math.min(window.devicePixelRatio || 1, 1.5, Math.sqrt(900000 / (rect.width * rect.height)));
+        const nextWidth = Math.max(1, Math.round(rect.width * scale));
+        const nextHeight = Math.max(1, Math.round(rect.height * scale));
+        if (nextWidth === width && nextHeight === height) return;
+
+        width = canvas.width = nextWidth;
+        height = canvas.height = nextHeight;
+        image = ctx.createImageData(width, height);
+        background = new Uint8ClampedArray(image.data.length);
+        depthBuffer = new Float32Array(width * height);
+        resolutionReadout.textContent = width + " × " + height;
+
+        const grid = Math.max(25, Math.round(48 * scale));
+        for (let y = 0; y < height; y++) {
+          for (let x = 0; x < width; x++) {
+            const nx = (x - width * .5) / (width * .5);
+            const ny = (y - height * .48) / (height * .5);
+            const glow = Math.max(0, 1 - Math.sqrt(nx * nx + ny * ny) * .85);
+            const line = x % grid === 0 || y % grid === 0 ? 3 : 0;
+            const index = (y * width + x) * 4;
+            background[index] = 8 + glow * 8 + line;
+            background[index + 1] = 17 + glow * 18 + line;
+            background[index + 2] = 30 + glow * 23 + line;
+            background[index + 3] = 255;
+          }
+        }
+        dirty = true;
+      }
+
+      function rasterize(a, b, c) {
+        const minX = Math.max(0, Math.floor(Math.min(a.x, b.x, c.x)));
+        const maxX = Math.min(width - 1, Math.ceil(Math.max(a.x, b.x, c.x)) - 1);
+        const minY = Math.max(0, Math.floor(Math.min(a.y, b.y, c.y)));
+        const maxY = Math.min(height - 1, Math.ceil(Math.max(a.y, b.y, c.y)) - 1);
+        if (minX > maxX || minY > maxY) return;
+
+        const area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+        if (Math.abs(area) < .0001) return;
+        const inverseArea = 1 / area;
+        const px = minX + .5;
+        const py = minY + .5;
+        let row0 = ((b.x - px) * (c.y - py) - (b.y - py) * (c.x - px)) * inverseArea;
+        let row1 = ((c.x - px) * (a.y - py) - (c.y - py) * (a.x - px)) * inverseArea;
+        const stepX0 = (b.y - c.y) * inverseArea;
+        const stepX1 = (c.y - a.y) * inverseArea;
+        const stepY0 = (c.x - b.x) * inverseArea;
+        const stepY1 = (a.x - c.x) * inverseArea;
+        const pixels = image.data;
+
+        for (let y = minY; y <= maxY; y++) {
+          let w0 = row0;
+          let w1 = row1;
+          let index = y * width + minX;
+          for (let x = minX; x <= maxX; x++, index++) {
+            const w2 = 1 - w0 - w1;
+            if (w0 >= -0.000001 && w1 >= -0.000001 && w2 >= -0.000001) {
+              const inverseDepth = w0 * a.inverseDepth + w1 * b.inverseDepth + w2 * c.inverseDepth;
+              if (inverseDepth > depthBuffer[index]) {
+                depthBuffer[index] = inverseDepth;
+                const offset = index * 4;
+                pixels[offset] = (w0 * a.r * a.inverseDepth + w1 * b.r * b.inverseDepth + w2 * c.r * c.inverseDepth) / inverseDepth;
+                pixels[offset + 1] = (w0 * a.g * a.inverseDepth + w1 * b.g * b.inverseDepth + w2 * c.g * c.inverseDepth) / inverseDepth;
+                pixels[offset + 2] = (w0 * a.b * a.inverseDepth + w1 * b.b * b.inverseDepth + w2 * c.b * c.inverseDepth) / inverseDepth;
+              }
+            }
+            w0 += stepX0;
+            w1 += stepX1;
+          }
+          row0 += stepY0;
+          row1 += stepY1;
+        }
+      }
+
+      function render() {
+        if (!image) return;
+        image.data.set(background);
+        depthBuffer.fill(0);
+
+        const ax = time * .48 + .27;
+        const ay = time * .71 + .55;
+        const az = Math.sin(time * .31) * .13;
+        const cx = Math.cos(ax), sx = Math.sin(ax);
+        const cy = Math.cos(ay), sy = Math.sin(ay);
+        const cz = Math.cos(az), sz = Math.sin(az);
+        const rotation = multiply(
+          [cy, 0, sy, 0, 1, 0, -sy, 0, cy],
+          multiply([1, 0, 0, 0, cx, -sx, 0, sx, cx], [cz, -sz, 0, sz, cz, 0, 0, 0, 1])
+        );
+        const focalLength = Math.min(width, height) * 1.17;
+        const transformed = vertices.map(vertex => transform(rotation, vertex));
+        const projected = transformed.map(([x, y, z]) => {
+          const inverseDepth = 1 / (5 - z);
+          return {
+            x: width * .5 + x * focalLength * inverseDepth,
+            y: height * .5 - y * focalLength * inverseDepth,
+            inverseDepth
+          };
+        });
+        const light = [
+          Math.sin(time * .83) * 3.1,
+          1.55 + Math.sin(time * 1.11) * 1.2,
+          2.8 + Math.cos(time * .7) * 1.1
+        ];
+        const visible = [];
+
+        for (const face of faces) {
+          const normal = transform(rotation, face.normal);
+          const center = [0, 0, 0];
+          for (const vertexIndex of face.corners) {
+            const point = transformed[vertexIndex];
+            center[0] += point[0] * .25;
+            center[1] += point[1] * .25;
+            center[2] += point[2] * .25;
+          }
+          if (normal[0] * -center[0] + normal[1] * -center[1] + normal[2] * (5 - center[2]) <= 0) continue;
+
+          const corners = face.corners.map(vertexIndex => {
+            const point = transformed[vertexIndex];
+            const cornerNormal = transform(rotation, cornerNormals[vertexIndex]);
+            let nx = normal[0] * .72 + cornerNormal[0] * .28;
+            let ny = normal[1] * .72 + cornerNormal[1] * .28;
+            let nz = normal[2] * .72 + cornerNormal[2] * .28;
+            const normalLength = Math.hypot(nx, ny, nz);
+            nx /= normalLength;
+            ny /= normalLength;
+            nz /= normalLength;
+
+            const lx = light[0] - point[0];
+            const ly = light[1] - point[1];
+            const lz = light[2] - point[2];
+            const distanceSquared = lx * lx + ly * ly + lz * lz;
+            const lambert = Math.max(0, (nx * lx + ny * ly + nz * lz) / Math.sqrt(distanceSquared));
+            const illumination = .21 + lambert * 1.55 / (1 + .045 * distanceSquared);
+            const screen = projected[vertexIndex];
+            return {
+              x: screen.x,
+              y: screen.y,
+              inverseDepth: screen.inverseDepth,
+              r: face.color[0] * illumination,
+              g: face.color[1] * illumination,
+              b: face.color[2] * illumination
+            };
+          });
+
+          rasterize(corners[0], corners[1], corners[2]);
+          rasterize(corners[0], corners[2], corners[3]);
+          visible.push(corners);
+        }
+
+        trianglesReadout.textContent = visible.length * 2 + " / 12";
+        ctx.putImageData(image, 0, 0);
+
+        if (wireframe) {
+          ctx.save();
+          ctx.lineWidth = Math.max(1, Math.min(width, height) / 450);
+          ctx.strokeStyle = "rgba(202, 253, 242, .77)";
+          ctx.lineJoin = "round";
+          for (const corners of visible) {
+            ctx.beginPath();
+            ctx.moveTo(corners[0].x, corners[0].y);
+            for (let i = 1; i < 4; i++) ctx.lineTo(corners[i].x, corners[i].y);
+            ctx.closePath();
+            ctx.moveTo(corners[0].x, corners[0].y);
+            ctx.lineTo(corners[2].x, corners[2].y);
+            ctx.stroke();
+          }
+
+          const lightDepth = 5 - light[2];
+          if (lightDepth > .1) {
+            const x = width * .5 + light[0] * focalLength / lightDepth;
+            const y = height * .5 - light[1] * focalLength / lightDepth;
+            const radius = Math.max(3, Math.min(width, height) * .008);
+            ctx.beginPath();
+            ctx.arc(x, y, radius * 2.4, 0, Math.PI * 2);
+            ctx.fillStyle = "rgba(255, 225, 154, .13)";
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(x, y, radius, 0, Math.PI * 2);
+            ctx.fillStyle = "#ffe5ad";
+            ctx.shadowColor = "#ffd385";
+            ctx.shadowBlur = radius * 3;
+            ctx.fill();
+          }
+          ctx.restore();
+        }
+        dirty = false;
+      }
+
+      function updateControls() {
+        wireButton.setAttribute("aria-pressed", String(wireframe));
+        pauseButton.setAttribute("aria-pressed", String(paused));
+        pauseButton.setAttribute("aria-label", paused ? "Resume animation" : "Pause animation");
+        pauseText.textContent = paused ? "Resume" : "Pause";
+        status.classList.toggle("paused", paused);
+        statusText.textContent = paused ? "Animation paused" : "Rendering live";
+        fpsReadout.textContent = paused ? "—" : fpsReadout.textContent;
+        dirty = true;
+        if (paused) render();
+      }
+
+      wireButton.addEventListener("click", () => {
+        wireframe = !wireframe;
+        updateControls();
+      });
+
+      pauseButton.addEventListener("click", () => {
+        paused = !paused;
+        fpsElapsed = 0;
+        fpsFrames = 0;
+        updateControls();
+      });
+
+      window.addEventListener("keydown", event => {
+        if (event.repeat || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+        if (event.target instanceof HTMLElement && event.target.isContentEditable) return;
+        const key = event.key.toLowerCase();
+        if (key === "w") {
+          event.preventDefault();
+          wireButton.click();
+        } else if (key === "p") {
+          event.preventDefault();
+          pauseButton.click();
+        }
+      });
+
+      function frame(now) {
+        const delta = previousFrame ? Math.min((now - previousFrame) / 1000, .05) : 0;
+        previousFrame = now;
+        if (!paused) {
+          time += delta;
+          render();
+          fpsElapsed += delta;
+          fpsFrames++;
+          if (fpsElapsed >= .5) {
+            fpsReadout.textContent = String(Math.round(fpsFrames / fpsElapsed));
+            fpsElapsed = 0;
+            fpsFrames = 0;
+          }
+        } else if (dirty) {
+          render();
+        }
+        requestAnimationFrame(frame);
+      }
+
+      if (typeof ResizeObserver !== "undefined") {
+        new ResizeObserver(resize).observe(stage);
+      } else {
+        window.addEventListener("resize", resize);
+      }
+      resize();
+      requestAnimationFrame(frame);
+    })();
+  </script>
+</body>
+</html>
