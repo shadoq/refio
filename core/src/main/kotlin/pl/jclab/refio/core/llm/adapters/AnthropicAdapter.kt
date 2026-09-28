@@ -58,6 +58,11 @@ class AnthropicAdapter(
         const val MESSAGES_ENDPOINT = "/v1/messages"
         const val MODELS_ENDPOINT = "/v1/models"
         const val DEFAULT_ANTHROPIC_VERSION = "2023-06-01"
+
+        // Models that no longer accept the extended-thinking budget block (Opus 4.7+, the
+        // Claude 5 family); matched anywhere so Bedrock-prefixed ids are covered too.
+        private val ADAPTIVE_THINKING_MODEL =
+            Regex("claude-(opus-4-[7-9]|opus-5|sonnet-5|fable-|mythos-)")
     }
 
     // Get timeout from ConfigService
@@ -250,20 +255,11 @@ class AnthropicAdapter(
                 }
             }
 
-            // Enable thinking mode for Claude 3.5+ if requested. The effort level scales the
-            // extended-thinking token budget; OFF omits the block entirely.
             val effort = ReasoningEffort.fromThinkingKwarg(kwargs["thinking"])
-            if (effort.isOn) {
-                val budget = when (effort) {
-                    ReasoningEffort.HIGH -> 12288
-                    ReasoningEffort.LOW -> 2048
-                    else -> 4096
-                }
-                put("thinking", mapOf(
-                    "type" to "enabled",
-                    "budget_tokens" to budget
-                ))
-                logger.info { "[ANTHROPIC] Enabled thinking mode for $model (effort=$effort, budget=$budget)" }
+            val thinkingParams = thinkingParams(effort)
+            if (thinkingParams.isNotEmpty()) {
+                putAll(thinkingParams)
+                logger.info { "[ANTHROPIC] Reasoning for $model (effort=$effort): $thinkingParams" }
             }
 
             // Additional parameters
@@ -294,6 +290,25 @@ class AnthropicAdapter(
             // Standard mode
             executeStandard(apiKeyToUse, requestBody, requestJson, startTime, logPrefix)
         }
+    }
+
+    /**
+     * Request fields for the configured reasoning level. OFF sends nothing, leaving the
+     * provider default. Models from Opus 4.7 on reject the extended-thinking budget block and
+     * take `output_config.effort` instead; on the ones whose thinking is always on (Opus 5.5)
+     * that effort is the only way to make them think less.
+     */
+    internal fun thinkingParams(effort: ReasoningEffort): Map<String, Any> {
+        if (!effort.isOn) return emptyMap()
+        if (ADAPTIVE_THINKING_MODEL.containsMatchIn(model)) {
+            return mapOf("output_config" to mapOf("effort" to effort.toEffortString()!!))
+        }
+        val budget = when (effort) {
+            ReasoningEffort.HIGH -> 12288
+            ReasoningEffort.LOW -> 2048
+            else -> 4096
+        }
+        return mapOf("thinking" to mapOf("type" to "enabled", "budget_tokens" to budget))
     }
 
     internal fun buildAnthropicToolsArray(tools: List<ToolSchema>): List<Map<String, Any>> =
