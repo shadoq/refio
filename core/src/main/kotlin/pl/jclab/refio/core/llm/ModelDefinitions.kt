@@ -72,6 +72,116 @@ object ModelDefinitions {
     val OPENAI_MODELS = mapOf(
 
         //
+        // GPT 6 (developers.openai.com/api/docs/pricing, 2026-09-27)
+        // Short-context prices; above 272K input tokens OpenAI bills 2x input and 1.5x output.
+        //
+        "gpt-6-astra" to ModelDefinition(
+            id = "gpt-6-astra",
+            name = "GPT-6 Astra",
+            provider = "openai",
+            description = "Most capable GPT-6 model for the hardest end-to-end work",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION,
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 1_050_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 10.00,
+            costPer1MOutput = 50.00,
+            costPer1MCachedInput = 1.0,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.RESPONSES,
+            apiFormat = ApiFormat.RESPONSES,
+            paramMappings = mapOf(
+                "max_tokens" to "max_output_tokens"
+            ),
+            removeParams = listOf(
+                "frequency_penalty",
+                "presence_penalty",
+                "top_p",
+                "temperature"
+            ),
+            active = true
+        ),
+        "gpt-6-sol" to ModelDefinition(
+            id = "gpt-6-sol",
+            name = "GPT-6 Sol",
+            provider = "openai",
+            description = "GPT-6 model built for complex coding and agentic workflows",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION,
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 1_050_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 2.00,
+            costPer1MOutput = 10.00,
+            costPer1MCachedInput = 0.2,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.RESPONSES,
+            apiFormat = ApiFormat.RESPONSES,
+            paramMappings = mapOf(
+                "max_tokens" to "max_output_tokens"
+            ),
+            removeParams = listOf(
+                "frequency_penalty",
+                "presence_penalty",
+                "top_p",
+                "temperature"
+            ),
+            active = true
+        ),
+        "gpt-6-luna" to ModelDefinition(
+            id = "gpt-6-luna",
+            name = "GPT-6 Luna",
+            provider = "openai",
+            description = "Cost-efficient GPT-6 model for fast, high-volume workloads",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION,
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 1_050_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 0.10,
+            costPer1MOutput = 0.50,
+            costPer1MCachedInput = 0.01,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.RESPONSES,
+            apiFormat = ApiFormat.RESPONSES,
+            paramMappings = mapOf(
+                "max_tokens" to "max_output_tokens"
+            ),
+            removeParams = listOf(
+                "frequency_penalty",
+                "presence_penalty",
+                "top_p",
+                "temperature"
+            ),
+            active = true
+        ),
+
+        //
         // GPT 5.6 (models.dev)
         //
         "gpt-5.6" to ModelDefinition(
@@ -122,9 +232,9 @@ object ModelDefinitions {
             modelType = ModelType.TEXT,
             maxContext = 1_050_000,
             maxOutputTokens = 128_000,
-            costPer1MInput = 5.00,
-            costPer1MOutput = 30.00,
-            costPer1MCachedInput = 0.5,
+            costPer1MInput = 4.00,
+            costPer1MOutput = 20.00,
+            costPer1MCachedInput = 0.4,
             supportsVision = true,
             supportsReasoning = true,
             supportsStreaming = true,
@@ -157,9 +267,9 @@ object ModelDefinitions {
             modelType = ModelType.TEXT,
             maxContext = 1_050_000,
             maxOutputTokens = 128_000,
-            costPer1MInput = 2.50,
-            costPer1MOutput = 15.00,
-            costPer1MCachedInput = 0.25,
+            costPer1MInput = 2.00,
+            costPer1MOutput = 12.00,
+            costPer1MCachedInput = 0.2,
             supportsVision = true,
             supportsReasoning = true,
             supportsStreaming = true,
@@ -192,9 +302,9 @@ object ModelDefinitions {
             modelType = ModelType.TEXT,
             maxContext = 1_050_000,
             maxOutputTokens = 128_000,
-            costPer1MInput = 1.00,
-            costPer1MOutput = 6.00,
-            costPer1MCachedInput = 0.1,
+            costPer1MInput = 0.20,
+            costPer1MOutput = 1.20,
+            costPer1MCachedInput = 0.02,
             supportsVision = true,
             supportsReasoning = true,
             supportsStreaming = true,
@@ -1605,6 +1715,32 @@ object ModelDefinitions {
         //
         // Opus models (premium intelligence)
         //
+        // Thinking is always on and cannot be disabled; its depth follows output_config.effort
+        // (API default medium). Cache reads are billed at 5% of input.
+        "claude-opus-5-5" to ModelDefinition(
+            id = "claude-opus-5-5",
+            name = "Claude Opus 5.5",
+            provider = "anthropic",
+            description = "Claude Opus 5.5 for long-running agentic coding and knowledge work, 1M context with always-on adaptive thinking",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 1_000_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 4.00,
+            costPer1MOutput = 20.00,
+            costPer1MCachedInput = 0.2,
+            supportsVision = true,
+            supportsReasoning = false,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            removeParams = listOf("temperature"),
+            active = true
+        ),
         "claude-opus-4-8" to ModelDefinition(
             id = "claude-opus-4-8",
             name = "Claude Opus 4.8",
@@ -1666,9 +1802,9 @@ object ModelDefinitions {
             modelType = ModelType.MULTIMODAL,
             maxContext = 1_000_000,
             maxOutputTokens = 128_000,
-            costPer1MInput = 3.00,
-            costPer1MOutput = 15.00,
-            costPer1MCachedInput = 0.3,
+            costPer1MInput = 2.00,
+            costPer1MOutput = 10.00,
+            costPer1MCachedInput = 0.2,
             supportsVision = true,
             supportsReasoning = false,
             supportsStreaming = true,
@@ -2622,6 +2758,90 @@ object ModelDefinitions {
             apiFormat = ApiFormat.CHAT_COMPLETIONS,
             active = true
         ),
+        // GLM-5.3 family always thinks: Z.AI does not allow disabling it, whatever the reasoning setting is.
+        "glm-5.3" to ModelDefinition(
+            id = "glm-5.3",
+            name = "GLM-5.3",
+            provider = "zai",
+            description = "Flagship GLM-5.3 model for agentic engineering and long-horizon coding, 1M context.",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.REASONING
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 1_000_000,
+            maxOutputTokens = 131_072,
+            costPer1MInput = 1.4,
+            costPer1MOutput = 4.4,
+            costPer1MCachedInput = 0.26,
+            supportsVision = false,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.CHAT_COMPLETIONS,
+            apiFormat = ApiFormat.CHAT_COMPLETIONS,
+            active = true
+        ),
+        "glm-5.3-flash" to ModelDefinition(
+            id = "glm-5.3-flash",
+            name = "GLM-5.3 Flash",
+            provider = "zai",
+            description = "Native multimodal GLM-5.3 model (320B total, 18B active) for affordable agentic work, 1M context.",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.REASONING,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 1_000_000,
+            maxOutputTokens = 131_072,
+            costPer1MInput = 0.15,
+            costPer1MOutput = 0.5,
+            costPer1MCachedInput = 0.03,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.CHAT_COMPLETIONS,
+            apiFormat = ApiFormat.CHAT_COMPLETIONS,
+            active = true
+        ),
+        "glm-5.3-flashx" to ModelDefinition(
+            id = "glm-5.3-flashx",
+            name = "GLM-5.3 FlashX",
+            provider = "zai",
+            description = "High-speed GLM-5.3 Flash variant (~200 tokens/s) with native multimodal input, 1M context.",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.REASONING,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 1_000_000,
+            maxOutputTokens = 131_072,
+            costPer1MInput = 0.37,
+            costPer1MOutput = 1.25,
+            costPer1MCachedInput = 0.075,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.CHAT_COMPLETIONS,
+            apiFormat = ApiFormat.CHAT_COMPLETIONS,
+            active = true
+        ),
         "glm-5v-turbo" to ModelDefinition(
             id = "glm-5v-turbo",
             name = "GLM-5V-Turbo",
@@ -2666,6 +2886,34 @@ object ModelDefinitions {
             maxOutputTokens = 32_768,
             costPer1MInput = 0.3,
             costPer1MOutput = 0.9,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.CHAT_COMPLETIONS,
+            apiFormat = ApiFormat.CHAT_COMPLETIONS,
+            active = true
+        ),
+        "glm-4.6v-flashx" to ModelDefinition(
+            id = "glm-4.6v-flashx",
+            name = "GLM-4.6V FlashX",
+            provider = "zai",
+            description = "Lightweight, high-speed, affordable GLM-4.6V multimodal (vision/video) model with tool use.",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.REASONING,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 128_000,
+            maxOutputTokens = 32_768,
+            costPer1MInput = 0.04,
+            costPer1MOutput = 0.4,
+            costPer1MCachedInput = 0.004,
             supportsVision = true,
             supportsReasoning = true,
             supportsStreaming = true,

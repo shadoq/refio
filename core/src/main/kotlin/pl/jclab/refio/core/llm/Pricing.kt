@@ -10,9 +10,9 @@ package pl.jclab.refio.core.llm
 data class ModelPricing(
     val input: Double,
     val output: Double,
-    // Cache-read / cache-write rates per 1M tokens. Populated by getModelPricing(); when a model
-    // has no known cache price they fall back to the full input rate (no discount), so an unknown
-    // cache never lowers the estimate. Constructors that only pass input/output (e.g. API display)
+    // Cache-read / cache-write rates per 1M tokens. Populated by getModelPricing(); a model with no
+    // known cache-read price falls back to the full input rate (no discount), so an unknown cache
+    // never lowers the estimate. Constructors that only pass input/output (e.g. API display)
     // leave these at 0.0 and are not used for cost calculation.
     val cachedInput: Double = 0.0,
     val cacheWriteInput: Double = 0.0
@@ -87,17 +87,19 @@ internal fun resolveModelPricing(
 
 /**
  * Build a ModelPricing, deriving the cache rates. Cache-read uses the explicit per-model price
- * when known, otherwise the full input rate (no discount). Cache-write (Anthropic) has no per-model
- * price here, so it uses the full input rate too - conservative: an unknown cache never lowers cost.
+ * when known, otherwise the full input rate (no discount). Cache-write tokens are reported only by
+ * Anthropic, whose default 5-minute cache bills a write at 1.25x the input rate.
  */
 private fun pricingOf(input: Double, output: Double, cachedInput: Double?): ModelPricing {
     return ModelPricing(
         input = input,
         output = output,
         cachedInput = cachedInput ?: input,
-        cacheWriteInput = input
+        cacheWriteInput = input * CACHE_WRITE_MULTIPLIER
     )
 }
+
+private const val CACHE_WRITE_MULTIPLIER = 1.25
 
 /**
  * Calculate cost for a completion.
