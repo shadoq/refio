@@ -75,13 +75,23 @@ class PricingTest {
 
     @Test
     fun `anthropic cache-read is billed at one tenth of input, not the full rate (10x regression)`() {
-        // claude-sonnet-5: input $3.00, cache-read $0.30. Before this fix a cache hit was billed at
+        // claude-sonnet-5: input $2.00, cache-read $0.20. Before this fix a cache hit was billed at
         // the full input rate - a 10x overcharge on repeated context.
         val cached = calculateCost(
             "anthropic", "claude-sonnet-5",
             inputTokens = 1_000_000, outputTokens = 0, cachedInputTokens = 1_000_000
         )
-        assertEquals(0.30, cached, eps)
+        assertEquals(0.20, cached, eps)
+    }
+
+    @Test
+    fun `anthropic cache-write is billed at a quarter above input, as the 5-minute cache costs`() {
+        // claude-sonnet-5: input $2.00, so writing 1M tokens to the default 5-minute cache is $2.50.
+        val written = calculateCost(
+            "anthropic", "claude-sonnet-5",
+            inputTokens = 1_000_000, outputTokens = 0, cacheWriteInputTokens = 1_000_000
+        )
+        assertEquals(2.50, written, eps)
     }
 
     @Test
