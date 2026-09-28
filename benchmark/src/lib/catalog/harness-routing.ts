@@ -200,6 +200,30 @@ export function refioConfigOverrides(
   return overrides;
 }
 
+export interface RefioThinking {
+  // The run-scope override that applies the setting to the Refio CLI.
+  override: string;
+  requested: "on" | "off";
+  // Refio's own reasoning level (OFF/LOW/MEDIUM/HIGH), recorded as the run used it.
+  level: string;
+}
+
+// Refio's reasoning setting for one run. Pinned on every run, like the context window:
+// left to the user's config file, the record would state whatever the sweep was told
+// rather than what the run used. A sweep that does not ask for reasoning measures
+// without it.
+export function refioThinking(
+  thinking: "on" | "off" | "unknown",
+  level?: string,
+): RefioThinking {
+  const effort = thinking === "on" ? (level ?? "medium").toUpperCase() : "OFF";
+  return {
+    override: `general.reasoning_effort=${effort}`,
+    requested: thinking === "on" ? "on" : "off",
+    level: effort,
+  };
+}
+
 // The model name Ollama itself knows, for a recorded id of the form "ollama/<name>".
 // Null for anything that is not a local model.
 export function ollamaModelName(modelId: string): string | null {

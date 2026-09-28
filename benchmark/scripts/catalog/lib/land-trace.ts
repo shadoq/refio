@@ -151,11 +151,12 @@ export async function buildTraceForRun(
 export function thinkingForRun(input: {
   harnessId: string;
   requested: Thinking["requested"];
+  level?: string;
   runJson?: unknown;
   timedLines?: TimedLine[];
 }): Thinking {
   if (input.harnessId === "refio") {
-    return buildThinking(input.requested, refioThinkingEvidence(input.runJson));
+    return buildThinking(input.requested, refioThinkingEvidence(input.runJson), input.level);
   }
   if (input.harnessId === "claude-code") {
     return buildThinking(input.requested, claudeThinkingEvidence(input.timedLines ?? []));

@@ -15,7 +15,7 @@
 // usage:
 //   tsx scripts/catalog/run-task.ts <taskId> --model <m> [--env <id>] [--harness <id>]
 //        [--harness-model <m>] [--ollama-host <host>] [--attempts N] [--start-attempt N]
-//        [--no-render] [--dry-run]
+//        [--thinking on|off] [--thinking-level low|medium|high] [--no-render] [--dry-run]
 //
 // A model id starting with "ollama/" points an external agent at the local Ollama
 // endpoint, so the same model can be measured under Refio and under that agent.
@@ -37,6 +37,7 @@ import {
   refioConfigOverrides,
   permissionModeOf,
   ollamaModelName,
+  refioThinking,
   DEFAULT_OLLAMA_CONTEXT,
 } from "../../src/lib/catalog/harness-routing";
 import { harnessVersion, warmUpOllama } from "./lib/run-context";
@@ -72,6 +73,7 @@ interface Args {
   harnessModel?: string;
   ollamaHost: string;
   thinking: "on" | "off" | "unknown";
+  thinkingLevel?: string;
   maxOutputTokens?: number;
   // Tokens the local model is loaded with, pinned for both harnesses alike.
   ollamaCtx: number;
@@ -106,6 +108,7 @@ function parseArgs(argv: string[]): Args {
     else if (t === "--harness-model") a.harnessModel = argv[++i];
     else if (t === "--ollama-host") a.ollamaHost = argv[++i];
     else if (t === "--thinking") a.thinking = argv[++i] as Args["thinking"];
+    else if (t === "--thinking-level") a.thinkingLevel = argv[++i];
     else if (t === "--max-output-tokens") a.maxOutputTokens = Number(argv[++i]);
     else if (t === "--ollama-ctx") a.ollamaCtx = Number(argv[++i]);
     else if (t === "--attempts") a.attempts = Number(argv[++i]);
@@ -193,6 +196,7 @@ async function main(): Promise<void> {
     let trace: TraceSummary | undefined;
     let thinking: Thinking | undefined;
     if (args.harness === "refio") {
+      const reasoning = refioThinking(args.thinking, args.thinkingLevel);
       const res = await runHeadless({
         repoRoot,
         fixtureDir: null,
@@ -201,7 +205,10 @@ async function main(): Promise<void> {
         model: args.model,
         deliverable: null,
         maxCost: args.maxCost,
-        configOverrides: refioConfigOverrides(args.model, args.ollamaHost, contextWindow),
+        configOverrides: [
+          ...refioConfigOverrides(args.model, args.ollamaHost, contextWindow),
+          reasoning.override,
+        ],
       });
       runJson = res.runJson;
       workDir = res.workDir;
@@ -216,7 +223,8 @@ async function main(): Promise<void> {
       });
       thinking = thinkingForRun({
         harnessId: "refio",
-        requested: args.thinking,
+        requested: reasoning.requested,
+        level: reasoning.level,
         runJson: res.runJson,
       });
     } else {

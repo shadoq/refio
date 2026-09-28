@@ -1,6 +1,10 @@
 // @vitest-environment node
 import { describe, it, expect } from "vitest";
-import { resolveHarnessRouting, refioConfigOverrides } from "@/lib/catalog/harness-routing";
+import {
+  resolveHarnessRouting,
+  refioConfigOverrides,
+  refioThinking,
+} from "@/lib/catalog/harness-routing";
 
 describe("resolveHarnessRouting for a cloud model", () => {
   it("changes nothing and passes the harness model through", () => {
@@ -137,6 +141,32 @@ describe("refioConfigOverrides", () => {
 
   it("leaves a cloud model alone", () => {
     expect(refioConfigOverrides("anthropic/claude-opus-5", "192.168.5.60")).toEqual([]);
+  });
+});
+
+// Reasoning changes speed, cost and output, so a record must say which setting the run
+// used. Refio reads it from the user's config file unless the sweep pins it; a label the
+// sweep never applied could claim "off" for a run that reasoned.
+describe("refioThinking", () => {
+  it("pins reasoning off when the sweep does not ask for it", () => {
+    expect(refioThinking("unknown")).toEqual({
+      override: "general.reasoning_effort=OFF",
+      requested: "off",
+      level: "OFF",
+    });
+  });
+
+  it("turns reasoning on at medium unless a level is given", () => {
+    expect(refioThinking("on")).toEqual({
+      override: "general.reasoning_effort=MEDIUM",
+      requested: "on",
+      level: "MEDIUM",
+    });
+    expect(refioThinking("on", "high").override).toBe("general.reasoning_effort=HIGH");
+  });
+
+  it("ignores a level when reasoning is off", () => {
+    expect(refioThinking("off", "high").level).toBe("OFF");
   });
 });
 
