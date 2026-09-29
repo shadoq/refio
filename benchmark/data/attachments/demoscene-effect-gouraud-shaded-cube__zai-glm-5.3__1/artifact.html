@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Gouraud-Shaded Cube — Canvas 2D</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background: #0a0d13;
+  }
+  #scene {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<script>
+(function () {
+  'use strict';
+
+  /* ============================================================
+     Config
+     ============================================================ */
+
+  const canvas = document.getElementById('scene');
+  const ctx = canvas.getContext('2d');
+
+  const BG_R = 10, BG_G = 13, BG_B = 19;   // #0a0d13 clear color
+  const CAM_DIST = 6;                      // cube pushed down +z, in front of camera
+  const FOV_SCALE = 1.12;                  // focal length = min(w, h) * 1.12
+  const AMBIENT = 0.16;                    // intensity floor so dark sides still read
+  const DIFFUSE_GAIN = 1.25;               // Lambert slope
+  const ATTEN = 0.008;                     // light falloff coefficient
+  const LIGHT_COLOR = [1.0, 0.95, 0.87];   // warm white, applied per channel
+  const BACK_EDGE_DIM = 0.35;              // wireframe: back-facing edge brightness
+
+  /* ============================================================
+     Render targets & resize
+     ============================================================ */
+
+  // Byte-order check so packed 32-bit pixels land correctly in ImageData.
+  const LITTLE_ENDIAN = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
+
+  // Pack 8-bit channels into one pixel word: 0xAABBGGRR on little-endian,
+  // the byte-swapped order on big-endian.
+  function packRGB(r, g, b) {
+    r = r < 0 ? 0 : r > 255 ? 255 : r | 0;
+    g = g < 0 ? 0 : g > 255 ? 255 : g | 0;
+    b = b < 0 ? 0 : b > 255 ? 255 : b | 0;
+    return LITTLE_ENDIAN
+      ? ((0xFF000000 | (b << 16) | (g << 8) | r) >>> 0)
+      : (((r << 24) | (g << 16) | (b << 8) | 0xFF) >>> 0);
+  }
+
+  let W = 0, H = 0;
+  let image = null;    // ImageData framebuffer
+  let pixels = null;   // Uint32Array view over image.data
+  let depth = null;    // Float32Array holding interpolated 1/z per pixel
+  let bgPacked = 0;
+
+  function resize() {
+    // Backing store matches the CSS pixel size of the window.
+    W = Math.max(1, Math.floor(window.innerWidth));
+    H = Math.max(1, Math.floor(window.innerHeight));
+    canvas.width = W;
+    canvas.height = H;
+    image = ctx.createImageData(W, H);
+    pixels = new Uint32Array(image.data.buffer);
+    depth = new Float32Array(W * H);
+    bgPacked = packRGB(BG_R, BG_G, BG_B);
+  }
+
+  window.addEventListener('resize', resize);
+  resize();
+
+  /* ============================================================
+     3D math (matrices as nested 3x3 arrays, vectors as [x, y, z])
+     ============================================================ */
+
+  function mat3Mul(a, b) {
+    const out = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+    for (let i = 0; i < 3; i++) {
+      for (let j = 0; j < 3; j++) {
+        let s = 0;
+        for (let k = 0; k < 3; k++) s += a[i][k] * b[k][j];
+        out[i][j] = s;
+      }
+    }
+    return out;
+  }
+
+  // Standard right-handed rotation matrices.
+  function rotX(a) {
+    const c = Math.cos(a), s = Math.sin(a);
+    return [[1, 0, 0], [0, c, -s], [0, s, c]];
+  }
+
+  function rotY(a) {
+    const c = Math.cos(a), s = Math.sin(a);
+    return [[c, 0, s], [0, 1, 0], [-s, 0, c]];
+  }
+
+  function rotZ(a) {
+    const c = Math.cos(a), s = Math.sin(a);
+    return [[c, -s, 0], [s, c, 0], [0, 0, 1]];
+  }
+
+  function transformPoint(m, v) {
+    return [
+      m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
+      m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
+      m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2]
+    ];
+  }
+
+  function dot(a, b) {
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  }
+
+  function cross(a, b) {
+    return [
+      a[1] * b[2] - a[2] * b[1],
+      a[2] * b[0] - a[0] * b[2],
+      a[0] * b[1] - a[1] * b[0]
+    ];
+  }
+
+  function sub(a, b) {
+    return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  }
+
+  function normalize(v) {
+    const len = Math.hypot(v[0], v[1], v[2]) || 1;
+    return [v[0] / len, v[1] / len, v[2] / len];
+  }
+
+  function clamp(x, lo, hi) {
+    return x < lo ? lo : x > hi ? hi : x;
+  }
+
+  /* ============================================================
+     Geometry: cube faces, triangles, per-vertex Gouraud attributes
+     ============================================================ */
+
+  function hexRGB(hex) {
+    return [
+      parseInt(hex.substring(1, 3), 16) / 255,
+      parseInt(hex.substring(3, 5), 16) / 255,
+      parseInt(hex.substring(5, 7), 16) / 255
+    ];
+  }
+
+  const VERTS = [
+    [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
+    [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]
+  ];
+
+  // Six quad faces, ordered +X, -X, +Y, -Y, +Z, -Z. Winding is chosen so a
+  // face read from outside through this pipeline's projection (which flips y
+  // into screen space) traces counter-clockwise on screen; see the culling
+  // note in the pipeline below for how that interacts with the signed area.
+  const FACES = [
+    { ids: [5, 6, 2, 1], color: hexRGB('#e05d5d') }, // +X
+    { ids: [3, 7, 4, 0], color: hexRGB('#5da9e0') }, // -X
+    { ids: [2, 6, 7, 3], color: hexRGB('#8fd18f') }, // +Y
+    { ids: [4, 5, 1, 0], color: hexRGB('#b06fd1') }, // -Y
+    { ids: [7, 6, 5, 4], color: hexRGB('#e0a35d') }, // +Z
+    { ids: [1, 2, 3, 0], color: hexRGB('#5dd1c0') }  // -Z
+  ];
+
+  // Outward unit normal per face, derived from the quad's corner vectors.
+  for (let f = 0; f < FACES.length; f++) {
+    const q = FACES[f].ids;
+    FACES[f].normal = normalize(
+      cross(sub(VERTS[q[3]], VERTS[q[0]]), sub(VERTS[q[1]], VERTS[q[0]])));
+  }
+
+  // Each quad splits into two triangles: 12 triangles total.
+  const TRIS = [];
+  for (let f = 0; f < FACES.length; f++) {
+    const q = FACES[f].ids;
+    TRIS.push([q[0], q[1], q[2]], [q[0], q[2], q[3]]);
+  }
+
+  // Per-vertex Gouraud attributes, built generically from face adjacency:
+  // normal = normalize(sum of the outward normals of every face meeting at
+  // that vertex), base color = average of those faces' base colors. Sharing
+  // attributes across seams is what makes the shading genuinely interpolate
+  // across each flat quad (true Gouraud) instead of looking flat-shaded.
+  const vertNormal = [];
+  const vertBase = [];
+  for (let i = 0; i < VERTS.length; i++) {
+    let nx = 0, ny = 0, nz = 0, r = 0, g = 0, b = 0, count = 0;
+    for (let f = 0; f < FACES.length; f++) {
+      if (FACES[f].ids.indexOf(i) !== -1) {
+        nx += FACES[f].normal[0];
+        ny += FACES[f].normal[1];
+        nz += FACES[f].normal[2];
+        r += FACES[f].color[0];
+        g += FACES[f].color[1];
+        b += FACES[f].color[2];
+        count++;
+      }
+    }
+    vertNormal.push(normalize([nx, ny, nz]));
+    vertBase.push([r / count, g / count, b / count]);
+  }
+
+  /* ============================================================
+     Frame state
+     ============================================================ */
+
+  let wireframe = false;
+  let paused = false;
+  let animTime = 0; // seconds of accumulated rotation; frozen while paused
+  let fps = 60;     // EMA-smoothed frames-per-second estimate
+
+  const N = VERTS.length;
+  const sx = new Float64Array(N); // screen x
+  const sy = new Float64Array(N); // screen y
+  const iz = new Float64Array(N); // 1 / view z (for depth + perspective correction)
+  const cr = new Float64Array(N); // lit vertex color, red   (0..1)
+  const cg = new Float64Array(N); // lit vertex color, green (0..1)
+  const cb = new Float64Array(N); // lit vertex color, blue  (0..1)
+
+  const front = new Uint8Array(TRIS.length); // per-triangle culling result
+
+  /* ============================================================
+     Pipeline (one frame, stages 1-9)
+     ============================================================ */
+
+  function render() {
+    // Clear both buffers: color to background, depth to 0 (= infinitely far,
+    // since the depth test uses 1/z and bigger means nearer).
+    pixels.fill(bgPacked);
+    depth.fill(0);
+
+    const t = animTime;
+    const w2 = W * 0.5, h2 = H * 0.5;
+    const focal = Math.min(W, H) * FOV_SCALE;
+
+    // (1) Rotation: three angles spun off the accumulated animation time,
+    //     composed as M = Ry * Rx * Rz.
+    const M = mat3Mul(mat3Mul(rotY(t * 0.6), rotX(t * 0.37)), rotZ(t * 0.21));
+
+    // (2) Moving point light orbiting the cube (which is centered at the
+    //     origin) on a tilted circle.
+    const la = t * 0.9;
+    const L = [
+      Math.cos(la) * 4.2,
+      1.1 + Math.sin(la * 0.63) * 1.9,
+      Math.sin(la) * 4.2
+    ];
+
+    // (3)(4)(5) Transform, light and project all 8 vertices.
+    for (let i = 0; i < N; i++) {
+      // World-space position: model matrix is rotation-only and the cube is
+      // centered at the origin, so world = M * vertex.
+      const p = transformPoint(M, VERTS[i]);
+
+      // Rotated vertex normal. M is rotation-only (orthonormal), so it
+      // transforms normals directly — no inverse transpose needed.
+      const nrm = transformPoint(M, vertNormal[i]);
+
+      // Per-vertex Lambert term: l = normalize(L - p), diffuse = max(n.l, 0).
+      const lv = sub(L, p);
+      const distSq = dot(lv, lv);
+      const l = normalize(lv);
+      const diffuse = Math.max(dot(nrm, l), 0);
+
+      // Ambient floor + distance-attenuated diffuse, then tinted per channel
+      // by the warm-white light color.
+      const intensity = clamp(
+        AMBIENT + DIFFUSE_GAIN * diffuse / (1 + ATTEN * distSq), 0, 1);
+      const base = vertBase[i];
+      cr[i] = base[0] * intensity * LIGHT_COLOR[0];
+      cg[i] = base[1] * intensity * LIGHT_COLOR[1];
+      cb[i] = base[2] * intensity * LIGHT_COLOR[2];
+
+      // View space: camera at the origin looking along +z, cube pushed to
+      // z = CAM_DIST. Perspective projection with the y flip for screen
+      // space (screen y grows downward). Keep 1/z for depth and for
+      // perspective-correct interpolation later.
+      const vz = p[2] + CAM_DIST;
+      const s = focal / vz;
+      sx[i] = w2 + p[0] * s;
+      sy[i] = h2 - p[1] * s;
+      iz[i] = 1 / vz;
+    }
+
+    // (6) Backface culling via the screen-space signed area of each triangle:
+    //         area2 = (x1-x0)*(y2-y0) - (x2-x0)*(y1-y0)
+    // The faces are wound counter-clockwise as seen from outside, and the
+    // projection flips the y axis into screen space, so a front-facing
+    // triangle's winding reads clockwise in the y-down screen coordinate
+    // system — which this cross-product-style test measures as a NEGATIVE
+    // value. Therefore we keep triangles with area2 < 0 and cull anything
+    // with area2 >= 0 (zero area means edge-on or degenerate: dropped too).
+    let drawn = 0, culled = 0;
+    for (let k = 0; k < TRIS.length; k++) {
+      const a = TRIS[k][0], b = TRIS[k][1], c = TRIS[k][2];
+      const area2 =
+        (sx[b] - sx[a]) * (sy[c] - sy[a]) -
+        (sx[c] - sx[a]) * (sy[b] - sy[a]);
+      if (area2 < 0) {
+        front[k] = 1;
+        drawn++;
+      } else {
+        front[k] = 0;
+        culled++;
+      }
+    }
+
+    // (7)(8) Rasterize either filled (Gouraud) or wireframe.
+    if (wireframe) {
+      drawWireframe();
+    } else {
+      for (let k = 0; k < TRIS.length; k++) {
+        if (front[k]) fillTriangle(TRIS[k][0], TRIS[k][1], TRIS[k][2]);
+      }
+    }
+
+    // (9) Present the framebuffer, then overlay the light glow and HUD.
+    ctx.putImageData(image, 0, 0);
+    drawLightGlow(L, focal, w2, h2);
+    drawHUD(drawn, culled);
+  }
+
+  /* ============================================================
+     Rasterizer — perspective-correct Gouraud triangle fill
+     ============================================================ */
+
+  function fillTriangle(i0, i1, i2) {
+    const x0 = sx[i0], y0 = sy[i0], z0 = iz[i0];
+    const x1 = sx[i1], y1 = sy[i1], z1 = iz[i1];
+    const x2 = sx[i2], y2 = sy[i2], z2 = iz[i2];
+
+    // Bounding box clipped to the canvas.
+    const minX = Math.max(0, Math.floor(Math.min(x0, x1, x2)));
+    const maxX = Math.min(W - 1, Math.ceil(Math.max(x0, x1, x2)));
+    const minY = Math.max(0, Math.floor(Math.min(y0, y1, y2)));
+    const maxY = Math.min(H - 1, Math.ceil(Math.max(y0, y1, y2)));
+    if (minX > maxX || minY > maxY) return;
+
+    // Signed area (negative for surviving front-facing triangles — see the
+    // culling note). Dividing the edge functions by it flips their sign,
+    // yielding plain barycentric coordinates that are >= 0 inside.
+    const area2 = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+
+    for (let y = minY; y <= maxY; y++) {
+      const py = y + 0.5; // sample at pixel center
+      for (let x = minX; x <= maxX; x++) {
+        const px = x + 0.5;
+
+        // Barycentric coordinates from the three edge functions.
+        const b0 = ((x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)) / area2;
+        const b1 = ((x0 - x2) * (py - y2) - (y0 - y2) * (px - x2)) / area2;
+        const b2 = 1 - b0 - b1;
+        if (b0 < 0 || b1 < 0 || b2 < 0) continue; // outside the triangle
+
+        // Depth test on interpolated 1/z: bigger value = nearer.
+        const zInv = b0 * z0 + b1 * z1 + b2 * z2;
+        const idx = y * W + x;
+        if (zInv <= depth[idx]) continue;
+        depth[idx] = zInv;
+
+        // PERSPECTIVE-CORRECT GOURAUD COLOR INTERPOLATION: barycentrics are
+        // affine in screen space, so 1/z interpolates directly, but vertex
+        // attributes (color) do not — they must be weighted by each vertex's
+        // 1/z and divided by the interpolated 1/z. Skipping that division is
+        // what produces the classic warped affine shading artifact.
+        const w0 = b0 * z0, w1 = b1 * z1, w2 = b2 * z2;
+        const r = (w0 * cr[i0] + w1 * cr[i1] + w2 * cr[i2]) / zInv;
+        const g = (w0 * cg[i0] + w1 * cg[i1] + w2 * cg[i2]) / zInv;
+        const b = (w0 * cb[i0] + w1 * cb[i1] + w2 * cb[i2]) / zInv;
+
+        pixels[idx] = packRGB(r * 255, g * 255, b * 255);
+      }
+    }
+  }
+
+  /* ============================================================
+     Wireframe — Bresenham edges with interpolated vertex colors
+     ============================================================ */
+
+  function drawWireframe() {
+    // Two passes: dimmed back-facing edges first, bright front-facing edges
+    // on top, so the hidden structure still reads while the silhouette wins.
+    for (let pass = 0; pass <= 1; pass++) {
+      const dim = pass === 0 ? BACK_EDGE_DIM : 1;
+      for (let k = 0; k < TRIS.length; k++) {
+        if (front[k] !== pass) continue;
+        const tri = TRIS[k];
+        drawEdge(tri[0], tri[1], dim);
+        drawEdge(tri[1], tri[2], dim);
+        drawEdge(tri[2], tri[0], dim);
+      }
+    }
+  }
+
+  function drawEdge(i0, i1, dim) {
+    drawLine(sx[i0], sy[i0], cr[i0], cg[i0], cb[i0],
+             sx[i1], sy[i1], cr[i1], cg[i1], cb[i1], dim);
+  }
+
+  // Integer Bresenham line, linearly interpolating the two endpoint vertex
+  // colors along the dominant axis and writing straight into the pixel
+  // buffer — same framebuffer as the filled mode.
+  function drawLine(x0, y0, r0, g0, b0, x1, y1, r1, g1, b1, dim) {
+    x0 = Math.round(x0); y0 = Math.round(y0);
+    x1 = Math.round(x1); y1 = Math.round(y1);
+    const dx = Math.abs(x1 - x0), xStep = x0 < x1 ? 1 : -1;
+    const dy = -Math.abs(y1 - y0), yStep = y0 < y1 ? 1 : -1;
+    const steps = Math.max(dx, -dy);
+    let err = dx + dy;
+    let x = x0, y = y0, i = 0;
+    for (;;) {
+      const t = steps > 0 ? i / steps : 1;
+      plot(x, y,
+           (r0 + (r1 - r0) * t) * dim,
+           (g0 + (g1 - g0) * t) * dim,
+           (b0 + (b1 - b0) * t) * dim);
+      if (x === x1 && y === y1) break;
+      const e2 = 2 * err;
+      if (e2 >= dy) { err += dy; x += xStep; }
+      if (e2 <= dx) { err += dx; y += yStep; }
+      i++;
+    }
+  }
+
+  function plot(x, y, r, g, b) {
+    if (x < 0 || y < 0 || x >= W || y >= H) return;
+    pixels[y * W + x] = packRGB(r * 255, g * 255, b * 255);
+  }
+
+  /* ============================================================
+     Light visualization
+     ============================================================ */
+
+  function drawLightGlow(L, focal, w2, h2) {
+    // Project the light through the same camera as the cube.
+    const vz = L[2] + CAM_DIST;
+    if (vz <= 0.1) return; // behind (or too close to) the camera
+    const s = focal / vz;
+    const x = w2 + L[0] * s;
+    const y = h2 - L[1] * s;
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const grad = ctx.createRadialGradient(x, y, 0, x, y, 22);
+    grad.addColorStop(0, 'rgba(255, 246, 220, 0.95)');
+    grad.addColorStop(0.35, 'rgba(255, 232, 178, 0.35)');
+    grad.addColorStop(1, 'rgba(255, 224, 150, 0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(x, y, 22, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore(); // restores the normal composite operation
+  }
+
+  /* ============================================================
+     HUD
+     ============================================================ */
+
+  function drawHUD(drawn, culled) {
+    ctx.font = '12px ui-monospace, Menlo, Consolas, monospace';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = 'rgba(233, 240, 250, 0.92)';
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.75)';
+    ctx.shadowBlur = 4;
+
+    const lines = [
+      'FPS   ' + Math.round(fps),
+      'MODE  ' + (wireframe ? 'WIREFRAME' : 'GOURAUD SHADED'),
+      'STATE ' + (paused ? 'PAUSED' : 'RUNNING'),
+      'TRIS  ' + drawn + '/12 (culled ' + culled + ')'
+    ];
+    for (let i = 0; i < lines.length; i++) {
+      ctx.fillText(lines[i], 14, 26 + i * 17);
+    }
+
+    ctx.fillText('[W] wireframe    [P] pause', 14, H - 14);
+
+    ctx.shadowBlur = 0;
+  }
+
+  /* ============================================================
+     Input
+     ============================================================ */
+
+  window.addEventListener('keydown', function (e) {
+    if (e.repeat) return;
+    const key = e.key.toLowerCase();
+    if (key === 'w') {
+      wireframe = !wireframe;
+    } else if (key === 'p') {
+      paused = !paused;
+    }
+  });
+
+  /* ============================================================
+     Main loop
+     ============================================================ */
+
+  let last = performance.now();
+
+  function frame(now) {
+    // Clamp dt so a background-tab stall can't explode the animation clock.
+    const dt = Math.min(Math.max(now - last, 0), 50);
+    last = now;
+
+    // animTime freezes while paused, but the loop keeps rendering so the
+    // FPS readout and the toggles stay live.
+    if (!paused) animTime += dt / 1000;
+    if (dt > 0) fps += (1000 / dt - fps) * 0.08; // EMA smoothing
+
+    render();
+    requestAnimationFrame(frame);
+  }
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Gouraud-Shaded Rotating Cube — Canvas 2D</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #0b0b12;
+  }
+  #stage {
+    position: relative;
+    line-height: 0;
+  }
+  #view {
+    max-width: 96vw;
+    max-height: 92vh;
+    image-rendering: auto;
+    border: 1px solid #2a2a3c;
+    border-radius: 6px;
+  }
+  #hud {
+    position: absolute;
+    top: 10px;
+    left: 12px;
+    margin: 0;
+    font: 13px/1.6 "Consolas", "Menlo", monospace;
+    color: #d8d8ee;
+    background: rgba(8, 8, 16, 0.55);
+    padding: 5px 10px;
+    border-radius: 4px;
+    pointer-events: none;
+    white-space: pre;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="view" width="800" height="600"></canvas>
+  <div id="hud"><span id="fpsLine">FPS: --.-</span><br><span id="statusLine"></span></div>
+</div>
+<script>
+"use strict";
+
+/* ============================================================
+   Config
+   ============================================================ */
+const W = 800, H = 600;          // internal canvas resolution
+const CX = 400, CY = 300;        // screen center
+const FOCAL = 600;               // perspective focal length
+const CAM_D = 5.5;               // camera distance along +Z
+const MIN_DEPTH = 0.2;           // depth clamp (near plane)
+const AMBIENT = 0.16;            // ambient light term
+const DIFFUSE = 0.84;            // diffuse (Lambert) term
+const BG_TOP = [16, 16, 28];     // background gradient top    (#10101c)
+const BG_BTM = [26, 26, 42];     // background gradient bottom (#1a1a2a)
+
+const canvas = document.getElementById("view");
+const ctx = canvas.getContext("2d");
+const imageData = ctx.createImageData(W, H);
+const pixels = new Uint32Array(imageData.data.buffer); // fast 32-bit pixel writes (little-endian)
+
+/* ============================================================
+   Geometry
+   ============================================================ */
+// 8 cube vertices at (±1,±1,±1)
+const VERTS = [
+  [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
+  [-1, -1,  1], [1, -1,  1], [1, 1,  1], [-1, 1,  1]
+];
+
+// 6 faces: quad vertex indices with consistent winding chosen so that
+// front-facing triangles yield a POSITIVE screen-space signed area
+// (the projection flips Y), plus base color and axis-aligned face normal.
+const FACES = [
+  { idx: [4, 7, 6, 5], color: [216,  64,  64], normal: [ 0,  0,  1] }, // front  (+z) red
+  { idx: [1, 2, 3, 0], color: [ 64, 192,  96], normal: [ 0,  0, -1] }, // back   (-z) green
+  { idx: [5, 6, 2, 1], color: [ 72, 116, 224], normal: [ 1,  0,  0] }, // right  (+x) blue
+  { idx: [0, 3, 7, 4], color: [224, 196,  64], normal: [-1,  0,  0] }, // left   (-x) yellow
+  { idx: [7, 3, 2, 6], color: [ 64, 200, 196], normal: [ 0,  1,  0] }, // top    (+y) teal
+  { idx: [0, 4, 5, 1], color: [192,  80, 200], normal: [ 0, -1,  0] }  // bottom (-y) magenta
+];
+
+// Split each quad into 2 triangles (12 total)
+const TRIANGLES = [];
+for (const f of FACES) {
+  const [a, b, c, d] = f.idx;
+  TRIANGLES.push({ i0: a, i1: b, i2: c, face: f });
+  TRIANGLES.push({ i0: a, i1: c, i2: d, face: f });
+}
+
+// 12 unique cube edges (for wireframe mode)
+const EDGES = [
+  [0, 1], [1, 2], [2, 3], [3, 0],   // back ring (z = -1)
+  [4, 5], [5, 6], [6, 7], [7, 4],   // front ring (z = +1)
+  [0, 4], [1, 5], [2, 6], [3, 7]    // connectors
+];
+
+// Map "sorted vertex pair" -> edge index, so triangle edges can mark the
+// real cube edges (quad diagonals are not cube edges and are ignored)
+const edgeLookup = new Map();
+EDGES.forEach((e, i) => {
+  edgeLookup.set(e[0] < e[1] ? e[0] * 8 + e[1] : e[1] * 8 + e[0], i);
+});
+
+// Per-vertex normals for Gouraud shading, precomputed once:
+// normalized average of the 3 adjacent face normals
+// -> each vertex normal is a unit (±1,±1,±1)/√3 direction.
+const VNRM = new Float64Array(24);
+{
+  const acc = Array.from({ length: 8 }, () => [0, 0, 0]);
+  for (const f of FACES) {
+    for (const vi of f.idx) {
+      acc[vi][0] += f.normal[0];
+      acc[vi][1] += f.normal[1];
+      acc[vi][2] += f.normal[2];
+    }
+  }
+  for (let i = 0; i < 8; i++) {
+    const x = acc[i][0], y = acc[i][1], z = acc[i][2];
+    const inv = 1 / Math.sqrt(x * x + y * y + z * z);
+    VNRM[i * 3]     = x * inv;
+    VNRM[i * 3 + 1] = y * inv;
+    VNRM[i * 3 + 2] = z * inv;
+  }
+}
+
+/* ============================================================
+   Math — 3×3 rotation matrices and helpers
+   ============================================================ */
+function rotX(a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return [1, 0, 0,  0, c, -s,  0, s, c];
+}
+function rotY(a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return [c, 0, s,  0, 1, 0,  -s, 0, c];
+}
+function rotZ(a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return [c, -s, 0,  s, c, 0,  0, 0, 1];
+}
+function matMul(a, b) { // row-major 3×3 matrix product
+  const o = new Array(9);
+  for (let r = 0; r < 3; r++)
+    for (let c = 0; c < 3; c++)
+      o[r * 3 + c] = a[r * 3] * b[c] + a[r * 3 + 1] * b[3 + c] + a[r * 3 + 2] * b[6 + c];
+  return o;
+}
+function matVec(m, x, y, z, out, o) { // out[o..o+2] = m · (x,y,z)
+  out[o]     = m[0] * x + m[1] * y + m[2] * z;
+  out[o + 1] = m[3] * x + m[4] * y + m[5] * z;
+  out[o + 2] = m[6] * x + m[7] * y + m[8] * z;
+}
+
+/* ============================================================
+   Rasterizer — per-pixel Gouraud interpolation into ImageData
+   ============================================================ */
+function packColor(r, g, b) { // little-endian 32-bit packing: A<<24 | B<<16 | G<<8 | R
+  return (0xff000000 | ((b & 0xff) << 16) | ((g & 0xff) << 8) | (r & 0xff)) >>> 0;
+}
+
+// Precomputed per-row background gradient (dark vertical ramp)
+const bgRow = new Uint32Array(H);
+for (let y = 0; y < H; y++) {
+  const t = y / (H - 1);
+  bgRow[y] = packColor(
+    Math.round(BG_TOP[0] + (BG_BTM[0] - BG_TOP[0]) * t),
+    Math.round(BG_TOP[1] + (BG_BTM[1] - BG_TOP[1]) * t),
+    Math.round(BG_TOP[2] + (BG_BTM[2] - BG_TOP[2]) * t)
+  );
+}
+function clearBackground() {
+  for (let y = 0; y < H; y++) pixels.fill(bgRow[y], y * W, y * W + W);
+}
+
+// Rasterize one triangle using edge functions / barycentric coordinates.
+// Colors c0/c1/c2 are per-vertex Gouraud-lit RGB values (interpolated per pixel).
+function rasterizeTriangle(x0, y0, x1, y1, x2, y2, r0, g0, b0, r1, g1, b1, r2, g2, b2) {
+  const area = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+  if (area <= 1e-9) return; // degenerate guard (culling already done upstream)
+
+  const minX = Math.max(0, Math.floor(Math.min(x0, x1, x2)));
+  const maxX = Math.min(W - 1, Math.ceil(Math.max(x0, x1, x2)));
+  const minY = Math.max(0, Math.floor(Math.min(y0, y1, y2)));
+  const maxY = Math.min(H - 1, Math.ceil(Math.max(y0, y1, y2)));
+  if (minX > maxX || minY > maxY) return;
+
+  const invArea = 1 / area;
+  // Edge function E(p) = A·px + B·py + C, stepped incrementally per pixel
+  const A12 = y1 - y2, B12 = x2 - x1, C12 = x1 * y2 - x2 * y1; // weight of v0
+  const A20 = y2 - y0, B20 = x0 - x2, C20 = x2 * y0 - x0 * y2; // weight of v1
+  const A01 = y0 - y1, B01 = x1 - x0, C01 = x0 * y1 - x1 * y0; // weight of v2
+  const px0 = minX + 0.5;
+
+  for (let y = minY; y <= maxY; y++) {
+    const py = y + 0.5;
+    let e0 = A12 * px0 + B12 * py + C12;
+    let e1 = A20 * px0 + B20 * py + C20;
+    let e2 = A01 * px0 + B01 * py + C01;
+    let off = y * W + minX;
+    for (let x = minX; x <= maxX; x++, off++) {
+      if (e0 >= 0 && e1 >= 0 && e2 >= 0) { // pixel center inside triangle
+        const w0 = e0 * invArea, w1 = e1 * invArea, w2 = e2 * invArea;
+        pixels[off] = packColor(
+          Math.round(w0 * r0 + w1 * r1 + w2 * r2),
+          Math.round(w0 * g0 + w1 * g1 + w2 * g2),
+          Math.round(w0 * b0 + w1 * b1 + w2 * b2)
+        );
+      }
+      e0 += A12; e1 += A20; e2 += A01;
+    }
+  }
+}
+
+/* ============================================================
+   Pipeline — state, light, projection, culling, per-vertex lighting
+   ============================================================ */
+const worldPos = new Float64Array(24); // rotated vertex positions
+const worldNrm = new Float64Array(24); // rotated vertex normals (still unit length)
+const scrX = new Float64Array(8);      // projected screen coordinates
+const scrY = new Float64Array(8);
+const edgeVisible = new Uint8Array(12);
+const lightPos = [0, 0, 0];
+
+// Animation state
+let rx = 0.50, ry = 0.75, rz = 0.15;  // rotation angles (rad)
+let lt = 0;                            // light orbit phase
+let wireframe = false;
+let paused = false;
+
+// Moving point light orbiting the cube
+function updateLight() {
+  lightPos[0] = 2.6 * Math.cos(lt);
+  lightPos[1] = 2.1 * Math.sin(0.7 * lt);
+  lightPos[2] = 2.6 * Math.sin(lt);
+}
+
+// Lambert shading at one vertex; writes RGB into a scratch slot
+const triR = [0, 0, 0], triG = [0, 0, 0], triB = [0, 0, 0];
+function shadeVertex(vi, slot, faceColor) {
+  // Direction from vertex to light, normalized
+  let lx = lightPos[0] - worldPos[vi * 3];
+  let ly = lightPos[1] - worldPos[vi * 3 + 1];
+  let lz = lightPos[2] - worldPos[vi * 3 + 2];
+  const inv = 1 / Math.sqrt(lx * lx + ly * ly + lz * lz);
+  lx *= inv; ly *= inv; lz *= inv;
+  // ambient + diffuse · max(0, n·l)   (vertex normal is already normalized)
+  let d = worldNrm[vi * 3] * lx + worldNrm[vi * 3 + 1] * ly + worldNrm[vi * 3 + 2] * lz;
+  if (d < 0) d = 0;
+  const k = AMBIENT + DIFFUSE * d;
+  triR[slot] = Math.min(255, faceColor[0] * k);
+  triG[slot] = Math.min(255, faceColor[1] * k);
+  triB[slot] = Math.min(255, faceColor[2] * k);
+}
+
+// Mark a triangle side as visible if it is a real cube edge
+function markEdge(a, b) {
+  const k = a < b ? a * 8 + b : b * 8 + a;
+  const e = edgeLookup.get(k);
+  if (e !== undefined) edgeVisible[e] = 1;
+}
+
+/* ============================================================
+   Render — one full frame
+   ============================================================ */
+function render() {
+  clearBackground();
+
+  // 1) Rotate vertices and normals: M = Rx · Ry · Rz
+  const M = matMul(rotX(rx), matMul(rotY(ry), rotZ(rz)));
+  for (let i = 0; i < 8; i++) {
+    matVec(M, VERTS[i][0], VERTS[i][1], VERTS[i][2], worldPos, i * 3);
+    matVec(M, VNRM[i * 3], VNRM[i * 3 + 1], VNRM[i * 3 + 2], worldNrm, i * 3);
+  }
+
+  // 2) Moving light
+  updateLight();
+
+  // 3) Perspective projection (y flipped for screen space)
+  for (let i = 0; i < 8; i++) {
+    const depth = Math.max(MIN_DEPTH, CAM_D - worldPos[i * 3 + 2]);
+    scrX[i] = CX + FOCAL * worldPos[i * 3] / depth;
+    scrY[i] = CY - FOCAL * worldPos[i * 3 + 1] / depth;
+  }
+
+  // 4) Backface culling in screen space + Gouraud shading + rasterization
+  edgeVisible.fill(0);
+  for (const tri of TRIANGLES) {
+    const x0 = scrX[tri.i0], y0 = scrY[tri.i0];
+    const x1 = scrX[tri.i1], y1 = scrY[tri.i1];
+    const x2 = scrX[tri.i2], y2 = scrY[tri.i2];
+    const cross = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+    if (cross <= 0) continue; // back-facing or degenerate — culled
+
+    markEdge(tri.i0, tri.i1);
+    markEdge(tri.i1, tri.i2);
+    markEdge(tri.i0, tri.i2);
+
+    if (wireframe) continue; // wireframe mode: faces are not rasterized
+
+    shadeVertex(tri.i0, 0, tri.face.color);
+    shadeVertex(tri.i1, 1, tri.face.color);
+    shadeVertex(tri.i2, 2, tri.face.color);
+
+    rasterizeTriangle(
+      x0, y0, x1, y1, x2, y2,
+      triR[0], triG[0], triB[0],
+      triR[1], triG[1], triB[1],
+      triR[2], triG[2], triB[2]
+    );
+  }
+
+  // 5) Blit the software framebuffer
+  ctx.putImageData(imageData, 0, 0);
+
+  // 6) Vector overlays drawn on top of the framebuffer
+  if (wireframe) {
+    drawWireframe();
+  } else {
+    drawEdgeHints(); // very faint edge hint over the shaded faces
+  }
+  drawLightMarker();
+}
+
+// Wireframe: bright edges on visible faces, dim edges on hidden ones
+function drawWireframe() {
+  ctx.lineWidth = 1.5;
+  for (let e = 0; e < EDGES.length; e++) {
+    ctx.strokeStyle = edgeVisible[e] ? "#e8e8ff" : "rgba(200,200,255,0.22)";
+    ctx.beginPath();
+    ctx.moveTo(scrX[EDGES[e][0]], scrY[EDGES[e][0]]);
+    ctx.lineTo(scrX[EDGES[e][1]], scrY[EDGES[e][1]]);
+    ctx.stroke();
+  }
+}
+
+// Subtle bright-edge hint in shaded mode
+function drawEdgeHints() {
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = "rgba(255,255,255,0.10)";
+  for (let e = 0; e < EDGES.length; e++) {
+    if (!edgeVisible[e]) continue;
+    ctx.beginPath();
+    ctx.moveTo(scrX[EDGES[e][0]], scrY[EDGES[e][0]]);
+    ctx.lineTo(scrX[EDGES[e][1]], scrY[EDGES[e][1]]);
+    ctx.stroke();
+  }
+}
+
+// Glowing yellow marker at the projected light position (skipped silently
+// if behind the camera or off-canvas)
+function drawLightMarker() {
+  const depth = CAM_D - lightPos[2];
+  if (depth <= MIN_DEPTH) return;
+  const x = CX + FOCAL * lightPos[0] / depth;
+  const y = CY - FOCAL * lightPos[1] / depth;
+  if (x < 0 || x >= W || y < 0 || y >= H) return;
+  const grad = ctx.createRadialGradient(x, y, 0, x, y, 10);
+  grad.addColorStop(0.0, "rgba(255,242,160,0.95)");
+  grad.addColorStop(0.4, "rgba(255,220,90,0.50)");
+  grad.addColorStop(1.0, "rgba(255,220,90,0)");
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(x, y, 10, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+/* ============================================================
+   HUD
+   ============================================================ */
+const fpsLine = document.getElementById("fpsLine");
+const statusLine = document.getElementById("statusLine");
+
+function updateStatusHUD() {
+  const mode = wireframe ? "[wireframe]" : "[shading on]";
+  const state = paused ? "[paused]" : "[running]";
+  statusLine.textContent = "W — wireframe · P — pause · " + mode + " · " + state;
+}
+updateStatusHUD();
+
+/* ============================================================
+   Input — W toggles wireframe, P toggles pause
+   ============================================================ */
+window.addEventListener("keydown", function (e) {
+  if (e.code === "KeyW" && !e.repeat) {
+    wireframe = !wireframe;
+    e.preventDefault();
+    updateStatusHUD();
+  } else if (e.code === "KeyP" && !e.repeat) {
+    paused = !paused;
+    e.preventDefault();
+    updateStatusHUD();
+  }
+});
+
+/* ============================================================
+   Main loop — animation state and FPS counter
+   ============================================================ */
+let lastT = null;      // previous rAF timestamp (ms)
+let fpsFrames = 0;     // frames counted in the current window
+let fpsElapsed = 0;    // ms accumulated in the current window
+let fpsSmooth = 0;     // smoothed FPS value
+
+function frame(t) {
+  if (lastT === null) lastT = t;
+  const rawMs = t - lastT;
+  lastT = t;
+
+  // Advance animation (frozen while paused; render loop, FPS and keys stay live)
+  let dt = rawMs / 1000;
+  if (dt > 0.1) dt = 0.1; // clamp huge deltas (tab switches etc.)
+  if (dt < 0) dt = 0;
+  if (!paused) {
+    rx += 0.55 * dt;
+    ry += 0.90 * dt;
+    rz += 0.35 * dt;
+    lt += 1.15 * dt;
+  }
+
+  render();
+
+  // FPS: count frames, refresh the readout every 500 ms
+  fpsFrames++;
+  fpsElapsed += rawMs;
+  if (fpsElapsed >= 500) {
+    const inst = (fpsFrames * 1000) / fpsElapsed;
+    fpsSmooth = fpsSmooth > 0 ? fpsSmooth * 0.6 + inst * 0.4 : inst;
+    fpsLine.textContent = "FPS: " + fpsSmooth.toFixed(1);
+    fpsFrames = 0;
+    fpsElapsed = 0;
+  }
+
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

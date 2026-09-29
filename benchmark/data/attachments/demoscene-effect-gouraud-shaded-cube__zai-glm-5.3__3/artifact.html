@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Gouraud-Shaded Rotating Cube — Canvas 2D Software Renderer</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #0b0d12;
+  }
+  #scene {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<script>
+"use strict";
+/* ================================================================
+   GOURAUD-SHADED ROTATING CUBE
+   Pure software 3D pipeline on a Canvas 2D element.
+   No WebGL, no external libraries, no network resources.
+
+   Per-frame pipeline:
+     rotate (Rz·Ry·Rx) -> per-vertex Lambert lighting ->
+     perspective projection -> backface culling ->
+     painter's depth sort -> barycentric Gouraud rasterization ->
+     single putImageData blit -> overlays (glow, HUD)
+   ================================================================ */
+
+/* ----------------------------------------------------------------
+   SECTION 0: Canvas, framebuffer and resize handling
+   ---------------------------------------------------------------- */
+const canvas = document.getElementById("scene");
+const ctx = canvas.getContext("2d");
+
+let W = 0, H = 0;      // canvas size in CSS pixels (devicePixelRatio capped to 1)
+let image = null;      // ImageData framebuffer covering the whole canvas
+let buf32 = null;      // Uint32Array view over image.data for fast pixel writes
+let focal = 0;         // perspective focal length in pixels
+let cx = 0, cy = 0;    // screen center (principal point)
+
+// One-time endianness detection so 32-bit pixel packing is always correct.
+const IS_LITTLE_ENDIAN = (() => {
+  const probe = new Uint32Array([0x0a0b0c0d]);
+  const bytes = new Uint8Array(probe.buffer);
+  return bytes[0] === 0x0d;
+})();
+
+// Background clear pixel: opaque near-black #0b0d12.
+const CLEAR_PIXEL = IS_LITTLE_ENDIAN
+  ? (0xff000000 | (0x12 << 16) | (0x0d << 8) | 0x0b)
+  : ((0x0b << 24) | (0x0d << 16) | (0x12 << 8) | 0xff);
+
+function resize() {
+  // Render at CSS pixel resolution: cap devicePixelRatio to 1 for performance.
+  const scale = Math.min(window.devicePixelRatio || 1, 1);
+  W = Math.max(1, Math.floor(window.innerWidth * scale));
+  H = Math.max(1, Math.floor(window.innerHeight * scale));
+  canvas.width = W;
+  canvas.height = H;
+  cx = W * 0.5;
+  cy = H * 0.5;
+  // Focal length chosen so the cube fills roughly 60-70% of screen height.
+  focal = H * 0.9;
+  // Recreate framebuffer objects for the new size.
+  image = ctx.createImageData(W, H);
+  buf32 = new Uint32Array(image.data.buffer);
+}
+window.addEventListener("resize", resize);
+resize();
+
+/* ----------------------------------------------------------------
+   SECTION 1: Math helpers (3x3 rotation matrices)
+   ---------------------------------------------------------------- */
+function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+// Row-major 3x3 matrix product A·B.
+function mulMat3(A, B) {
+  const out = new Array(9);
+  for (let r = 0; r < 3; r++) {
+    for (let c = 0; c < 3; c++) {
+      out[r * 3 + c] = A[r * 3] * B[c] + A[r * 3 + 1] * B[3 + c] + A[r * 3 + 2] * B[6 + c];
+    }
+  }
+  return out;
+}
+
+// Elementary right-handed rotation matrices.
+function rotX(a) { const c = Math.cos(a), s = Math.sin(a); return [1, 0, 0, 0, c, -s, 0, s, c]; }
+function rotY(a) { const c = Math.cos(a), s = Math.sin(a); return [c, 0, s, 0, 1, 0, -s, 0, c]; }
+function rotZ(a) { const c = Math.cos(a), s = Math.sin(a); return [c, -s, 0, s, c, 0, 0, 0, 1]; }
+
+// Apply a 3x3 matrix to a vector {x,y,z}, writing into `out` (no allocation).
+function applyMat3(m, v, out) {
+  const x = v.x, y = v.y, z = v.z;
+  out.x = m[0] * x + m[1] * y + m[2] * z;
+  out.y = m[3] * x + m[4] * y + m[5] * z;
+  out.z = m[6] * x + m[7] * y + m[8] * z;
+  return out;
+}
+
+/* ----------------------------------------------------------------
+   SECTION 2: Geometry — cube vertices, normals, faces, triangles
+   ---------------------------------------------------------------- */
+// 8 cube vertices (±1, ±1, ±1):
+//   0:(-1,-1,-1)  1:(+1,-1,-1)  2:(+1,+1,-1)  3:(-1,+1,-1)
+//   4:(-1,-1,+1)  5:(+1,-1,+1)  6:(+1,+1,+1)  7:(-1,+1,+1)
+const VERTICES = [
+  { x: -1, y: -1, z: -1 },
+  { x:  1, y: -1, z: -1 },
+  { x:  1, y:  1, z: -1 },
+  { x: -1, y:  1, z: -1 },
+  { x: -1, y: -1, z:  1 },
+  { x:  1, y: -1, z:  1 },
+  { x:  1, y:  1, z:  1 },
+  { x: -1, y:  1, z:  1 },
+];
+
+// Vertex normals = normalized average of the 3 adjacent face normals,
+// i.e. (±1,±1,±1)/√3 — this is what makes light interpolate smoothly
+// across faces (real Gouraud gradients, not flat shading).
+const VERTEX_NORMALS = VERTICES.map(v => {
+  const inv = 1 / Math.sqrt(3);
+  return { x: v.x * inv, y: v.y * inv, z: v.z * inv };
+});
+
+// 6 quad faces, each with a distinct base color from a cohesive palette.
+// Corner indices are wound so that cross(edge1, edge2) = outward normal,
+// which is exactly what backface culling expects.
+const FACES = [
+  { indices: [0, 3, 2, 1], color: [232,  72,  85] }, // front  (-z) crimson
+  { indices: [5, 6, 7, 4], color: [255, 170,  60] }, // back   (+z) amber
+  { indices: [7, 6, 2, 3], color: [ 86, 204, 132] }, // top    (+y) green
+  { indices: [1, 5, 4, 0], color: [ 64, 180, 216] }, // bottom (-y) cyan
+  { indices: [1, 2, 6, 5], color: [155, 110, 240] }, // right  (+x) violet
+  { indices: [0, 4, 7, 3], color: [ 70, 130, 240] }, // left   (-x) blue
+];
+
+// Split each quad face into exactly 2 triangles -> 12 triangles total.
+const TRIANGLES = [];
+for (const face of FACES) {
+  const [a, b, c, d] = face.indices;
+  TRIANGLES.push({ v: [a, b, c], color: face.color });
+  TRIANGLES.push({ v: [a, c, d], color: face.color });
+}
+
+/* ----------------------------------------------------------------
+   SECTION 3: Scene state and constants
+   ---------------------------------------------------------------- */
+const CAM_DISTANCE = 4;        // camera at origin looking down +z; viewZ = worldZ + 4
+const AMBIENT = 0.18;          // ambient light contribution
+const LIGHT_INTENSITY = 0.85;  // diffuse light intensity multiplier
+
+const ROT_SPEED_X = 0.7;       // rad/s, different speed per axis
+const ROT_SPEED_Y = 1.0;
+const ROT_SPEED_Z = 0.45;
+
+const LIGHT_ORBIT_RADIUS = 3.2;   // light orbit radius around the Y axis
+const LIGHT_ORBIT_SPEED = 1.15;   // rad/s around Y
+const LIGHT_BOB_SPEED = 1.9;      // rad/s vertical bobbing (different frequency)
+const LIGHT_BOB_AMPLITUDE = 1.15; // vertical bob amplitude
+
+const state = {
+  angleX: 0.42,     // time-accumulated rotation angles (so pause/resume is exact)
+  angleY: 0.65,
+  angleZ: 0.10,
+  lightAngle: 0.0,  // orbit phase around Y
+  lightBob: 0.0,    // vertical bobbing phase
+  paused: false,
+  wireframe: false,
+};
+
+// Scratch buffers reused every frame (no per-frame allocation for vertices).
+const worldPos  = VERTICES.map(() => ({ x: 0, y: 0, z: 0 }));       // rotated positions
+const worldNrm  = VERTEX_NORMALS.map(() => ({ x: 0, y: 0, z: 0 })); // rotated normals
+const diffuse   = new Float64Array(8);  // per-vertex N·L diffuse term
+const viewDepth = new Float64Array(8);  // per-vertex view-space z
+const sx        = new Float64Array(8);  // projected screen x
+const sy        = new Float64Array(8);  // projected screen y
+const visible   = [];                   // triangles surviving backface culling this frame
+
+/* ----------------------------------------------------------------
+   SECTION 4: Software rasterizer — Gouraud shading
+   Per-pixel barycentric edge functions with incremental stepping.
+   ---------------------------------------------------------------- */
+function rasterizeTriangle(x0, y0, r0, g0, b0,
+                           x1, y1, r1, g1, b1,
+                           x2, y2, r2, g2, b2) {
+  // Doubled signed area in screen space. Backface culling guarantees that
+  // visible triangles wind positively here; skip degenerate ones.
+  const area = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+  if (area <= 1e-6) return;
+
+  // Bounding box clamped to the canvas.
+  const minX = Math.max(0, Math.floor(Math.min(x0, x1, x2)));
+  const maxX = Math.min(W - 1, Math.ceil(Math.max(x0, x1, x2)));
+  const minY = Math.max(0, Math.floor(Math.min(y0, y1, y2)));
+  const maxY = Math.min(H - 1, Math.ceil(Math.max(y0, y1, y2)));
+  if (minX > maxX || minY > maxY) return;
+
+  // Edge functions w_i(p) = A_i·px + B_i·py + C_i (barycentric numerators).
+  // wi(vi) = area, and w0+w1+w2 = area at every point.
+  const A0 = y1 - y2, B0 = x2 - x1, C0 = x1 * y2 - x2 * y1;
+  const A1 = y2 - y0, B1 = x0 - x2, C1 = x2 * y0 - x0 * y2;
+  const A2 = y0 - y1, B2 = x1 - x0, C2 = x0 * y1 - x1 * y0;
+
+  // First sample at the center of pixel (minX, minY) — pixel centers at +0.5.
+  const px = minX + 0.5, py = minY + 0.5;
+  let w0row = A0 * px + B0 * py + C0;
+  let w1row = A1 * px + B1 * py + C1;
+  let w2row = A2 * px + B2 * py + C2;
+
+  const invArea = 1 / area;
+  const little = IS_LITTLE_ENDIAN;
+
+  for (let y = minY; y <= maxY; y++) {
+    let w0 = w0row, w1 = w1row, w2 = w2row;
+    let off = y * W + minX;
+    for (let x = minX; x <= maxX; x++) {
+      if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
+        // Gouraud: affine interpolation of the vertex colors.
+        const r = ((r0 * w0 + r1 * w1 + r2 * w2) * invArea) | 0;
+        const g = ((g0 * w0 + g1 * w1 + g2 * w2) * invArea) | 0;
+        const b = ((b0 * w0 + b1 * w1 + b2 * w2) * invArea) | 0;
+        // Pack ABGR (little-endian) / ARGB (big-endian), alpha = 255.
+        buf32[off] = little
+          ? (0xff000000 | (b << 16) | (g << 8) | r)
+          : ((r << 24) | (g << 16) | (b << 8) | 0xff);
+      }
+      // Incremental edge-function stepping (+1 in x).
+      w0 += A0; w1 += A1; w2 += A2;
+      off++;
+    }
+    // Incremental edge-function stepping (+1 in y).
+    w0row += B0; w1row += B1; w2row += B2;
+  }
+}
+
+/* ----------------------------------------------------------------
+   SECTION 5: The per-frame pipeline
+   ---------------------------------------------------------------- */
+function renderFrame() {
+  /* -- 1. Clear the framebuffer to near-black (#0b0d12). -- */
+  buf32.fill(CLEAR_PIXEL);
+
+  /* -- 2. Combined rotation matrix R = Rz · Ry · Rx (time-accumulated). -- */
+  const R = mulMat3(
+    rotZ(state.angleZ),
+    mulMat3(rotY(state.angleY), rotX(state.angleX))
+  );
+
+  /* -- 3. Transform vertex positions AND normals by R.
+          Rotation is orthonormal, so normals use the same matrix. -- */
+  for (let i = 0; i < 8; i++) {
+    applyMat3(R, VERTICES[i], worldPos[i]);
+    applyMat3(R, VERTEX_NORMALS[i], worldNrm[i]);
+  }
+
+  /* -- 4. Moving point light: orbits around Y at radius 3.2,
+          bobbing vertically on a different frequency. -- */
+  const light = {
+    x: LIGHT_ORBIT_RADIUS * Math.cos(state.lightAngle),
+    y: LIGHT_BOB_AMPLITUDE * Math.sin(state.lightBob),
+    z: LIGHT_ORBIT_RADIUS * Math.sin(state.lightAngle),
+  };
+
+  /* -- 5. Per-vertex Lambert diffuse: L = normalize(lightPos - worldPos). -- */
+  for (let i = 0; i < 8; i++) {
+    const lx = light.x - worldPos[i].x;
+    const ly = light.y - worldPos[i].y;
+    const lz = light.z - worldPos[i].z;
+    const invLen = 1 / Math.sqrt(lx * lx + ly * ly + lz * lz);
+    diffuse[i] = Math.max(0,
+      (worldNrm[i].x * lx + worldNrm[i].y * ly + worldNrm[i].z * lz) * invLen);
+  }
+
+  /* -- 6. Perspective projection (camera at origin, looking down +z). -- */
+  for (let i = 0; i < 8; i++) {
+    const vz = worldPos[i].z + CAM_DISTANCE;   // viewZ = worldZ + 4 (> 0 always)
+    viewDepth[i] = vz;
+    const s = focal / vz;
+    sx[i] = cx + worldPos[i].x * s;
+    sy[i] = cy - worldPos[i].y * s;
+  }
+
+  /* -- 7. Per-triangle: Gouraud vertex colors + backface culling. -- */
+  visible.length = 0;
+  for (const tri of TRIANGLES) {
+    const ia = tri.v[0], ib = tri.v[1], ic = tri.v[2];
+
+    // View-space coordinates of the three corners.
+    const ax = worldPos[ia].x, ay = worldPos[ia].y, az = worldPos[ia].z + CAM_DISTANCE;
+    const bx = worldPos[ib].x, by = worldPos[ib].y, bz = worldPos[ib].z + CAM_DISTANCE;
+    const ccx = worldPos[ic].x, ccy = worldPos[ic].y, ccz = worldPos[ic].z + CAM_DISTANCE;
+
+    // View-space normal = cross(edge1, edge2).
+    const e1x = bx - ax, e1y = by - ay, e1z = bz - az;
+    const e2x = ccx - ax, e2y = ccy - ay, e2z = ccz - az;
+    const nx = e1y * e2z - e1z * e2y;
+    const ny = e1z * e2x - e1x * e2z;
+    const nz = e1x * e2y - e1y * e2x;
+
+    // Cull if dot(normal, centroid) >= 0 (centroid sum has the same sign).
+    if (nx * (ax + bx + ccx) + ny * (ay + by + ccy) + nz * (az + bz + ccz) >= 0) continue;
+
+    // Per-vertex lit colors: faceColor × (ambient + diffuse × intensity), clamped.
+    const f0 = AMBIENT + diffuse[ia] * LIGHT_INTENSITY;
+    const f1 = AMBIENT + diffuse[ib] * LIGHT_INTENSITY;
+    const f2 = AMBIENT + diffuse[ic] * LIGHT_INTENSITY;
+    const base = tri.color;
+    visible.push({
+      ia, ib, ic,
+      color: base,
+      depth: (viewDepth[ia] + viewDepth[ib] + viewDepth[ic]) / 3,
+      avgFactor: (f0 + f1 + f2) / 3,
+      r0: Math.min(255, base[0] * f0), g0: Math.min(255, base[1] * f0), b0: Math.min(255, base[2] * f0),
+      r1: Math.min(255, base[0] * f1), g1: Math.min(255, base[1] * f1), b1: Math.min(255, base[2] * f1),
+      r2: Math.min(255, base[0] * f2), g2: Math.min(255, base[1] * f2), b2: Math.min(255, base[2] * f2),
+    });
+  }
+
+  /* -- 8. Painter's algorithm: sort survivors far -> near. -- */
+  visible.sort((p, q) => q.depth - p.depth);
+
+  /* -- 9. Rasterize (shaded mode). Wireframe strokes are drawn after blit. -- */
+  const drawn = visible.length;
+  if (!state.wireframe) {
+    for (const t of visible) {
+      rasterizeTriangle(
+        sx[t.ia], sy[t.ia], t.r0, t.g0, t.b0,
+        sx[t.ib], sy[t.ib], t.r1, t.g1, t.b1,
+        sx[t.ic], sy[t.ic], t.r2, t.g2, t.b2
+      );
+    }
+  }
+
+  /* -- 10. Blit the finished framebuffer in a single call. -- */
+  ctx.putImageData(image, 0, 0);
+
+  /* -- 11. Overlays on top of the blit: glow, wireframe, HUD. -- */
+  drawLightGlow(light);
+  if (state.wireframe) drawWireframe();
+  drawHUD(drawn);
+}
+
+/* ----------------------------------------------------------------
+   SECTION 6: Overlays — light glow, wireframe, HUD
+   ---------------------------------------------------------------- */
+// Soft radial glow marking the orbiting light position (visible in both modes).
+function drawLightGlow(light) {
+  const vz = light.z + CAM_DISTANCE;
+  if (vz <= 0.2) return; // behind the camera plane (cannot happen, but be safe)
+
+  const lx = cx + light.x * focal / vz;
+  const ly = cy - light.y * focal / vz;
+  const margin = 280;
+  if (lx < -margin || lx > W + margin || ly < -margin || ly > H + margin) return;
+
+  // Closer to the camera -> stronger, larger glow.
+  const t = clamp((CAM_DISTANCE + LIGHT_ORBIT_RADIUS - vz) / (2 * LIGHT_ORBIT_RADIUS), 0.15, 1);
+  const radius = clamp(focal * 0.09 * (4.2 / vz), 26, 220);
+
+  const grad = ctx.createRadialGradient(lx, ly, 0, lx, ly, radius);
+  grad.addColorStop(0.00, "rgba(255, 248, 225, " + (0.95 * t).toFixed(3) + ")");
+  grad.addColorStop(0.22, "rgba(255, 216, 138, " + (0.42 * t).toFixed(3) + ")");
+  grad.addColorStop(1.00, "rgba(255, 190, 90, 0)");
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(lx, ly, radius, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Bright warm core dot.
+  ctx.fillStyle = "rgba(255, 252, 240, " + (0.9 * t).toFixed(3) + ")";
+  ctx.beginPath();
+  ctx.arc(lx, ly, Math.max(2, radius * 0.07), 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// Wireframe mode: stroke edges of every visible (culling-passing) triangle.
+function drawWireframe() {
+  ctx.save();
+  ctx.lineWidth = 1.5;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  for (const t of visible) {
+    const k = t.avgFactor; // average vertex light intensity of this triangle
+    const r = Math.min(255, t.color[0] * k) | 0;
+    const g = Math.min(255, t.color[1] * k) | 0;
+    const b = Math.min(255, t.color[2] * k) | 0;
+    ctx.strokeStyle = "rgb(" + r + "," + g + "," + b + ")";
+    ctx.beginPath();
+    ctx.moveTo(sx[t.ia], sy[t.ia]);
+    ctx.lineTo(sx[t.ib], sy[t.ib]);
+    ctx.lineTo(sx[t.ic], sy[t.ic]);
+    ctx.closePath();
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// Rounded-rectangle path helper.
+function roundRectPath(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+// Monospace HUD: FPS, frame time, triangle count, mode, controls, paused flag.
+function drawHUD(trianglesDrawn) {
+  ctx.save();
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  const font = '12px ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace';
+  ctx.font = font;
+
+  const fpsColor = fpsEMA >= 55 ? "#7ee787" : fpsEMA >= 30 ? "#f2cc60" : "#ff7b72";
+  const stats = [
+    { label: "FPS",   value: fpsEMA.toFixed(1),                          color: fpsColor },
+    { label: "FRAME", value: msEMA.toFixed(2) + " ms",                   color: "#c9d1d9" },
+    { label: "TRIS",  value: trianglesDrawn + " / 12 drawn",             color: "#c9d1d9" },
+    { label: "MODE",  value: state.wireframe ? "WIREFRAME" : "SHADED",   color: "#8ab4ff" },
+    { label: "RES",   value: W + " × " + H,                              color: "#6e7681" },
+  ];
+  const hints = ["W — wireframe", "P — pause"];
+
+  const lineH = 17, padX = 14, padY = 12, gap = 12, boxW = 246;
+  const boxH = padY * 2 + lineH + 6 + stats.length * lineH + gap + hints.length * lineH;
+
+  // Translucent panel.
+  ctx.fillStyle = "rgba(8, 10, 15, 0.62)";
+  roundRectPath(14, 14, boxW, boxH, 8);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.07)";
+  ctx.lineWidth = 1;
+  roundRectPath(14.5, 14.5, boxW - 1, boxH - 1, 8);
+  ctx.stroke();
+
+  // Title.
+  let y = 14 + padY;
+  ctx.font = "bold " + font;
+  ctx.fillStyle = "#ffd48a";
+  ctx.fillText("GOURAUD CUBE · SOFTWARE RASTERIZER", 14 + padX, y);
+  ctx.font = font;
+  y += lineH + 6;
+
+  // Stats.
+  for (const s of stats) {
+    ctx.fillStyle = "#6e7681";
+    ctx.fillText(s.label, 14 + padX, y);
+    ctx.fillStyle = s.color;
+    ctx.fillText(s.value, 14 + padX + 72, y);
+    y += lineH;
+  }
+
+  // Control hints.
+  y += gap - lineH;
+  for (const h of hints) {
+    ctx.fillStyle = "#6e7681";
+    ctx.fillText(h, 14 + padX, y);
+    y += lineH;
+  }
+
+  // Clear "PAUSED" indicator.
+  if (state.paused) {
+    const size = Math.max(28, Math.min(W, H) * 0.07);
+    ctx.font = "bold " + size + "px ui-monospace, Menlo, Consolas, monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "rgba(8, 10, 15, 0.45)";
+    ctx.fillRect(0, cy - size, W, size * 2);
+    ctx.shadowColor = "rgba(255, 205, 120, 0.9)";
+    ctx.shadowBlur = 24;
+    ctx.fillStyle = "#ffd48a";
+    ctx.fillText("PAUSED", cx, cy);
+    ctx.shadowBlur = 0;
+  }
+  ctx.restore();
+}
+
+/* ----------------------------------------------------------------
+   SECTION 7: Input — W toggles wireframe, P toggles pause
+   ---------------------------------------------------------------- */
+window.addEventListener("keydown", (e) => {
+  if (e.repeat) return; // ignore auto-repeat while key is held
+  const key = e.key.toLowerCase();
+  if (key === "w") {
+    state.wireframe = !state.wireframe;
+  } else if (key === "p") {
+    state.paused = !state.paused;
+  }
+});
+
+/* ----------------------------------------------------------------
+   SECTION 8: Main loop — rAF, dt clamping, EMA FPS, simulation
+   ---------------------------------------------------------------- */
+let lastNow = performance.now();
+let msEMA = 16.7;   // exponential moving average of frame deltas (ms)
+let fpsEMA = 60.0;  // FPS derived from the EMA frame time
+
+function tick(now) {
+  // Frame delta from performance.now()-based rAF timestamps.
+  let dtMs = now - lastNow;
+  lastNow = now;
+  if (dtMs < 0) dtMs = 0;
+
+  // Update FPS / frame-time EMAs (spikes clamped to 1 s so tab switches
+  // don't wreck the statistics).
+  const statMs = Math.min(dtMs, 1000);
+  if (statMs > 0) {
+    msEMA += (statMs - msEMA) * 0.1;
+    fpsEMA = 1000 / Math.max(msEMA, 1e-6);
+  }
+
+  // Simulation time step clamped to 50 ms; angles accumulate from dt so
+  // pause/resume works correctly.
+  const dt = Math.min(dtMs, 50) / 1000;
+  if (!state.paused) {
+    state.angleX += ROT_SPEED_X * dt;
+    state.angleY += ROT_SPEED_Y * dt;
+    state.angleZ += ROT_SPEED_Z * dt;
+    state.lightAngle += LIGHT_ORBIT_SPEED * dt;
+    state.lightBob += LIGHT_BOB_SPEED * dt;
+  }
+
+  renderFrame();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>

@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gouraud-Shaded Rotating Cube — Canvas 2D</title>
+<style>
+  html, body {
+    height: 100%;
+    margin: 0;
+    background: #0b0e14;
+    overflow: hidden;
+  }
+  canvas {
+    display: block;
+  }
+  /* Non-interactive vignette overlay */
+  #vignette {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0) 52%, rgba(0, 0, 0, 0.5) 100%);
+  }
+  /* HUD */
+  #hud {
+    position: fixed;
+    top: 14px;
+    left: 14px;
+    font-family: "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: 12px;
+    line-height: 1.75;
+    color: #cfd8e3;
+    background: rgba(11, 14, 20, 0.72);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 8px;
+    padding: 8px 12px;
+    user-select: none;
+  }
+  #hud span {
+    display: block;
+    white-space: pre;
+  }
+  #hud .dim {
+    color: #7d8894;
+  }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<div id="vignette"></div>
+<div id="hud"><span id="hud-fps">FPS: --</span><span id="hud-mode">MODE: GOURAUD SHADING</span><span id="hud-state">STATE: RUNNING</span><span id="hud-hint" class="dim">[W] wireframe   [P] pause</span></div>
+<script>
+"use strict";
+(function () {
+  /* ===================================================================
+   * 1) SETUP & RESIZE
+   * =================================================================== */
+  const canvas = document.getElementById("scene");
+  const ctx = canvas.getContext("2d");
+  const hudFps = document.getElementById("hud-fps");
+  const hudMode = document.getElementById("hud-mode");
+  const hudState = document.getElementById("hud-state");
+
+  const CAM_DIST = 4.4; // camera at origin looking down +z; cube sits at z = CAM_DIST
+  // Dark backdrop packed as little-endian ABGR uint32 (R=11, G=14, B=23, A=255).
+  const BG_COLOR = (0xFF000000 | (23 << 16) | (14 << 8) | 11) >>> 0;
+
+  let W = 0, H = 0, DPR = 1, CX = 0, CY = 0, FOCAL = 1;
+  let imageData = null;
+  let buf32 = null;  // Uint32 view over imageData for fast pixel writes
+  let zbuf = null;   // Float32 depth buffer
+
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 1.5);
+    W = Math.max(1, Math.floor(window.innerWidth * DPR));
+    H = Math.max(1, Math.floor(window.innerHeight * DPR));
+    canvas.width = W;
+    canvas.height = H;
+    canvas.style.width = window.innerWidth + "px";
+    canvas.style.height = window.innerHeight + "px";
+    imageData = ctx.createImageData(W, H);
+    buf32 = new Uint32Array(imageData.data.buffer);
+    zbuf = new Float32Array(W * H);
+    zbuf.fill(Infinity);
+    CX = W / 2;
+    CY = H / 2;
+    FOCAL = 0.95 * Math.min(W, H);
+  }
+
+  resize();
+  window.addEventListener("load", resize);
+  window.addEventListener("resize", resize);
+
+  /* ===================================================================
+   * 2) GEOMETRY
+   * =================================================================== */
+  const CUBE_VERTICES = [
+    [-1, -1, -1], // 0
+    [ 1, -1, -1], // 1
+    [ 1,  1, -1], // 2
+    [-1,  1, -1], // 3
+    [-1, -1,  1], // 4
+    [ 1, -1,  1], // 5
+    [ 1,  1,  1], // 6
+    [-1,  1,  1]  // 7
+  ];
+
+  // Vertex normals = normalized vertex position (the average of the 3
+  // adjacent axis-aligned face normals at each cube corner).
+  const CUBE_NORMALS = CUBE_VERTICES.map(function (v) {
+    const len = Math.hypot(v[0], v[1], v[2]);
+    return [v[0] / len, v[1] / len, v[2] / len];
+  });
+
+  // 6 quads wound CCW seen from outside.
+  const FACES = [
+    { quad: [4, 5, 6, 7], color: [229, 57, 53] },   // front  (+z) red
+    { quad: [1, 0, 3, 2], color: [41, 121, 255] },  // back   (-z) blue
+    { quad: [5, 1, 2, 6], color: [255, 152, 0] },   // right  (+x) orange
+    { quad: [0, 4, 7, 3], color: [0, 188, 166] },   // left   (-x) teal
+    { quad: [7, 6, 2, 3], color: [156, 77, 204] },  // top    (+y) purple
+    { quad: [0, 1, 5, 4], color: [76, 175, 80] }    // bottom (-y) green
+  ];
+
+  // Each quad splits into triangles (v0,v1,v2) and (v0,v2,v3).
+  const QUAD_TRIS = [[0, 1, 2], [0, 2, 3]];
+
+  /* ===================================================================
+   * 3) ROTATION MATRICES (row-major 3x3)
+   * =================================================================== */
+  function rotX(a) {
+    const c = Math.cos(a), s = Math.sin(a);
+    return [1, 0, 0, 0, c, -s, 0, s, c];
+  }
+  function rotY(a) {
+    const c = Math.cos(a), s = Math.sin(a);
+    return [c, 0, s, 0, 1, 0, -s, 0, c];
+  }
+  function rotZ(a) {
+    const c = Math.cos(a), s = Math.sin(a);
+    return [c, -s, 0, s, c, 0, 0, 0, 1];
+  }
+  function mat3Mul(a, b) {
+    const out = new Array(9);
+    for (let r = 0; r < 3; r++) {
+      for (let c = 0; c < 3; c++) {
+        out[r * 3 + c] = a[r * 3] * b[c] + a[r * 3 + 1] * b[3 + c] + a[r * 3 + 2] * b[6 + c];
+      }
+    }
+    return out;
+  }
+  function mat3Apply(m, v) {
+    return [
+      m[0] * v[0] + m[1] * v[1] + m[2] * v[2],
+      m[3] * v[0] + m[4] * v[1] + m[5] * v[2],
+      m[6] * v[0] + m[7] * v[1] + m[8] * v[2]
+    ];
+  }
+
+  /* ===================================================================
+   * Per-vertex scratch buffers (reused every frame, no allocations)
+   * =================================================================== */
+  const NV = CUBE_VERTICES.length;
+  const posX = new Float64Array(NV), posY = new Float64Array(NV), posZ = new Float64Array(NV);
+  const nrmX = new Float64Array(NV), nrmY = new Float64Array(NV), nrmZ = new Float64Array(NV);
+  const viewZ = new Float64Array(NV);
+  const scrX = new Float64Array(NV), scrY = new Float64Array(NV);
+  const vertOK = new Uint8Array(NV);
+  const litR = new Float64Array(4), litG = new Float64Array(4), litB = new Float64Array(4);
+
+  /* ===================================================================
+   * 6) SOFTWARE GOURAUD RASTERIZER (perspective-correct, z-buffered)
+   * =================================================================== */
+  function rasterizeTriangle(x0, y0, z0, r0, g0, b0,
+                             x1, y1, z1, r1, g1, b1,
+                             x2, y2, z2, r2, g2, b2) {
+    // Perspective-correct setup: interpolate 1/z and attribute/z linearly
+    // in screen space, then divide at each pixel.
+    const iz0 = 1 / z0, iz1 = 1 / z1, iz2 = 1 / z2;
+    const riz0 = r0 * iz0, giz0 = g0 * iz0, biz0 = b0 * iz0;
+    const riz1 = r1 * iz1, giz1 = g1 * iz1, biz1 = b1 * iz1;
+    const riz2 = r2 * iz2, giz2 = g2 * iz2, biz2 = b2 * iz2;
+
+    // Signed screen-space area = edge(v0, v1, v2).
+    const area = (x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0);
+    if (Math.abs(area) < 1e-4) return; // degenerate sliver
+    const s = area < 0 ? -1 : 1;       // winding-sign normalizer
+    const invArea = 1 / Math.abs(area);
+
+    // Triangle bounding box clamped to the canvas.
+    const minX = Math.max(0, Math.floor(Math.min(x0, x1, x2)));
+    const maxX = Math.min(W - 1, Math.ceil(Math.max(x0, x1, x2)));
+    const minY = Math.max(0, Math.floor(Math.min(y0, y1, y2)));
+    const maxY = Math.min(H - 1, Math.ceil(Math.max(y0, y1, y2)));
+    if (minX > maxX || minY > maxY) return;
+
+    // Incremental edge stepping: edge(a,b,p) changes by -(b.y - a.y) per
+    // +1 in x and by (b.x - a.x) per +1 in y. Values are pre-multiplied
+    // by s so the inside test is simply w0 >= 0 && w1 >= 0 && w2 >= 0.
+    const stepX0 = -(y2 - y1) * s, stepY0 = (x2 - x1) * s; // w0 = edge(v1, v2, p)
+    const stepX1 = -(y0 - y2) * s, stepY1 = (x0 - x2) * s; // w1 = edge(v2, v0, p)
+    const stepX2 = -(y1 - y0) * s, stepY2 = (x1 - x0) * s; // w2 = edge(v0, v1, p)
+
+    // Edge values at the first sampled pixel center.
+    const px0 = minX + 0.5, py0 = minY + 0.5;
+    let w0Row = ((x2 - x1) * (py0 - y1) - (y2 - y1) * (px0 - x1)) * s;
+    let w1Row = ((x0 - x2) * (py0 - y2) - (y0 - y2) * (px0 - x2)) * s;
+    let w2Row = ((x1 - x0) * (py0 - y0) - (y1 - y0) * (px0 - x0)) * s;
+
+    const zb = zbuf;
+    const fb = buf32;
+
+    for (let y = minY; y <= maxY; y++) {
+      let w0 = w0Row, w1 = w1Row, w2 = w2Row;
+      const rowBase = y * W;
+      let entered = false; // scanline spans of a triangle are contiguous
+      for (let x = minX; x <= maxX; x++) {
+        if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
+          entered = true;
+          const i = rowBase + x;
+          const iz = (w0 * iz0 + w1 * iz1 + w2 * iz2) * invArea;
+          const z = 1 / iz;
+          if (z < zb[i]) {
+            zb[i] = z;
+            let r = (w0 * riz0 + w1 * riz1 + w2 * riz2) * invArea * z;
+            let g = (w0 * giz0 + w1 * giz1 + w2 * giz2) * invArea * z;
+            let b = (w0 * biz0 + w1 * biz1 + w2 * biz2) * invArea * z;
+            r = r < 0 ? 0 : r > 255 ? 255 : r;
+            g = g < 0 ? 0 : g > 255 ? 255 : g;
+            b = b < 0 ? 0 : b > 255 ? 255 : b;
+            fb[i] = 0xFF000000 | (b << 16) | (g << 8) | r;
+          }
+        } else if (entered) {
+          break; // left the triangle on this scanline
+        }
+        w0 += stepX0; w1 += stepX1; w2 += stepX2;
+      }
+      w0Row += stepY0; w1Row += stepY1; w2Row += stepY2;
+    }
+  }
+
+  /* ===================================================================
+   * 7) WIREFRAME MODE
+   * =================================================================== */
+  function isFrontFacing(face) {
+    // Same view-space cull test as the solid path, on the quad's first triangle.
+    const q = face.quad;
+    if (!vertOK[q[0]] || !vertOK[q[1]] || !vertOK[q[2]]) return false;
+    const ax = posX[q[0]], ay = posY[q[0]], az = viewZ[q[0]];
+    const e1x = posX[q[1]] - ax, e1y = posY[q[1]] - ay, e1z = viewZ[q[1]] - az;
+    const e2x = posX[q[2]] - ax, e2y = posY[q[2]] - ay, e2z = viewZ[q[2]] - az;
+    const nx = e1y * e2z - e1z * e2y;
+    const ny = e1z * e2x - e1x * e2z;
+    const nz = e1x * e2y - e1y * e2x;
+    return nx * ax + ny * ay + nz * az < 0;
+  }
+
+  function strokeQuadPath(face) {
+    const q = face.quad;
+    if (!vertOK[q[0]] || !vertOK[q[1]] || !vertOK[q[2]] || !vertOK[q[3]]) return;
+    ctx.moveTo(scrX[q[0]], scrY[q[0]]);
+    ctx.lineTo(scrX[q[1]], scrY[q[1]]);
+    ctx.lineTo(scrX[q[2]], scrY[q[2]]);
+    ctx.lineTo(scrX[q[3]], scrY[q[3]]);
+    ctx.closePath();
+  }
+
+  function drawWireframe() {
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.lineWidth = 1.5 * DPR;
+
+    // Pass 1: back-facing edges (dim).
+    ctx.strokeStyle = "rgba(230, 237, 243, 0.12)";
+    ctx.beginPath();
+    for (let f = 0; f < FACES.length; f++) {
+      if (isFrontFacing(FACES[f])) continue;
+      strokeQuadPath(FACES[f]);
+    }
+    ctx.stroke();
+
+    // Pass 2: front-facing edges (bright).
+    ctx.strokeStyle = "#e6edf3";
+    ctx.beginPath();
+    for (let f = 0; f < FACES.length; f++) {
+      if (!isFrontFacing(FACES[f])) continue;
+      strokeQuadPath(FACES[f]);
+    }
+    ctx.stroke();
+
+    // Pass 3: small 3px vertex dots on front-facing faces.
+    ctx.fillStyle = "#e6edf3";
+    for (let f = 0; f < FACES.length; f++) {
+      if (!isFrontFacing(FACES[f])) continue;
+      const q = FACES[f].quad;
+      for (let k = 0; k < 4; k++) {
+        if (!vertOK[q[k]]) continue;
+        ctx.beginPath();
+        ctx.arc(scrX[q[k]], scrY[q[k]], 1.5 * DPR, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  /* ===================================================================
+   * 8) LIGHT MARKER
+   * =================================================================== */
+  function drawLightMarker(lx, ly, lz) {
+    const z = lz + CAM_DIST; // same camera transform
+    if (z <= 0.2) return;
+    const px = CX + FOCAL * lx / z;
+    const py = CY - FOCAL * ly / z;
+    const radius = (4 + 1.5 * Math.sin(simTime * 6)) * DPR; // pulsing
+    ctx.save();
+    ctx.shadowColor = "rgba(255, 232, 130, 0.9)";
+    ctx.shadowBlur = 20 * DPR;
+    ctx.fillStyle = "#ffe27a";
+    ctx.beginPath();
+    ctx.arc(px, py, radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = "#fff8dc";
+    ctx.beginPath();
+    ctx.arc(px, py, radius * 0.45, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  /* ===================================================================
+   * 5) PER-FRAME PIPELINE: transform -> project -> light -> cull -> rasterize
+   * =================================================================== */
+  function render() {
+    // ---- STAGE 1: TRANSFORM -------------------------------------------
+    // M = Rz(w*0.45) * Ry(w*0.7) * Rx(w*0.32); rotate positions and normals.
+    const M = mat3Mul(mat3Mul(rotZ(simTime * 0.45), rotY(simTime * 0.7)), rotX(simTime * 0.32));
+    for (let i = 0; i < NV; i++) {
+      const p = CUBE_VERTICES[i];
+      const wp = mat3Apply(M, p);
+      posX[i] = wp[0]; posY[i] = wp[1]; posZ[i] = wp[2];
+      const n = CUBE_NORMALS[i];
+      const wn = mat3Apply(M, n);
+      nrmX[i] = wn[0]; nrmY[i] = wn[1]; nrmZ[i] = wn[2];
+    }
+
+    // Moving point light (world space), orbiting around/behind the cube.
+    const lightX = 4.1 * Math.cos(simTime * 1.1);
+    const lightY = 2.1 * Math.sin(simTime * 0.7) + 0.5;
+    const lightZ = 1.6 + 3.8 * Math.sin(simTime * 0.86);
+
+    // ---- STAGE 2: PROJECT ---------------------------------------------
+    // View space = world + (0, 0, CAM_DIST); camera at origin looking +z.
+    // sx = CX + FOCAL * x / z, sy = CY - FOCAL * y / z (guard z > 0.05).
+    for (let i = 0; i < NV; i++) {
+      const z = posZ[i] + CAM_DIST;
+      viewZ[i] = z;
+      if (z > 0.05) {
+        vertOK[i] = 1;
+        scrX[i] = CX + FOCAL * posX[i] / z;
+        scrY[i] = CY - FOCAL * posY[i] / z;
+      } else {
+        vertOK[i] = 0;
+      }
+    }
+
+    // Common dark backdrop for both modes.
+    buf32.fill(BG_COLOR);
+
+    if (wireframe) {
+      // ---- WIREFRAME: backdrop + ctx strokes --------------------------
+      ctx.putImageData(imageData, 0, 0);
+      drawWireframe();
+    } else {
+      // ---- SOLID: clear z-buffer, then light -> cull -> rasterize -----
+      zbuf.fill(Infinity);
+      for (let f = 0; f < FACES.length; f++) {
+        const face = FACES[f];
+
+        // STAGE 3: LIGHT — per-vertex Lambert for this face's 4 corners.
+        for (let k = 0; k < 4; k++) {
+          const vi = face.quad[k];
+          let lx = lightX - posX[vi];
+          let ly = lightY - posY[vi];
+          let lz = lightZ - posZ[vi];
+          const dist = Math.sqrt(lx * lx + ly * ly + lz * lz) || 1e-9;
+          lx /= dist; ly /= dist; lz /= dist; // Ldir = normalize(light - vertex)
+          const att = 1 / (1 + 0.03 * dist * dist);
+          const ndl = Math.max(0, nrmX[vi] * lx + nrmY[vi] * ly + nrmZ[vi] * lz);
+          let intensity = 0.16 + 1.15 * ndl * att; // ambient + attenuated diffuse
+          intensity = intensity < 0 ? 0 : intensity > 1 ? 1 : intensity;
+          litR[k] = face.color[0] * intensity;
+          litG[k] = face.color[1] * intensity;
+          litB[k] = face.color[2] * intensity;
+        }
+
+        // STAGES 4 + 5: CULL per triangle, then RASTERIZE the survivors.
+        for (let t = 0; t < 2; t++) {
+          const ca = QUAD_TRIS[t][0], cb = QUAD_TRIS[t][1], cc = QUAD_TRIS[t][2];
+          const ia = face.quad[ca], ib = face.quad[cb], ic = face.quad[cc];
+          if (!vertOK[ia] || !vertOK[ib] || !vertOK[ic]) continue;
+
+          // Backface culling in view space: n = (p1 - p0) x (p2 - p0);
+          // visible iff dot(n, p0) < 0 (normal points back toward camera).
+          const e1x = posX[ib] - posX[ia], e1y = posY[ib] - posY[ia], e1z = viewZ[ib] - viewZ[ia];
+          const e2x = posX[ic] - posX[ia], e2y = posY[ic] - posY[ia], e2z = viewZ[ic] - viewZ[ia];
+          const nx = e1y * e2z - e1z * e2y;
+          const ny = e1z * e2x - e1x * e2z;
+          const nz = e1x * e2y - e1y * e2x;
+          if (nx * posX[ia] + ny * posY[ia] + nz * viewZ[ia] >= 0) continue;
+
+          rasterizeTriangle(
+            scrX[ia], scrY[ia], viewZ[ia], litR[ca], litG[ca], litB[ca],
+            scrX[ib], scrY[ib], viewZ[ib], litR[cb], litG[cb], litB[cb],
+            scrX[ic], scrY[ic], viewZ[ic], litR[cc], litG[cc], litB[cc]
+          );
+        }
+      }
+      ctx.putImageData(imageData, 0, 0);
+    }
+
+    // Light marker on top of everything (both modes).
+    drawLightMarker(lightX, lightY, lightZ);
+  }
+
+  /* ===================================================================
+   * 9) CONTROLS & TIMING
+   * =================================================================== */
+  let wireframe = false;
+  let paused = false;
+  let simTime = 0; // seconds; frozen while paused
+
+  function updateHud() {
+    hudMode.textContent = "MODE: " + (wireframe ? "WIREFRAME" : "GOURAUD SHADING");
+    hudState.textContent = "STATE: " + (paused ? "PAUSED" : "RUNNING");
+    hudState.style.color = paused ? "#ffd54f" : "#cfd8e3";
+  }
+
+  window.addEventListener("keydown", function (e) {
+    if (e.repeat) return;
+    const key = e.key.toLowerCase();
+    if (key === "w") {
+      wireframe = !wireframe;
+    } else if (key === "p") {
+      paused = !paused;
+    } else {
+      return;
+    }
+    updateHud();
+  });
+
+  let lastT = 0;
+  let frames = 0;
+  let fpsWindowStart = 0;
+
+  function frameLoop(t) {
+    if (lastT === 0) {
+      lastT = t;
+      fpsWindowStart = t;
+    }
+    const dt = Math.min(t - lastT, 50); // clamp huge gaps (tab switches)
+    lastT = t;
+    if (!paused) simTime += dt / 1000; // pause freezes rotation AND light motion
+
+    render(); // render loop keeps running so W stays responsive while paused
+
+    // FPS over a 500 ms window.
+    frames++;
+    const elapsed = t - fpsWindowStart;
+    if (elapsed >= 500) {
+      if (frames > 0) {
+        const fps = frames * 1000 / elapsed;
+        const ms = elapsed / frames;
+        hudFps.textContent = "FPS: " + fps.toFixed(1) + " (" + ms.toFixed(1) + " ms)";
+      }
+      frames = 0;
+      fpsWindowStart = t;
+      updateHud();
+    }
+    requestAnimationFrame(frameLoop);
+  }
+
+  updateHud();
+  requestAnimationFrame(frameLoop);
+})();
+</script>
+</body>
+</html>
