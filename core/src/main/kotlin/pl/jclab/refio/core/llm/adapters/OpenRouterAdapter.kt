@@ -71,7 +71,7 @@ open class OpenRouterAdapter(
         kwargs: Map<String, Any>,
         requestId: String,
     ): Map<String, Any> = super.buildRequestBody(
-        requestMessages, effectiveMaxTokens, temperature, streaming, kwargs, requestId,
+        endOnUserTurnForGemini(requestMessages), effectiveMaxTokens, temperature, streaming, kwargs, requestId,
     ).toMutableMap().apply {
         // `thinking` arrives as Boolean true (toggle on, unspecified magnitude) or a non-blank
         // effort String ("low"/"medium"/"high"); absent/false/blank means thinking OFF.
@@ -98,6 +98,12 @@ open class OpenRouterAdapter(
             thinkingOn -> {
                 // Bare on without a level: let the provider reason at its own default.
             }
+            offEffort(model) != null -> {
+                // Reasoning cannot be disabled here but can be scaled: OFF means the lowest level.
+                val effort = offEffort(model)!!.toEffortString()
+                put("reasoning", mapOf("effort" to effort))
+                logger.info { "[${providerTag}] Thinking OFF mapped to reasoning effort=$effort for $model" }
+            }
             !reasoningIsMandatory(model) -> {
                 // Honour "thinking OFF": suppress upstream reasoning. Without this the toggle was
                 // a silent no-op for OpenRouter - reasoning models (e.g. minimax-m3) defaulted to
@@ -121,6 +127,19 @@ open class OpenRouterAdapter(
      */
     private fun reasoningIsMandatory(modelId: String): Boolean =
         ModelDefinitions.getDefinition("openrouter", modelId)?.reasoningMandatory == true
+
+    /**
+     * Google rejects a request whose last message is a model turn ("Requests ending with a model
+     * turn are not supported"). Tool results travel as assistant text, so after every tool call
+     * the conversation ends on one; hand that last message to Gemini as a user turn instead.
+     */
+    private fun endOnUserTurnForGemini(messages: List<Map<String, Any>>): List<Map<String, Any>> {
+        if (!model.startsWith("google/gemini") || messages.lastOrNull()?.get("role") != "assistant") return messages
+        return messages.dropLast(1) + (messages.last() + ("role" to "user"))
+    }
+
+    private fun offEffort(modelId: String): ReasoningEffort? =
+        ModelDefinitions.getDefinition("openrouter", modelId)?.reasoningOffEffort
 
     /**
      * OpenRouter returns HTTP 200 with `{"error": {...}}` for upstream provider errors.

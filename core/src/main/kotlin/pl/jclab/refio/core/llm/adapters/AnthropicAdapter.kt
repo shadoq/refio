@@ -8,6 +8,7 @@ import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.llm.LLMResponse
 import pl.jclab.refio.core.llm.LLMUsage
 import pl.jclab.refio.core.llm.ReasoningEffort
+import pl.jclab.refio.core.llm.ModelDefinitions
 import pl.jclab.refio.core.llm.ModelConfig
 import pl.jclab.refio.core.llm.NativeToolCall
 import pl.jclab.refio.core.llm.NativeToolCallDelta
@@ -299,7 +300,13 @@ class AnthropicAdapter(
      * that effort is the only way to make them think less.
      */
     internal fun thinkingParams(effort: ReasoningEffort): Map<String, Any> {
-        if (!effort.isOn) return emptyMap()
+        if (!effort.isOn) {
+            // Models that think by default run at their lowest level instead of the costlier default;
+            // the rest stay off when nothing is sent.
+            val offEffort = ModelDefinitions.getDefinition("anthropic", model)?.reasoningOffEffort
+                ?: return emptyMap()
+            return mapOf("output_config" to mapOf("effort" to offEffort.toEffortString()!!))
+        }
         if (ADAPTIVE_THINKING_MODEL.containsMatchIn(model)) {
             return mapOf("output_config" to mapOf("effort" to effort.toEffortString()!!))
         }

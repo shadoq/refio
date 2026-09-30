@@ -36,8 +36,11 @@ class OpenRouterAdapterTest {
 
     /** Exposes the protected [OpenRouterAdapter.buildRequestBody] to the test. */
     private class Testable(model: String) : OpenRouterAdapter(model = model) {
-        fun body(kwargs: Map<String, Any>): Map<String, Any> = buildRequestBody(
-            requestMessages = listOf(mapOf("role" to "user", "content" to "hi")),
+        fun body(
+            kwargs: Map<String, Any>,
+            messages: List<Map<String, Any>> = listOf(mapOf("role" to "user", "content" to "hi")),
+        ): Map<String, Any> = buildRequestBody(
+            requestMessages = messages,
             effectiveMaxTokens = 1024,
             temperature = 0.7,
             streaming = false,
@@ -101,13 +104,60 @@ class OpenRouterAdapterTest {
         // The Kimi family rejects reasoning.enabled=false ("Reasoning is mandatory for this
         // endpoint and cannot be disabled"), so thinking OFF must NOT emit the suppression key
         // for any kimi variant — both the 1M-context k3 and the family fallback (e.g. k2.7-code).
-        for (model in listOf("moonshotai/kimi-k3", "moonshotai/kimi-k2.7-code")) {
+        for (model in listOf("moonshotai/kimi-k2.7-code")) {
             val body = Testable(model).body(emptyMap())
             assertTrue(
                 !body.containsKey("reasoning"),
                 "mandatory-reasoning model $model must not receive reasoning.enabled=false"
             )
         }
+    }
+
+    @Test
+    fun `a tool result closing the conversation is sent to gemini as a user turn it accepts`() {
+        // Tool results travel as assistant text; Google rejects a request that ends on a model
+        // turn ("Requests ending with a model turn are not supported"), which failed every turn
+        // right after the first tool call.
+        val history = listOf(
+            mapOf("role" to "user", "content" to "write a game"),
+            mapOf("role" to "assistant", "content" to "[Tool result: file_search] No files found"),
+        )
+
+        @Suppress("UNCHECKED_CAST")
+        val sent = Testable("google/gemini-3.8-flash").body(emptyMap(), history)["messages"] as List<Map<String, Any>>
+        assertEquals("user", sent.last()["role"])
+        assertEquals(history.last()["content"], sent.last()["content"])
+    }
+
+    @Test
+    fun `other models keep the tool result on the assistant turn`() {
+        val history = listOf(
+            mapOf("role" to "user", "content" to "write a game"),
+            mapOf("role" to "assistant", "content" to "[Tool result: file_search] No files found"),
+        )
+
+        @Suppress("UNCHECKED_CAST")
+        val sent = Testable("deepseek/deepseek-v4.1-flash").body(emptyMap(), history)["messages"] as List<Map<String, Any>>
+        assertEquals("assistant", sent.last()["role"])
+    }
+
+    @Test
+    fun `thinking OFF runs kimi-k3 and opus 5_5 at low effort instead of their costlier defaults`() {
+        // Neither can stop reasoning; left alone kimi-k3 reasons at "max" and opus-5.5 at "medium".
+        for (model in listOf("moonshotai/kimi-k3", "anthropic/claude-opus-5.5")) {
+            val body = Testable(model).body(emptyMap())
+            assertEquals(mapOf("effort" to "low"), body["reasoning"], "model $model")
+        }
+    }
+
+    @Test
+    fun `thinking OFF asks for low reasoning on an endpoint that cannot disable it but can scale it`() {
+        // gemini-3.8-flash rejects reasoning.enabled=false with HTTP 400, which failed every turn;
+        // the lowest effort is the closest thing to OFF that the endpoint accepts.
+        val body = Testable("google/gemini-3.8-flash").body(emptyMap())
+        @Suppress("UNCHECKED_CAST")
+        val reasoning = body["reasoning"] as? Map<String, Any>
+        assertEquals(mapOf("effort" to "low"), reasoning)
     }
 
     @Test

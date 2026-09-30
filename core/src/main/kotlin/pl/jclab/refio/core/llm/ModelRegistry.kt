@@ -87,6 +87,9 @@ data class ModelDefinition(
     // reasoning.enabled=false with a hard error. When true, adapters must not try to
     // suppress reasoning even when the user turns thinking OFF.
     val reasoningMandatory: Boolean = false,
+    // Effort sent in place of "thinking OFF" for models that think anyway unless told otherwise
+    // but accept a level (e.g. Opus 5.5, Sonnet 5, kimi-k3). null = no mapping for this model.
+    val reasoningOffEffort: ReasoningEffort? = null,
 
     // Provider-specific
     val endpointType: ApiEndpointType = ApiEndpointType.CHAT_COMPLETIONS,  // API endpoint to use (CHAT_COMPLETIONS, RESPONSES, etc.)

@@ -22,10 +22,21 @@ class AnthropicThinkingParamsTest {
     }
 
     @Test
-    fun `adaptive model with reasoning off sends nothing and keeps the provider default`() {
-        val params = AnthropicAdapter(model = "claude-sonnet-5").thinkingParams(ReasoningEffort.OFF)
+    fun `model that thinks only when asked sends nothing with reasoning off`() {
+        // Opus 4.8 leaves thinking off unless the request enables it.
+        val params = AnthropicAdapter(model = "claude-opus-4-8").thinkingParams(ReasoningEffort.OFF)
 
         assertTrue(params.isEmpty())
+    }
+
+    @Test
+    fun `claude 5 models with reasoning off run at low effort instead of their costlier default`() {
+        // Each of them thinks unless told otherwise; left alone they run at high (medium on Opus 5.5).
+        for (model in listOf("claude-sonnet-5", "claude-sonnet-5-5", "claude-opus-5")) {
+            val params = AnthropicAdapter(model = model).thinkingParams(ReasoningEffort.OFF)
+
+            assertEquals(mapOf("output_config" to mapOf("effort" to "low")), params, "model $model")
+        }
     }
 
     @Test

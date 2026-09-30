@@ -21,6 +21,16 @@ class OpenRouterPrefixResolutionTest {
         )
 
     @Test
+    fun `an OpenRouter reasoning model lets the thinking toggle through`() {
+        // The turn gate drops thinking for any model whose definition says it cannot think, so a
+        // reasoning family that left the flag unset had every requested level silently turned off.
+        val def = ModelDefinitions.getDefinition("openrouter", "google/gemini-3.8-flash")
+
+        assertNotNull(def)
+        assertTrue(def.supportsThinking)
+    }
+
+    @Test
     fun `gpt-5_1 keeps its 400k window instead of falling back to the 128k gpt- family`() {
         assertEquals(400_000, definitionFor("openai/gpt-5.1").maxContext)
         assertEquals(400_000, definitionFor("openai/gpt-5.1-codex").maxContext)
