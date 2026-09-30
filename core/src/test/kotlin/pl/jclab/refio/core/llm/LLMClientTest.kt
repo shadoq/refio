@@ -30,6 +30,26 @@ class LLMClientTest {
     }
 
     @Nested
+    inner class StreamedCost {
+
+        @Test
+        fun `a streamed call is billed at the cost the provider reported, not a local price estimate`() {
+            // kimi-k3 on OpenRouter: the local literal ($0.60/$2.50) is ~5x below the real price,
+            // which undercounted a benchmark's Kimi spend at $1.46 against $4.04 on the invoice.
+            val usage = LLMUsage(inputTokens = 16_376, outputTokens = 203, totalTokens = 16_579, upstreamCostUsd = 0.0397341)
+
+            assertEquals(0.0397341, llmClient.estimateCost(usage, "openrouter", "moonshotai/kimi-k3"), 1e-9)
+        }
+
+        @Test
+        fun `without a reported cost the streamed call falls back to the local price table`() {
+            val usage = LLMUsage(inputTokens = 1_000_000, outputTokens = 0, totalTokens = 1_000_000)
+
+            assertEquals(0.20, llmClient.estimateCost(usage, "openai", "gpt-5.4-nano"), 1e-9)
+        }
+    }
+
+    @Nested
     inner class NoEgressEnforcement {
 
         @Test
