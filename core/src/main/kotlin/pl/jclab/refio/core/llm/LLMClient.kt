@@ -603,8 +603,9 @@ class LLMClient(
         httpClientPool.clear()
     }
 
-    private fun estimateCost(usage: LLMUsage, provider: String, model: String): Double {
-        return calculateCost(
+    /** The provider-reported charge wins; the local price table is only a fallback estimate. */
+    internal fun estimateCost(usage: LLMUsage, provider: String, model: String): Double {
+        return usage.upstreamCostUsd ?: calculateCost(
             provider = provider,
             model = model,
             inputTokens = usage.inputTokens,
