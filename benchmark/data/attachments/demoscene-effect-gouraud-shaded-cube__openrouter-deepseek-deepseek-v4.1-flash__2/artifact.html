@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gouraud Shaded Cube — Canvas 2D</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #0a0a12;
+    font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: #e8e8f0;
+  }
+  #canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+    background: radial-gradient(circle at 50% 45%, #1a1a2e 0%, #0a0a12 70%, #050508 100%);
+  }
+  #hud {
+    position: fixed;
+    top: 14px;
+    left: 16px;
+    pointer-events: none;
+    user-select: none;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+  }
+  #title {
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    color: #f0f0ff;
+  }
+  #help {
+    margin-top: 6px;
+    font-size: 13px;
+    color: #9aa0b5;
+    line-height: 1.5;
+  }
+  #help b { color: #7fd1ff; font-weight: 600; }
+  #fps {
+    position: fixed;
+    top: 14px;
+    right: 16px;
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+    color: #7fd1ff;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div id="hud">
+  <div id="title">Gouraud-Shaded Rotating Cube</div>
+  <div id="help">
+    <b>W</b> — toggle wireframe &nbsp;·&nbsp; <b>P</b> — pause
+  </div>
+</div>
+<div id="fps">FPS: --</div>
+
+<script>
+"use strict";
+
+/* =========================================================================
+   Gouraud-shaded rotating cube — pure Canvas 2D software renderer.
+   Pipeline stages:
+     1. Model space vertices + faces (CCW winding, outward normals)
+     2. Rotation matrices (rotX/rotY/rotZ) composed from time
+     3. Perspective projection to screen space
+     4. Backface culling via face normal vs. view direction
+     5. Per-vertex Lambert lighting (smooth normals averaged from faces)
+     6. Scanline triangle rasterizer with barycentric color + z-buffer
+   ========================================================================= */
+
+// -------------------------------------------------------------------------
+// Canvas setup (with devicePixelRatio handling for crisp rendering)
+// -------------------------------------------------------------------------
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d", { alpha: false });
+const fpsEl = document.getElementById("fps");
+
+let W = 0, H = 0;          // logical (CSS) size
+let DPR = 1;               // device pixel ratio
+let imgData = null;        // ImageData buffer for rasterization
+let buf = null;            // Uint8ClampedArray view of imgData.data
+let zbuf = null;           // depth buffer (Float32Array)
+
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width = Math.floor(W * DPR);
+  canvas.height = Math.floor(H * DPR);
+  canvas.style.width = W + "px";
+  canvas.style.height = H + "px";
+
+  // Rasterization buffer at device resolution
+  imgData = ctx.createImageData(canvas.width, canvas.height);
+  buf = imgData.data;
+  zbuf = new Float32Array(canvas.width * canvas.height);
+}
+window.addEventListener("resize", resize);
+resize();
+
+// -------------------------------------------------------------------------
+// 1. Geometry: cube vertices (half-extent 1) and quad faces.
+//    Faces are wound CCW when viewed from outside so the cross product
+//    of two edges yields an outward-facing normal.
+// -------------------------------------------------------------------------
+const S = 1.0; // half-extent
+const vertices = [
+  [-S, -S, -S], // 0
+  [ S, -S, -S], // 1
+  [ S,  S, -S], // 2
+  [-S,  S, -S], // 3
+  [-S, -S,  S], // 4
+  [ S, -S,  S], // 5
+  [ S,  S,  S], // 6
+  [-S,  S,  S], // 7
+];
+
+// Each face: [i0, i1, i2, i3] with CCW winding (outward normal).
+const faces = [
+  [4, 5, 6, 7], // +Z front
+  [1, 0, 3, 2], // -Z back
+  [5, 1, 2, 6], // +X right
+  [0, 4, 7, 3], // -X left
+  [7, 6, 2, 3], // +Y top
+  [0, 1, 5, 4], // -Y bottom
+];
+
+// Per-face base hues (pleasant palette)
+const faceHues = [200, 280, 340, 160, 40, 100];
+
+// -------------------------------------------------------------------------
+// 2. Math helpers: 3x3 matrices and vec3 operations.
+// -------------------------------------------------------------------------
+function mat3Identity() {
+  return [1,0,0, 0,1,0, 0,0,1];
+}
+function mat3Mul(a, b) {
+  // returns a * b (row-major 3x3)
+  const r = new Array(9);
+  for (let i = 0; i < 3; i++) {
+    for (let j = 0; j < 3; j++) {
+      r[i*3+j] = a[i*3+0]*b[0*3+j] + a[i*3+1]*b[1*3+j] + a[i*3+2]*b[2*3+j];
+    }
+  }
+  return r;
+}
+function mat3Apply(m, v) {
+  return [
+    m[0]*v[0] + m[1]*v[1] + m[2]*v[2],
+    m[3]*v[0] + m[4]*v[1] + m[5]*v[2],
+    m[6]*v[0] + m[7]*v[1] + m[8]*v[2],
+  ];
+}
+function rotX(a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return [1,0,0, 0,c,-s, 0,s,c];
+}
+function rotY(a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return [c,0,s, 0,1,0, -s,0,c];
+}
+function rotZ(a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return [c,-s,0, s,c,0, 0,0,1];
+}
+function vSub(a, b) { return [a[0]-b[0], a[1]-b[1], a[2]-b[2]]; }
+function vCross(a, b) {
+  return [
+    a[1]*b[2] - a[2]*b[1],
+    a[2]*b[0] - a[0]*b[2],
+    a[0]*b[1] - a[1]*b[0],
+  ];
+}
+function vDot(a, b) { return a[0]*b[0] + a[1]*b[1] + a[2]*b[2]; }
+function vNorm(a) {
+  const l = Math.hypot(a[0], a[1], a[2]) || 1;
+  return [a[0]/l, a[1]/l, a[2]/l];
+}
+
+// -------------------------------------------------------------------------
+// Precompute per-vertex normals by averaging adjacent face normals.
+// This gives smooth Gouraud interpolation across the cube.
+// -------------------------------------------------------------------------
+const vertexNormals = vertices.map(() => [0, 0, 0]);
+for (const f of faces) {
+  const p0 = vertices[f[0]], p1 = vertices[f[1]], p2 = vertices[f[2]];
+  const n = vNorm(vCross(vSub(p1, p0), vSub(p2, p0)));
+  for (const idx of f) {
+    vertexNormals[idx][0] += n[0];
+    vertexNormals[idx][1] += n[1];
+    vertexNormals[idx][2] += n[2];
+  }
+}
+for (let i = 0; i < vertexNormals.length; i++) {
+  vertexNormals[i] = vNorm(vertexNormals[i]);
+}
+
+// -------------------------------------------------------------------------
+// HSL -> RGB helper (h in degrees, s/l in 0..1)
+// -------------------------------------------------------------------------
+function hslToRgb(h, s, l) {
+  h = ((h % 360) + 360) % 360 / 360;
+  let r, g, b;
+  if (s === 0) {
+    r = g = b = l;
+  } else {
+    const hue2rgb = (p, q, t) => {
+      if (t < 0) t += 1;
+      if (t > 1) t -= 1;
+      if (t < 1/6) return p + (q - p) * 6 * t;
+      if (t < 1/2) return q;
+      if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+      return p;
+    };
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    r = hue2rgb(p, q, h + 1/3);
+    g = hue2rgb(p, q, h);
+    b = hue2rgb(p, q, h - 1/3);
+  }
+  return [r * 255, g * 255, b * 255];
+}
+
+// -------------------------------------------------------------------------
+// 3. Projection parameters
+// -------------------------------------------------------------------------
+const CAM_Z = 4.2;   // camera distance along +Z
+const FOV = 1.6;     // focal length scale
+
+// -------------------------------------------------------------------------
+// Animation state
+// -------------------------------------------------------------------------
+let paused = false;
+let wireframe = false;
+let angleX = 0, angleY = 0, angleZ = 0;
+let lightAngle = 0;
+let lastTime = performance.now();
+
+// FPS tracking (rolling average)
+let fpsAccum = 0, fpsFrames = 0, fpsTimer = 0;
+let fpsValue = 0;
+
+// -------------------------------------------------------------------------
+// Main render function
+// -------------------------------------------------------------------------
+function render(dt) {
+  // --- Advance animation (unless paused) ---
+  if (!paused) {
+    angleX += dt * 0.55;
+    angleY += dt * 0.85;
+    angleZ += dt * 0.30;
+    lightAngle += dt * 1.35; // light orbits at a different speed
+  }
+
+  // --- Compose rotation matrix from time ---
+  let R = mat3Mul(rotY(angleY), rotX(angleX));
+  R = mat3Mul(R, rotZ(angleZ));
+
+  // --- Transform vertices to view space ---
+  const viewVerts = vertices.map(v => mat3Apply(R, v));
+
+  // --- Moving directional light (orbiting point light direction) ---
+  const lightPos = [
+    Math.cos(lightAngle) * 3.0,
+    Math.sin(lightAngle * 0.7) * 2.2,
+    Math.sin(lightAngle) * 3.0,
+  ];
+  const lightDir = vNorm(lightPos); // direction from origin toward light
+
+  // --- Projection center & focal length ---
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+  const f = Math.min(canvas.width, canvas.height) * 0.42 * FOV;
+
+  // Project each vertex; store screen x/y and depth (z + camZ)
+  const proj = viewVerts.map(v => {
+    const zc = v[2] + CAM_Z;
+    const invZ = 1 / zc;
+    return {
+      x: cx + v[0] * f * invZ,
+      y: cy - v[1] * f * invZ,
+      z: zc,          // depth for z-buffer (larger = farther)
+      invZ: invZ,     // for perspective-correct interpolation
+    };
+  });
+
+  // --- Clear color buffer with a subtle vertical gradient ---
+  const bw = canvas.width, bh = canvas.height;
+  for (let y = 0; y < bh; y++) {
+    const t = y / bh;
+    const r = 10 + t * 12;
+    const g = 10 + t * 14;
+    const b = 18 + t * 22;
+    let o = y * bw * 4;
+    for (let x = 0; x < bw; x++) {
+      buf[o] = r; buf[o+1] = g; buf[o+2] = b; buf[o+3] = 255;
+      o += 4;
+    }
+  }
+  // Reset z-buffer to +Infinity (far)
+  zbuf.fill(Infinity);
+
+  // --- Build triangle list with lighting ---
+  // For each face: backface cull, then split into 2 triangles.
+  const triangles = [];
+
+  for (let fi = 0; fi < faces.length; fi++) {
+    const face = faces[fi];
+    const p0 = viewVerts[face[0]];
+    const p1 = viewVerts[face[1]];
+    const p2 = viewVerts[face[2]];
+
+    // Face normal in view space
+    const faceNormal = vNorm(vCross(vSub(p1, p0), vSub(p2, p0)));
+
+    // Backface culling: view direction from face centroid to camera (0,0,CAM_Z)
+    const centroid = [
+      (p0[0]+p1[0]+p2[0]+viewVerts[face[3]][0]) / 4,
+      (p0[1]+p1[1]+p2[1]+viewVerts[face[3]][1]) / 4,
+      (p0[2]+p1[2]+p2[2]+viewVerts[face[3]][2]) / 4,
+    ];
+    const viewDir = vNorm([-centroid[0], -centroid[1], CAM_Z - centroid[2]]);
+    if (vDot(faceNormal, viewDir) <= 0) continue; // cull back-facing
+
+    // Base color for this face
+    const baseRgb = hslToRgb(faceHues[fi], 0.65, 0.55);
+
+    // Compute per-vertex lit colors (Gouraud)
+    const litColors = face.map(idx => {
+      // Rotate the smooth vertex normal into view space
+      const n = vNorm(mat3Apply(R, vertexNormals[idx]));
+      // Lambert diffuse with ambient
+      const diff = Math.max(0, vDot(n, lightDir));
+      const ambient = 0.18;
+      const intensity = ambient + diff * 0.95;
+      return [
+        Math.min(255, baseRgb[0] * intensity),
+        Math.min(255, baseRgb[1] * intensity),
+        Math.min(255, baseRgb[2] * intensity),
+      ];
+    });
+
+    // Split quad into two triangles: (0,1,2) and (0,2,3)
+    triangles.push({
+      a: proj[face[0]], b: proj[face[1]], c: proj[face[2]],
+      ca: litColors[0], cb: litColors[1], cc: litColors[2],
+    });
+    triangles.push({
+      a: proj[face[0]], b: proj[face[2]], c: proj[face[3]],
+      ca: litColors[0], cb: litColors[2], cc: litColors[3],
+    });
+  }
+
+  // --- Rasterize triangles (Gouraud + z-buffer) ---
+  for (const tri of triangles) {
+    rasterizeTriangle(tri);
+  }
+
+  // --- Blit the pixel buffer to the canvas ---
+  ctx.putImageData(imgData, 0, 0);
+
+  // --- Wireframe overlay ---
+  if (wireframe) {
+    drawWireframe(viewVerts, proj, R);
+  }
+}
+
+// -------------------------------------------------------------------------
+// 5/6. Scanline triangle rasterizer with barycentric interpolation.
+//      Interpolates color (r,g,b) and depth across the triangle.
+// -------------------------------------------------------------------------
+function rasterizeTriangle(tri) {
+  const { a, b, c, ca, cb, cc } = tri;
+
+  // Bounding box (clamped to canvas)
+  const minX = Math.max(0, Math.floor(Math.min(a.x, b.x, c.x)));
+  const maxX = Math.min(canvas.width - 1, Math.ceil(Math.max(a.x, b.x, c.x)));
+  const minY = Math.max(0, Math.floor(Math.min(a.y, b.y, c.y)));
+  const maxY = Math.min(canvas.height - 1, Math.ceil(Math.max(a.y, b.y, c.y)));
+  if (minX > maxX || minY > maxY) return;
+
+  // Edge function for barycentric coordinates
+  const area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+  if (Math.abs(area) < 1e-9) return;
+  const invArea = 1 / area;
+
+  // Perspective-correct interpolation weights use invZ
+  const w0z = a.invZ, w1z = b.invZ, w2z = c.invZ;
+
+  for (let y = minY; y <= maxY; y++) {
+    const py = y + 0.5;
+    for (let x = minX; x <= maxX; x++) {
+      const px = x + 0.5;
+
+      // Barycentric coordinates
+      let w0 = ((b.x - px) * (c.y - py) - (b.y - py) * (c.x - px)) * invArea;
+      let w1 = ((c.x - px) * (a.y - py) - (c.y - py) * (a.x - px)) * invArea;
+      let w2 = 1 - w0 - w1;
+
+      // Small epsilon shrink to avoid seams between adjacent triangles
+      const eps = -0.0008;
+      if (w0 < eps || w1 < eps || w2 < eps) continue;
+
+      // Perspective-correct depth interpolation
+      const invZ = w0 * w0z + w1 * w1z + w2 * w2z;
+      const depth = 1 / invZ;
+
+      const idx = y * canvas.width + x;
+      if (depth >= zbuf[idx]) continue; // occluded
+      zbuf[idx] = depth;
+
+      // Interpolate color (barycentric, perspective-corrected)
+      const r = (w0 * ca[0] * w0z + w1 * cb[0] * w1z + w2 * cc[0] * w2z) * depth;
+      const g = (w0 * ca[1] * w0z + w1 * cb[1] * w1z + w2 * cc[1] * w2z) * depth;
+      const bl = (w0 * ca[2] * w0z + w1 * cb[2] * w1z + w2 * cc[2] * w2z) * depth;
+
+      const o = idx * 4;
+      buf[o] = r;
+      buf[o+1] = g;
+      buf[o+2] = bl;
+      buf[o+3] = 255;
+    }
+  }
+}
+
+// -------------------------------------------------------------------------
+// 6. Wireframe overlay: draw visible face edges as lines.
+// -------------------------------------------------------------------------
+function drawWireframe(viewVerts, proj, R) {
+  ctx.save();
+  ctx.lineWidth = Math.max(1, DPR * 1.2);
+  ctx.strokeStyle = "rgba(180, 220, 255, 0.85)";
+  ctx.lineJoin = "round";
+
+  for (const face of faces) {
+    const p0 = viewVerts[face[0]];
+    const p1 = viewVerts[face[1]];
+    const p2 = viewVerts[face[2]];
+    const faceNormal = vNorm(vCross(vSub(p1, p0), vSub(p2, p0)));
+    const centroid = [
+      (p0[0]+p1[0]+p2[0]+viewVerts[face[3]][0]) / 4,
+      (p0[1]+p1[1]+p2[1]+viewVerts[face[3]][1]) / 4,
+      (p0[2]+p1[2]+p2[2]+viewVerts[face[3]][2]) / 4,
+    ];
+    const viewDir = vNorm([-centroid[0], -centroid[1], CAM_Z - centroid[2]]);
+    if (vDot(faceNormal, viewDir) <= 0) continue;
+
+    ctx.beginPath();
+    for (let i = 0; i < 4; i++) {
+      const p = proj[face[i]];
+      const q = proj[face[(i + 1) % 4]];
+      ctx.moveTo(p.x / DPR, p.y / DPR);
+      ctx.lineTo(q.x / DPR, q.y / DPR);
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// -------------------------------------------------------------------------
+// Main loop with delta time and FPS tracking
+// -------------------------------------------------------------------------
+function loop(now) {
+  const dt = Math.min((now - lastTime) / 1000, 0.1); // clamp for stability
+  lastTime = now;
+
+  render(dt);
+
+  // FPS rolling average, updated ~4x per second
+  fpsAccum += dt;
+  fpsFrames++;
+  fpsTimer += dt;
+  if (fpsTimer >= 0.25) {
+    fpsValue = fpsFrames / fpsAccum;
+    fpsEl.textContent = "FPS: " + fpsValue.toFixed(0);
+    fpsAccum = 0;
+    fpsFrames = 0;
+    fpsTimer = 0;
+  }
+
+  requestAnimationFrame(loop);
+}
+
+// -------------------------------------------------------------------------
+// Keyboard controls
+// -------------------------------------------------------------------------
+window.addEventListener("keydown", (e) => {
+  const k = e.key.toLowerCase();
+  if (k === "w") {
+    wireframe = !wireframe;
+  } else if (k === "p") {
+    paused = !paused;
+  }
+});
+
+// Kick off the animation
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

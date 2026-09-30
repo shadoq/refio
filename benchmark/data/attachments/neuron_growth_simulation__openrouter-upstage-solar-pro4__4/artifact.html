@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Neuron Growth Simulation</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+background: #05070f;
+display: flex;
+justify-content: center;
+align-items: center;
+min-height: 100vh;
+overflow: hidden;
+font-family: 'Courier New', monospace;
+}
+canvas {
+border: 2px solid rgba(0, 229, 255, 0.3);
+box-shadow: 0 0 60px rgba(0, 229, 255, 0.15), inset 0 0 100px rgba(0, 229, 255, 0.05);
+}
+</style>
+</head>
+<body>
+<canvas id="canvas" width="800" height="800"></canvas>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.9/dat.gui.min.js"></script>
+<script>
+// ============================================================
+// NEURON GROWTH SIMULATION
+// A self-contained neural network visualization with neon glow
+// ============================================================
+
+// --- Canvas Setup ---
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const W = canvas.width;
+const H = canvas.height;
+const CENTER_X = W / 2;
+const CENTER_Y = H / 2;
+
+// --- Color Palette ---
+const COLORS = {
+background: '#05070f',
+backgroundGlow: '#101a3a',
+branch: '#00e5ff',
+accentBranch: '#d6ff00',
+synapse: '#ff2bd6',
+pulse: '#fff36a',
+uiAccent: '#ffd400',
+scanline: 'rgba(0, 229, 255, 0.08)'
+};
+
+// --- Configuration (defaults, updated by GUI) ---
+const config = {
+// Growth
+neuronCount: 5,
+growthSpeed: 2.5,
+maxDepth: 6,
+splitChance: 0.15,
+curvature: 0.3,
+maxBranchLength: 120,
+maxBranches: 300,
+// Synapses
+synapseDistance: 50,
+synapseGlowStrength: 15,
+// Pulses
+pulseSpeed: 3,
+pulseFrequency: 0.02,
+pulseBrightness: 1.0,
+// Visuals
+backgroundColor: '#05070f',
+branchColor: '#00e5ff',
+accentBranchColor: '#d6ff00',
+synapseColor: '#ff2bd6',
+pulseColor: '#fff36a'
+};
+
+// --- State ---
+let neurons = [];
+let branches = [];
+let synapses = [];
+let pulses = [];
+let growing = true;
+let paused = false;
+let frame = 0;
+let scanlineOffset = 0;
+
+// --- Branch Class ---
+class Branch {
+constructor(startX, startY, angle, depth, parent = null) {
+this.startX = startX;
+this.startY = startY;
+this.x = startX;
+this.y = startY;
+this.angle = angle;
+this.depth = depth;
+this.parent = parent;
+this.length = 0;
+this.maxLength = config.maxBranchLength * (0.6 + Math.random() * 0.4);
+this.width = depth === 0 ? 3 : (2 - depth * 0.25) * (0.7 + Math.random() * 0.6);
+this.curvatureOffset = (Math.random() - 0.5) * config.curvature * 2;
+this.curvaturePhase = Math.random() * Math.PI * 2;
+this.alive = true;
+this.isSideBranch = parent && parent.isSideBranch;
+this.growSpeed = config.growthSpeed * (0.5 + Math.random() * 0.5);
+this.tipX = startX;
+this.tipY = startY;
+}
+
+grow() {
+if (!this.alive) return;
+
+const steps = Math.ceil(this.growSpeed);
+for (let i = 0; i < steps && this.length < this.maxLength; i++) {
+this.length += 0.5 + Math.random() * 0.5;
+
+// Organic curvature using sine wave
+const curve = Math.sin(this.length * 0.03 + this.curvaturePhase) * this.curvatureOffset;
+this.angle += curve * 0.02;
+
+// Random jitter
+this.angle += (Math.random() - 0.5) * 0.04;
+
+// Update position
+this.tipX = this.startX + Math.cos(this.angle) * this.length;
+this.tipY = this.startY + Math.sin(this.angle) * this.length;
+
+// Boundary check
+if (this.tipX < 10 || this.tipX > W - 10 || this.tipY < 10 || this.tipY > H - 10) {
+this.alive = false;
+break;
+}
+}
+
+// Check if finished growing
+if (this.length >= this.maxLength) {
+this.alive = false;
+}
+}
+
+getTip() {
+return { x: this.tipX, y: this.tipY };
+}
+}
+
+// --- Neuron Class ---
+class Neuron {
+constructor(x, y) {
+this.x = x;
+this.y = y;
+this.branches = [];
+this.id = Date.now() + Math.random();
+}
+
+addBranch(branch) {
+this.branches.push(branch);
+}
+}
+
+// --- Synapse Class ---
+class Synapse {
+constructor(branch1, branch2) {
+this.branch1 = branch1;
+this.branch2 = branch2;
+this.tip1 = branch1.getTip();
+this.tip2 = branch2.getTip();
+this.glowPhase = Math.random() * Math.PI * 2;
+this.active = true;
+this.id = Date.now() + Math.random();
+}
+
+update() {
+this.tip1 = this.branch1.getTip();
+this.tip2 = this.branch2.getTip();
+this.glowPhase += 0.03;
+}
+
+getGlowIntensity() {
+return 0.5 + Math.sin(this.glowPhase) * 0.5;
+}
+}
+
+// --- Pulse Class ---
+class Pulse {
+constructor(fromNeuron, toNeuron, path) {
+this.fromNeuron = fromNeuron;
+this.toNeuron = toNeuron;
+this.path = path; // Array of {x, y} points along the path
+this.progress = 0;
+this.speed = config.pulseSpeed * (0.8 + Math.random() * 0.4);
+this.alive = true;
+this.trail = [];
+this.brightness = config.pulseBrightness;
+}
+
+update() {
+this.progress += this.speed * 0.02;
+this.trail.push({ progress: this.progress, brightness: this.brightness });
+
+// Keep trail short
+if (this.trail.length > 8) {
+this.trail.shift();
+}
+
+if (this.progress >= 1) {
+this.alive = false;
+}
+}
+
+getPosition() {
+if (this.path.length < 2) return null;
+const idx = this.progress * (this.path.length - 1);
+const i = Math.floor(idx);
+const t = idx - i;
+const p1 = this.path[Math.min(i, this.path.length - 1)];
+const p2 = this.path[Math.min(i + 1, this.path.length - 1)];
+if (!p1 || !p2) return null;
+return {
+x: p1.x + (p2.x - p1.x) * t,
+y: p1.y + (p2.y - p1.y) * t
+};
+}
+}
+
+// --- Network Generation ---
+function generateNetwork() {
+neurons = [];
+branches = [];
+synapses = [];
+pulses = [];
+growing = true;
+
+const count = Math.floor(config.neuronCount * (0.7 + Math.random() * 0.6));
+const actualCount = Math.max(3, Math.min(6, count));
+
+for (let i = 0; i < actualCount; i++) {
+const angle = (i / actualCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.5;
+const dist = 20 + Math.random() * 40;
+const x = CENTER_X + Math.cos(angle) * dist;
+const y = CENTER_Y + Math.sin(angle) * dist;
+const neuron = new Neuron(x, y);
+neurons.push(neuron);
+
+// Initial branches from each seed neuron
+const numInitialBranches = 2 + Math.floor(Math.random() * 3);
+for (let j = 0; j < numInitialBranches; j++) {
+const branchAngle = (j / numInitialBranches) * Math.PI * 2 + (Math.random() - 0.5) * 0.8;
+const branch = new Branch(x, y, branchAngle, 0, null);
+neuron.addBranch(branch);
+branches.push(branch);
+}
+}
+}
+
+// --- Growth Logic ---
+function growNetwork() {
+if (!growing || paused) return;
+
+const newBranches = [];
+
+// Grow existing branches
+for (let i = branches.length - 1; i >= 0; i--) {
+const branch = branches[i];
+branch.grow();
+
+// Check for split
+if (branch.alive && branch.depth < config.maxDepth && branches.length + newBranches.length < config.maxBranches) {
+if (Math.random() < config.splitChance * 0.1) {
+const newAngle = branch.angle + (Math.random() - 0.5) * 1.2;
+const sideBranch = new Branch(
+branch.tipX,
+branch.tipY,
+newAngle,
+branch.depth + 1,
+branch
+);
+sideBranch.isSideBranch = true;
+sideBranch.maxLength = branch.maxLength * (0.3 + Math.random() * 0.3);
+sideBranch.width = branch.width * 0.5;
+newBranches.push(sideBranch);
+}
+}
+}
+branches.push(...newBranches);
+
+// Assign branches to neurons and create new neurons at branch tips
+for (const branch of newBranches) {
+// Find nearest neuron
+let nearestNeuron = null;
+let nearestDist = Infinity;
+for (const neuron of neurons) {
+const dist = Math.hypot(branch.tipX - neuron.x, branch.tipY - neuron.y);
+if (dist < nearestDist) {
+nearestDist = dist;
+nearestNeuron = neuron;
+}
+}
+
+if (nearestNeuron && nearestDist < 80) {
+nearestNeuron.addBranch(branch);
+} else if (branches.length < config.maxBranches * 0.8) {
+// Create new neuron at branch tip occasionally
+if (Math.random() < 0.3 && branch.depth > 1) {
+const neuron = new Neuron(branch.tipX, branch.tipY);
+neurons.push(neuron);
+neuron.addBranch(branch);
+}
+}
+}
+
+// Check if growth should stop
+const activeBranches = branches.filter(b => b.alive).length;
+const totalPossible = config.maxBranches;
+
+if (branches.length >= totalPossible || activeBranches === 0) {
+growing = false;
+}
+
+// Detect synapses
+detectSynapses();
+}
+
+// --- Synapse Detection ---
+function detectSynapses() {
+const newSynapses = [];
+const maxSynapses = 150;
+
+for (let i = 0; i < branches.length && synapses.length + newSynapses.length < maxSynapses; i++) {
+const b1 = branches[i];
+if (!b1.alive) continue;
+
+for (let j = i + 1; j < branches.length; j++) {
+const b2 = branches[j];
+if (!b2.alive) continue;
+
+const tip1 = b1.getTip();
+const tip2 = b2.getTip();
+const dist = Math.hypot(tip1.x - tip2.x, tip1.y - tip2.y);
+
+if (dist < config.synapseDistance) {
+// Check for duplicates
+let duplicate = false;
+for (const syn of synapses) {
+if ((syn.branch1 === b1 && syn.branch2 === b2) ||
+(syn.branch1 === b2 && syn.branch2 === b1)) {
+duplicate = true;
+break;
+}
+}
+for (const syn of newSynapses) {
+if ((syn.branch1 === b1 && syn.branch2 === b2) ||
+(syn.branch1 === b2 && syn.branch2 === b1)) {
+duplicate = true;
+break;
+}
+}
+
+if (!duplicate) {
+newSynapses.push(new Synapse(b1, b2));
+}
+}
+}
+}
+
+synapses.push(...newSynapses);
+}
+
+// --- Pulse Generation ---
+function generatePulse() {
+if (synapses.length === 0 || paused) return;
+
+if (Math.random() < config.pulseFrequency) {
+// Pick a random synapse
+const synIdx = Math.floor(Math.random() * synapses.length);
+const syn = synapses[synIdx];
+
+// Find connected neurons
+let fromNeuron = null;
+let toNeuron = null;
+
+for (const neuron of neurons) {
+for (const branch of neuron.branches) {
+if (branch === syn.branch1 || branch === syn.branch2) {
+if (!fromNeuron) {
+fromNeuron = neuron;
+} else {
+toNeuron = neuron;
+break;
+}
+}
+}
+if (fromNeuron && toNeuron) break;
+}
+
+if (fromNeuron && toNeuron) {
+// Build path from neuron1 through synapse to neuron2
+const path = [];
+
+// Path from fromNeuron to synapse point 1
+const b1 = syn.branch1;
+path.push({ x: b1.startX, y: b1.startY });
+path.push({ x: b1.tipX, y: b1.tipY });
+
+// Path from synapse point 2 to toNeuron
+const b2 = syn.branch2;
+path.push({ x: b2.tipX, y: b2.tipY });
+path.push({ x: b2.startX, y: b2.startY });
+
+// Find which end connects to toNeuron
+// Reorder if needed
+let endNeuron = null;
+for (const branch of toNeuron.branches) {
+if (branch === b2) {
+endNeuron = toNeuron;
+break;
+}
+}
+if (!endNeuron) {
+for (const branch of toNeuron.branches) {
+if (branch === b1) {
+// Swap
+path.reverse();
+endNeuron = toNeuron;
+break;
+}
+}
+}
+
+if (path.length >= 2) {
+pulses.push(new Pulse(fromNeuron, toNeuron, path));
+}
+}
+}
+}
+
+// --- Rendering ---
+function drawVignette() {
+const gradient = ctx.createRadialGradient(CENTER_X, CENTER_Y, 200, CENTER_X, CENTER_Y, 500);
+gradient.addColorStop(0, 'rgba(5, 7, 15, 0)');
+gradient.addColorStop(0.5, 'rgba(5, 7, 15, 0.2)');
+gradient.addColorStop(1, 'rgba(5, 7, 15, 0.7)');
+ctx.fillStyle = gradient;
+ctx.fillRect(0, 0, W, H);
+}
+
+function drawScanlines() {
+ctx.fillStyle = COLORS.scanline;
+const spacing = 4;
+for (let y = scanlineOffset % spacing; y < H; y += spacing) {
+ctx.fillRect(0, y, W, 1);
+}
+scanlineOffset += 0.5;
+}
+
+function drawGrid() {
+ctx.strokeStyle = COLORS.scanline;
+ctx.lineWidth = 0.5;
+const gridSize = 40;
+for (let x = 0; x <= W; x += gridSize) {
+ctx.beginPath();
+ctx.moveTo(x, 0);
+ctx.lineTo(x, H);
+ctx.stroke();
+}
+for (let y = 0; y <= H; y += gridSize) {
+ctx.beginPath();
+ctx.moveTo(0, y);
+ctx.lineTo(W, y);
+ctx.stroke();
+}
+}
+
+function drawBranch(branch, color) {
+if (!branch.alive && branch.length < 10) return;
+
+ctx.beginPath();
+ctx.moveTo(branch.startX, branch.startY);
+
+// Draw smooth curve to tip
+const midX = (branch.startX + branch.tipX) / 2 + Math.sin(branch.length * 0.05) * 15;
+const midY = (branch.startY + branch.tipY) / 2 + Math.cos(branch.length * 0.05) * 15;
+
+ctx.quadraticCurveTo(midX, midY, branch.tipX, branch.tipY);
+
+ctx.strokeStyle = color;
+ctx.lineWidth = branch.width;
+ctx.lineCap = 'round';
+ctx.lineJoin = 'round';
+
+// Neon glow effect
+ctx.shadowColor = color;
+ctx.shadowBlur = branch.depth === 0 ? 12 : 6;
+
+ctx.stroke();
+ctx.shadowBlur = 0;
+}
+
+function drawNeuron(neuron) {
+ctx.beginPath();
+ctx.arc(neuron.x, neuron.y, 5, 0, Math.PI * 2);
+ctx.fillStyle = COLORS.uiAccent;
+ctx.shadowColor = COLORS.uiAccent;
+ctx.shadowBlur = 20;
+ctx.fill();
+ctx.shadowBlur = 0;
+}
+
+function drawSynapse(synapse) {
+const intensity = synapse.getGlowIntensity();
+const glowStrength = config.synapseGlowStrength * intensity;
+
+const x1 = synapse.tip1.x;
+const y1 = synapse.tip1.y;
+const x2 = synapse.tip2.x;
+const y2 = synapse.tip2.y;
+
+// Glow line
+ctx.beginPath();
+ctx.moveTo(x1, y1);
+ctx.lineTo(x2, y2);
+ctx.strokeStyle = COLORS.synapse;
+ctx.lineWidth = 2 + intensity * 1.5;
+ctx.shadowColor = COLORS.synapse;
+ctx.shadowBlur = glowStrength;
+ctx.globalAlpha = 0.6 + intensity * 0.4;
+ctx.stroke();
+ctx.globalAlpha = 1;
+ctx.shadowBlur = 0;
+
+// Glowing nodes at connection points
+const nodeSize = 3 + intensity * 2;
+ctx.beginPath();
+ctx.arc(x1, y1, nodeSize, 0, Math.PI * 2);
+ctx.fillStyle = COLORS.synapse;
+ctx.shadowColor = COLORS.synapse;
+ctx.shadowBlur = glowStrength * 0.8;
+ctx.fill();
+
+ctx.beginPath();
+ctx.arc(x2, y2, nodeSize, 0, Math.PI * 2);
+ctx.fill();
+ctx.shadowBlur = 0;
+}
+
+function drawPulse(pulse) {
+const pos = pulse.getPosition();
+if (!pos) return;
+
+const trailAlpha = 0.3;
+const coreAlpha = 1;
+
+// Draw trail
+for (let i = 0; i < pulse.trail.length; i++) {
+const t = pulse.trail[i];
+const trailProgress = t.progress;
+const idx = trailProgress * (pulse.path.length - 1);
+const ti = Math.floor(idx);
+const tt = idx - ti;
+const p1 = pulse.path[Math.min(ti, pulse.path.length - 1)];
+const p2 = pulse.path[Math.min(ti + 1, pulse.path.length - 1)];
+if (!p1 || !p2) continue;
+
+const tx = p1.x + (p2.x - p1.x) * tt;
+const ty = p1.y + (p2.y - p1.y) * tt;
+
+const trailBrightness = t.brightness * (1 - i / pulse.trail.length) * 0.5;
+
+ctx.beginPath();
+ctx.arc(tx, ty, 2 + (1 - i / pulse.trail.length) * 2, 0, Math.PI * 2);
+ctx.fillStyle = COLORS.pulse;
+ctx.globalAlpha = trailBrightness * pulse.brightness;
+ctx.shadowColor = COLORS.pulse;
+ctx.shadowBlur = 15;
+ctx.fill();
+ctx.globalAlpha = 1;
+ctx.shadowBlur = 0;
+}
+
+// Draw main pulse core
+const gradient = ctx.createRadialGradient(pos.x, pos.y, 0, pos.x, pos.y, 8);
+gradient.addColorStop(0, COLORS.pulse);
+gradient.addColorStop(0.5, COLORS.pulse);
+gradient.addColorStop(1, 'rgba(255, 243, 106, 0)');
+
+ctx.beginPath();
+ctx.arc(pos.x, pos.y, 8, 0, Math.PI * 2);
+ctx.fillStyle = gradient;
+ctx.shadowColor = COLORS.pulse;
+ctx.shadowBlur = 25 * pulse.brightness;
+ctx.fill();
+ctx.shadowBlur = 0;
+}
+
+function render() {
+// Clear with background
+ctx.fillStyle = config.backgroundColor;
+ctx.fillRect(0, 0, W, W);
+
+// Draw subtle background glow
+const bgGradient = ctx.createRadialGradient(CENTER_X, CENTER_Y, 50, CENTER_X, CENTER_Y, 400);
+bgGradient.addColorStop(0, COLORS.backgroundGlow);
+bgGradient.addColorStop(1, 'rgba(16, 26, 58, 0)');
+ctx.fillStyle = bgGradient;
+ctx.fillRect(0, 0, W, H);
+
+// Draw grid (subtle)
+drawGrid();
+
+// Draw branches
+ctx.lineCap = 'round';
+ctx.lineJoin = 'round';
+
+for (const branch of branches) {
+const color = branch.isSideBranch ? config.accentBranchColor : config.branchColor;
+drawBranch(branch, color);
+}
+
+// Draw neurons
+for (const neuron of neurons) {
+drawNeuron(neuron);
+}
+
+// Draw synapses
+for (const syn of synapses) {
+drawSynapse(syn);
+}
+
+// Draw pulses
+for (const pulse of pulses) {
+drawPulse(pulse);
+}
+
+// Draw scanlines
+drawScanlines();
+
+// Draw vignette
+drawVignette();
+
+// Draw status info
+if (paused) {
+ctx.fillStyle = COLORS.uiAccent;
+ctx.font = '14px Courier New';
+ctx.textAlign = 'center';
+ctx.fillText('PAUSED', CENTER_X, 30);
+}
+
+if (!growing && branches.length > 0) {
+ctx.fillStyle = 'rgba(255, 212, 0, 0.5)';
+ctx.font = '12px Courier New';
+ctx.textAlign = 'center';
+ctx.fillText('Network stable - ' + branches.length + ' branches, ' + synapses.length + ' synapses', CENTER_X, H - 20);
+}
+}
+
+// --- Animation Loop ---
+function animate() {
+if (!paused) {
+// Growth phase
+if (growing) {
+for (let i = 0; i < 3; i++) {
+growNetwork();
+}
+}
+
+// Update synapses
+for (const syn of synapses) {
+syn.update();
+}
+
+// Generate new pulses
+generatePulse();
+
+// Update pulses
+for (let i = pulses.length - 1; i >= 0; i--) {
+pulses[i].update();
+if (!pulses[i].alive) {
+pulses.splice(i, 1);
+}
+}
+}
+
+render();
+frame++;
+requestAnimationFrame(animate);
+}
+
+// --- GUI Setup ---
+function setupGUI() {
+const gui = new dat.GUI({ width: 300 });
+
+// Growth folder
+const growthFolder = gui.addFolder('Growth');
+growthFolder.add(config, 'neuronCount', 3, 6, 1).name('Neuron Count').onChange(() => {});
+growthFolder.add(config, 'growthSpeed', 0.5, 5, 0.1).name('Growth Speed');
+growthFolder.add(config, 'maxDepth', 2, 10, 1).name('Max Depth');
+growthFolder.add(config, 'splitChance', 0, 0.5, 0.01).name('Split Chance');
+growthFolder.add(config, 'curvature', 0, 1, 0.01).name('Curvature');
+growthFolder.add(config, 'maxBranchLength', 50, 200, 5).name('Max Branch Length');
+growthFolder.add(config, 'maxBranches', 100, 500, 10).name('Max Branches');
+growthFolder.add({ regenerate: () => generateNetwork() }, 'regenerate').name('Regenerate Network');
+growthFolder.open();
+
+// Synapses folder
+const synapseFolder = gui.addFolder('Synapses');
+synapseFolder.add(config, 'synapseDistance', 20, 100, 1).name('Distance Threshold');
+synapseFolder.add(config, 'synapseGlowStrength', 5, 30, 1).name('Glow Strength');
+synapseFolder.open();
+
+// Pulses folder
+const pulseFolder = gui.addFolder('Pulses');
+pulseFolder.add(config, 'pulseSpeed', 1, 8, 0.1).name('Speed');
+pulseFolder.add(config, 'pulseFrequency', 0.005, 0.05, 0.001).name('Frequency');
+pulseFolder.add(config, 'pulseBrightness', 0.5, 2, 0.1).name('Brightness');
+pulseFolder.open();
+
+// Visuals folder
+const visualsFolder = gui.addFolder('Visuals');
+visualsFolder.addColor(config, 'backgroundColor').name('Background Color');
+visualsFolder.addColor(config, 'branchColor').name('Branch Color');
+visualsFolder.addColor(config, 'accentBranchColor').name('Accent Color');
+visualsFolder.addColor(config, 'synapseColor').name('Synapse Color');
+visualsFolder.addColor(config, 'pulseColor').name('Pulse Color');
+
+// Add control buttons at root level
+gui.add({ clear: () => {
+ctx.fillStyle = config.backgroundColor;
+ctx.fillRect(0, 0, W, H);
+}}, 'clear').name('Clear Canvas');
+
+gui.add({ togglePause: () => { paused = !paused; } }, 'togglePause').name(paused ? 'Resume' : 'Pause');
+
+// Apply color changes in real-time
+visualsFolder.__controllers.forEach(controller => {
+controller.onChange(() => {});
+});
+}
+
+// --- Initialization ---
+function init() {
+generateNetwork();
+setupGUI();
+animate();
+}
+
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gouraud Shaded Cube — Canvas 2D Software Renderer</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #0a0a12;
+  }
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+  #hud {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    color: #d8e0ff;
+    background: rgba(10, 12, 24, 0.62);
+    border: 1px solid rgba(120, 150, 255, 0.28);
+    border-radius: 8px;
+    padding: 10px 14px;
+    pointer-events: none;
+    user-select: none;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+  }
+  #hud .title {
+    font-weight: 700;
+    color: #9fc4ff;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+  }
+  #hud .row { white-space: nowrap; }
+  #hud .val { color: #7dffb0; }
+  #hud .hint {
+    margin-top: 6px;
+    color: #8a93b8;
+    font-size: 11px;
+  }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<div id="hud">
+  <div class="title">GOURAUD SHADED CUBE</div>
+  <div class="row">FPS: <span class="val" id="fps">--</span></div>
+  <div class="row">MODE: <span class="val" id="mode">SHADED</span></div>
+  <div class="row">STATE: <span class="val" id="state">RUNNING</span></div>
+  <div class="hint">W = wireframe, P = pause</div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---------------------------------------------------------------------------
+  // Canvas setup with devicePixelRatio handling
+  // ---------------------------------------------------------------------------
+  const canvas = document.getElementById("scene");
+  const ctx = canvas.getContext("2d", { alpha: false });
+
+  let W = 0;          // backing-store width (device pixels)
+  let H = 0;          // backing-store height (device pixels)
+  let imageData = null;
+  let pixels = null;  // Uint8ClampedArray view of imageData.data
+  let depthBuffer = null;
+
+  function resize() {
+    const dpr = window.devicePixelRatio || 1;
+    W = Math.max(1, Math.floor(window.innerWidth * dpr));
+    H = Math.max(1, Math.floor(window.innerHeight * dpr));
+    canvas.width = W;
+    canvas.height = H;
+    canvas.style.width = window.innerWidth + "px";
+    canvas.style.height = window.innerHeight + "px";
+
+    imageData = ctx.createImageData(W, H);
+    pixels = imageData.data;
+    depthBuffer = new Float32Array(W * H);
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  // ---------------------------------------------------------------------------
+  // Vector math helpers (vec3)
+  // ---------------------------------------------------------------------------
+  function vAdd(a, b) { return [a[0] + b[0], a[1] + b[1], a[2] + b[2]]; }
+  function vSub(a, b) { return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; }
+  function vDot(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+  function vCross(a, b) {
+    return [
+      a[1] * b[2] - a[2] * b[1],
+      a[2] * b[0] - a[0] * b[2],
+      a[0] * b[1] - a[1] * b[0]
+    ];
+  }
+  function vLen(a) { return Math.sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]); }
+  function vNorm(a) {
+    const l = vLen(a);
+    if (l < 1e-9) return [0, 0, 0];
+    return [a[0] / l, a[1] / l, a[2] / l];
+  }
+
+  // ---------------------------------------------------------------------------
+  // 3x3 rotation matrices and mat3 * vec3
+  // ---------------------------------------------------------------------------
+  function rotationX(angle) {
+    const c = Math.cos(angle), s = Math.sin(angle);
+    return [
+      1, 0, 0,
+      0, c, -s,
+      0, s, c
+    ];
+  }
+  function rotationY(angle) {
+    const c = Math.cos(angle), s = Math.sin(angle);
+    return [
+      c, 0, s,
+      0, 1, 0,
+      -s, 0, c
+    ];
+  }
+  function mat3MulVec3(m, v) {
+    return [
+      m[0] * v[0] + m[1] * v[1] + m[2] * v[2],
+      m[3] * v[0] + m[4] * v[1] + m[5] * v[2],
+      m[6] * v[0] + m[7] * v[1] + m[8] * v[2]
+    ];
+  }
+  function mat3Mul(a, b) {
+    const r = new Array(9);
+    for (let i = 0; i < 3; i++) {
+      for (let j = 0; j < 3; j++) {
+        r[i * 3 + j] =
+          a[i * 3 + 0] * b[0 * 3 + j] +
+          a[i * 3 + 1] * b[1 * 3 + j] +
+          a[i * 3 + 2] * b[2 * 3 + j];
+      }
+    }
+    return r;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Geometry: unit cube (half-extent 1) — 8 vertices, 6 quad faces
+  // Faces wound counter-clockwise when viewed from outside.
+  // ---------------------------------------------------------------------------
+  const VERTICES = [
+    [-1, -1, -1], // 0
+    [ 1, -1, -1], // 1
+    [ 1,  1, -1], // 2
+    [-1,  1, -1], // 3
+    [-1, -1,  1], // 4
+    [ 1, -1,  1], // 5
+    [ 1,  1,  1], // 6
+    [-1,  1,  1]  // 7
+  ];
+
+  // Each face: 4 vertex indices (CCW from outside) + base albedo color
+  const FACES = [
+    { idx: [4, 5, 6, 7], color: [230,  80,  80] }, // front  (+z) red
+    { idx: [1, 0, 3, 2], color: [ 80, 200, 120] }, // back   (-z) green
+    { idx: [5, 1, 2, 6], color: [ 80, 140, 240] }, // right  (+x) blue
+    { idx: [0, 4, 7, 3], color: [240, 200,  70] }, // left   (-x) yellow
+    { idx: [7, 6, 2, 3], color: [200, 100, 230] }, // top    (+y) purple
+    { idx: [0, 1, 5, 4], color: [ 90, 220, 220] }  // bottom (-y) cyan
+  ];
+
+  // ---------------------------------------------------------------------------
+  // Camera / projection parameters
+  // ---------------------------------------------------------------------------
+  const CAMERA_DIST = 5.0;   // distance from origin to camera along +z
+  const FOCAL = 3.2;         // focal length (controls FOV / zoom)
+
+  // Project a 3D point (already in view space, camera at origin looking +z)
+  // to screen space. Returns {x, y, z} where z is the view-space depth.
+  function project(p) {
+    const z = p[2] + CAMERA_DIST;      // depth from camera
+    const scale = FOCAL / z;
+    return {
+      x: W * 0.5 + p[0] * scale * (W * 0.5),
+      y: H * 0.5 - p[1] * scale * (W * 0.5),
+      z: z
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Lighting: moving point light orbiting the cube
+  // ---------------------------------------------------------------------------
+  function lightPosition(t) {
+    const r = 4.2;
+    return [
+      Math.cos(t * 0.9) * r,
+      Math.sin(t * 1.3) * 2.2,
+      Math.sin(t * 0.9) * r
+    ];
+  }
+
+  const AMBIENT = 0.18;
+
+  // Compute per-vertex shaded color for a face vertex.
+  // vertexNormal: normalized normal at the vertex (use face normal for flat cube)
+  // baseColor: [r,g,b] 0..255
+  function shadeVertex(vertexNormal, worldPos, lightPos, baseColor) {
+    const toLight = vNorm(vSub(lightPos, worldPos));
+    let lambert = vDot(vertexNormal, toLight);
+    if (lambert < 0) lambert = 0;
+    let intensity = AMBIENT + (1 - AMBIENT) * lambert;
+    if (intensity > 1) intensity = 1;
+    if (intensity < 0) intensity = 0;
+    return [
+      baseColor[0] * intensity,
+      baseColor[1] * intensity,
+      baseColor[2] * intensity
+    ];
+  }
+
+  // ---------------------------------------------------------------------------
+  // Triangle rasterizer with Gouraud color interpolation + z-buffer
+  // ---------------------------------------------------------------------------
+  // p0,p1,p2: {x, y, z} projected screen coords (z = view depth)
+  // c0,c1,c2: [r,g,b] per-vertex colors (0..255 floats)
+  function rasterizeTriangle(p0, c0, p1, c1, p2, c2) {
+    // Sort vertices by y ascending
+    let a = { p: p0, c: c0 };
+    let b = { p: p1, c: c1 };
+    let d = { p: p2, c: c2 };
+
+    if (a.p.y > b.p.y) { const t = a; a = b; b = t; }
+    if (b.p.y > d.p.y) { const t = b; b = d; d = t; }
+    if (a.p.y > b.p.y) { const t = a; a = b; b = t; }
+
+    const y0 = a.p.y, y1 = b.p.y, y2 = d.p.y;
+
+    // Total height guard
+    if (y2 - y0 < 1e-6) return;
+
+    // Clamp scanline range to canvas
+    let yStart = Math.max(0, Math.ceil(y0));
+    let yEnd = Math.min(H - 1, Math.floor(y2));
+    if (yStart > yEnd) return;
+
+    // Interpolate helper along an edge from (ya, pa, ca) to (yb, pb, cb) at y
+    function edgeInterp(ya, pa, ca, yb, pb, cb, y) {
+      const dy = yb - ya;
+      if (Math.abs(dy) < 1e-9) {
+        return { x: pa.x, z: pa.z, r: ca[0], g: ca[1], b: ca[2] };
+      }
+      const t = (y - ya) / dy;
+      return {
+        x: pa.x + (pb.x - pa.x) * t,
+        z: pa.z + (pb.z - pa.z) * t,
+        r: ca[0] + (cb[0] - ca[0]) * t,
+        g: ca[1] + (cb[1] - ca[1]) * t,
+        b: ca[2] + (cb[2] - ca[2]) * t
+      };
+    }
+
+    for (let y = yStart; y <= yEnd; y++) {
+      const yc = y + 0.5;
+
+      // Long edge: a -> d
+      const longEdge = edgeInterp(y0, a.p, a.c, y2, d.p, d.c, yc);
+
+      let leftEdge, rightEdge;
+      if (yc < y1) {
+        // Top half: short edge a -> b
+        const shortEdge = edgeInterp(y0, a.p, a.c, y1, b.p, b.c, yc);
+        if (shortEdge.x < longEdge.x) {
+          leftEdge = shortEdge; rightEdge = longEdge;
+        } else {
+          leftEdge = longEdge; rightEdge = shortEdge;
+        }
+      } else {
+        // Bottom half: short edge b -> d
+        const shortEdge = edgeInterp(y1, b.p, b.c, y2, d.p, d.c, yc);
+        if (shortEdge.x < longEdge.x) {
+          leftEdge = shortEdge; rightEdge = longEdge;
+        } else {
+          leftEdge = longEdge; rightEdge = shortEdge;
+        }
+      }
+
+      let xL = leftEdge.x;
+      let xR = rightEdge.x;
+
+      if (xR - xL < 1e-9) continue;
+
+      let xStart = Math.max(0, Math.ceil(xL));
+      let xEnd = Math.min(W - 1, Math.floor(xR));
+      if (xStart > xEnd) continue;
+
+      const span = xR - xL;
+      const invSpan = 1 / span;
+
+      const rowOffset = y * W;
+
+      for (let x = xStart; x <= xEnd; x++) {
+        const xc = x + 0.5;
+        const t = (xc - xL) * invSpan;
+
+        // Interpolate depth
+        const z = leftEdge.z + (rightEdge.z - leftEdge.z) * t;
+
+        const idx = rowOffset + x;
+        // Depth test: smaller z = closer to camera
+        if (z >= depthBuffer[idx]) continue;
+        depthBuffer[idx] = z;
+
+        // Interpolate color
+        let r = leftEdge.r + (rightEdge.r - leftEdge.r) * t;
+        let g = leftEdge.g + (rightEdge.g - leftEdge.g) * t;
+        let b = leftEdge.b + (rightEdge.b - leftEdge.b) * t;
+
+        // Clamp
+        if (r < 0) r = 0; else if (r > 255) r = 255;
+        if (g < 0) g = 0; else if (g > 255) g = 255;
+        if (b < 0) b = 0; else if (b > 255) b = 255;
+
+        const pIdx = idx * 4;
+        pixels[pIdx]     = r;
+        pixels[pIdx + 1] = g;
+        pixels[pIdx + 2] = b;
+        pixels[pIdx + 3] = 255;
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // State
+  // ---------------------------------------------------------------------------
+  let wireframe = false;
+  let paused = false;
+  let animTime = 0;          // animation clock (seconds), frozen when paused
+  let lastTimestamp = 0;
+
+  // FPS smoothing
+  let fpsAccum = 0;
+  let fpsFrames = 0;
+  let fpsLastUpdate = 0;
+  let fpsDisplay = 0;
+
+  const fpsEl = document.getElementById("fps");
+  const modeEl = document.getElementById("mode");
+  const stateEl = document.getElementById("state");
+
+  // ---------------------------------------------------------------------------
+  // Input
+  // ---------------------------------------------------------------------------
+  window.addEventListener("keydown", function (e) {
+    const k = e.key.toLowerCase();
+    if (k === "w") {
+      wireframe = !wireframe;
+      modeEl.textContent = wireframe ? "WIREFRAME" : "SHADED";
+      e.preventDefault();
+    } else if (k === "p") {
+      paused = !paused;
+      stateEl.textContent = paused ? "PAUSED" : "RUNNING";
+      e.preventDefault();
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // Main render
+  // ---------------------------------------------------------------------------
+  function render() {
+    const t = animTime;
+
+    // Model rotation: tumble around X and Y
+    const rx = rotationX(t * 0.7);
+    const ry = rotationY(t * 1.1);
+    const model = mat3Mul(ry, rx);
+
+    // Light position
+    const lightPos = lightPosition(t);
+
+    // Transform all vertices into view space (rotate only; camera at origin)
+    const viewVerts = new Array(VERTICES.length);
+    for (let i = 0; i < VERTICES.length; i++) {
+      viewVerts[i] = mat3MulVec3(model, VERTICES[i]);
+    }
+
+    // Project all vertices
+    const projVerts = new Array(VERTICES.length);
+    for (let i = 0; i < VERTICES.length; i++) {
+      projVerts[i] = project(viewVerts[i]);
+    }
+
+    // Clear background / depth buffer
+    if (!wireframe) {
+      // Fill background color into pixel buffer
+      for (let i = 0; i < pixels.length; i += 4) {
+        pixels[i]     = 10;
+        pixels[i + 1] = 10;
+        pixels[i + 2] = 18;
+        pixels[i + 3] = 255;
+      }
+      depthBuffer.fill(Infinity);
+    } else {
+      ctx.fillStyle = "#0a0a12";
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    // Camera position in view space (origin)
+    const camPos = [0, 0, 0];
+
+    // Collect visible faces
+    const visibleFaces = [];
+
+    for (let f = 0; f < FACES.length; f++) {
+      const face = FACES[f];
+      const i0 = face.idx[0], i1 = face.idx[1], i2 = face.idx[2], i3 = face.idx[3];
+
+      const v0 = viewVerts[i0];
+      const v1 = viewVerts[i1];
+      const v2 = viewVerts[i2];
+      const v3 = viewVerts[i3];
+
+      // Face normal from rotated vertices
+      const e1 = vSub(v1, v0);
+      const e2 = vSub(v2, v0);
+      let normal = vNorm(vCross(e1, e2));
+
+      // Face centroid
+      const centroid = [
+        (v0[0] + v1[0] + v2[0] + v3[0]) * 0.25,
+        (v0[1] + v1[1] + v2[1] + v3[1]) * 0.25,
+        (v0[2] + v1[2] + v2[2] + v3[2]) * 0.25
+      ];
+
+      // View direction from camera to centroid
+      const viewDir = vNorm(vSub(centroid, camPos));
+
+      // Backface culling
+      if (vDot(normal, viewDir) <= 0) continue;
+
+      // Per-vertex shading (Gouraud): use face normal for flat cube vertices
+      const c0 = shadeVertex(normal, v0, lightPos, face.color);
+      const c1 = shadeVertex(normal, v1, lightPos, face.color);
+      const c2 = shadeVertex(normal, v2, lightPos, face.color);
+      const c3 = shadeVertex(normal, v3, lightPos, face.color);
+
+      visibleFaces.push({
+        idx: [i0, i1, i2, i3],
+        colors: [c0, c1, c2, c3]
+      });
+    }
+
+    if (wireframe) {
+      // Draw wireframe of visible faces
+      ctx.strokeStyle = "#9fc4ff";
+      ctx.lineWidth = Math.max(1, (window.devicePixelRatio || 1) * 1.5);
+      ctx.lineJoin = "round";
+
+      for (let f = 0; f < visibleFaces.length; f++) {
+        const vf = visibleFaces[f];
+        const idx = vf.idx;
+        ctx.beginPath();
+        const p0 = projVerts[idx[0]];
+        ctx.moveTo(p0.x, p0.y);
+        for (let k = 1; k < 4; k++) {
+          const pk = projVerts[idx[k]];
+          ctx.lineTo(pk.x, pk.y);
+        }
+        ctx.closePath();
+        ctx.stroke();
+      }
+    } else {
+      // Rasterize visible faces as two triangles each
+      for (let f = 0; f < visibleFaces.length; f++) {
+        const vf = visibleFaces[f];
+        const idx = vf.idx;
+        const cols = vf.colors;
+
+        const p0 = projVerts[idx[0]];
+        const p1 = projVerts[idx[1]];
+        const p2 = projVerts[idx[2]];
+        const p3 = projVerts[idx[3]];
+
+        // Triangle 1: v0, v1, v2
+        rasterizeTriangle(p0, cols[0], p1, cols[1], p2, cols[2]);
+        // Triangle 2: v0, v2, v3
+        rasterizeTriangle(p0, cols[0], p2, cols[2], p3, cols[3]);
+      }
+
+      ctx.putImageData(imageData, 0, 0);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Animation loop
+  // ---------------------------------------------------------------------------
+  function loop(timestamp) {
+    if (!lastTimestamp) lastTimestamp = timestamp;
+    let dt = (timestamp - lastTimestamp) / 1000;
+    lastTimestamp = timestamp;
+    if (dt > 0.1) dt = 0.1; // clamp large gaps (tab switch)
+
+    if (!paused) {
+      animTime += dt;
+    }
+
+    render();
+
+    // FPS measurement
+    fpsAccum += dt;
+    fpsFrames++;
+    if (timestamp - fpsLastUpdate > 250) {
+      if (fpsAccum > 0) {
+        fpsDisplay = fpsFrames / fpsAccum;
+      }
+      fpsEl.textContent = fpsDisplay.toFixed(1);
+      fpsAccum = 0;
+      fpsFrames = 0;
+      fpsLastUpdate = timestamp;
+    }
+
+    requestAnimationFrame(loop);
+  }
+
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

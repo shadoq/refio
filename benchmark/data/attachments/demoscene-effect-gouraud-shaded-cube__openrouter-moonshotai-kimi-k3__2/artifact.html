@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Gouraud Shaded Cube</title>
+<style>
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: #05070d;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-family: monospace;
+  }
+  canvas {
+    border: 1px solid #2a3350;
+  }
+  .caption {
+    color: #5a6a90;
+    font-size: 12px;
+    margin-top: 8px;
+  }
+</style>
+</head>
+<body>
+<canvas id="c" width="800" height="600"></canvas>
+<div class="caption">Software-rendered Gouraud-shaded cube &mdash; Canvas 2D only, no WebGL</div>
+<script>
+'use strict';
+
+// ============================ Setup ============================
+const W = 800, H = 600;
+const c = document.getElementById('c');
+const ctx = c.getContext('2d');
+const img = ctx.createImageData(W, H);
+const buf32 = new Uint32Array(img.data.buffer); // 32-bit view over the pixel buffer
+const zbuf = new Float32Array(W * H);           // per-pixel depth buffer
+
+// ================== Precomputed background =====================
+// Vertical gradient from rgb(10,14,26) at the top to rgb(22,28,48) at the
+// bottom, packed little-endian as (255<<24)|(b<<16)|(g<<8)|r.
+const bg = new Uint32Array(W * H);
+for (let y = 0; y < H; y++) {
+  const t = y / (H - 1);
+  const r = Math.round(10 + (22 - 10) * t);
+  const g = Math.round(14 + (28 - 14) * t);
+  const b = Math.round(26 + (48 - 26) * t);
+  const px = (255 << 24) | (b << 16) | (g << 8) | r;
+  for (let x = 0; x < W; x++) bg[y * W + x] = px;
+}
+
+// ========================== Geometry ===========================
+const vertices = [
+  [-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1],
+  [-1,-1, 1],[1,-1, 1],[1,1, 1],[-1,1, 1]
+];
+
+// Outward-facing quads with CCW winding.
+const quads = [
+  [4,5,6,7],[1,0,3,2],[5,1,2,6],
+  [0,4,7,3],[7,6,2,3],[0,1,5,4]
+];
+
+// Split each quad [a,b,c,d] into triangles [a,b,c] and [a,c,d] -> 12 triangles.
+const triangles = [];
+for (const [a, b, qd, d] of quads) {
+  triangles.push([a, b, qd]);
+  triangles.push([a, qd, d]);
+}
+
+// ======================= Vector helpers ========================
+function sub(a, b) { return [a[0]-b[0], a[1]-b[1], a[2]-b[2]]; }
+function cross(a, b) {
+  return [
+    a[1]*b[2] - a[2]*b[1],
+    a[2]*b[0] - a[0]*b[2],
+    a[0]*b[1] - a[1]*b[0]
+  ];
+}
+function dot(a, b) { return a[0]*b[0] + a[1]*b[1] + a[2]*b[2]; }
+function normalize(v) {
+  const l = Math.hypot(v[0], v[1], v[2]) || 1e-9;
+  return [v[0]/l, v[1]/l, v[2]/l];
+}
+
+// Per-vertex normals: accumulate each adjacent quad's unit normal into its
+// four vertices, then normalize (for a cube this equals normalize(position)).
+const normals = vertices.map(() => [0, 0, 0]);
+for (const q of quads) {
+  const n = normalize(cross(
+    sub(vertices[q[1]], vertices[q[0]]),
+    sub(vertices[q[2]], vertices[q[0]])
+  ));
+  for (const i of q) {
+    normals[i][0] += n[0];
+    normals[i][1] += n[1];
+    normals[i][2] += n[2];
+  }
+}
+for (let i = 0; i < normals.length; i++) normals[i] = normalize(normals[i]);
+
+// ====================== 3x3 matrix helpers =====================
+function rotX(a) {
+  const s = Math.sin(a), co = Math.cos(a);
+  return [[1,0,0],[0,co,-s],[0,s,co]];
+}
+function rotY(a) {
+  const s = Math.sin(a), co = Math.cos(a);
+  return [[co,0,s],[0,1,0],[-s,0,co]];
+}
+function rotZ(a) {
+  const s = Math.sin(a), co = Math.cos(a);
+  return [[co,-s,0],[s,co,0],[0,0,1]];
+}
+function mat3mul(A, B) {
+  const M = [[0,0,0],[0,0,0],[0,0,0]];
+  for (let i = 0; i < 3; i++)
+    for (let j = 0; j < 3; j++)
+      M[i][j] = A[i][0]*B[0][j] + A[i][1]*B[1][j] + A[i][2]*B[2][j];
+  return M;
+}
+function applyMat(m, v) {
+  return [
+    m[0][0]*v[0] + m[0][1]*v[1] + m[0][2]*v[2],
+    m[1][0]*v[0] + m[1][1]*v[1] + m[1][2]*v[2],
+    m[2][0]*v[0] + m[2][1]*v[1] + m[2][2]*v[2]
+  ];
+}
+
+// ================= Scanline Gouraud rasterizer =================
+// Fills a triangle with per-pixel interpolated color (the Gouraud shading)
+// and a z-buffer test. Points are {x, y, z, r, g, b}.
+function fillTri(p0, p1, p2) {
+  // Sort the three points by y ascending.
+  const pts = [p0, p1, p2].sort((a, b) => a.y - b.y);
+  const top = pts[0], mid = pts[1], bot = pts[2];
+
+  const yStart = Math.max(0, Math.ceil(top.y));
+  const yEnd = Math.min(H - 1, Math.floor(bot.y));
+
+  for (let y = yStart; y <= yEnd; y++) {
+    // Interpolate along the long edge (top -> bottom).
+    const tL = (y - top.y) / ((bot.y - top.y) || 1e-9);
+    const ax = top.x + (bot.x - top.x) * tL;
+    const az = top.z + (bot.z - top.z) * tL;
+    const ar = top.r + (bot.r - top.r) * tL;
+    const ag = top.g + (bot.g - top.g) * tL;
+    const ab = top.b + (bot.b - top.b) * tL;
+
+    // Interpolate along the active short edge.
+    let bx, bz, br, bg2, bb;
+    if (y < mid.y) {
+      const t = (y - top.y) / ((mid.y - top.y) || 1e-9);
+      bx  = top.x + (mid.x - top.x) * t;
+      bz  = top.z + (mid.z - top.z) * t;
+      br  = top.r + (mid.r - top.r) * t;
+      bg2 = top.g + (mid.g - top.g) * t;
+      bb  = top.b + (mid.b - top.b) * t;
+    } else {
+      const t = (y - mid.y) / ((bot.y - mid.y) || 1e-9);
+      bx  = mid.x + (bot.x - mid.x) * t;
+      bz  = mid.z + (bot.z - mid.z) * t;
+      br  = mid.r + (bot.r - mid.r) * t;
+      bg2 = mid.g + (bot.g - mid.g) * t;
+      bb  = mid.b + (bot.b - mid.b) * t;
+    }
+
+    // Order the span endpoints so left.x <= right.x.
+    let left  = { x: ax, z: az, r: ar, g: ag, b: ab };
+    let right = { x: bx, z: bz, r: br, g: bg2, b: bb };
+    if (left.x > right.x) { const tmp = left; left = right; right = tmp; }
+
+    const xStart = Math.max(0, Math.ceil(left.x));
+    const xEnd = Math.min(W - 1, Math.floor(right.x));
+
+    // Walk the span, interpolating depth and color per pixel.
+    for (let x = xStart; x <= xEnd; x++) {
+      const t2 = (x - left.x) / ((right.x - left.x) || 1e-9);
+      const z = left.z + (right.z - left.z) * t2;
+      const idx = y * W + x;
+      if (z < zbuf[idx]) {
+        zbuf[idx] = z;
+        const r = Math.round(left.r + (right.r - left.r) * t2);
+        const g = Math.round(left.g + (right.g - left.g) * t2);
+        const b = Math.round(left.b + (right.b - left.b) * t2);
+        buf32[idx] = (255 << 24) | (b << 16) | (g << 8) | r;
+      }
+    }
+  }
+}
+
+// ========================== State ==============================
+let t = 0;                 // accumulated animation time (seconds)
+let paused = false;
+let wireframe = false;
+let fps = 60;              // smoothed FPS estimate
+let last = performance.now();
+
+const FOCAL = 420;                 // perspective focal length
+const MATERIAL = [235, 130, 50];   // base material color (rgb)
+
+// ======================= Animation loop ========================
+function frame(now) {
+  requestAnimationFrame(frame);
+
+  // Delta time in seconds, clamped to avoid huge steps after tab switches.
+  let dt = (now - last) / 1000;
+  last = now;
+  if (dt > 0.05) dt = 0.05;
+  if (dt <= 0) dt = 1e-4; // guard against division by zero below
+  if (!paused) t += dt;
+  fps += (1 / dt - fps) * 0.1; // smoothed EMA of the frame rate
+
+  // Clear the color buffer with the background and reset the depth buffer.
+  buf32.set(bg);
+  zbuf.fill(Infinity);
+
+  // Combined rotation R = Rz * Ry * Rx.
+  const ax = t * 0.7, ay = t * 1.0, az = t * 0.45;
+  const R = mat3mul(rotZ(az), mat3mul(rotY(ay), rotX(ax)));
+
+  // Rotate vertices and normals; move vertices into view space
+  // (camera at the origin looking down +z, cube pushed to z = 4).
+  const viewPos = [], viewNrm = [];
+  for (let i = 0; i < 8; i++) {
+    const v = applyMat(R, vertices[i]);
+    viewPos.push([v[0], v[1], v[2] + 4]);
+    viewNrm.push(applyMat(R, normals[i]));
+  }
+
+  // Moving point light.
+  const lightPos = [
+    3.2 * Math.cos(t * 0.9),
+    2.2 * Math.sin(t * 1.2),
+    4 + 2.8 * Math.sin(t * 0.6)
+  ];
+
+  // Per-vertex Lambert lighting + perspective projection.
+  const proj = [];
+  for (let i = 0; i < 8; i++) {
+    const vp = viewPos[i];
+    const n = viewNrm[i];
+    const L = normalize(sub(lightPos, vp));
+    const I = 0.15 + 0.95 * Math.max(0, dot(n, L));
+    const r = Math.min(255, MATERIAL[0] * I);
+    const g = Math.min(255, MATERIAL[1] * I);
+    const b = Math.min(255, MATERIAL[2] * I);
+    proj.push({
+      x: 400 + FOCAL * vp[0] / vp[2],
+      y: 300 - FOCAL * vp[1] / vp[2],
+      z: vp[2],
+      r, g, b
+    });
+  }
+
+  // Backface culling in view space, then rasterize visible triangles.
+  const visible = [];
+  for (const tri of triangles) {
+    const v0 = viewPos[tri[0]], v1 = viewPos[tri[1]], v2 = viewPos[tri[2]];
+    const n = cross(sub(v1, v0), sub(v2, v0));
+    // Camera at origin: front-facing triangles have dot(n, v0) < 0.
+    if (dot(n, v0) >= 0) continue;
+    visible.push(tri);
+    if (!wireframe) fillTri(proj[tri[0]], proj[tri[1]], proj[tri[2]]);
+  }
+
+  // Present the software-rendered frame.
+  ctx.putImageData(img, 0, 0);
+
+  // Wireframe overlay: stroke the edges of every visible triangle.
+  if (wireframe) {
+    ctx.strokeStyle = '#7dff8a';
+    ctx.lineWidth = 1;
+    for (const tri of visible) {
+      const a = proj[tri[0]], b = proj[tri[1]], cc = proj[tri[2]];
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.lineTo(cc.x, cc.y);
+      ctx.closePath();
+      ctx.stroke();
+    }
+  }
+
+  // Light indicator: project the light position and draw a glowing dot.
+  const lx = 400 + FOCAL * lightPos[0] / lightPos[2];
+  const ly = 300 - FOCAL * lightPos[1] / lightPos[2];
+  ctx.beginPath();
+  ctx.arc(lx, ly, 12, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255, 230, 120, 0.18)'; // soft glow ring
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(lx, ly, 5, 0, Math.PI * 2);
+  ctx.fillStyle = '#ffe678';
+  ctx.fill();
+
+  // HUD.
+  ctx.font = '14px monospace';
+  ctx.fillStyle = '#cfe3ff';
+  ctx.fillText('FPS: ' + Math.round(fps), 10, 20);
+  ctx.fillText('W: wireframe   P: pause', 10, 40);
+  if (paused) {
+    ctx.fillStyle = '#ff5555';
+    ctx.fillText('PAUSED', 10, 60);
+  }
+  if (wireframe) {
+    ctx.fillStyle = '#7dff8a';
+    ctx.fillText('WIREFRAME', 10, 80);
+  }
+}
+requestAnimationFrame(frame);
+
+// ========================== Input ==============================
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'w' || e.key === 'W') wireframe = !wireframe;
+  if (e.key === 'p' || e.key === 'P') paused = !paused;
+});
+</script>
+</body>
+</html>

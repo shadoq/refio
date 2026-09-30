@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Gouraud-Shaded Rotating Cube</title>
+<style>
+  body { margin: 0; background: #111; display: flex; justify-content: center; align-items: center; height: 100vh; }
+  canvas { border: 1px solid #333; background: #000; }
+</style>
+</head>
+<body>
+<canvas id="c" width="800" height="600"></canvas>
+<script>
+"use strict";
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+// ---- Geometry: a cube ----
+// 8 vertices
+const V = [
+  [-1,-1,-1], [ 1,-1,-1], [ 1, 1,-1], [-1, 1,-1],
+  [-1,-1, 1], [ 1,-1, 1], [ 1, 1, 1], [-1, 1, 1]
+];
+// 6 faces, each split into 2 triangles (CCW as seen from outside)
+// face order: 0=front(+z),1=back(-z),2=right(+x),3=left(-x),4=top(+y),5=bottom(-y)
+const FACES = [
+  { verts: [4,5,6, 4,6,7], n:[0,0,1] },   // front
+  { verts: [1,0,3, 1,3,2], n:[0,0,-1] },  // back
+  { verts: [5,1,2, 5,2,6], n:[1,0,0] },   // right
+  { verts: [0,4,7, 0,7,3], n:[-1,0,0] },  // left
+  { verts: [7,6,2, 7,2,3], n:[0,1,0] },   // top
+  { verts: [0,1,5, 0,5,4], n:[0,-1,0] }   // bottom
+];
+
+// ---- State ----
+let rotX = 0, rotY = 0;
+let paused = false;
+let wireframe = false;
+let lightPos = { x: 2, y: 2, z: 2 };
+let lightAngle = 0;
+
+// ---- FPS ----
+let fps = 0, frameCount = 0, fpsTime = 0;
+
+// ---- Math helpers ----
+function matMul(m, v) {
+  return [
+    m[0][0]*v[0] + m[0][1]*v[1] + m[0][2]*v[2],
+    m[1][0]*v[0] + m[1][1]*v[1] + m[1][2]*v[2],
+    m[2][0]*v[0] + m[2][1]*v[1] + m[2][2]*v[2]
+  ];
+}
+
+function rotMatX(a) {
+  const c=Math.cos(a), s=Math.sin(a);
+  return [[1,0,0],[0,c,-s],[0,s,c]];
+}
+function rotMatY(a) {
+  const c=Math.cos(a), s=Math.sin(a);
+  return [[c,0,s],[0,1,0],[-s,0,c]];
+}
+
+// Compose: R = Rx * Ry (apply Y then X)
+function combinedRot(rx, ry) {
+  const Ry = rotMatY(ry), Rx = rotMatX(rx);
+  // Rx * Ry
+  const m = [[0,0,0],[0,0,0],[0,0,0]];
+  for (let i=0;i<3;i++)
+    for (let j=0;j<3;j++)
+      for (let k=0;k<3;k++)
+        m[i][j] += Rx[i][k]*Ry[k][j];
+  return m;
+}
+
+function project(v) {
+  const fov = 500;
+  const z = v[2] + 4; // push scene back so z is positive
+  const scale = fov / z;
+  return [v[0]*scale + W/2, -v[1]*scale + H/2, z];
+}
+
+function dot(a,b) {
+  return a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+}
+
+// Backface culling: dot of (face normal after rotation) with view direction
+// View direction is (0,0,-1) in view space (camera at origin looking -Z).
+// After rotation, a face is front-facing if its normal's Z component > 0.
+function isFrontFacing(normalRotated) {
+  return normalRotated[2] > 0;
+}
+
+// ---- Main loop ----
+let lastTime = performance.now();
+
+function frame(now) {
+  const dt = (now - lastTime) / 1000;
+  lastTime = now;
+
+  // FPS counter
+  frameCount++;
+  if (now - fpsTime >= 1000) {
+    fps = frameCount;
+    frameCount = 0;
+    fpsTime = now;
+  }
+
+  if (!paused) {
+    rotY += dt * 1.2;
+    rotX += dt * 0.4;
+    lightAngle += dt * 0.8;
+    lightPos.x = 3 * Math.cos(lightAngle);
+    lightPos.y = 3 * Math.sin(lightAngle * 0.7);
+    lightPos.z = 3 * Math.sin(lightAngle * 0.5) + 1;
+  }
+
+  // Clear
+  ctx.fillStyle = '#0a0a12';
+  ctx.fillRect(0,0,W,H);
+
+  // Transform vertices
+  const R = combinedRot(rotX, rotY);
+  const tv = V.map(v => matMul(R, v)); // rotated vertices
+
+  // Transform face normals (pure rotation, no translation)
+  // For an axis-aligned cube, normals are just the rotated axis vectors
+  const faceNormals = FACES.map(f => matMul(R, f.n));
+
+  // Draw each face (two triangles)
+  for (let fi = 0; fi < FACES.length; fi++) {
+    const face = FACES[fi];
+    const normalRot = faceNormals[fi];
+
+    // Backface culling
+    if (!isFrontFacing(normalRot)) continue;
+
+    // Two triangles
+    const triIndices = [face.verts.slice(0,3), face.verts.slice(3,6)];
+
+    for (const tri of triIndices) {
+      const p0 = project(tv[tri[0]]);
+      const p1 = project(tv[tri[1]]);
+      const p2 = project(tv[tri[2]]);
+
+      // ---- Per-vertex lighting (Lambert) ----
+      // For each vertex, use the face normal (Gouraud uses vertex normals;
+      // for a cube we approximate by using the face normal for all 3 vertices,
+      // which still gives the Gouraud look with flat-ish shading per face but
+      // proper interpolation across triangles). For a smoother look we can
+      // compute vertex normals as average of adjacent face normals, but here
+      // we use the face normal at each vertex for simplicity — the interpolation
+      // across the triangle then produces the Gouraud effect.
+      const vn = normalRot;
+      const v0 = tv[tri[0]], v1 = tv[tri[1]], v2 = tv[tri[2]];
+
+      // Light direction at each vertex (from vertex to light)
+      function lightDir(v) {
+        return [lightPos.x - v[0], lightPos.y - v[1], lightPos.z - v[2]];
+      }
+      function normalize(v) {
+        const l = Math.sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2]) || 1;
+        return [v[0]/l, v[1]/l, v[2]/l];
+      }
+
+      const l0 = normalize(lightDir(v0));
+      const l1 = normalize(lightDir(v1));
+      const l2 = normalize(lightDir(v2));
+
+      function lambert(n, l) {
+        const d = dot(n, l);
+        // Clamp to [0,1], with a small ambient
+        const ambient = 0.15;
+        return Math.max(ambient, ambient + (1-ambient)*d);
+      }
+
+      const i0 = lambert(vn, l0);
+      const i1 = lambert(vn, l1);
+      const i2 = lambert(vn, l2);
+
+      // Color: use a fixed base color (warm orange) modulated by intensity
+      const baseR = 255, baseG = 140, baseB = 60;
+      const c0 = [baseR*i0, baseG*i0, baseB*i0];
+      const c1 = [baseR*i1, baseG*i1, baseB*i1];
+      const c2 = [baseR*i2, baseG*i2, baseB*i2];
+
+      // ---- Rasterize triangle with Gouraud interpolation ----
+      rasterizeTriangle(p0, p1, p2, c0, c1, c2, wireframe);
+    }
+  }
+
+  // ---- HUD ----
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(10, 10, 180, 50);
+  ctx.fillStyle = '#fff';
+  ctx.font = '14px monospace';
+  ctx.fillText('FPS: ' + fps, 20, 32);
+  ctx.fillText('W: wireframe ' + (wireframe ? 'ON' : 'OFF'), 20, 50);
+  ctx.fillText('P: pause ' + (paused ? 'ON' : 'OFF'), 20, 68);
+  if (paused) {
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(W/2-100, H/2-20, 200, 40);
+    ctx.fillStyle = '#ff4444';
+    ctx.font = '18px monospace';
+    ctx.fillText('PAUSED', W/2-60, H/2+6);
+  }
+
+  requestAnimationFrame(frame);
+}
+
+// ---- Software rasterizer: Gouraud-shaded triangle ----
+function rasterizeTriangle(p0, p1, p2, c0, c1, c2, wireframe) {
+  // p = [x, y, z], c = [r,g,b]
+  // Bounding box
+  const x0 = Math.max(0, Math.min(p0[0], p1[0], p2[0]));
+  const x1 = Math.min(W-1, Math.max(p0[0], p1[0], p2[0]));
+  const y0 = Math.max(0, Math.min(p0[1], p1[1], p2[1]));
+  const y1 = Math.min(H-1, Math.max(p0[1], p1[1], p2[1]));
+
+  if (x0 > x1 || y0 > y1) return;
+
+  // Edge functions
+  function edge(ax, ay, bx, by, cx, cy) {
+    return (bx-ax)*(cy-ay) - (by-ay)*(cx-ax);
+  }
+
+  const e01 = edge(p0[0],p0[1], p1[0],p1[1]);
+  const e12 = edge(p1[0],p1[1], p2[0],p2[1]);
+  const e20 = edge(p2[0],p2[1], p0[0],p0[1]);
+
+  // Determine orientation (all edges same sign for inside points)
+  const orient = Math.sign(e01);
+  if (orient === 0) return;
+
+  function inside(ex, ey, x, y) {
+    return orient * (ex*(y-p0[1]) - ey*(x-p0[0])) >= 0;
+    // Actually proper edge test per edge:
+  }
+
+  // Proper barycentric test
+  function bary(ax, ay, bx, by, cx, cy, px, py) {
+    const w0 = (bx-ax)*(cy-ay) - (by-ay)*(cx-ax);
+    const w1 = (cx-ax)*(py-ay) - (cy-ay)*(px-ax);
+    const w2 = (ax-bx)*(py-by) - (ay-by)*(px-bx);
+    // Use cross product signs consistently
+    return null;
+  }
+
+  // Use a robust barycentric approach
+  for (let y = Math.floor(y0); y <= y1; y++) {
+    for (let x = Math.floor(x0); x <= x1; x++) {
+      // Barycentric coordinates
+      const denom = (p1[1]-p2[1])*(p0[0]-p2[0]) + (p2[0]-p1[0])*(p0[1]-p2[1]);
+      if (Math.abs(denom) < 1e-9) continue;
+      const a = ((p1[1]-p2[1])*(x-p2[0]) + (p2[0]-p1[0])*(y-p2[1])) / denom;
+      const b = ((p2[1]-p0[1])*(x-p2[0]) + (p0[0]-p2[0])*(y-p2[1])) / denom;
+      const cc = 1 - a - b;
+      if (a < 0 || b < 0 || cc < 0) continue;
+
+      // Interpolate color (Gouraud)
+      const r = c0[0]*a + c1[0]*b + c2[0]*cc;
+      const g = c0[1]*a + c1[1]*b + c2[1]*cc;
+      const b_ = c0[2]*a + c1[2]*b + c2[2]*cc;
+
+      // Depth test (simple: store depth per pixel in a buffer)
+      const z = p0[2]*a + p1[2]*b + p2[2]*cc;
+
+      // Write pixel
+      if (wireframe) {
+        // Draw only if near an edge (simple approach: draw all pixels but thin lines look bad;
+        // instead we draw the triangle edges via line segments below)
+        continue;
+      }
+
+      // Depth buffer (per-frame, allocated once outside — using a simple array)
+      const idx = y * W + x;
+      if (z < depthBuf[idx]) {
+        depthBuf[idx] = z;
+        const ri = Math.min(255, Math.max(0, Math.round(r)));
+        const gi = Math.min(255, Math.max(0, Math.round(g)));
+        const bi = Math.min(255, Math.max(0, Math.round(b_)));
+        ctx.fillStyle = `rgb(${ri},${gi},${bi})`;
+        ctx.fillRect(x, y, 1, 1);
+      }
+    }
+  }
+
+  if (wireframe) {
+    // Draw triangle edges
+    ctx.strokeStyle = '#88ccff';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(p0[0], p0[1]);
+    ctx.lineTo(p1[0], p1[1]);
+    ctx.lineTo(p2[0], p2[1]);
+    ctx.closePath();
+    ctx.stroke();
+  }
+}
+
+// ---- Depth buffer ----
+let depthBuf = new Float32Array(W * H).fill(Infinity);
+
+// ---- Input ----
+window.addEventListener('keydown', (e) => {
+  const k = e.key.toLowerCase();
+  if (k === 'w') { wireframe = !wireframe; e.preventDefault(); }
+  if (k === 'p') { paused = !paused; e.preventDefault(); }
+});
+
+// ---- Start ----
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

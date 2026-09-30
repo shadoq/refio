@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gouraud-Shaded Rotating Cube</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a2e;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    font-family: 'Courier New', monospace;
+  }
+  canvas {
+    border: 2px solid #444;
+    background: #0d0d1a;
+  }
+  #controls {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    color: #aaa;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+</style>
+</head>
+<body>
+<div id="controls">
+  W - Toggle wireframe<br>
+  P - Pause/Resume<br>
+  FPS: <span id="fps">0</span>
+</div>
+<canvas id="canvas" width="800" height="600"></canvas>
+
+<script>
+// ─── Configuration ───────────────────────────────────────────────
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const WIDTH = canvas.width;
+const HEIGHT = canvas.height;
+const FOV = 500;
+const NEAR = 0.1;
+const FAR = 1000;
+
+// ─── 3D Vector helpers ──────────────────────────────────────────
+function vec3(x, y, z) { return [x, y, z]; }
+const vadd = (a, b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2]];
+const vsub = (a, b) => [a[0]-b[0], a[1]-b[1], a[2]-b[2]];
+const vscale = (v, s) => [v[0]*s, v[1]*s, v[2]*s];
+const vdot = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+const vlen = v => Math.sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
+const vnorm = v => { const l = vlen(v) || 1; return [v[0]/l, v[1]/l, v[2]/l]; };
+const vcross = (a, b) => [
+  a[1]*b[2] - a[2]*b[1],
+  a[2]*b[0] - a[0]*b[2],
+  a[0]*b[1] - a[1]*b[0]
+];
+
+// ─── Rotation matrices ──────────────────────────────────────────
+function rotX(angle) {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  return [
+    [1, 0, 0],
+    [0, c, -s],
+    [0, s, c]
+  ];
+}
+function rotY(angle) {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  return [
+    [c, 0, s],
+    [0, 1, 0],
+    [-s, 0, c]
+  ];
+}
+function rotZ(angle) {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  return [
+    [c, -s, 0],
+    [s, c, 0],
+    [0, 0, 1]
+  ];
+}
+function matMulVec(m, v) {
+  return [
+    m[0][0]*v[0] + m[0][1]*v[1] + m[0][2]*v[2],
+    m[1][0]*v[0] + m[1][1]*v[1] + m[1][2]*v[2],
+    m[2][0]*v[0] + m[2][1]*v[1] + m[2][2]*v[2]
+  ];
+}
+function matMulMat(a, b) {
+  const r = [[0,0,0],[0,0,0],[0,0,0]];
+  for (let i = 0; i < 3; i++)
+    for (let j = 0; j < 3; j++)
+      for (let k = 0; k < 3; k++)
+        r[i][j] += a[i][k] * b[k][j];
+  return r;
+}
+
+// ─── Cube vertices & faces ──────────────────────────────────────
+// Cube centered at origin, side length 2
+const cubeVerts = [
+  vec3(-1, -1, -1), vec3( 1, -1, -1), vec3( 1,  1, -1), vec3(-1,  1, -1),
+  vec3(-1, -1,  1), vec3( 1, -1,  1), vec3( 1,  1,  1), vec3(-1,  1,  1)
+];
+
+// Each face: [v0, v1, v2, v3] (quad) — we split into two triangles
+const cubeFaces = [
+  { indices: [0,1,2,3], color: [0.2, 0.5, 0.9] },   // back  - blue
+  { indices: [5,4,7,6], color: [0.9, 0.3, 0.3] },   // front - red
+  { indices: [4,0,3,7], color: [0.3, 0.8, 0.3] },   // left  - green
+  { indices: [1,5,6,2], color: [0.9, 0.7, 0.2] },   // right - yellow
+  { indices: [3,2,6,7], color: [0.3, 0.3, 0.8] },   // top   - indigo
+  { indices: [4,5,1,0], color: [0.8, 0.4, 0.1] }    // bottom - orange
+];
+
+// Triangle split from quad [a,b,c,d] → [a,b,c] and [a,c,d]
+function quadToTriangles(quad) {
+  return [
+    [quad[0], quad[1], quad[2]],
+    [quad[0], quad[2], quad[3]]
+  ];
+}
+
+// ─── State ──────────────────────────────────────────────────────
+let angleX = 0, angleY = 0, angleZ = 0;
+let paused = false;
+let showWireframe = false;
+let lightAngleX = 0, lightAngleY = 0;
+let frameCount = 0;
+let lastFpsUpdate = performance.now();
+let fps = 0;
+const fpsSpan = document.getElementById('fps');
+
+// ─── Key handling ───────────────────────────────────────────────
+window.addEventListener('keydown', e => {
+  const key = e.key.toLowerCase();
+  if (key === 'w') showWireframe = !showWireframe;
+  if (key === 'p') paused = !paused;
+});
+
+// ─── Lighting (Lambert) ────────────────────────────────────────
+function computeLighting(normal, lightDir) {
+  const l = vnorm(lightDir);
+  const n = vnorm(normal);
+  const diff = Math.max(0, vdot(n, l));
+  // Ambient + diffuse
+  const ambient = 0.25;
+  const intensity = ambient + (1 - ambient) * diff;
+  return intensity;
+}
+
+// ─── Perspective projection ────────────────────────────────────
+function project(v3) {
+  const z = v3[2];
+  if (z < NEAR) return null;
+  const scale = FOV / (z + FOV);
+  return [v3[0] * scale + WIDTH/2, v3[1] * scale + HEIGHT/2, z];
+}
+
+// ─── Backface culling ──────────────────────────────────────────
+function isFrontFace(p0, p1, p2, camPos) {
+  const e1 = vsub(p1, p0);
+  const e2 = vsub(p2, p0);
+  const normal = vcross(e1, e2);
+  const toCam = vsub(camPos, p0);
+  return vdot(normal, toCam) > 0;
+}
+
+// ─── Edge function for rasterization ───────────────────────────
+function edgeFunction(a, b, c) {
+  return (c[0]-a[0])*(b[1]-a[1]) - (c[1]-a[1])*(b[0]-a[0]);
+}
+
+// ─── Flat-top / flat-bottom triangle rasterizer ────────────────
+function rasterizeTriangle(p0, p1, p2, colors, lightIntensities) {
+  // Sort by Y for flat-top/flat-bottom
+  const pts = [
+    { p: p0, c: colors[0], li: lightIntensities[0] },
+    { p: p1, c: colors[1], li: lightIntensities[1] },
+    { p: p2, c: colors[2], li: lightIntensities[2] }
+  ];
+  pts.sort((a, b) => a.p[1] - b.p[1]);
+
+  const top = pts[0], mid = pts[1], bot = pts[2];
+  const x0 = top.p[0], y0 = top.p[1];
+  const x1 = mid.p[0], y1 = mid.p[1];
+  const x2 = bot.p[0], y2 = bot.p[1];
+
+  // Bounding box
+  const minX = Math.max(0, Math.ceil(Math.min(x0, x1, x2)));
+  const maxX = Math.min(WIDTH-1, Math.floor(Math.max(x0, x1, x2)));
+  const minY = Math.max(0, Math.ceil(y0));
+  const maxY = Math.min(HEIGHT-1, Math.floor(y2));
+
+  // Precompute slopes
+  const dy01 = y1 - y0 || 1;
+  const dy12 = y2 - y1 || 1;
+  const dy02 = y2 - y0 || 1;
+
+  const dx01 = (x1 - x0) / dy01;
+  const dx12 = (x2 - x1) / dy12;
+  const dx02 = (x2 - x0) / dy02;
+
+  // Color interpolation slopes
+  const dcR01 = (mid.c[0] - top.c[0]) / dy01;
+  const dcG01 = (mid.c[1] - top.c[1]) / dy01;
+  const dcB01 = (mid.c[2] - top.c[2]) / dy01;
+  const dcR12 = (bot.c[0] - mid.c[0]) / dy12;
+  const dcG12 = (bot.c[1] - mid.c[1]) / dy12;
+  const dcB12 = (bot.c[2] - mid.c[2]) / dy12;
+  const dcR02 = (bot.c[0] - top.c[0]) / dy02;
+  const dcG02 = (bot.c[1] - top.c[1]) / dy02;
+  const dcB02 = (bot.c[2] - top.c[2]) / dy02;
+
+  const dli01 = (mid.li - top.li) / dy01;
+  const dli12 = (bot.li - mid.li) / dy12;
+  const dli02 = (bot.li - top.li) / dy02;
+
+  // Scan lines
+  for (let y = minY; y <= maxY; y++) {
+    let xLeft, xRight;
+    let cRLeft, cGLeft, cBLeft, liLeft;
+    let cRRight, cGRight, cBRight, liRight;
+
+    if (y < y1) {
+      // Top part: top→mid and top→bot
+      const t = (y - y0) / dy01;
+      xLeft = x0 + dx01 * (y - y0);
+      xRight = x0 + dx02 * (y - y0);
+      cRLeft = top.c[0] + dcR01 * (y - y0);
+      cGLeft = top.c[1] + dcG01 * (y - y0);
+      cBLeft = top.c[2] + dcB01 * (y - y0);
+      liLeft = top.li + dli01 * (y - y0);
+      cRRight = top.c[0] + dcR02 * (y - y0);
+      cGRight = top.c[1] + dcG02 * (y - y0);
+      cBRight = top.c[2] + dcB02 * (y - y0);
+      liRight = top.li + dli02 * (y - y0);
+    } else {
+      // Bottom part: mid→bot and top→bot
+      const t = (y - y1) / dy12;
+      xLeft = x1 + dx12 * (y - y1);
+      xRight = x0 + dx02 * (y - y0);
+      cRLeft = mid.c[0] + dcR12 * (y - y1);
+      cGLeft = mid.c[1] + dcG12 * (y - y1);
+      cBLeft = mid.c[2] + dcB12 * (y - y1);
+      liLeft = mid.li + dli12 * (y - y1);
+      cRRight = top.c[0] + dcR02 * (y - y0);
+      cGRight = top.c[1] + dcG02 * (y - y0);
+      cBRight = top.c[2] + dcB02 * (y - y0);
+      liRight = top.li + dli02 * (y - y0);
+    }
+
+    if (xLeft > xRight) {
+      [xLeft, xRight] = [xRight, xLeft];
+      [cRLeft, cRRight] = [cRRight, cRLeft];
+      [cGLeft, cGRight] = [cGRight, cGLeft];
+      [cBLeft, cBRight] = [cBRight, cBLeft];
+      [liLeft, liRight] = [liRight, liLeft];
+    }
+
+    const dxSpan = (xRight - xLeft) || 1;
+    for (let x = Math.ceil(xLeft); x <= Math.floor(xRight); x++) {
+      const t = (x - xLeft) / dxSpan;
+      const r = cRLeft + (cRRight - cRLeft) * t;
+      const g = cGLeft + (cGRight - cGLeft) * t;
+      const b = cBLeft + (cBRight - cBLeft) * t;
+      const li = liLeft + (liRight - liLeft) * t;
+      const ri = Math.max(0, Math.min(1, r * li));
+      const gi = Math.max(0, Math.min(1, g * li));
+      const bi = Math.max(0, Math.min(1, b * li));
+      ctx.fillStyle = `rgb(${(ri*255)|0},${(gi*255)|0},${(bi*255)|0})`;
+      ctx.fillRect(x, y, 1, 1);
+    }
+  }
+}
+
+// ─── Render ────────────────────────────────────────────────────
+function render(now) {
+  // FPS
+  frameCount++;
+  if (now - lastFpsUpdate >= 1000) {
+    fps = frameCount;
+    frameCount = 0;
+    lastFpsUpdate = now;
+    fpsSpan.textContent = fps;
+  }
+
+  ctx.fillStyle = '#0d0d1a';
+  ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+  if (paused) return;
+
+  // Update rotation
+  angleX += 0.012;
+  angleY += 0.018;
+  angleZ += 0.007;
+
+  // Update light position (orbiting)
+  lightAngleX += 0.015;
+  lightAngleY += 0.01;
+  const lightDist = 6;
+  const lightPos = vec3(
+    lightDist * Math.sin(lightAngleY) * Math.cos(lightAngleX),
+    lightDist * Math.sin(lightAngleX),
+    lightDist * Math.cos(lightAngleY) * Math.cos(lightAngleX)
+  );
+
+  // Camera
+  const camPos = vec3(0, 0, 5);
+
+  // Combined rotation matrix
+  const rx = rotX(angleX);
+  const ry = rotY(angleY);
+  const rz = rotZ(angleZ);
+  const rot = matMulMat(matMulMat(rx, ry), rz);
+
+  // Transform vertices
+  const transformed = cubeVerts.map(v => matMulVec(rot, v));
+
+  // Draw each face
+  for (const face of cubeFaces) {
+    const tris = quadToTriangles(face.indices);
+    for (const triIdx of tris) {
+      const p0 = transformed[triIdx[0]];
+      const p1 = transformed[triIdx[1]];
+      const p2 = transformed[triIdx[2]];
+
+      // Backface culling
+      if (!isFrontFace(p0, p1, p2, camPos)) continue;
+
+      // Project
+      const pr0 = project(p0);
+      const pr1 = project(p1);
+      const pr2 = project(p2);
+      if (!pr0 || !pr1 || !pr2) continue;
+
+      // Compute face normal (in world space after rotation)
+      const e1 = vsub(p1, p0);
+      const e2 = vsub(p2, p0);
+      const normal = vnorm(vcross(e1, e2));
+
+      // Light direction (from surface to light)
+      const lightDir = vsub(lightPos, (p0[0]+p1[0]+p2[0])/3,
+                                   (p0[1]+p1[1]+p2[1])/3,
+                                   (p0[2]+p1[2]+p2[2])/3);
+
+      // Per-vertex lighting
+      const lightIntensities = [
+        computeLighting(normal, lightDir),
+        computeLighting(normal, lightDir),
+        computeLighting(normal, lightDir)
+      ];
+
+      // Face base color
+      const bc = face.color;
+
+      // Vertex colors (base * intensity)
+      const colors = triIdx.map(() => bc);
+
+      // Rasterize
+      rasterizeTriangle(pr0, pr1, pr2, colors, lightIntensities);
+    }
+  }
+
+  // Wireframe overlay
+  if (showWireframe) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+    ctx.lineWidth = 1;
+    for (const face of cubeFaces) {
+      const quad = face.indices.map(i => project(transformed[i]));
+      if (quad.some(p => p === null)) continue;
+      ctx.beginPath();
+      ctx.moveTo(quad[0][0], quad[0][1]);
+      for (let i = 1; i < 4; i++) ctx.lineTo(quad[i][0], quad[i][1]);
+      ctx.closePath();
+      ctx.stroke();
+    }
+    // Edge diagonals for triangles
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    for (const face of cubeFaces) {
+      const tris = quadToTriangles(face.indices);
+      for (const triIdx of tris) {
+        const pts = triIdx.map(i => project(transformed[i]));
+        if (pts.some(p => p === null)) continue;
+        ctx.beginPath();
+        ctx.moveTo(pts[0][0], pts[0][1]);
+        ctx.lineTo(pts[1][0], pts[1][1]);
+        ctx.lineTo(pts[2][0], pts[2][1]);
+        ctx.closePath();
+        ctx.stroke();
+      }
+    }
+  }
+
+  // Light indicator
+  const lightScreen = project(lightPos);
+  if (lightScreen) {
+    ctx.beginPath();
+    ctx.arc(lightScreen[0], lightScreen[1], 6, 0, Math.PI*2);
+    ctx.fillStyle = '#fffbe6';
+    ctx.fill();
+    ctx.strokeStyle = '#ffdd44';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    // Glow
+    const grad = ctx.createRadialGradient(lightScreen[0], lightScreen[1], 2, lightScreen[0], lightScreen[1], 20);
+    grad.addColorStop(0, 'rgba(255,255,200,0.6)');
+    grad.addColorStop(1, 'rgba(255,255,200,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(lightScreen[0]-20, lightScreen[1]-20, 40, 40);
+  }
+
+  requestAnimationFrame(render);
+}
+
+requestAnimationFrame(render);
+</script>
+</body>
+</html>

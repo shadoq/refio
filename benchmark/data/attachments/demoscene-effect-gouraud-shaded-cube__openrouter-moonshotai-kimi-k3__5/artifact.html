@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Gouraud Shaded Cube — Canvas 2D</title>
+<style>
+html,body { margin:0; padding:0; overflow:hidden; background:#0b0e14; height:100%; }
+canvas { display:block; }
+#hud  { position:fixed; top:10px;    left:12px; font:14px/1.4 monospace; color:#8fd3ff; text-shadow:0 0 6px #000; pointer-events:none; user-select:none; white-space:pre; }
+#help { position:fixed; bottom:10px; left:12px; font:14px/1.4 monospace; color:#8fd3ff; text-shadow:0 0 6px #000; pointer-events:none; user-select:none; white-space:pre; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud"></div>
+<div id="help">W — toggle wireframe    P — pause</div>
+<script>
+'use strict';
+
+// ================= Setup =================
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const hud = document.getElementById('hud');
+let W, H, img, buf32;
+
+function resize() {
+  W = canvas.width = innerWidth;
+  H = canvas.height = innerHeight;
+  img = ctx.createImageData(W, H);
+  buf32 = new Uint32Array(img.data.buffer);
+}
+window.addEventListener('resize', resize);
+resize();
+
+// Pixels are packed little-endian Uint32: (255<<24)|(b<<16)|(g<<8)|r
+const BG = (255 << 24) | (0x14 << 16) | (0x0e << 8) | 0x0b; // #0b0e14
+
+// ================= Math helpers =================
+function rotX(a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return [1, 0, 0,
+          0, c,-s,
+          0, s, c];
+}
+function rotY(a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return [ c, 0, s,
+           0, 1, 0,
+          -s, 0, c];
+}
+function matMul3(A, B) {
+  const R = new Array(9);
+  for (let r = 0; r < 3; r++)
+    for (let c = 0; c < 3; c++)
+      R[r*3+c] = A[r*3]*B[c] + A[r*3+1]*B[3+c] + A[r*3+2]*B[6+c];
+  return R;
+}
+function applyMat(m, v) {
+  return [
+    m[0]*v[0] + m[1]*v[1] + m[2]*v[2],
+    m[3]*v[0] + m[4]*v[1] + m[5]*v[2],
+    m[6]*v[0] + m[7]*v[1] + m[8]*v[2]
+  ];
+}
+function dot(a, b)   { return a[0]*b[0] + a[1]*b[1] + a[2]*b[2]; }
+function cross(a, b) { return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]; }
+function sub(a, b)   { return [a[0]-b[0], a[1]-b[1], a[2]-b[2]]; }
+function normalize(v) {
+  const l = Math.hypot(v[0], v[1], v[2]) || 1;
+  return [v[0]/l, v[1]/l, v[2]/l];
+}
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+// ================= Cube geometry: vertices =================
+// 6 faces, corners counter-clockwise when viewed from OUTSIDE
+const FACES = [
+  { c: [[-1,-1, 1],[ 1,-1, 1],[ 1, 1, 1],[-1, 1, 1]], col: [255, 92, 92] }, // front  +Z
+  { c: [[ 1,-1,-1],[-1,-1,-1],[-1, 1,-1],[ 1, 1,-1]], col: [ 92,255,140] }, // back   -Z
+  { c: [[ 1,-1, 1],[ 1,-1,-1],[ 1, 1,-1],[ 1, 1, 1]], col: [ 92,150,255] }, // right  +X
+  { c: [[-1,-1,-1],[-1,-1, 1],[-1, 1, 1],[-1, 1,-1]], col: [255,214, 92] }, // left   -X
+  { c: [[-1, 1, 1],[ 1, 1, 1],[ 1, 1,-1],[-1, 1,-1]], col: [214, 92,255] }, // top    +Y
+  { c: [[-1,-1,-1],[ 1,-1,-1],[ 1,-1, 1],[-1,-1, 1]], col: [ 92,235,255] }  // bottom -Y
+];
+
+// 24 vertices (4 per face, duplicated so each keeps its face color).
+// Per-vertex normal = normalize(corner position) -> smooth Gouraud across edges.
+const basePos = [], baseNrm = [], baseCol = [];
+for (const f of FACES) {
+  for (const p of f.c) {
+    basePos.push(p);
+    baseNrm.push(normalize(p));
+    baseCol.push(f.col);
+  }
+}
+
+// 12 triangles: each quad split into (0,1,2) and (0,2,3)
+const TRIS = [];
+for (let f = 0; f < 6; f++) {
+  const o = f * 4;
+  TRIS.push([o, o + 1, o + 2], [o, o + 2, o + 3]);
+}
+
+// ================= Gouraud rasterization (scanline fill) =================
+// Each p = {x, y, r, g, b} in screen space with float colors.
+function rasterTri(p0, p1, p2) {
+  // 1. sort vertices by y ascending
+  let v0 = p0, v1 = p1, v2 = p2, t;
+  if (v1.y < v0.y) { t = v0; v0 = v1; v1 = t; }
+  if (v2.y < v0.y) { t = v0; v0 = v2; v2 = t; }
+  if (v2.y < v1.y) { t = v1; v1 = v2; v2 = t; }
+  if (v2.y === v0.y) return;
+
+  const yStart = Math.max(0, Math.ceil(v0.y));
+  const yEnd   = Math.min(H - 1, Math.floor(v2.y));
+
+  // 2. walk scanlines, interpolating along long edge and active short edge
+  for (let y = yStart; y <= yEnd; y++) {
+    // point A on long edge v0 -> v2
+    const tl = (y - v0.y) / (v2.y - v0.y);
+    let Ax = lerp(v0.x, v2.x, tl);
+    let Ar = lerp(v0.r, v2.r, tl);
+    let Ag = lerp(v0.g, v2.g, tl);
+    let Ab = lerp(v0.b, v2.b, tl);
+
+    // point B on active short edge
+    let Bx, Br, Bg, Bb, d, s;
+    if (y < v1.y) {
+      d = v1.y - v0.y;
+      s = d === 0 ? 0 : (y - v0.y) / d;
+      Bx = lerp(v0.x, v1.x, s);
+      Br = lerp(v0.r, v1.r, s);
+      Bg = lerp(v0.g, v1.g, s);
+      Bb = lerp(v0.b, v1.b, s);
+    } else {
+      d = v2.y - v1.y;
+      s = d === 0 ? 0 : (y - v1.y) / d;
+      Bx = lerp(v1.x, v2.x, s);
+      Br = lerp(v1.r, v2.r, s);
+      Bg = lerp(v1.g, v2.g, s);
+      Bb = lerp(v1.b, v2.b, s);
+    }
+
+    // 3. ensure A is left of B, then fill the span with interpolated color
+    if (Ax > Bx) {
+      let tmp;
+      tmp = Ax; Ax = Bx; Bx = tmp;
+      tmp = Ar; Ar = Br; Br = tmp;
+      tmp = Ag; Ag = Bg; Bg = tmp;
+      tmp = Ab; Ab = Bb; Bb = tmp;
+    }
+
+    const xStart = Math.max(0, Math.ceil(Ax));
+    const xEnd   = Math.min(W - 1, Math.floor(Bx));
+    const dx = Bx - Ax;
+    const row = y * W;
+    for (let x = xStart; x <= xEnd; x++) {
+      const u = dx === 0 ? 0 : (x - Ax) / dx;
+      let r = lerp(Ar, Br, u) | 0;
+      let g = lerp(Ag, Bg, u) | 0;
+      let b = lerp(Ab, Bb, u) | 0;
+      if (r < 0) r = 0; else if (r > 255) r = 255;
+      if (g < 0) g = 0; else if (g > 255) g = 255;
+      if (b < 0) b = 0; else if (b > 255) b = 255;
+      buf32[row + x] = (255 << 24) | (b << 16) | (g << 8) | r;
+    }
+  }
+}
+
+// ================= Animation state =================
+let time = 0;
+let paused = false;
+let wireframe = false;
+let last = performance.now();
+let frames = 0;
+let fpsTime = performance.now();
+const camDist = 3.5;
+
+window.addEventListener('keydown', e => {
+  const k = e.key;
+  if (k === 'w' || k === 'W') wireframe = !wireframe;
+  else if (k === 'p' || k === 'P') paused = !paused;
+});
+
+// ================= Main loop =================
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dt = now - last;
+  last = now;
+  if (!paused) time += dt / 1000;
+
+  // --- Rotation matrices ---
+  const R = matMul3(rotY(time * 0.9), rotX(time * 0.6));
+
+  // --- Moving light (world space, orbits fully around the cube) ---
+  const L = [
+    3.0 * Math.cos(0.9 * time),
+    2.6 * Math.sin(1.2 * time),
+    3.0 * Math.sin(0.6 * time)
+  ];
+
+  const f = 0.9 * Math.min(W, H);
+  const scr  = new Array(24); // screen-space {x,y,r,g,b}
+  const view = new Array(24); // view-space positions (for backface culling)
+
+  for (let i = 0; i < 24; i++) {
+    // rotate vertex position and normal
+    const V = applyMat(R, basePos[i]);
+    const N = applyMat(R, baseNrm[i]);
+
+    // --- Per-vertex Lambert lighting (rotated/world space) ---
+    const dir = normalize(sub(L, V));
+    const inten = 0.18 + 0.82 * Math.max(0, dot(N, dir));
+    const c = baseCol[i];
+    let r = c[0] * inten, g = c[1] * inten, b = c[2] * inten;
+    if (r > 255) r = 255;
+    if (g > 255) g = 255;
+    if (b > 255) b = 255;
+
+    // --- View transform: camera at origin looking down +z ---
+    const vz = V[2] + camDist;
+
+    // --- Perspective projection (note the y flip) ---
+    const sx = W / 2 + f * V[0] / vz;
+    const sy = H / 2 - f * V[1] / vz;
+
+    view[i] = [V[0], V[1], vz];
+    scr[i]  = { x: sx, y: sy, r, g, b };
+  }
+
+  // --- Clear pixel buffer to background ---
+  buf32.fill(BG);
+
+  // --- Backface culling (view space) + rasterization ---
+  const visible = [];
+  for (const tri of TRIS) {
+    const a = view[tri[0]], b = view[tri[1]], c = view[tri[2]];
+    const n = cross(sub(b, a), sub(c, a));
+    if (dot(n, a) >= 0) continue; // back-facing: camera at origin, a is view direction
+    visible.push(tri);
+    if (!wireframe) rasterTri(scr[tri[0]], scr[tri[1]], scr[tri[2]]);
+  }
+
+  ctx.putImageData(img, 0, 0);
+
+  // --- Wireframe overlay ---
+  if (wireframe) {
+    ctx.lineWidth = 1.5;
+    for (const tri of visible) {
+      const p0 = scr[tri[0]], p1 = scr[tri[1]], p2 = scr[tri[2]];
+      const r = Math.round((p0.r + p1.r + p2.r) / 3);
+      const g = Math.round((p0.g + p1.g + p2.g) / 3);
+      const b = Math.round((p0.b + p1.b + p2.b) / 3);
+      ctx.strokeStyle = 'rgb(' + r + ',' + g + ',' + b + ')';
+      ctx.beginPath();
+      ctx.moveTo(p0.x, p0.y);
+      ctx.lineTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
+      ctx.closePath();
+      ctx.stroke();
+    }
+  }
+
+  // --- Light indicator ---
+  const lz = L[2] + camDist;
+  if (lz > 0.1) {
+    const lx = W / 2 + f * L[0] / lz;
+    const ly = H / 2 - f * L[1] / lz;
+    ctx.fillStyle = 'rgba(255,251,224,0.18)';
+    ctx.beginPath();
+    ctx.arc(lx, ly, 10, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#fffbe0';
+    ctx.beginPath();
+    ctx.arc(lx, ly, 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // --- FPS display ---
+  frames++;
+  const elapsed = now - fpsTime;
+  if (elapsed >= 500) {
+    const fps = Math.round(frames * 1000 / elapsed);
+    frames = 0;
+    fpsTime = now;
+    hud.textContent = fps + ' FPS · ' + (wireframe ? 'wireframe' : 'solid') + ' · ' + (paused ? 'paused' : 'running');
+  }
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

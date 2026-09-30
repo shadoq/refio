@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Snake — 30 × 30 Arena</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    min-height: 100vh;
+    background: #0b1020;
+    color: #e2e8f0;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .app { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  header { text-align: center; }
+  header h1 {
+    font-size: 28px;
+    letter-spacing: 10px;
+    color: #22c55e;
+    text-shadow: 0 0 12px rgba(34,197,94,.7), 0 0 34px rgba(34,197,94,.35);
+  }
+  header .tagline { font-size: 12px; color: #64748b; letter-spacing: 4px; margin-top: 2px; }
+  #hud {
+    width: 600px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: #0f172a;
+    border: 1px solid #1e293b;
+    border-radius: 10px;
+    padding: 10px 18px;
+    font-weight: 700;
+    font-size: 16px;
+  }
+  #hud-p1 { color: #4ade80; text-shadow: 0 0 8px rgba(74,222,128,.5); }
+  #hud-p2 { color: #fbbf24; text-shadow: 0 0 8px rgba(251,191,36,.5); }
+  #hud-mode { color: #94a3b8; font-size: 12px; letter-spacing: 3px; text-transform: uppercase; }
+  #stage { position: relative; width: 600px; height: 600px; }
+  canvas {
+    display: block;
+    background: #0f172a;
+    border-radius: 10px;
+    box-shadow: 0 0 0 1px #1e293b, 0 0 44px rgba(34,197,94,.12);
+  }
+  .overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    background: rgba(11,16,32,.88);
+    border-radius: 10px;
+    text-align: center;
+    z-index: 2;
+  }
+  .hidden { display: none !important; }
+  .menu-title {
+    font-size: 58px;
+    letter-spacing: 14px;
+    color: #22c55e;
+    text-shadow: 0 0 16px rgba(34,197,94,.8), 0 0 46px rgba(34,197,94,.4);
+  }
+  .menu-sub { color: #94a3b8; letter-spacing: 2px; margin-bottom: 10px; }
+  #menu button {
+    width: 280px;
+    padding: 12px 0;
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    font-family: inherit;
+    color: #e2e8f0;
+    background: #111c33;
+    border: 1px solid rgba(34,197,94,.4);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all .15s ease;
+  }
+  #menu button:hover {
+    background: #22c55e;
+    color: #052e16;
+    box-shadow: 0 0 20px rgba(34,197,94,.5);
+    transform: translateY(-1px);
+  }
+  .legend { margin-top: 12px; font-size: 12px; color: #64748b; letter-spacing: 1px; }
+  #gameover h2 {
+    font-size: 44px;
+    letter-spacing: 8px;
+    color: #ef4444;
+    text-shadow: 0 0 16px rgba(239,68,68,.65), 0 0 44px rgba(239,68,68,.3);
+  }
+  #result { font-size: 26px; font-weight: 800; color: #f8fafc; }
+  #final-scores { font-size: 16px; color: #94a3b8; letter-spacing: 1px; }
+  .hint { margin-top: 10px; font-size: 13px; color: #64748b; letter-spacing: 1px; }
+  #paused {
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 6px 20px;
+    background: rgba(11,16,32,.88);
+    border: 1px solid #f59e0b;
+    color: #fbbf24;
+    font-weight: 800;
+    font-size: 14px;
+    letter-spacing: 5px;
+    border-radius: 999px;
+    z-index: 3;
+    text-shadow: 0 0 10px rgba(251,191,36,.6);
+    box-shadow: 0 0 18px rgba(245,158,11,.25);
+  }
+</style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>SNAKE</h1>
+      <p class="tagline">30 × 30 ARENA</p>
+    </header>
+    <div id="hud">
+      <div id="hud-p1">P1: 0</div>
+      <div id="hud-mode">Human vs Human</div>
+      <div id="hud-p2">P2: 0</div>
+    </div>
+    <div id="stage">
+      <canvas id="game" width="600" height="600"></canvas>
+      <div id="paused" class="hidden">PAUSED</div>
+      <div id="menu" class="overlay">
+        <h2 class="menu-title">SNAKE</h2>
+        <p class="menu-sub">30 × 30 Arena — Two Snakes Battle</p>
+        <button data-mode="1">1 — Human vs Human</button>
+        <button data-mode="2">2 — CPU vs Human</button>
+        <button data-mode="3">3 — CPU vs CPU</button>
+        <p class="legend">P1: WASD · P2: Arrows · Space: Pause · R: Restart</p>
+      </div>
+      <div id="gameover" class="overlay hidden">
+        <h2>GAME OVER</h2>
+        <p id="result">Draw!</p>
+        <p id="final-scores"></p>
+        <p class="hint">Press R to Restart • M for Menu</p>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  'use strict';
+
+  var GRID = 30;
+  var CELL = 20;
+  var SIZE = GRID * CELL;
+  var TICK_MS = 110;
+
+  var UP = { x: 0, y: -1 };
+  var DOWN = { x: 0, y: 1 };
+  var LEFT = { x: -1, y: 0 };
+  var RIGHT = { x: 1, y: 0 };
+  var DIRS = [UP, RIGHT, DOWN, LEFT];
+
+  var KEY_DIRS = {
+    w: UP, a: LEFT, s: DOWN, d: RIGHT,
+    ArrowUp: UP, ArrowDown: DOWN, ArrowLeft: LEFT, ArrowRight: RIGHT
+  };
+
+  var STATE = { MENU: 'MENU', PLAYING: 'PLAYING', PAUSED: 'PAUSED', GAMEOVER: 'GAMEOVER' };
+
+  var MODES = {
+    1: { label: 'Human vs Human', names: ['Player 1', 'Player 2'], hud: ['P1', 'P2'],   cpu: [false, false] },
+    2: { label: 'CPU vs Human',   names: ['Player 1', 'CPU'],      hud: ['P1', 'CPU'],  cpu: [false, true]  },
+    3: { label: 'CPU vs CPU',     names: ['CPU 1', 'CPU 2'],       hud: ['CPU 1', 'CPU 2'], cpu: [true, true] }
+  };
+
+  var SCHEMES = [
+    { head: '#4ade80', tail: '#166534' },
+    { head: '#fbbf24', tail: '#92400e' }
+  ];
+
+  var canvas = document.getElementById('game');
+  var ctx = canvas.getContext('2d');
+  var hudP1El = document.getElementById('hud-p1');
+  var hudP2El = document.getElementById('hud-p2');
+  var hudModeEl = document.getElementById('hud-mode');
+  var menuEl = document.getElementById('menu');
+  var overEl = document.getElementById('gameover');
+  var pausedEl = document.getElementById('paused');
+  var resultEl = document.getElementById('result');
+  var scoresEl = document.getElementById('final-scores');
+
+  var state = STATE.MENU;
+  var currentMode = 1;
+  var snakes = [];
+  var food = null;
+
+  function makeSnake(x, y, dir, cpu) {
+    return {
+      body: [
+        { x: x, y: y },
+        { x: x - dir.x, y: y - dir.y },
+        { x: x - 2 * dir.x, y: y - 2 * dir.y }
+      ],
+      dir: dir,
+      nextDir: dir,
+      score: 0,
+      cpu: cpu
+    };
+  }
+
+  function resetBoard(mode) {
+    currentMode = mode;
+    var cfg = MODES[mode];
+    snakes = [
+      makeSnake(7, 14, RIGHT, cfg.cpu[0]),
+      makeSnake(22, 14, LEFT, cfg.cpu[1])
+    ];
+    food = null;
+    spawnFood();
+    hudModeEl.textContent = cfg.label;
+    hudP1El.textContent = cfg.hud[0] + ': 0';
+    hudP2El.textContent = cfg.hud[1] + ': 0';
+  }
+
+  function startGame(mode) {
+    resetBoard(mode);
+    state = STATE.PLAYING;
+    menuEl.classList.add('hidden');
+    overEl.classList.add('hidden');
+    pausedEl.classList.add('hidden');
+    render();
+  }
+
+  function showMenu() {
+    resetBoard(1);
+    state = STATE.MENU;
+    menuEl.classList.remove('hidden');
+    overEl.classList.add('hidden');
+    pausedEl.classList.add('hidden');
+    render();
+  }
+
+  function togglePause() {
+    if (state === STATE.PLAYING) {
+      state = STATE.PAUSED;
+      pausedEl.classList.remove('hidden');
+    } else if (state === STATE.PAUSED) {
+      state = STATE.PLAYING;
+      pausedEl.classList.add('hidden');
+    }
+  }
+
+  function spawnFood() {
+    var free = [];
+    for (var y = 0; y < GRID; y++) {
+      for (var x = 0; x < GRID; x++) {
+        var occupied = false;
+        for (var s = 0; s < snakes.length && !occupied; s++) {
+          for (var i = 0; i < snakes[s].body.length; i++) {
+            if (snakes[s].body[i].x === x && snakes[s].body[i].y === y) { occupied = true; break; }
+          }
+        }
+        if (!occupied) free.push({ x: x, y: y });
+      }
+    }
+    if (!free.length) { food = null; return; }
+    food = free[Math.floor(Math.random() * free.length)];
+  }
+
+  function setDir(s, d) {
+    if (s.cpu) return;
+    if (d.x === -s.dir.x && d.y === -s.dir.y) return;
+    if (d.x === s.dir.x && d.y === s.dir.y) return;
+    s.nextDir = d;
+  }
+
+  function buildBlocked(a, b) {
+    var set = new Set();
+    [a, b].forEach(function (s) {
+      for (var i = 0; i < s.body.length - 1; i++) {
+        set.add(s.body[i].x + ',' + s.body[i].y);
+      }
+    });
+    return set;
+  }
+
+  function bfsFirstStep(start, target, blocked) {
+    var key = function (x, y) { return x + ',' + y; };
+    var visited = new Set([key(start.x, start.y)]);
+    var queue = [{ x: start.x, y: start.y, first: null }];
+    while (queue.length) {
+      var cur = queue.shift();
+      for (var i = 0; i < DIRS.length; i++) {
+        var d = DIRS[i];
+        var nx = cur.x + d.x, ny = cur.y + d.y;
+        if (nx < 0 || ny < 0 || nx >= GRID || ny >= GRID) continue;
+        var k = key(nx, ny);
+        if (visited.has(k) || blocked.has(k)) continue;
+        var first = cur.first || { x: nx, y: ny };
+        if (nx === target.x && ny === target.y) return first;
+        visited.add(k);
+        queue.push({ x: nx, y: ny, first: first });
+      }
+    }
+    return null;
+  }
+
+  function floodCount(sx, sy, blocked) {
+    var key = function (x, y) { return x + ',' + y; };
+    var seen = new Set([key(sx, sy)]);
+    var stack = [{ x: sx, y: sy }];
+    var count = 0;
+    while (stack.length) {
+      var c = stack.pop();
+      count++;
+      for (var i = 0; i < DIRS.length; i++) {
+        var nx = c.x + DIRS[i].x, ny = c.y + DIRS[i].y;
+        if (nx < 0 || ny < 0 || nx >= GRID || ny >= GRID) continue;
+        var k = key(nx, ny);
+        if (seen.has(k) || blocked.has(k)) continue;
+        seen.add(k);
+        stack.push({ x: nx, y: ny });
+      }
+    }
+    return count;
+  }
+
+  function aiMove(s, other) {
+    var head = s.body[0];
+    var blocked = buildBlocked(s, other);
+    if (food) {
+      var first = bfsFirstStep(head, food, blocked);
+      if (first) {
+        s.nextDir = { x: first.x - head.x, y: first.y - head.y };
+        return;
+      }
+    }
+    var best = null, bestCount = -1;
+    for (var i = 0; i < DIRS.length; i++) {
+      var d = DIRS[i];
+      if (d.x === -s.dir.x && d.y === -s.dir.y) continue;
+      var nx = head.x + d.x, ny = head.y + d.y;
+      if (nx < 0 || ny < 0 || nx >= GRID || ny >= GRID) continue;
+      if (blocked.has(nx + ',' + ny)) continue;
+      var c = floodCount(nx, ny, blocked);
+      if (c > bestCount) { bestCount = c; best = d; }
+    }
+    if (best) s.nextDir = best;
+  }
+
+  function tick() {
+    if (state !== STATE.PLAYING) return;
+
+    if (snakes[0].cpu) aiMove(snakes[0], snakes[1]);
+    if (snakes[1].cpu) aiMove(snakes[1], snakes[0]);
+
+    snakes.forEach(function (s) { s.dir = s.nextDir; });
+
+    var newHeads = snakes.map(function (s) {
+      return { x: s.body[0].x + s.dir.x, y: s.body[0].y + s.dir.y };
+    });
+    var eats = newHeads.map(function (h) {
+      return !!(food && h.x === food.x && h.y === food.y);
+    });
+
+    snakes.forEach(function (s, i) {
+      s.body.unshift(newHeads[i]);
+      if (eats[i]) s.score++;
+      else s.body.pop();
+    });
+    if (eats[0] || eats[1]) spawnFood();
+
+    var dead = [false, false];
+    if (newHeads[0].x === newHeads[1].x && newHeads[0].y === newHeads[1].y) {
+      dead[0] = true;
+      dead[1] = true;
+    }
+    for (var i = 0; i < 2; i++) {
+      var h = snakes[i].body[0];
+      if (h.x < 0 || h.y < 0 || h.x >= GRID || h.y >= GRID) dead[i] = true;
+      if (!dead[i]) {
+        for (var j = 1; j < snakes[i].body.length; j++) {
+          if (snakes[i].body[j].x === h.x && snakes[i].body[j].y === h.y) { dead[i] = true; break; }
+        }
+      }
+      if (!dead[i]) {
+        var other = snakes[1 - i];
+        for (var k = 0; k < other.body.length; k++) {
+          if (other.body[k].x === h.x && other.body[k].y === h.y) { dead[i] = true; break; }
+        }
+      }
+    }
+
+    updateHUD();
+    render();
+
+    if (dead[0] || dead[1]) endGame(dead);
+  }
+
+  function endGame(dead) {
+    state = STATE.GAMEOVER;
+    var cfg = MODES[currentMode];
+    var result;
+    if (dead[0] && dead[1]) result = 'Draw!';
+    else if (dead[0]) result = cfg.names[1] + ' Wins!';
+    else result = cfg.names[0] + ' Wins!';
+    resultEl.textContent = result;
+    scoresEl.textContent = cfg.names[0] + ': ' + snakes[0].score + '   ·   ' + cfg.names[1] + ': ' + snakes[1].score;
+    overEl.classList.remove('hidden');
+  }
+
+  function updateHUD() {
+    var cfg = MODES[currentMode];
+    hudP1El.textContent = cfg.hud[0] + ': ' + snakes[0].score;
+    hudP2El.textContent = cfg.hud[1] + ': ' + snakes[1].score;
+  }
+
+  function lerpColor(hexA, hexB, t) {
+    var a = parseInt(hexA.slice(1), 16);
+    var b = parseInt(hexB.slice(1), 16);
+    var r = Math.round((a >> 16) + ((b >> 16) - (a >> 16)) * t);
+    var g = Math.round(((a >> 8) & 255) + (((b >> 8) & 255) - ((a >> 8) & 255)) * t);
+    var bl = Math.round((a & 255) + ((b & 255) - (a & 255)) * t);
+    return 'rgb(' + r + ',' + g + ',' + bl + ')';
+  }
+
+  function roundRectPath(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  function drawFood() {
+    if (!food) return;
+    var cx = food.x * CELL + CELL / 2;
+    var cy = food.y * CELL + CELL / 2;
+    ctx.fillStyle = '#ef4444';
+    ctx.beginPath();
+    ctx.arc(cx, cy + 1, 7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#78350f';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - 5);
+    ctx.quadraticCurveTo(cx + 1, cy - 8, cx + 3, cy - 9);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.beginPath();
+    ctx.arc(cx - 2.5, cy - 1.5, 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawSnake(s, scheme) {
+    var n = s.body.length;
+    for (var i = n - 1; i >= 0; i--) {
+      var seg = s.body[i];
+      var t = n <= 1 ? 0 : i / (n - 1);
+      ctx.fillStyle = lerpColor(scheme.head, scheme.tail, t);
+      roundRectPath(seg.x * CELL + 1, seg.y * CELL + 1, CELL - 2, CELL - 2, 5);
+      ctx.fill();
+    }
+    var head = s.body[0];
+    var cx = head.x * CELL + CELL / 2;
+    var cy = head.y * CELL + CELL / 2;
+    var fx = s.dir.x * 3.5, fy = s.dir.y * 3.5;
+    var px = -s.dir.y * 4, py = s.dir.x * 4;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.arc(cx + fx + px, cy + fy + py, 2.6, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(cx + fx - px, cy + fy - py, 2.6, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#0b1020';
+    ctx.beginPath(); ctx.arc(cx + fx + px + s.dir.x, cy + fy + py + s.dir.y, 1.3, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(cx + fx - px + s.dir.x, cy + fy - py + s.dir.y, 1.3, 0, Math.PI * 2); ctx.fill();
+  }
+
+  function render() {
+    ctx.fillStyle = '#0f172a';
+    ctx.fillRect(0, 0, SIZE, SIZE);
+
+    ctx.strokeStyle = 'rgba(148,163,184,0.06)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (var i = 1; i < GRID; i++) {
+      ctx.moveTo(i * CELL + 0.5, 0);
+      ctx.lineTo(i * CELL + 0.5, SIZE);
+      ctx.moveTo(0, i * CELL + 0.5);
+      ctx.lineTo(SIZE, i * CELL + 0.5);
+    }
+    ctx.stroke();
+
+    drawFood();
+    drawSnake(snakes[0], SCHEMES[0]);
+    drawSnake(snakes[1], SCHEMES[1]);
+  }
+
+  document.addEventListener('keydown', function (e) {
+    var k = e.key;
+    var kl = k.length === 1 ? k.toLowerCase() : k;
+
+    if (k === ' ' || k.indexOf('Arrow') === 0) e.preventDefault();
+
+    if (state === STATE.MENU) {
+      if (kl === '1' || kl === '2' || kl === '3') startGame(Number(kl));
+      return;
+    }
+
+    if (state === STATE.GAMEOVER) {
+      if (kl === 'r' || k === 'Enter') startGame(currentMode);
+      else if (kl === 'm' || k === 'Escape') showMenu();
+      return;
+    }
+
+    if (k === ' ' || kl === 'p') { togglePause(); return; }
+    if (state !== STATE.PLAYING) return;
+    if (kl === 'r') { startGame(currentMode); return; }
+
+    var d = KEY_DIRS[kl];
+    if (!d) return;
+    if (currentMode === 1) {
+      if ('wasd'.indexOf(kl) !== -1) setDir(snakes[0], d);
+      else setDir(snakes[1], d);
+    } else if (currentMode === 2) {
+      setDir(snakes[0], d);
+    }
+  });
+
+  Array.prototype.forEach.call(menuEl.querySelectorAll('button[data-mode]'), function (btn) {
+    btn.addEventListener('click', function () {
+      startGame(Number(btn.getAttribute('data-mode')));
+    });
+  });
+
+  showMenu();
+  setInterval(tick, TICK_MS);
+})();
+</script>
+</body>
+</html>

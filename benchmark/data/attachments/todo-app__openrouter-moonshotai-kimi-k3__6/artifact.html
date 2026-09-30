@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Todo App</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      padding: 40px 16px;
+      background: linear-gradient(135deg, #e0eafc 0%, #cfdef3 100%);
+      color: #2d3748;
+    }
+
+    .card {
+      background: #ffffff;
+      width: 100%;
+      max-width: 500px;
+      border-radius: 16px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
+      padding: 28px;
+    }
+
+    header h1 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      text-align: center;
+      margin-bottom: 20px;
+      color: #1a202c;
+    }
+
+    .visually-hidden {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    .todo-form {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+
+    .todo-input {
+      flex: 1;
+      padding: 12px 14px;
+      font-size: 1rem;
+      border: 2px solid #e2e8f0;
+      border-radius: 8px;
+      outline: none;
+      transition: border-color 0.2s ease;
+    }
+
+    .todo-input:focus {
+      border-color: #4299e1;
+    }
+
+    .add-btn {
+      padding: 12px 20px;
+      font-size: 1rem;
+      font-weight: 600;
+      color: #ffffff;
+      background: #4299e1;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.2s ease;
+    }
+
+    .add-btn:hover {
+      background: #3182ce;
+    }
+
+    .filters {
+      display: flex;
+      gap: 8px;
+      justify-content: center;
+      margin-bottom: 16px;
+    }
+
+    .filter-btn {
+      padding: 8px 16px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      color: #4a5568;
+      background: #edf2f7;
+      border: none;
+      border-radius: 20px;
+      cursor: pointer;
+      transition: background 0.2s ease, color 0.2s ease;
+    }
+
+    .filter-btn:hover {
+      background: #e2e8f0;
+    }
+
+    .filter-btn.active {
+      background: #4299e1;
+      color: #ffffff;
+    }
+
+    .todo-list {
+      list-style: none;
+      margin-bottom: 16px;
+    }
+
+    .todo-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 10px;
+      border-bottom: 1px solid #edf2f7;
+      transition: background 0.15s ease;
+    }
+
+    .todo-item:hover {
+      background: #f7fafc;
+    }
+
+    .todo-item:last-child {
+      border-bottom: none;
+    }
+
+    .todo-checkbox {
+      width: 18px;
+      height: 18px;
+      cursor: pointer;
+      accent-color: #4299e1;
+      flex-shrink: 0;
+    }
+
+    .todo-text {
+      flex: 1;
+      font-size: 1rem;
+      word-break: break-word;
+    }
+
+    .todo-item.completed .todo-text {
+      text-decoration: line-through;
+      color: #a0aec0;
+    }
+
+    .delete-btn {
+      background: transparent;
+      border: none;
+      color: #cbd5e0;
+      font-size: 1.1rem;
+      cursor: pointer;
+      padding: 4px 8px;
+      border-radius: 6px;
+      transition: color 0.2s ease, background 0.2s ease;
+      flex-shrink: 0;
+    }
+
+    .delete-btn:hover {
+      color: #e53e3e;
+      background: #fff5f5;
+    }
+
+    .empty-state {
+      text-align: center;
+      color: #a0aec0;
+      padding: 24px 0;
+      font-size: 0.95rem;
+    }
+
+    .footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-top: 12px;
+      border-top: 1px solid #edf2f7;
+    }
+
+    .item-count {
+      font-size: 0.85rem;
+      color: #718096;
+    }
+
+    .clear-btn {
+      background: transparent;
+      border: none;
+      color: #718096;
+      font-size: 0.85rem;
+      cursor: pointer;
+      padding: 6px 10px;
+      border-radius: 6px;
+      transition: color 0.2s ease, background 0.2s ease;
+    }
+
+    .clear-btn:hover {
+      color: #e53e3e;
+      background: #fff5f5;
+    }
+
+    .clear-btn.hidden {
+      visibility: hidden;
+    }
+
+    @media (max-width: 480px) {
+      .card {
+        padding: 20px;
+      }
+
+      header h1 {
+        font-size: 1.5rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <header>
+      <h1>Todo App</h1>
+    </header>
+
+    <form class="todo-form" id="todo-form">
+      <label for="todo-input" class="visually-hidden">New todo</label>
+      <input
+        type="text"
+        id="todo-input"
+        class="todo-input"
+        placeholder="What needs to be done?"
+        autocomplete="off"
+      >
+      <button type="submit" class="add-btn">Add</button>
+    </form>
+
+    <div class="filters" role="group" aria-label="Filter todos">
+      <button type="button" class="filter-btn active" data-filter="all">All</button>
+      <button type="button" class="filter-btn" data-filter="active">Active</button>
+      <button type="button" class="filter-btn" data-filter="completed">Completed</button>
+    </div>
+
+    <ul class="todo-list" id="todo-list"></ul>
+
+    <div class="footer">
+      <span class="item-count" id="item-count">0 items left</span>
+      <button type="button" class="clear-btn hidden" id="clear-completed">Clear completed</button>
+    </div>
+  </main>
+
+  <script>
+    const STORAGE_KEY = 'todos';
+
+    let todos = loadTodos();
+    let currentFilter = 'all';
+
+    const form = document.getElementById('todo-form');
+    const input = document.getElementById('todo-input');
+    const list = document.getElementById('todo-list');
+    const itemCount = document.getElementById('item-count');
+    const clearCompletedBtn = document.getElementById('clear-completed');
+    const filterButtons = document.querySelectorAll('.filter-btn');
+
+    function loadTodos() {
+      try {
+        const stored = localStorage.getItem(STORAGE_KEY);
+        return stored ? JSON.parse(stored) : [];
+      } catch (e) {
+        return [];
+      }
+    }
+
+    function saveTodos() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(todos));
+    }
+
+    function generateId() {
+      if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+        return crypto.randomUUID();
+      }
+      return Date.now() + '-' + Math.random();
+    }
+
+    function addTodo(text) {
+      todos.push({
+        id: generateId(),
+        text: text,
+        completed: false
+      });
+      saveTodos();
+      render();
+    }
+
+    function toggleTodo(id) {
+      const todo = todos.find(function (t) { return t.id === id; });
+      if (todo) {
+        todo.completed = !todo.completed;
+        saveTodos();
+        render();
+      }
+    }
+
+    function deleteTodo(id) {
+      todos = todos.filter(function (t) { return t.id !== id; });
+      saveTodos();
+      render();
+    }
+
+    function clearCompleted() {
+      todos = todos.filter(function (t) { return !t.completed; });
+      saveTodos();
+      render();
+    }
+
+    function getFilteredTodos() {
+      if (currentFilter === 'active') {
+        return todos.filter(function (t) { return !t.completed; });
+      }
+      if (currentFilter === 'completed') {
+        return todos.filter(function (t) { return t.completed; });
+      }
+      return todos;
+    }
+
+    function render() {
+      list.innerHTML = '';
+
+      const filtered = getFilteredTodos();
+
+      if (filtered.length === 0) {
+        const empty = document.createElement('li');
+        empty.className = 'empty-state';
+        if (todos.length === 0) {
+          empty.textContent = 'No todos yet. Add one above!';
+        } else if (currentFilter === 'active') {
+          empty.textContent = 'No active todos.';
+        } else {
+          empty.textContent = 'No completed todos.';
+        }
+        list.appendChild(empty);
+      } else {
+        filtered.forEach(function (todo) {
+          const li = document.createElement('li');
+          li.className = 'todo-item' + (todo.completed ? ' completed' : '');
+
+          const checkbox = document.createElement('input');
+          checkbox.type = 'checkbox';
+          checkbox.className = 'todo-checkbox';
+          checkbox.checked = todo.completed;
+          checkbox.setAttribute('aria-label', 'Mark "' + todo.text + '" as complete');
+          checkbox.addEventListener('change', function () {
+            toggleTodo(todo.id);
+          });
+
+          const span = document.createElement('span');
+          span.className = 'todo-text';
+          span.textContent = todo.text;
+
+          const deleteBtn = document.createElement('button');
+          deleteBtn.type = 'button';
+          deleteBtn.className = 'delete-btn';
+          deleteBtn.textContent = '✕';
+          deleteBtn.setAttribute('aria-label', 'Delete "' + todo.text + '"');
+          deleteBtn.addEventListener('click', function () {
+            deleteTodo(todo.id);
+          });
+
+          li.appendChild(checkbox);
+          li.appendChild(span);
+          li.appendChild(deleteBtn);
+          list.appendChild(li);
+        });
+      }
+
+      const activeCount = todos.filter(function (t) { return !t.completed; }).length;
+      itemCount.textContent = activeCount + (activeCount === 1 ? ' item left' : ' items left');
+
+      const hasCompleted = todos.some(function (t) { return t.completed; });
+      clearCompletedBtn.classList.toggle('hidden', !hasCompleted);
+
+      filterButtons.forEach(function (btn) {
+        btn.classList.toggle('active', btn.dataset.filter === currentFilter);
+      });
+    }
+
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      const text = input.value.trim();
+      if (text === '') {
+        return;
+      }
+      addTodo(text);
+      input.value = '';
+      input.focus();
+    });
+
+    filterButtons.forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        currentFilter = btn.dataset.filter;
+        render();
+      });
+    });
+
+    clearCompletedBtn.addEventListener('click', clearCompleted);
+
+    render();
+  </script>
+</body>
+</html>

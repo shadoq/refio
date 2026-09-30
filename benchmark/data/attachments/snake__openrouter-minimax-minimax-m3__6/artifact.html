@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Snake Battle</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(ellipse at center, #1a1a2e 0%, #0a0a14 100%);
+    color: #e0e0ff;
+    font-family: 'Segoe UI', Tahoma, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    overflow: hidden;
+  }
+  #gameContainer {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    padding: 20px;
+  }
+  h1 {
+    font-size: 32px;
+    background: linear-gradient(90deg, #00e5ff, #ff00d4);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    letter-spacing: 3px;
+    font-weight: 700;
+    text-shadow: 0 0 30px rgba(0, 229, 255, 0.3);
+  }
+  #scoreBoard {
+    display: flex;
+    gap: 40px;
+    font-size: 20px;
+    font-weight: 600;
+  }
+  #scoreBoard .score {
+    padding: 8px 20px;
+    border-radius: 8px;
+    background: rgba(255,255,255,0.05);
+    border: 2px solid;
+  }
+  .p1 { border-color: #00e5ff !important; color: #00e5ff; }
+  .p2 { border-color: #ff00d4 !important; color: #ff00d4; }
+  canvas {
+    border: 3px solid #2a2a4a;
+    border-radius: 8px;
+    background: #0f0f1f;
+    box-shadow: 0 0 40px rgba(0, 229, 255, 0.15), inset 0 0 60px rgba(0,0,0,0.5);
+  }
+  #overlay {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(10, 10, 20, 0.92);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 10;
+    backdrop-filter: blur(8px);
+  }
+  #menu, #gameOverScreen {
+    text-align: center;
+    padding: 40px;
+    background: rgba(20, 20, 40, 0.95);
+    border: 2px solid #3a3a6a;
+    border-radius: 16px;
+    box-shadow: 0 0 60px rgba(0, 229, 255, 0.2);
+    min-width: 400px;
+  }
+  #menu h2, #gameOverScreen h2 {
+    font-size: 36px;
+    margin-bottom: 24px;
+    background: linear-gradient(90deg, #00e5ff, #ff00d4);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .modeBtn {
+    display: block;
+    width: 100%;
+    margin: 10px 0;
+    padding: 14px;
+    font-size: 18px;
+    font-weight: 600;
+    background: rgba(255,255,255,0.05);
+    color: #e0e0ff;
+    border: 2px solid #3a3a6a;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .modeBtn:hover {
+    background: rgba(0, 229, 255, 0.1);
+    border-color: #00e5ff;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 20px rgba(0, 229, 255, 0.3);
+  }
+  .modeBtn.selected {
+    background: rgba(0, 229, 255, 0.2);
+    border-color: #00e5ff;
+  }
+  .hint {
+    margin-top: 20px;
+    font-size: 14px;
+    color: #888;
+    line-height: 1.6;
+  }
+  .hint kbd {
+    background: #2a2a4a;
+    padding: 3px 8px;
+    border-radius: 4px;
+    border: 1px solid #4a4a7a;
+    font-family: monospace;
+    color: #fff;
+  }
+  #winnerText {
+    font-size: 24px;
+    margin-bottom: 20px;
+    color: #ffcc00;
+  }
+  .footer {
+    margin-top: 16px;
+    font-size: 13px;
+    color: #666;
+  }
+</style>
+</head>
+<body>
+<div id="gameContainer">
+  <h1>🐍 SNAKE BATTLE 🐍</h1>
+  <div id="scoreBoard">
+    <div class="score p1">P1: <span id="score1">0</span></div>
+    <div class="score p2">P2: <span id="score2">0</span></div>
+  </div>
+  <canvas id="game" width="600" height="600"></canvas>
+  <div class="footer">Use Arrow keys / WASD • Restart: <kbd>R</kbd> or <kbd>Space</kbd></div>
+</div>
+
+<div id="overlay">
+  <div id="menu">
+    <h2>SELECT MODE</h2>
+    <button class="modeBtn" data-mode="HvH">👥 Human vs Human</button>
+    <button class="modeBtn selected" data-mode="CvH">🤖 CPU vs Human</button>
+    <button class="modeBtn" data-mode="CvC">🤖 CPU vs CPU</button>
+    <div class="hint">
+      <p><b>Player 1 (Cyan):</b> Arrow Keys</p>
+      <p><b>Player 2 (Magenta):</b> <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd></p>
+      <p style="margin-top:10px;">Press <kbd>Enter</kbd> or click a mode to start</p>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const CELL = 20;
+  const GRID = 30;
+  const TICK_MS = 100;
+  const overlay = document.getElementById('overlay');
+  const menu = document.getElementById('menu');
+  const score1El = document.getElementById('score1');
+  const score2El = document.getElementById('score2');
+
+  let mode = 'CvH';
+  let snakes, foods, dirs, nextDirs, scores, alive, gameOver, lastWinner, tickHandle;
+
+  function init() {
+    snakes = [
+      { body: [{x: 5, y: 15}, {x: 4, y: 15}, {x: 3, y: 15}], dir: {x: 1, y: 0}, isCpu: mode[0] === 'C' },
+      { body: [{x: 24, y: 15}, {x: 25, y: 15}, {x: 26, y: 15}], dir: {x: -1, y: 0}, isCpu: mode[3] === 'C' }
+    ];
+    foods = [];
+    dirs = [{x:1,y:0},{x:-1,y:0}];
+    nextDirs = [{x:1,y:0},{x:-1,y:0}];
+    scores = [0, 0];
+    alive = [true, true];
+    gameOver = false;
+    lastWinner = null;
+    spawnFood(0);
+    spawnFood(1);
+    updateScores();
+  }
+
+  function spawnFood(snakeIdx) {
+    const occupied = new Set();
+    snakes.forEach(s => s.body.forEach(b => occupied.add(b.x + ',' + b.y)));
+    foods.forEach(f => occupied.add(f.x + ',' + f.y));
+    const free = [];
+    for (let x = 0; x < GRID; x++)
+      for (let y = 0; y < GRID; y++)
+        if (!occupied.has(x + ',' + y)) free.push({x, y});
+    if (!free.length) return;
+    const f = free[Math.floor(Math.random() * free.length)];
+    foods[snakeIdx] = f;
+  }
+
+  function opposite(a, b) {
+    return a.x === -b.x && a.y === -b.y && (a.x !== 0 || a.y !== 0);
+  }
+
+  function bfs(start, goal, blockers) {
+    const visited = new Set();
+    const queue = [[start, []]];
+    visited.add(start.x + ',' + start.y);
+    while (queue.length) {
+      const [cur, path] = queue.shift();
+      if (cur.x === goal.x && cur.y === goal.y) return path;
+      const moves = [{x:1,y:0},{x:-1,y:0},{x:0,y:1},{x:0,-1}];
+      for (const m of moves) {
+        const nx = cur.x + m.x, ny = cur.y + m.y;
+        if (nx < 0 || nx >= GRID || ny < 0 || ny >= GRID) continue;
+        const key = nx + ',' + ny;
+        if (visited.has(key)) continue;
+        if (blockers.has(key)) continue;
+        visited.add(key);
+        queue.push([{x:nx, y:ny}, [...path, m]]);
+      }
+    }
+    return null;
+  }
+
+  function getAllBlockers(excludeIdx) {
+    const set = new Set();
+    snakes.forEach((s, i) => {
+      if (i === excludeIdx) return;
+      if (!alive[i]) return;
+      s.body.forEach(b => set.add(b.x + ',' + b.y));
+    });
+    snakes[excludeIdx].body.forEach((b, i) => {
+      if (i === 0) return;
+      set.add(b.x + ',' + b.y);
+    });
+    return set;
+  }
+
+  function cpuMove(idx) {
+    const snake = snakes[idx];
+    const head = snake.body[0];
+    const food = foods[idx];
+    if (!food) return;
+
+    const blockers = getAllBlockers(idx);
+    const path = bfs(head, food, blockers);
+    const moves = [{x:1,y:0},{x:-1,y:0},{x:0,y:1},{x:0,-1}];
+
+    if (path && path.length) {
+      const next = path[0];
+      if (!opposite(next, dirs[idx])) {
+        dirs[idx] = next;
+        return;
+      }
+    }
+
+    const safe = moves.filter(m => {
+      if (opposite(m, dirs[idx])) return false;
+      const nx = head.x + m.x, ny = head.y + m.y;
+      if (nx < 0 || nx >= GRID || ny < 0 || ny >= GRID) return false;
+      if (blockers.has(nx + ',' + ny)) return false;
+      return true;
+    });
+
+    if (safe.length) {
+      safe.sort((a, b) => {
+        const da = Math.abs(head.x + a.x - food.x) + Math.abs(head.y + a.y - food.y);
+        const db = Math.abs(head.x + b.x - food.x) + Math.abs(head.y + b.y - food.y);
+        return da - db;
+      });
+      dirs[idx] = safe[0];
+    }
+  }
+
+  function tick() {
+    if (gameOver) return;
+    for (let i = 0; i < 2; i++) {
+      if (!alive[i]) continue;
+      if (snakes[i].isCpu) cpuMove(i);
+      else dirs[i] = nextDirs[i];
+    }
+
+    const newHeads = [null, null];
+    for (let i = 0; i < 2; i++) {
+      if (!alive[i]) continue;
+      const head = snakes[i].body[0];
+      const nh = { x: head.x + dirs[i].x, y: head.y + dirs[i].y };
+      newHeads[i] = nh;
+    }
+
+    const willEat = [false, false];
+    for (let i = 0; i < 2; i++) {
+      if (!alive[i]) continue;
+      const f = foods[i];
+      willEat[i] = (newHeads[i].x === f.x && newHeads[i].y === f.y);
+    }
+
+    for (let i = 0; i < 2; i++) {
+      if (!alive[i]) continue;
+      const nh = newHeads[i];
+      if (nh.x < 0 || nh.x >= GRID || nh.y < 0 || nh.y >= GRID) {
+        alive[i] = false; continue;
+      }
+      for (let j = 0; j < 2; j++) {
+        if (!alive[j]) continue;
+        for (let k = 0; k < snakes[j].body.length; k++) {
+          if (j === i && k === snakes[j].body.length - 1 && !willEat[j]) continue;
+          if (nh.x === snakes[j].body[k].x && nh.y === snakes[j].body[k].y) {
+            alive[i] = false; break;
+          }
+        }
+        if (!alive[i]) break;
+      }
+    }
+
+    for (let i = 0; i < 2; i++) {
+      if (!alive[i]) continue;
+      snakes[i].body.unshift(newHeads[i]);
+      if (willEat[i]) {
+        scores[i]++;
+        spawnFood(i);
+      } else {
+        snakes[i].body.pop();
+      }
+    }
+
+    updateScores();
+
+    if ((!alive[0] && !alive[1]) || (mode !== 'CvC' && (!alive[0] || !alive[1]))) {
+      endGame();
+    }
+  }
+
+  function endGame() {
+    gameOver = true;
+    clearInterval(tickHandle);
+    if (alive[0] && !alive[1]) lastWinner = 0;
+    else if (!alive[0] && alive[1]) lastWinner = 1;
+    else if (scores[0] > scores[1]) lastWinner = 0;
+    else if (scores[1] > scores[0]) lastWinner = 1;
+    else lastWinner = -1;
+    showGameOver();
+  }
+
+  function updateScores() {
+    score1El.textContent = scores[0];
+    score2El.textContent = scores[1];
+  }
+
+  function draw() {
+    ctx.fillStyle = '#0a0a14';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= GRID; i++) {
+      ctx.beginPath();
+      ctx.moveTo(i * CELL, 0);
+      ctx.lineTo(i * CELL, GRID * CELL);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(0, i * CELL);
+      ctx.lineTo(GRID * CELL, i * CELL);
+      ctx.stroke();
+    }
+
+    foods.forEach((f, i) => {
+      if (!f) return;
+      const glow = 0.5 + 0.5 * Math.sin(Date.now() / 200);
+      ctx.fillStyle = `rgba(255, 220, 0, ${0.6 + glow * 0.4})`;
+      ctx.shadowColor = '#ffcc00';
+      ctx.shadowBlur = 15;
+      ctx.beginPath();
+      ctx.arc(f.x * CELL + CELL/2, f.y * CELL + CELL/2, CELL/2 - 2, 0, Math.PI*2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    });
+
+    const colors = ['#00e5ff', '#ff00d4'];
+    snakes.forEach((s, i) => {
+      s.body.forEach((seg, k) => {
+        const t = k / Math.max(s.body.length, 1);
+        ctx.fillStyle = colors[i];
+        ctx.globalAlpha = alive[i] ? (0.4 + 0.6 * (1 - t)) : 0.2;
+        ctx.shadowColor = colors[i];
+        ctx.shadowBlur = k === 0 ? 12 : 4;
+        ctx.fillRect(seg.x * CELL + 1, seg.y * CELL + 1, CELL - 2, CELL - 2);
+      });
+      ctx.globalAlpha = 1;
+      ctx.shadowBlur = 0;
+    });
+  }
+
+  function loop() {
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  function showMenu() {
+    overlay.style.display = 'flex';
+    menu.style.display = 'block';
+    document.getElementById('gameOverScreen')?.remove();
+  }
+
+  function showGameOver() {
+    overlay.style.display = 'flex';
+    menu.style.display = 'none';
+    let existing = document.getElementById('gameOverScreen');
+    if (existing) existing.remove();
+    const div = document.createElement('div');
+    div.id = 'gameOverScreen';
+    let msg = '';
+    if (lastWinner === -1) msg = "🤝 IT'S A TIE!";
+    else if (mode === 'CvC') msg = `🤖 CPU ${lastWinner + 1} WINS! (Score: ${scores[lastWinner]})`;
+    else if (lastWinner === 0) msg = `🏆 PLAYER 1 WINS! (Score: ${scores[0]})`;
+    else msg = `🏆 PLAYER 2 WINS! (Score: ${scores[1]})`;
+    div.innerHTML = `
+      <h2>GAME OVER</h2>
+      <div id="winnerText">${msg}</div>
+      <div style="font-size:18px; margin-bottom:20px;">
+        <span style="color:#00e5ff">P1: ${scores[0]}</span> &nbsp; • &nbsp;
+        <span style="color:#ff00d4">P2: ${scores[1]}</span>
+      </div>
+      <button class="modeBtn" id="restartBtn">Return to Menu</button>
+      <div class="hint">Press <kbd>R</kbd> or <kbd>Space</kbd> to restart</div>
+    `;
+    overlay.appendChild(div);
+    document.getElementById('restartBtn').addEventListener('click', showMenu);
+  }
+
+  function startGame() {
+    init();
+    overlay.style.display = 'none';
+    document.getElementById('gameOverScreen')?.remove();
+    clearInterval(tickHandle);
+    tickHandle = setInterval(tick, TICK_MS);
+  }
+
+  document.querySelectorAll('.modeBtn[data-mode]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.modeBtn').forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+      mode = btn.dataset.mode;
+      startGame();
+    });
+  });
+
+  document.addEventListener('keydown', e => {
+    if (overlay.style.display === 'flex' && (e.key === 'Enter')) {
+      const sel = document.querySelector('.modeBtn.selected');
+      if (sel) sel.click();
+      return;
+    }
+    if (gameOver && (e.key === 'r' || e.key === 'R' || e.key === ' ')) {
+      e.preventDefault();
+      startGame();
+      return;
+    }
+    if (gameOver) return;
+
+    const key = e.key.toLowerCase();
+    if (['arrowup','arrowdown','arrowleft','arrowright'].includes(key)) e.preventDefault();
+
+    if (key === 'arrowup' && !opposite({x:0,y:-1}, dirs[0])) nextDirs[0] = {x:0,y:-1};
+    else if (key === 'arrowdown' && !opposite({x:0,y:1}, dirs[0])) nextDirs[0] = {x:0,y:1};
+    else if (key === 'arrowleft' && !opposite({x:-1,y:0}, dirs[0])) nextDirs[0] = {x:-1,y:0};
+    else if (key === 'arrowright' && !opposite({x:1,y:0}, dirs[0])) nextDirs[0] = {x:1,y:0};
+    else if (key === 'w' && !opposite({x:0,y:-1}, dirs[1])) nextDirs[1] = {x:0,y:-1};
+    else if (key === 's' && !opposite({x:0,y:1}, dirs[1])) nextDirs[1] = {x:0,y:1};
+    else if (key === 'a' && !opposite({x:-1,y:0}, dirs[1])) nextDirs[1] = {x:-1,y:0};
+    else if (key === 'd' && !opposite({x:1,y:0}, dirs[1])) nextDirs[1] = {x:1,y:0};
+  });
+
+  init();
+  loop();
+})();
+</script>
+</body>
+</html>

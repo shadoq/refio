@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Gouraud-Shaded Rotating Cube</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a2e;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    font-family: 'Courier New', monospace;
+    overflow: hidden;
+  }
+  canvas {
+    border: 2px solid #4a4a8a;
+    box-shadow: 0 0 30px rgba(100, 100, 255, 0.3);
+    background: #0d0d1a;
+  }
+  #info {
+    position: absolute;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: #88aaff;
+    font-size: 14px;
+    text-align: center;
+    background: rgba(10, 10, 30, 0.85);
+    padding: 10px 20px;
+    border-radius: 8px;
+    border: 1px solid #4a4a8a;
+    user-select: none;
+  }
+  #info span { color: #ffcc44; }
+</style>
+</head>
+<body>
+<div id="info">Gouraud-Shaded Cube | <span>W</span> Wireframe | <span>P</span> Pause | FPS: <span id="fps">0</span></div>
+<canvas id="canvas"></canvas>
+
+<script>
+(() => {
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  const fpsEl = document.getElementById('fps');
+
+  // --- Canvas sizing ---
+  const SIZE = 600;
+  canvas.width = SIZE;
+  canvas.height = SIZE;
+
+  // --- Cube geometry (unit cube centered at origin) ---
+  const V = [
+    [-1, -1, -1],  // 0: back-bottom-left
+    [ 1, -1, -1],  // 1: back-bottom-right
+    [ 1,  1, -1],  // 2: back-top-right
+    [-1,  1, -1],  // 3: back-top-left
+    [-1, -1,  1],  // 4: front-bottom-left
+    [ 1, -1,  1],  // 5: front-bottom-right
+    [ 1,  1,  1],  // 6: front-top-right
+    [-1,  1,  1],  // 7: front-top-left
+  ];
+
+  // 6 faces, each split into 2 triangles (12 triangles total)
+  // Face vertices: [a,b,c,d] -> triangles [a,b,c] and [a,c,d]
+  const FACES = [
+    { verts: [0, 1, 2, 3], normal: [0, 0, -1] },  // back
+    { verts: [5, 4, 7, 6], normal: [0, 0,  1] },  // front
+    { verts: [4, 0, 3, 7], normal: [-1, 0, 0] },  // left
+    { verts: [1, 5, 6, 2], normal: [ 1, 0, 0] },  // right
+    { verts: [3, 2, 6, 7], normal: [0, -1, 0] },  // top
+    { verts: [4, 5, 1, 0], normal: [0,  1, 0] },  // bottom
+  ];
+
+  // Precompute triangle list: each entry = [faceIndex, triIndex, v0, v1, v2]
+  const TRIANGLES = [];
+  for (let f = 0; f < FACES.length; f++) {
+    const { verts } = FACES[f];
+    TRIANGLES.push({ face: f, tri: 0, v: [verts[0], verts[1], verts[2]] });
+    TRIANGLES.push({ face: f, tri: 1, v: [verts[0], verts[2], verts[3]] });
+  }
+
+  // --- State ---
+  let angleX = 0;
+  let angleY = 0;
+  let angleZ = 0;
+  let paused = false;
+  let wireframe = false;
+  let lightAngle = 0;
+
+  // --- Math helpers ---
+  function rotateX(v, a) {
+    const c = Math.cos(a), s = Math.sin(a);
+    return [v[0], v[1]*c - v[2]*s, v[1]*s + v[2]*c];
+  }
+  function rotateY(v, a) {
+    const c = Math.cos(a), s = Math.sin(a);
+    return [v[0]*c + v[2]*s, v[1], -v[0]*s + v[2]*c];
+  }
+  function rotateZ(v, a) {
+    const c = Math.cos(a), s = Math.sin(a);
+    return [v[0]*c - v[1]*s, v[0]*s + v[1]*c, v[2]];
+  }
+
+  function transformVertex(v) {
+    let p = [...v];
+    p = rotateX(p, angleX);
+    p = rotateY(p, angleY);
+    p = rotateZ(p, angleZ);
+    return p;
+  }
+
+  // Perspective projection
+  const FOV = 400;
+  const Z_NEAR = 2;
+  function project(p) {
+    const z = p[2] + 4; // push cube back from camera
+    const scale = FOV / (z + Z_NEAR);
+    return [p[0] * scale + SIZE / 2, -p[1] * scale + SIZE / 2, z];
+  }
+
+  // --- Backface culling: compute signed area in screen space ---
+  function isFrontFacing(p0, p1, p2) {
+    return ((p1[0] - p0[0]) * (p2[1] - p0[1]) - (p1[1] - p0[1]) * (p2[0] - p0[0])) > 0;
+  }
+
+  // --- Barycentric interpolation ---
+  function barycentric(px, py, ax, ay, bx, by, cx, cy) {
+    const denom = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
+    if (Math.abs(denom) < 1e-10) return null;
+    const w0 = ((by - cy) * (px - cx) + (cx - bx) * (py - cy)) / denom;
+    const w1 = ((cy - ay) * (px - cx) + (ax - cx) * (py - cy)) / denom;
+    const w2 = 1 - w0 - w1;
+    return { w0, w1, w2 };
+  }
+
+  // Edge function test for bounding box rasterization
+  function edge(ax, ay, bx, by, cx, cy) {
+    return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+  }
+
+  function pointInTriangle(px, py, ax, ay, bx, by, cx, cy) {
+    const e0 = edge(ax, ay, bx, by, px, py);
+    const e1 = edge(bx, by, cx, cy, px, py);
+    const e2 = edge(cx, cy, ax, ay, px, py);
+    return (e0 >= 0 && e1 >= 0 && e2 >= 0) || (e0 <= 0 && e1 <= 0 && e2 <= 0);
+  }
+
+  // --- Lambert lighting ---
+  function normalize(v) {
+    const len = Math.sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
+    return len > 0 ? [v[0]/len, v[1]/len, v[2]/len] : [0, 0, 0];
+  }
+
+  function dot(a, b) {
+    return a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+  }
+
+  function computeLightDir() {
+    // Moving light source: orbits around the scene
+    const lx = Math.cos(lightAngle) * 3;
+    const lz = Math.sin(lightAngle) * 3;
+    const ly = Math.sin(lightAngle * 0.7) * 2 + 1;
+    return normalize([lx, ly, lz]);
+  }
+
+  // Face normals in world space (pre-rotated for the current frame)
+  // We compute them from the rotated face vertices
+  function computeFaceNormal(p0, p1, p2) {
+    const ax = p1[0] - p0[0], ay = p1[1] - p0[1], az = p1[2] - p0[2];
+    const bx = p2[0] - p0[0], by = p2[1] - p0[1], bz = p2[2] - p0[2];
+    return normalize([
+      ay * bz - az * by,
+      az * bx - ax * bz,
+      ax * by - ay * bx
+    ]);
+  }
+
+  function vertexColor(normal, lightDir) {
+    const intensity = Math.max(0, dot(normal, lightDir));
+    // Ambient + diffuse: warm color palette
+    const ambient = 0.25;
+    const total = ambient + (1 - ambient) * intensity;
+    // Base color: warm orange/amber
+    const r = Math.min(1, 0.55 * total + 0.45);
+    const g = Math.min(1, 0.35 * total + 0.30);
+    const b = Math.min(1, 0.15 * total + 0.20);
+    return [r, g, b];
+  }
+
+  // --- Frame rendering ---
+  let lastTime = performance.now();
+  let frameCount = 0;
+  let fpsDisplay = 0;
+  let fpsTimer = 0;
+
+  function render(now) {
+    // FPS tracking
+    frameCount++;
+    if (now - fpsTimer > 500) {
+      fpsDisplay = Math.round(frameCount / ((now - fpsTimer) / 1000));
+      fpsTimer = now;
+      frameCount = 0;
+      fpsEl.textContent = fpsDisplay;
+    }
+
+    // Clear
+    ctx.fillStyle = '#0d0d1a';
+    ctx.fillRect(0, 0, SIZE, SIZE);
+
+    // Update light position
+    lightAngle += 0.02;
+    const lightDir = computeLightDir();
+
+    // Advance rotation if not paused
+    if (!paused) {
+      angleX += 0.015;
+      angleY += 0.02;
+      angleZ += 0.008;
+    }
+
+    // Transform all vertices once per frame
+    const rotated = V.map(v => transformVertex(v));
+
+    // Project vertices
+    const projected = rotated.map(p => project(p));
+
+    // Prepare scanline buffer for Gouraud shading
+    // We'll draw each visible triangle with interpolated vertex colors
+    const imageData = ctx.getImageData(0, 0, SIZE, SIZE);
+    const pixels = imageData.data;
+
+    // For each triangle, rasterize with Gouraud shading
+    for (const tri of TRIANGLES) {
+      const vIdx = tri.v;
+      const p0 = projected[vIdx[0]];
+      const p1 = projected[vIdx[1]];
+      const p2 = projected[vIdx[2]];
+
+      // Backface culling
+      if (!isFrontFacing(p0, p1, p2)) continue;
+
+      // Compute face normal (in rotated space) for lighting
+      const r0 = rotated[vIdx[0]];
+      const r1 = rotated[vIdx[1]];
+      const r2 = rotated[vIdx[2]];
+      const faceNormal = computeFaceNormal(r0, r1, r2);
+
+      // Compute per-vertex colors using vertex normals
+      // For a cube, vertex normals = face normals (flat shading per vertex would be same)
+      // But for Gouraud, we use the actual face normal at each vertex (same for all 3 in a cube face)
+      // To make Gouraud visible, we use the face normal for all 3 vertices
+      // Actually for a cube, all vertices of a face share the same normal.
+      // Gouraud shading on a cube with flat faces = same as flat shading per face.
+      // To demonstrate Gouraud properly, we compute vertex normals as average of adjacent face normals.
+      // Let's compute vertex normals properly: average of face normals of faces sharing this vertex.
+
+      // Precomputed vertex normals (average of adjacent faces)
+      // Vertices and their adjacent faces:
+      // 0: back, left, bottom
+      // 1: back, right, bottom
+      // 2: back, right, top
+      // 3: back, left, top
+      // 4: front, left, bottom
+      // 5: front, right, bottom
+      // 6: front, right, top
+      // 7: front, left, top
+      const vertexFaces = [
+        [0, 2, 5], // v0: back, left, bottom
+        [0, 3, 5], // v1: back, right, bottom
+        [0, 3, 4], // v2: back, right, top
+        [0, 2, 4], // v3: back, left, top
+        [1, 2, 5], // v4: front, left, bottom
+        [1, 3, 5], // v5: front, right, bottom
+        [1, 3, 4], // v6: front, right, top
+        [1, 2, 4], // v7: front, left, top
+      ];
+
+      // Compute rotated face normals for lighting
+      const rotatedFaceNormals = FACES.map(f => {
+        const idx = f.verts;
+        const a = rotated[idx[0]];
+        const b = rotated[idx[1]];
+        const c = rotated[idx[2]];
+        return computeFaceNormal(a, b, c);
+      });
+
+      // Compute vertex normals (average of adjacent face normals)
+      const vertexNormals = vertexFaces.map(adj => {
+        let nx = 0, ny = 0, nz = 0;
+        for (const fi of adj) {
+          nx += rotatedFaceNormals[fi][0];
+          ny += rotatedFaceNormals[fi][1];
+          nz += rotatedFaceNormals[fi][2];
+        }
+        return normalize([nx, ny, nz]);
+      });
+
+      // Vertex colors (Gouraud: compute at each vertex)
+      const c0 = vertexColor(vertexNormals[vIdx[0]], lightDir);
+      const c1 = vertexColor(vertexNormals[vIdx[1]], lightDir);
+      const c2 = vertexColor(vertexNormals[vIdx[2]], lightDir);
+
+      // Bounding box
+      const minX = Math.max(0, Math.floor(Math.min(p0[0], p1[0], p2[0])));
+      const maxX = Math.min(SIZE - 1, Math.ceil(Math.max(p0[0], p1[0], p2[0])));
+      const minY = Math.max(0, Math.floor(Math.min(p0[1], p1[1], p2[1])));
+      const maxY = Math.min(SIZE - 1, Math.ceil(Math.max(p0[1], p1[1], p2[1])));
+
+      // Rasterize
+      for (let y = minY; y <= maxY; y++) {
+        for (let x = minX; x <= maxX; x++) {
+          if (!pointInTriangle(x + 0.5, y + 0.5, p0[0], p0[1], p1[0], p1[1], p2[0], p2[1])) continue;
+
+          const bc = barycentric(x + 0.5, y + 0.5, p0[0], p0[1], p1[0], p1[1], p2[0], p2[1]);
+          if (!bc) continue;
+
+          // Interpolate Z for depth test (simple painter's algorithm: sort by average depth)
+          const z = bc.w0 * p0[2] + bc.w1 * p1[2] + bc.w2 * p2[2];
+
+          // Interpolate colors
+          const r = bc.w0 * c0[0] + bc.w1 * c1[0] + bc.w2 * c2[0];
+          const g = bc.w0 * c0[1] + bc.w1 * c1[1] + bc.w2 * c2[1];
+          const b = bc.w0 * c0[2] + bc.w1 * c1[2] + bc.w2 * c2[2];
+
+          const idx = (y * SIZE + x) * 4;
+
+          // Simple depth buffer (we'll do per-triangle sorting instead)
+          // For simplicity, we draw in order of average depth (painter's algorithm)
+          // We'll handle this outside the rasterizer by sorting triangles first.
+
+          // Store for later (we'll sort and draw in order)
+          // Actually, let's use a depth buffer approach:
+          // We'll maintain a depth buffer per frame.
+          if (!render.depthBuffer) render.depthBuffer = new Float32Array(SIZE * SIZE);
+          const depthIdx = y * SIZE + x;
+          if (z < render.depthBuffer[depthIdx] || render.depthBuffer[depthIdx] === 0) {
+            render.depthBuffer[depthIdx] = z;
+            pixels[idx]     = Math.round(r * 255);
+            pixels[idx + 1] = Math.round(g * 255);
+            pixels[idx + 2] = Math.round(b * 255);
+            pixels[idx + 3] = 255;
+          }
+        }
+      }
+    }
+
+    // Draw wireframe overlay if enabled
+    if (wireframe) {
+      ctx.putImageData(imageData, 0, 0);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+      ctx.lineWidth = 1;
+      for (const tri of TRIANGLES) {
+        const vIdx = tri.v;
+        const p0 = projected[vIdx[0]];
+        const p1 = projected[vIdx[1]];
+        const p2 = projected[vIdx[2]];
+        if (!isFrontFacing(p0, p1, p2)) continue;
+        ctx.beginPath();
+        ctx.moveTo(p0[0], p0[1]);
+        ctx.lineTo(p1[0], p1[1]);
+        ctx.lineTo(p2[0], p2[1]);
+        ctx.closePath();
+        ctx.stroke();
+      }
+    } else {
+      ctx.putImageData(imageData, 0, 0);
+    }
+
+    // Reset depth buffer for next frame
+    render.depthBuffer = new Float32Array(SIZE * SIZE);
+
+    requestAnimationFrame(render);
+  }
+
+  // Handle keyboard
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'w' || e.key === 'W') {
+      wireframe = !wireframe;
+    } else if (e.key === 'p' || e.key === 'P') {
+      paused = !paused;
+    }
+  });
+
+  // Start
+  requestAnimationFrame(render);
+})();
+</script>
+</body>
+</html>
