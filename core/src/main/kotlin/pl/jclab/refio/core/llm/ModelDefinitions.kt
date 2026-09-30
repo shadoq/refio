@@ -1739,6 +1739,33 @@ object ModelDefinitions {
             supportsFunctionCalling = true,
             supportsThinking = true,
             removeParams = listOf("temperature"),
+            reasoningOffEffort = ReasoningEffort.LOW,
+            active = true
+        ),
+        // Thinks by default at high effort; thinking OFF maps to the lowest effort.
+        "claude-opus-5" to ModelDefinition(
+            id = "claude-opus-5",
+            name = "Claude Opus 5",
+            provider = "anthropic",
+            description = "Claude Opus 5 (legacy), 1M context with adaptive thinking on by default",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 1_000_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 5.00,
+            costPer1MOutput = 25.00,
+            costPer1MCachedInput = 0.5,
+            supportsVision = true,
+            supportsReasoning = false,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            removeParams = listOf("temperature"),
+            reasoningOffEffort = ReasoningEffort.LOW,
             active = true
         ),
         "claude-opus-4-8" to ModelDefinition(
@@ -1789,6 +1816,33 @@ object ModelDefinitions {
             removeParams = listOf("temperature"),
             active = true
         ),
+        // Thinks by default at high effort; thinking OFF maps to the lowest effort.
+        "claude-sonnet-5-5" to ModelDefinition(
+            id = "claude-sonnet-5-5",
+            name = "Claude Sonnet 5.5",
+            provider = "anthropic",
+            description = "Claude Sonnet 5.5, fast Sonnet tier with 1M context and adaptive thinking",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 1_000_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 2.00,
+            costPer1MOutput = 10.00,
+            costPer1MCachedInput = 0.2,
+            supportsVision = true,
+            supportsReasoning = false,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            removeParams = listOf("temperature"),
+            reasoningOffEffort = ReasoningEffort.LOW,
+            active = true
+        ),
+        // Thinks by default at high effort; thinking OFF maps to the lowest effort.
         "claude-sonnet-5" to ModelDefinition(
             id = "claude-sonnet-5",
             name = "Claude Sonnet 5",
@@ -1811,6 +1865,7 @@ object ModelDefinitions {
             supportsFunctionCalling = true,
             supportsThinking = true,
             removeParams = listOf("temperature"),
+            reasoningOffEffort = ReasoningEffort.LOW,
             active = true
         ),
         "claude-mythos-5" to ModelDefinition(
@@ -6628,6 +6683,8 @@ object ModelDefinitions {
      // model id when the cache is warm — see getModelPricing() fallback chain.
     val OPENROUTER_MODELS = mapOf(
         // Anthropic — Opus tier $15/$75, Sonnet $3/$15, Haiku $0.80/$4
+        // Always thinks (default "medium"); thinking OFF maps to the lowest effort. Must precede "anthropic/claude-opus".
+        "anthropic/claude-opus-5.5" to openrouterDef("anthropic/claude-opus-5.5*", maxContext = 1_000_000, vision = true, reasoning = true, reasoningMandatory = true, reasoningOffEffort = ReasoningEffort.LOW, inPrice = 4.0, outPrice = 20.0),
         "anthropic/claude-opus" to openrouterDef("anthropic/claude-opus-*", maxContext = 1_000_000, vision = true, inPrice = 15.0, outPrice = 75.0),
         "anthropic/claude-sonnet" to openrouterDef("anthropic/claude-sonnet-*", maxContext = 1_000_000, vision = true, inPrice = 3.0, outPrice = 15.0),
         "anthropic/claude-haiku" to openrouterDef("anthropic/claude-haiku-*", maxContext = 200_000, vision = true, inPrice = 0.80, outPrice = 4.0),
@@ -6654,6 +6711,8 @@ object ModelDefinitions {
         // o-series reasoning — premium pricing
         "openai/o" to openrouterDef("openai/o*", maxContext = 200_000, reasoning = true, inPrice = 15.0, outPrice = 60.0),
         // Google — gemini-pro $2/$12, gemini-flash $0.50/$3
+        // Rejects reasoning.enabled=false but accepts an effort, so thinking OFF maps to low.
+        "google/gemini-3.8-flash" to openrouterDef("google/gemini-3.8-flash*", maxContext = 1_048_576, vision = true, reasoning = true, reasoningMandatory = true, reasoningOffEffort = ReasoningEffort.LOW, inPrice = 0.75, outPrice = 3.75),
         "google/gemini-3" to openrouterDef("google/gemini-3*", maxContext = 1_048_576, vision = true, inPrice = 2.0, outPrice = 12.0),
         // Image-generation tier ships a 32k window, far below the text Gemini family.
         // Must precede "google/gemini-".
@@ -6703,7 +6762,7 @@ object ModelDefinitions {
         // The Kimi family mandates reasoning on OpenRouter: kimi-k3 and kimi-k2.7-code both
         // reject reasoning.enabled=false with a hard error, so reasoningMandatory covers the
         // whole family (over-applying only leaves reasoning at its default, which is safe).
-        "moonshotai/kimi-k3" to openrouterDef("moonshotai/kimi-k3*", maxContext = 1_048_576, vision = true, reasoning = true, reasoningMandatory = true, inPrice = 0.60, outPrice = 2.50),
+        "moonshotai/kimi-k3" to openrouterDef("moonshotai/kimi-k3*", maxContext = 1_048_576, vision = true, reasoning = true, reasoningMandatory = true, reasoningOffEffort = ReasoningEffort.LOW, inPrice = 0.60, outPrice = 2.50),
         "moonshotai/kimi" to openrouterDef("moonshotai/kimi-*", maxContext = 262_144, vision = true, reasoning = true, reasoningMandatory = true, inPrice = 0.74, outPrice = 3.49),
         "moonshotai/" to openrouterDef("moonshotai/*", maxContext = 128_000, inPrice = 0.50, outPrice = 2.0),
         // MiniMax — m2.5 $0.15/$1.15
@@ -6805,6 +6864,8 @@ object ModelDefinitions {
          * When true, adapters must not suppress reasoning on thinking OFF.
          */
         reasoningMandatory: Boolean = false,
+        /** Effort sent instead of thinking OFF when reasoning is mandatory but scalable. */
+        reasoningOffEffort: ReasoningEffort? = null,
         /**
          * USD per 1M input tokens. Family-level baseline used when no live
          * pricing is available from OpenRouter's `/models` endpoint.
@@ -6834,7 +6895,11 @@ object ModelDefinitions {
         costPer1MOutput = outPrice,
         supportsVision = vision,
         supportsReasoning = reasoning,
+        // OpenRouter drives reasoning through its unified `reasoning` field, so a reasoning family
+        // can also take the thinking toggle; without this the turn gate forced thinking off.
+        supportsThinking = reasoning,
         reasoningMandatory = reasoningMandatory,
+        reasoningOffEffort = reasoningOffEffort,
         supportsStreaming = true,
         supportsFunctionCalling = functionCalling,
         endpointType = ApiEndpointType.CHAT_COMPLETIONS,

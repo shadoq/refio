@@ -98,6 +98,7 @@ object SupportedModels {
     private val ANTHROPIC_SUPPORTED = setOf(
         // Opus models
         "claude-opus-5-5",
+        "claude-opus-5",
         "claude-opus-4-8",
         "claude-opus-4-7",
         "anthropic.claude-opus-4-7",
@@ -110,6 +111,7 @@ object SupportedModels {
         "claude-opus-4-0",
         "claude-opus-4-20250514",
         // Sonnet models
+        "claude-sonnet-5-5",
         "claude-sonnet-5",
         "claude-sonnet-4-8",
         "claude-sonnet-4-7",
