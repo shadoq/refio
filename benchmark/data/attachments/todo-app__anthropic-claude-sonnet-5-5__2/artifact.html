@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Todo App</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:#eef1f7;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;display:flex;justify-content:center;padding:40px 16px;color:#222}
+.app{width:100%;max-width:480px;background:#fff;border-radius:14px;box-shadow:0 8px 30px rgba(0,0,0,.1);padding:24px}
+h1{margin:0 0 16px;font-size:26px}
+form{display:flex;gap:8px}
+input[type=text]{flex:1;padding:10px 12px;border:1px solid #ccd;border-radius:8px;font-size:16px}
+button{cursor:pointer;border:0;border-radius:8px;font-size:15px}
+.add{background:#4f6cf7;color:#fff;padding:0 18px}
+.filters{display:flex;gap:6px;margin:16px 0}
+.filters button{flex:1;padding:8px;background:#eef1f7;color:#445}
+.filters button.active{background:#4f6cf7;color:#fff}
+ul{list-style:none;margin:0;padding:0}
+li{display:flex;align-items:center;gap:10px;padding:10px 4px;border-bottom:1px solid #eee}
+li span{flex:1;word-break:break-word}
+li.done span{text-decoration:line-through;color:#999}
+.del{background:none;color:#d33;font-size:18px;padding:2px 8px}
+.del:hover{background:#fee}
+.info{margin-top:12px;font-size:13px;color:#778;display:flex;justify-content:space-between}
+.info button{background:none;color:#778;text-decoration:underline;font-size:13px}
+.empty{text-align:center;color:#99a;padding:20px 0}
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>Todo List</h1>
+  <form id="form">
+    <input type="text" id="input" placeholder="What needs to be done?" autocomplete="off" autofocus>
+    <button class="add" type="submit">Add</button>
+  </form>
+  <div class="filters" id="filters">
+    <button data-f="all" class="active">All</button>
+    <button data-f="active">Active</button>
+    <button data-f="completed">Completed</button>
+  </div>
+  <ul id="list"></ul>
+  <div class="info"><span id="count"></span><button id="clear">Clear completed</button></div>
+</div>
+<script>
+const KEY='todos-v1';
+let todos=[],filter='all';
+try{todos=JSON.parse(localStorage.getItem(KEY))||[]}catch(e){todos=[]}
+const $=id=>document.getElementById(id);
+const save=()=>{try{localStorage.setItem(KEY,JSON.stringify(todos))}catch(e){}};
+
+function render(){
+  const list=$('list');
+  list.innerHTML='';
+  const shown=todos.filter(t=>filter==='all'||(filter==='active'?!t.done:t.done));
+  if(!shown.length){
+    const d=document.createElement('li');d.className='empty';d.textContent='Nothing here.';
+    d.style.justifyContent='center';list.appendChild(d);
+  }
+  shown.forEach(t=>{
+    const li=document.createElement('li');
+    if(t.done)li.className='done';
+    const cb=document.createElement('input');cb.type='checkbox';cb.checked=t.done;
+    cb.onchange=()=>{t.done=cb.checked;save();render()};
+    const sp=document.createElement('span');sp.textContent=t.text;
+    const del=document.createElement('button');del.className='del';del.textContent='✕';del.title='Delete';
+    del.onclick=()=>{todos=todos.filter(x=>x.id!==t.id);save();render()};
+    li.append(cb,sp,del);list.appendChild(li);
+  });
+  const left=todos.filter(t=>!t.done).length;
+  $('count').textContent=left+' item'+(left===1?'':'s')+' left';
+  document.querySelectorAll('#filters button').forEach(b=>b.classList.toggle('active',b.dataset.f===filter));
+}
+
+$('form').onsubmit=e=>{
+  e.preventDefault();
+  const text=$('input').value.trim();
+  if(!text)return;
+  todos.push({id:Date.now()+Math.random(),text,done:false});
+  $('input').value='';save();render();
+};
+$('filters').onclick=e=>{
+  if(e.target.dataset.f){filter=e.target.dataset.f;render()}
+};
+$('clear').onclick=()=>{todos=todos.filter(t=>!t.done);save();render()};
+render();
+</script>
+</body>
+</html>

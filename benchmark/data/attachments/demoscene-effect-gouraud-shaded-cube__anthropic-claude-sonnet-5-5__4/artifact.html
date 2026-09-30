@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Gouraud Shaded Cube</title>
+<style>
+html,body{margin:0;height:100%;background:#0a0a12;color:#9fd;font:14px monospace;display:flex;align-items:center;justify-content:center}
+#wrap{position:relative}
+canvas{background:#000;border:1px solid #234;width:min(96vw,128vh*0.96);image-rendering:auto}
+#hud{position:absolute;left:10px;top:8px;line-height:1.5;text-shadow:0 0 4px #000;pointer-events:none}
+</style></head><body>
+<div id="wrap"><canvas id="c" width="640" height="480"></canvas>
+<div id="hud"></div></div>
+<script>
+(() => {
+const W = 640, H = 480;
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const hud = document.getElementById('hud');
+const img = ctx.createImageData(W, H), buf = img.data;
+
+// ---- Geometry: 6 faces x 4 vertices, split into 2 triangles each ----
+const faces = [
+  { n:[0,0,1],  c:[255,80,80],  v:[[-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1]] },
+  { n:[0,0,-1], c:[80,255,120], v:[[1,-1,-1],[-1,-1,-1],[-1,1,-1],[1,1,-1]] },
+  { n:[1,0,0],  c:[80,140,255], v:[[1,-1,1],[1,-1,-1],[1,1,-1],[1,1,1]] },
+  { n:[-1,0,0], c:[255,220,80], v:[[-1,-1,-1],[-1,-1,1],[-1,1,1],[-1,1,-1]] },
+  { n:[0,1,0],  c:[220,90,255], v:[[-1,1,1],[1,1,1],[1,1,-1],[-1,1,-1]] },
+  { n:[0,-1,0], c:[80,240,240], v:[[-1,-1,-1],[1,-1,-1],[1,-1,1],[-1,-1,1]] },
+];
+const norm = v => { const l = Math.hypot(...v); return [v[0]/l, v[1]/l, v[2]/l]; };
+const dot = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+// Per-vertex normals: blend face normal with corner direction so shading varies across faces
+for (const f of faces) {
+  f.vn = f.v.map(p => { const d = norm(p);
+    return norm([f.n[0]*0.6 + d[0]*0.8, f.n[1]*0.6 + d[1]*0.8, f.n[2]*0.6 + d[2]*0.8]); });
+  f.tris = [[0,1,2],[0,2,3]];
+}
+
+// ---- Matrices ----
+function rotXYZ(ax, ay, az) {
+  const cx=Math.cos(ax), sx=Math.sin(ax), cy=Math.cos(ay), sy=Math.sin(ay), cz=Math.cos(az), sz=Math.sin(az);
+  const Rx=[[1,0,0],[0,cx,-sx],[0,sx,cx]], Ry=[[cy,0,sy],[0,1,0],[-sy,0,cy]], Rz=[[cz,-sz,0],[sz,cz,0],[0,0,1]];
+  const mul=(A,B)=>A.map((r,i)=>[0,1,2].map(j=>r[0]*B[0][j]+r[1]*B[1][j]+r[2]*B[2][j]));
+  return mul(Rz, mul(Ry, Rx));
+}
+const xf = (M, v) => [dot(M[0],v), dot(M[1],v), dot(M[2],v)];
+
+const CAM = 5, FOV = 420, AMB = 0.15;
+let ax = 0.4, ay = 0, az = 0, lt = 0, wire = false, paused = false;
+
+function project(p) { const s = FOV / (CAM + p[2] * -1 + 0); // camera at z=+CAM looking toward -z handled below
+  return s; }
+
+// ---- Rasterizer: Gouraud triangle via barycentric interpolation of vertex colors ----
+function tri(a, b, c) {
+  const minX = Math.max(0, Math.floor(Math.min(a.x,b.x,c.x))), maxX = Math.min(W-1, Math.ceil(Math.max(a.x,b.x,c.x)));
+  const minY = Math.max(0, Math.floor(Math.min(a.y,b.y,c.y))), maxY = Math.min(H-1, Math.ceil(Math.max(a.y,b.y,c.y)));
+  const area = (b.x-a.x)*(c.y-a.y) - (b.y-a.y)*(c.x-a.x);
+  if (Math.abs(area) < 1e-6) return;
+  const inv = 1 / area;
+  for (let y = minY; y <= maxY; y++) {
+    const py = y + 0.5;
+    for (let x = minX; x <= maxX; x++) {
+      const px = x + 0.5;
+      const w0 = ((b.x-px)*(c.y-py) - (b.y-py)*(c.x-px)) * inv;
+      const w1 = ((c.x-px)*(a.y-py) - (c.y-py)*(a.x-px)) * inv;
+      const w2 = 1 - w0 - w1;
+      if (w0 < -0.001 || w1 < -0.001 || w2 < -0.001) continue;
+      const i = (y*W + x) * 4;
+      buf[i]   = w0*a.r + w1*b.r + w2*c.r;
+      buf[i+1] = w0*a.g + w1*b.g + w2*c.g;
+      buf[i+2] = w0*a.b + w1*b.b + w2*c.b;
+      buf[i+3] = 255;
+    }
+  }
+}
+
+function render() {
+  const M = rotXYZ(ax, ay, az);
+  // moving light orbiting the cube (world space)
+  const L = [Math.cos(lt*1.3)*3.2, Math.sin(lt*0.9)*2.4, Math.sin(lt*1.3)*3.2 + 1.5];
+
+  buf.fill(0);
+  for (let i = 3; i < buf.length; i += 4) buf[i] = 255;
+  const drawn = [];
+
+  for (const f of faces) {
+    const wn = xf(M, f.n);
+    const wv = f.v.map(p => xf(M, p));
+    // Backface culling: camera at (0,0,CAM); view vector from face point to camera
+    const toCam = [-wv[0][0], -wv[0][1], CAM - wv[0][2]];
+    if (dot(wn, toCam) <= 0) continue;
+
+    const pv = wv.map((p, k) => {
+      const s = FOV / (CAM - p[2]);
+      const n = xf(M, f.vn[k]);
+      // per-vertex Lambert lighting
+      const ld = norm([L[0]-p[0], L[1]-p[1], L[2]-p[2]]);
+      const I = Math.min(1, AMB + Math.max(0, dot(n, ld)) * 0.95);
+      return { x: W/2 + p[0]*s, y: H/2 - p[1]*s, r: f.c[0]*I, g: f.c[1]*I, b: f.c[2]*I };
+    });
+    drawn.push(pv);
+    if (!wire) for (const t of f.tris) tri(pv[t[0]], pv[t[1]], pv[t[2]]);
+  }
+  ctx.putImageData(img, 0, 0);
+
+  if (wire) {
+    ctx.strokeStyle = '#7fffd4'; ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (const pv of drawn) for (const t of faces[0].tris) {
+      ctx.moveTo(pv[t[0]].x, pv[t[0]].y); ctx.lineTo(pv[t[1]].x, pv[t[1]].y);
+      ctx.lineTo(pv[t[2]].x, pv[t[2]].y); ctx.closePath();
+    }
+    ctx.stroke();
+  }
+  // light marker
+  const ls = FOV / (CAM - L[2]);
+  if (CAM - L[2] > 0.1) {
+    ctx.fillStyle = '#ffe680'; ctx.beginPath();
+    ctx.arc(W/2 + L[0]*ls, H/2 - L[1]*ls, 5, 0, 7); ctx.fill();
+  }
+}
+
+let last = performance.now(), fps = 0, acc = 0, frames = 0;
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (!paused) { ax += dt*0.7; ay += dt*1.0; az += dt*0.3; lt += dt; }
+  render();
+  acc += dt; frames++;
+  if (acc >= 0.5) { fps = frames / acc; acc = 0; frames = 0; }
+  hud.innerHTML = 'FPS: ' + fps.toFixed(0) + '<br>Mode: ' + (wire ? 'wireframe' : 'Gouraud') +
+    (paused ? ' (paused)' : '') + '<br>[W] wireframe &nbsp; [P] pause';
+  requestAnimationFrame(loop);
+}
+addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if (k === 'w') wire = !wire; else if (k === 'p') paused = !paused;
+});
+requestAnimationFrame(loop);
+})();
+</script></body></html>

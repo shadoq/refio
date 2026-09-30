@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Gouraud Shaded Cube - Canvas 2D</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b0d12;color:#cfe;font:14px monospace;overflow:hidden}
+  body{display:flex;align-items:center;justify-content:center}
+  canvas{width:min(96vw,128vh*0.9);aspect-ratio:4/3;image-rendering:auto;background:#10131b;box-shadow:0 0 30px #000}
+  #hud{position:fixed;left:12px;top:10px;line-height:1.5;text-shadow:0 0 4px #000;pointer-events:none}
+</style>
+</head>
+<body>
+<canvas id="c" width="640" height="480"></canvas>
+<div id="hud"></div>
+<script>
+(() => {
+"use strict";
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height, hud = document.getElementById('hud');
+const img = ctx.createImageData(W, H), buf = img.data;
+
+// ---------- Geometry: cube faces subdivided into grids (shared-style smooth normals) ----------
+const N = 8, S = 1;
+const faces = [ // origin, u axis, v axis (outward normal = u x v)
+  {o:[ S,-S,-S], u:[0,2*S,0], v:[0,0,2*S]}, {o:[-S,-S, S], u:[0,2*S,0], v:[0,0,-2*S]},
+  {o:[-S, S,-S], u:[2*S,0,0], v:[0,0,2*S]}, {o:[-S,-S, S], u:[0,0,-2*S], v:[2*S,0,0]},
+  {o:[-S,-S, S], u:[2*S,0,0], v:[0,2*S,0]}, {o:[ S,-S,-S], u:[-2*S,0,0], v:[0,2*S,0]}
+];
+const verts = [], norms = [], tris = [], baseCol = [];
+const faceColors = [[255,90,80],[80,170,255],[110,240,120],[255,210,70],[200,110,255],[80,230,220]];
+faces.forEach((f, fi) => {
+  const start = verts.length;
+  for (let j = 0; j <= N; j++) for (let i = 0; i <= N; i++) {
+    const a = i / N, b = j / N;
+    const p = [0,1,2].map(k => f.o[k] + f.u[k]*a + f.v[k]*b);
+    verts.push(p);
+    const l = Math.hypot(...p);
+    norms.push(p.map(x => x / l));          // smoothed normal -> visible Gouraud gradients
+    baseCol.push(faceColors[fi]);
+  }
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+    const a = start + j*(N+1) + i, b = a + 1, c = a + N + 1, d = c + 1;
+    tris.push([a,b,d], [a,d,c]);            // quad -> 2 triangles
+  }
+});
+
+// ---------- Math ----------
+const mul = (A,B) => { const R = []; for (let i=0;i<3;i++) for (let j=0;j<3;j++) R[i*3+j] = A[i*3]*B[j]+A[i*3+1]*B[3+j]+A[i*3+2]*B[6+j]; return R; };
+const rx = t => [1,0,0, 0,Math.cos(t),-Math.sin(t), 0,Math.sin(t),Math.cos(t)];
+const ry = t => [Math.cos(t),0,Math.sin(t), 0,1,0, -Math.sin(t),0,Math.cos(t)];
+const rz = t => [Math.cos(t),-Math.sin(t),0, Math.sin(t),Math.cos(t),0, 0,0,1];
+const apply = (M,p) => [M[0]*p[0]+M[1]*p[1]+M[2]*p[2], M[3]*p[0]+M[4]*p[1]+M[5]*p[2], M[6]*p[0]+M[7]*p[1]+M[8]*p[2]];
+
+const CAM = 6, FOV = 420;
+let wire = false, paused = false, angle = 0, ltime = 0, last = performance.now(), fps = 0, acc = 0, frames = 0;
+const ambient = 0.18;
+
+addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if (k === 'w') wire = !wire; else if (k === 'p') paused = !paused;
+});
+
+// ---------- Gouraud triangle rasterizer (barycentric, per-pixel color interpolation) ----------
+function fillTri(x0,y0,c0, x1,y1,c1, x2,y2,c2) {
+  const minX = Math.max(0, Math.floor(Math.min(x0,x1,x2))), maxX = Math.min(W-1, Math.ceil(Math.max(x0,x1,x2)));
+  const minY = Math.max(0, Math.floor(Math.min(y0,y1,y2))), maxY = Math.min(H-1, Math.ceil(Math.max(y0,y1,y2)));
+  const area = (x1-x0)*(y2-y0) - (x2-x0)*(y1-y0);
+  if (Math.abs(area) < 1e-6) return;
+  const inv = 1 / area, eps = -0.5 * Math.abs(inv); // slight overdraw to avoid seams
+  for (let y = minY; y <= maxY; y++) {
+    const py = y + 0.5;
+    for (let x = minX; x <= maxX; x++) {
+      const px = x + 0.5;
+      const w0 = ((x1-px)*(y2-py) - (x2-px)*(y1-py)) * inv;
+      const w1 = ((x2-px)*(y0-py) - (x0-px)*(y2-py)) * inv;
+      const w2 = 1 - w0 - w1;
+      if (w0 < eps || w1 < eps || w2 < eps) continue;
+      const o = (y*W + x) * 4;
+      buf[o]   = w0*c0[0] + w1*c1[0] + w2*c2[0];
+      buf[o+1] = w0*c0[1] + w1*c1[1] + w2*c2[1];
+      buf[o+2] = w0*c0[2] + w1*c1[2] + w2*c2[2];
+      buf[o+3] = 255;
+    }
+  }
+}
+
+function frame(now) {
+  const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  acc += dt; frames++;
+  if (acc >= 0.5) { fps = frames / acc; acc = 0; frames = 0; }
+  if (!paused) { angle += dt; ltime += dt; }
+
+  // Transform
+  const M = mul(rz(angle*0.4), mul(ry(angle*0.8), rx(angle*0.6)));
+  // Moving light (orbits the cube), world space
+  const L = [Math.cos(ltime*1.3)*4, Math.sin(ltime*0.9)*3, Math.sin(ltime*1.3)*4 - 1];
+
+  const n = verts.length, sx = new Float64Array(n), sy = new Float64Array(n), col = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const p = apply(M, verts[i]), nn = apply(M, norms[i]);
+    const z = p[2] + CAM;
+    sx[i] = W/2 + p[0]*FOV/z; sy[i] = H/2 - p[1]*FOV/z;   // perspective projection
+    // per-vertex Lambert: ambient + diffuse * max(0, N·L)
+    let lx = L[0]-p[0], ly = L[1]-p[1], lz = L[2]-(p[2]);
+    const ll = Math.hypot(lx,ly,lz); lx/=ll; ly/=ll; lz/=ll;
+    const d = Math.max(0, nn[0]*lx + nn[1]*ly + nn[2]*lz);
+    const k = Math.min(1, ambient + (1-ambient)*d), b = baseCol[i];
+    col[i] = [b[0]*k, b[1]*k, b[2]*k];
+  }
+
+  // clear
+  for (let i = 0; i < buf.length; i += 4) { buf[i]=16; buf[i+1]=19; buf[i+2]=27; buf[i+3]=255; }
+
+  const visible = [];
+  for (const t of tris) {
+    const [a,b,c] = t;
+    // backface culling via signed screen area (y is flipped, so CCW-in-world => negative here)
+    const ar = (sx[b]-sx[a])*(sy[c]-sy[a]) - (sx[c]-sx[a])*(sy[b]-sy[a]);
+    if (ar >= 0) continue;
+    visible.push(t);
+    fillTri(sx[a],sy[a],col[a], sx[b],sy[b],col[b], sx[c],sy[c],col[c]);
+  }
+  ctx.putImageData(img, 0, 0);
+
+  if (wire) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 1; ctx.beginPath();
+    for (const [a,b,c] of visible) {
+      ctx.moveTo(sx[a],sy[a]); ctx.lineTo(sx[b],sy[b]); ctx.lineTo(sx[c],sy[c]); ctx.closePath();
+    }
+    ctx.stroke();
+  }
+
+  // light marker (projected)
+  const lz = L[2] + CAM;
+  if (lz > 0.1) {
+    const lxs = W/2 + L[0]*FOV/lz, lys = H/2 - L[1]*FOV/lz;
+    ctx.fillStyle = '#fff'; ctx.shadowColor = '#ffd'; ctx.shadowBlur = 14;
+    ctx.beginPath(); ctx.arc(lxs, lys, 5, 0, 7); ctx.fill(); ctx.shadowBlur = 0;
+  }
+
+  hud.innerHTML = `FPS: ${fps.toFixed(0)}<br>Triangles: ${visible.length}/${tris.length} (culled ${tris.length-visible.length})<br>` +
+    `[W] wireframe: ${wire?'ON':'off'} &nbsp; [P] ${paused?'PAUSED':'running'}`;
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

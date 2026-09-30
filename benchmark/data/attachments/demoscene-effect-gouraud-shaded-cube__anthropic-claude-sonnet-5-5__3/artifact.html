@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Gouraud Shaded Cube - Canvas 2D</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b0d12;color:#cfd6e4;font:14px monospace;overflow:hidden}
+  body{display:flex;align-items:center;justify-content:center}
+  canvas{width:min(96vw,128vh*0.96);aspect-ratio:4/3;background:#10131a;image-rendering:auto;box-shadow:0 0 30px #000}
+  #hud{position:fixed;left:12px;top:10px;line-height:1.5;text-shadow:0 0 4px #000;pointer-events:none}
+</style>
+</head>
+<body>
+<canvas id="c" width="640" height="480"></canvas>
+<div id="hud"></div>
+<script>
+(() => {
+  const W = 640, H = 480;
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const hud = document.getElementById('hud');
+  const img = ctx.createImageData(W, H);
+  const buf32 = new Uint32Array(img.data.buffer);
+  const BG = (255 << 24) | (26 << 16) | (19 << 8) | 16; // ABGR
+
+  // ---------- Geometry: cube faces subdivided into grid, split into triangles ----------
+  const N = 6; // grid cells per face side
+  const faceDefs = [
+    { n:[1,0,0],  u:[0,1,0], v:[0,0,1], c:[230,80,80] },
+    { n:[-1,0,0], u:[0,0,1], v:[0,1,0], c:[80,200,230] },
+    { n:[0,1,0],  u:[0,0,1], v:[1,0,0], c:[90,220,110] },
+    { n:[0,-1,0], u:[1,0,0], v:[0,0,1], c:[230,200,80] },
+    { n:[0,0,1],  u:[1,0,0], v:[0,1,0], c:[110,120,240] },
+    { n:[0,0,-1], u:[0,1,0], v:[1,0,0], c:[220,100,220] },
+  ];
+  const verts = [];   // {p:[x,y,z], n:[x,y,z], c:[r,g,b]}  (model space)
+  const tris = [];    // {a,b,c,face}
+  faceDefs.forEach((f, fi) => {
+    const base = verts.length;
+    for (let j = 0; j <= N; j++) for (let i = 0; i <= N; i++) {
+      const s = i / N * 2 - 1, t = j / N * 2 - 1;
+      const p = [0,1,2].map(k => f.n[k] + s * f.u[k] + t * f.v[k]);
+      // vertex normal: blend of face normal and radial direction -> visible smooth shading
+      const r = Math.hypot(...p);
+      let nn = [0,1,2].map(k => 0.35 * f.n[k] + 0.65 * p[k] / r);
+      const l = Math.hypot(...nn);
+      nn = nn.map(x => x / l);
+      verts.push({ p, n: nn, c: f.c });
+    }
+    const idx = (i, j) => base + j * (N + 1) + i;
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+      tris.push({ a: idx(i,j), b: idx(i+1,j), c: idx(i+1,j+1), face: fi });
+      tris.push({ a: idx(i,j), b: idx(i+1,j+1), c: idx(i,j+1), face: fi });
+    }
+  });
+
+  // ---------- Math ----------
+  const mul = (A, B) => {
+    const R = new Array(9);
+    for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++)
+      R[r*3+c] = A[r*3]*B[c] + A[r*3+1]*B[3+c] + A[r*3+2]*B[6+c];
+    return R;
+  };
+  const rotX = a => { const c=Math.cos(a), s=Math.sin(a); return [1,0,0, 0,c,-s, 0,s,c]; };
+  const rotY = a => { const c=Math.cos(a), s=Math.sin(a); return [c,0,s, 0,1,0, -s,0,c]; };
+  const rotZ = a => { const c=Math.cos(a), s=Math.sin(a); return [c,-s,0, s,c,0, 0,0,1]; };
+  const apply = (M, v) => [
+    M[0]*v[0] + M[1]*v[1] + M[2]*v[2],
+    M[3]*v[0] + M[4]*v[1] + M[5]*v[2],
+    M[6]*v[0] + M[7]*v[1] + M[8]*v[2]];
+
+  // ---------- Camera / projection ----------
+  const CAM_Z = 6, FOV_F = 560; // focal length in pixels
+  const project = (p) => {
+    const z = p[2] + CAM_Z;
+    return [W / 2 + p[0] * FOV_F / z, H / 2 - p[1] * FOV_F / z, z];
+  };
+
+  // ---------- Rasterizer (Gouraud: barycentric color interpolation) ----------
+  function fillTriangle(x0,y0,c0, x1,y1,c1, x2,y2,c2) {
+    const minX = Math.max(0, Math.floor(Math.min(x0,x1,x2)));
+    const maxX = Math.min(W-1, Math.ceil(Math.max(x0,x1,x2)));
+    const minY = Math.max(0, Math.floor(Math.min(y0,y1,y2)));
+    const maxY = Math.min(H-1, Math.ceil(Math.max(y0,y1,y2)));
+    const area = (x1-x0)*(y2-y0) - (x2-x0)*(y1-y0);
+    if (Math.abs(area) < 1e-6) return;
+    const inv = 1 / area;
+    const eps = -0.0005;
+    for (let y = minY; y <= maxY; y++) {
+      const py = y + 0.5;
+      let row = y * W;
+      for (let x = minX; x <= maxX; x++) {
+        const px = x + 0.5;
+        const w0 = ((x1-px)*(y2-py) - (x2-px)*(y1-py)) * inv;
+        const w1 = ((x2-px)*(y0-py) - (x0-px)*(y2-py)) * inv;
+        const w2 = 1 - w0 - w1;
+        if (w0 < eps || w1 < eps || w2 < eps) continue;
+        let r = w0*c0[0] + w1*c1[0] + w2*c2[0];
+        let g = w0*c0[1] + w1*c1[1] + w2*c2[1];
+        let b = w0*c0[2] + w1*c1[2] + w2*c2[2];
+        r = r < 0 ? 0 : r > 255 ? 255 : r;
+        g = g < 0 ? 0 : g > 255 ? 255 : g;
+        b = b < 0 ? 0 : b > 255 ? 255 : b;
+        buf32[row + x] = (255 << 24) | ((b|0) << 16) | ((g|0) << 8) | (r|0);
+      }
+    }
+  }
+
+  // ---------- State ----------
+  let wire = false, paused = false;
+  let time = 0, last = performance.now();
+  let frames = 0, fpsTime = last, fps = 0;
+  const AMBIENT = 0.14;
+
+  window.addEventListener('keydown', e => {
+    const k = e.key.toLowerCase();
+    if (k === 'w') wire = !wire;
+    else if (k === 'p') paused = !paused;
+  });
+
+  const pw = new Array(verts.length), ps = new Array(verts.length), pc = new Array(verts.length);
+
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    if (!paused) time += dt;
+
+    // transform
+    const M = mul(rotZ(time * 0.4), mul(rotY(time * 0.8), rotX(time * 0.6)));
+    // moving light orbiting the cube (world space)
+    const L = [Math.cos(time * 1.3) * 3.2, Math.sin(time * 0.9) * 2.4, Math.sin(time * 1.3) * 3.2 - 1.0];
+
+    for (let i = 0; i < verts.length; i++) {
+      const v = verts[i];
+      const wp = apply(M, v.p);
+      const wn = apply(M, v.n);
+      pw[i] = wp;
+      ps[i] = project(wp);
+      // per-vertex Lambert lighting
+      let lx = L[0]-wp[0], ly = L[1]-wp[1], lz = L[2]-wp[2];
+      const ll = Math.hypot(lx, ly, lz);
+      const d = Math.max(0, (wn[0]*lx + wn[1]*ly + wn[2]*lz) / ll);
+      const k = Math.min(1.25, AMBIENT + (1 - AMBIENT) * d);
+      pc[i] = [v.c[0]*k, v.c[1]*k, v.c[2]*k];
+    }
+
+    buf32.fill(BG);
+    const visible = [];
+    for (const t of tris) {
+      // backface culling: face normal (rotated) vs. view vector from camera
+      const fn = apply(M, faceDefs[t.face].n);
+      const p = pw[t.a];
+      const vx = p[0], vy = p[1], vz = p[2] + CAM_Z;
+      if (fn[0]*vx + fn[1]*vy + fn[2]*vz >= 0) continue;
+      visible.push(t);
+      if (!wire) {
+        const A = ps[t.a], B = ps[t.b], C = ps[t.c];
+        fillTriangle(A[0],A[1],pc[t.a], B[0],B[1],pc[t.b], C[0],C[1],pc[t.c]);
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+
+    if (wire) {
+      ctx.strokeStyle = '#7fe3ff';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (const t of visible) {
+        const A = ps[t.a], B = ps[t.b], C = ps[t.c];
+        ctx.moveTo(A[0],A[1]); ctx.lineTo(B[0],B[1]); ctx.lineTo(C[0],C[1]); ctx.closePath();
+      }
+      ctx.stroke();
+    }
+
+    // light marker
+    const lp = project(L);
+    ctx.fillStyle = '#fff6b0';
+    ctx.beginPath(); ctx.arc(lp[0], lp[1], 6, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,240,150,0.4)';
+    ctx.beginPath(); ctx.arc(lp[0], lp[1], 11, 0, Math.PI*2); ctx.stroke();
+
+    // FPS
+    frames++;
+    if (now - fpsTime >= 500) {
+      fps = frames * 1000 / (now - fpsTime);
+      frames = 0; fpsTime = now;
+    }
+    hud.innerHTML = `FPS: ${fps.toFixed(1)}<br>` +
+      `[W] wireframe: ${wire ? 'ON' : 'off'}<br>[P] pause: ${paused ? 'PAUSED' : 'running'}<br>` +
+      `triangles drawn: ${visible.length}/${tris.length}`;
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

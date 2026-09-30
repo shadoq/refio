@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Todo App</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; background: #eef1f6; font-family: system-ui, sans-serif; display: flex; justify-content: center; padding: 40px 16px; color: #222; }
+  .app { width: 100%; max-width: 480px; background: #fff; border-radius: 12px; box-shadow: 0 6px 24px rgba(0,0,0,.1); padding: 24px; align-self: flex-start; }
+  h1 { margin: 0 0 16px; font-size: 1.6rem; text-align: center; }
+  form { display: flex; gap: 8px; }
+  input[type=text] { flex: 1; padding: 10px 12px; border: 1px solid #ccd; border-radius: 8px; font-size: 1rem; }
+  button { cursor: pointer; border: 0; border-radius: 8px; font-size: .95rem; }
+  .add { background: #4a6cf7; color: #fff; padding: 0 16px; }
+  .filters { display: flex; gap: 6px; justify-content: center; margin: 16px 0; }
+  .filters button { background: #eef1f6; padding: 6px 14px; }
+  .filters button.active { background: #4a6cf7; color: #fff; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { display: flex; align-items: center; gap: 10px; padding: 10px 4px; border-bottom: 1px solid #eee; }
+  li span { flex: 1; word-break: break-word; }
+  li.done span { text-decoration: line-through; color: #999; }
+  .del { background: transparent; color: #d33; font-size: 1.2rem; }
+  .empty { text-align: center; color: #999; padding: 16px 0; }
+  .count { font-size: .85rem; color: #777; text-align: center; margin-top: 12px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>Todo List</h1>
+  <form id="form">
+    <input type="text" id="input" placeholder="What needs to be done?" autocomplete="off" required>
+    <button class="add" type="submit">Add</button>
+  </form>
+  <div class="filters" id="filters">
+    <button data-f="all" class="active">All</button>
+    <button data-f="active">Active</button>
+    <button data-f="completed">Completed</button>
+  </div>
+  <ul id="list"></ul>
+  <div class="count" id="count"></div>
+</div>
+<script>
+  const KEY = 'todos-v1';
+  let todos = [];
+  try { todos = JSON.parse(localStorage.getItem(KEY)) || []; } catch (e) {}
+  let filter = 'all';
+
+  const list = document.getElementById('list');
+  const input = document.getElementById('input');
+
+  function save() { localStorage.setItem(KEY, JSON.stringify(todos)); }
+
+  function render() {
+    const shown = todos.filter(t => filter === 'all' || (filter === 'active' ? !t.done : t.done));
+    list.innerHTML = '';
+    if (!shown.length) {
+      const li = document.createElement('li');
+      li.className = 'empty';
+      li.style.justifyContent = 'center';
+      li.textContent = 'No todos here.';
+      list.appendChild(li);
+    }
+    shown.forEach(t => {
+      const li = document.createElement('li');
+      if (t.done) li.className = 'done';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = t.done;
+      cb.onchange = () => { t.done = cb.checked; save(); render(); };
+      const span = document.createElement('span');
+      span.textContent = t.text;
+      const del = document.createElement('button');
+      del.className = 'del';
+      del.textContent = '\u00d7';
+      del.title = 'Delete';
+      del.onclick = () => { todos = todos.filter(x => x.id !== t.id); save(); render(); };
+      li.append(cb, span, del);
+      list.appendChild(li);
+    });
+    const left = todos.filter(t => !t.done).length;
+    document.getElementById('count').textContent = left + ' item' + (left === 1 ? '' : 's') + ' left';
+    document.querySelectorAll('#filters button').forEach(b => b.classList.toggle('active', b.dataset.f === filter));
+  }
+
+  document.getElementById('form').onsubmit = e => {
+    e.preventDefault();
+    const text = input.value.trim();
+    if (!text) return;
+    todos.push({ id: Date.now() + Math.random(), text, done: false });
+    input.value = '';
+    save(); render();
+  };
+
+  document.getElementById('filters').onclick = e => {
+    if (e.target.dataset.f) { filter = e.target.dataset.f; render(); }
+  };
+
+  render();
+</script>
+</body>
+</html>

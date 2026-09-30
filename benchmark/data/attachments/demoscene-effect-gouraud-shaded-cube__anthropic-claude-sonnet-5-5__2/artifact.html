@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Gouraud Shaded Cube</title>
+<style>
+html,body{margin:0;height:100%;background:#0b0d12;color:#cde;font:14px monospace;display:flex;align-items:center;justify-content:center}
+#w{position:relative}canvas{display:block;max-width:100vw;max-height:100vh;background:#000}
+#hud{position:absolute;left:8px;top:6px;pointer-events:none;text-shadow:0 0 3px #000;line-height:1.5}
+</style></head><body>
+<div id="w"><canvas id="c" width="640" height="480"></canvas><div id="hud"></div></div>
+<script>
+const cv=document.getElementById('c'),ctx=cv.getContext('2d'),hud=document.getElementById('hud');
+const W=cv.width,H=cv.height,img=ctx.createImageData(W,H),buf=img.data;
+// --- geometry: 8 shared corners; smooth (corner-direction) normals make Gouraud visible
+const V=[];for(let i=0;i<8;i++)V.push([i&1?1:-1,i&2?1:-1,i&4?1:-1]);
+const vn=V.map(v=>{const l=Math.hypot(...v);return v.map(x=>x/l)});
+const faces=[{q:[1,3,7,5],n:[1,0,0]},{q:[0,4,6,2],n:[-1,0,0]},{q:[2,6,7,3],n:[0,1,0]},
+ {q:[0,1,5,4],n:[0,-1,0]},{q:[4,5,7,6],n:[0,0,1]},{q:[0,2,3,1],n:[0,0,-1]}];
+const tris=[];faces.forEach(f=>{const q=f.q;tris.push({i:[q[0],q[1],q[2]],f},{i:[q[0],q[2],q[3]],f})});
+const BASE=[230,120,60]; // material color
+// --- math
+function rotX(a){const c=Math.cos(a),s=Math.sin(a);return[1,0,0,0,c,-s,0,s,c]}
+function rotY(a){const c=Math.cos(a),s=Math.sin(a);return[c,0,s,0,1,0,-s,0,c]}
+function rotZ(a){const c=Math.cos(a),s=Math.sin(a);return[c,-s,0,s,c,0,0,0,1]}
+function mul(a,b){const r=[];for(let i=0;i<3;i++)for(let j=0;j<3;j++)r.push(a[i*3]*b[j]+a[i*3+1]*b[3+j]+a[i*3+2]*b[6+j]);return r}
+function ap(m,v){return[m[0]*v[0]+m[1]*v[1]+m[2]*v[2],m[3]*v[0]+m[4]*v[1]+m[5]*v[2],m[6]*v[0]+m[7]*v[1]+m[8]*v[2]]}
+const CAMZ=5,FOCAL=520;
+function proj(p){const z=p[2]+CAMZ,s=FOCAL/z;return[W/2+p[0]*s,H/2-p[1]*s,z]}
+// --- Gouraud rasterizer
+function tri(a,b,c){ // each: [x,y,r,g,b]
+ const minX=Math.max(0,Math.floor(Math.min(a[0],b[0],c[0]))),maxX=Math.min(W-1,Math.ceil(Math.max(a[0],b[0],c[0])));
+ const minY=Math.max(0,Math.floor(Math.min(a[1],b[1],c[1]))),maxY=Math.min(H-1,Math.ceil(Math.max(a[1],b[1],c[1])));
+ const area=(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);if(Math.abs(area)<1e-6)return;
+ const inv=1/area,e=-1e-4;
+ for(let y=minY;y<=maxY;y++){const py=y+.5;let o=(y*W+minX)*4;
+  for(let x=minX;x<=maxX;x++,o+=4){const px=x+.5;
+   const w0=((b[0]-px)*(c[1]-py)-(b[1]-py)*(c[0]-px))*inv;
+   const w1=((c[0]-px)*(a[1]-py)-(c[1]-py)*(a[0]-px))*inv;
+   const w2=1-w0-w1;
+   if(w0<e||w1<e||w2<e)continue;
+   buf[o]=w0*a[2]+w1*b[2]+w2*c[2];buf[o+1]=w0*a[3]+w1*b[3]+w2*c[3];buf[o+2]=w0*a[4]+w1*b[4]+w2*c[4];buf[o+3]=255}}}
+}
+// --- state
+let wire=false,paused=false,t=0,last=performance.now(),fps=0,fc=0,fa=0;
+addEventListener('keydown',e=>{const k=e.key.toLowerCase();if(k==='w')wire=!wire;else if(k==='p')paused=!paused});
+function frame(now){
+ const dt=Math.min(.1,(now-last)/1000);last=now;
+ fc++;fa+=dt;if(fa>=.5){fps=fc/fa;fc=0;fa=0}
+ if(!paused)t+=dt;
+ const R=mul(rotZ(t*.4),mul(rotY(t*.9),rotX(t*.6)));
+ const L=[Math.cos(t*1.3)*4,Math.sin(t*.8)*2.5,Math.sin(t*1.3)*4-1]; // orbiting point light (world space)
+ // clear
+ for(let i=0;i<buf.length;i+=4){buf[i]=12;buf[i+1]=14;buf[i+2]=20;buf[i+3]=255}
+ // transform + per-vertex Lambert lighting
+ const wp=V.map(v=>ap(R,v).map(x=>x*1.2)),wn=vn.map(n=>ap(R,n));
+ const sp=wp.map(proj);
+ const col=wp.map((p,i)=>{let l=[L[0]-p[0],L[1]-p[1],L[2]-p[2]];const d=Math.hypot(...l);
+  const nl=Math.max(0,(wn[i][0]*l[0]+wn[i][1]*l[1]+wn[i][2]*l[2])/d);
+  const k=Math.min(1,.12+.95*nl);return BASE.map(c=>Math.min(255,c*k+(nl>.9?(nl-.9)*400:0)))});
+ const vis=[];
+ for(const tr of tris){ // backface culling using rotated face normal vs. view vector
+  const n=ap(R,tr.f.n),c=tr.i.reduce((s,i)=>[s[0]+wp[i][0],s[1]+wp[i][1],s[2]+wp[i][2]],[0,0,0]).map(x=>x/3);
+  const vx=-c[0],vy=-c[1],vz=-CAMZ-c[2]; // toward camera at (0,0,-CAMZ)
+  if(n[0]*vx+n[1]*vy+n[2]*vz<=0)continue;
+  vis.push(tr)}
+ if(!wire)for(const tr of vis){const[i,j,k]=tr.i;
+  tri([...sp[i].slice(0,2),...col[i]],[...sp[j].slice(0,2),...col[j]],[...sp[k].slice(0,2),...col[k]])}
+ ctx.putImageData(img,0,0);
+ if(wire){ctx.lineWidth=1.5;for(const tr of vis){const[i,j,k]=tr.i;
+  for(const[a,b]of[[i,j],[j,k],[k,i]]){const g=ctx.createLinearGradient(sp[a][0],sp[a][1],sp[b][0],sp[b][1]);
+   g.addColorStop(0,`rgb(${col[a]|0},${col[a][1]|0},${col[a][2]|0})`.replace(/rgb\((\d+),/,(m,x)=>`rgb(${col[a][0]|0},`));
+   g.addColorStop(1,`rgb(${col[b][0]|0},${col[b][1]|0},${col[b][2]|0})`);
+   ctx.strokeStyle=g;ctx.beginPath();ctx.moveTo(sp[a][0],sp[a][1]);ctx.lineTo(sp[b][0],sp[b][1]);ctx.stroke()}}}
+ // light marker
+ const lp=proj(L);ctx.fillStyle='#ffe98a';ctx.beginPath();ctx.arc(lp[0],lp[1],6,0,7);ctx.fill();
+ ctx.strokeStyle='rgba(255,233,138,.4)';ctx.beginPath();ctx.arc(lp[0],lp[1],11,0,7);ctx.stroke();
+ hud.textContent=`FPS: ${fps.toFixed(0)}\n[W] wireframe: ${wire?'ON':'off'}   [P] pause: ${paused?'ON':'off'}`;
+ hud.style.whiteSpace='pre';
+ requestAnimationFrame(frame)}
+requestAnimationFrame(frame);
+</script></body></html>

@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Gouraud Shaded Cube</title>
+<style>
+html,body{margin:0;height:100%;background:#0a0a12;color:#9fd;font:14px monospace;display:flex;align-items:center;justify-content:center}
+#w{position:relative}canvas{display:block;background:#10101c;border:1px solid #234;max-width:100vw;max-height:100vh}
+#hud{position:absolute;left:8px;top:6px;line-height:1.5;pointer-events:none;text-shadow:0 0 3px #000}
+</style></head><body>
+<div id="w"><canvas id="c" width="640" height="480"></canvas><div id="hud"></div></div>
+<script>
+(function(){
+const cv=document.getElementById('c'),ctx=cv.getContext('2d'),hud=document.getElementById('hud');
+const W=cv.width,H=cv.height;
+const img=ctx.createImageData(W,H),buf=img.data;
+let wire=false,paused=false;
+
+// ---- Geometry: cube faces subdivided into grids so per-vertex lighting shows gradients
+const N=6; // subdivisions per face edge
+const verts=[]; // {x,y,z,nx,ny,nz}
+const tris=[];  // index triples (counter-clockwise seen from outside)
+const faces=[ // normal, u axis, v axis
+ [[0,0,1],[1,0,0],[0,1,0]],[[0,0,-1],[-1,0,0],[0,1,0]],
+ [[1,0,0],[0,0,-1],[0,1,0]],[[-1,0,0],[0,0,1],[0,1,0]],
+ [[0,1,0],[1,0,0],[0,0,-1]],[[0,-1,0],[1,0,0],[0,0,1]]];
+for(const [n,u,v] of faces){
+  const base=verts.length;
+  for(let j=0;j<=N;j++)for(let i=0;i<=N;i++){
+    const a=i/N*2-1,b=j/N*2-1;
+    const x=n[0]+u[0]*a+v[0]*b,y=n[1]+u[1]*a+v[1]*b,z=n[2]+u[2]*a+v[2]*b;
+    // smoothed normal: blend of face normal and radial direction
+    const l=Math.hypot(x,y,z);
+    let nx=n[0]*.45+x/l*.55,ny=n[1]*.45+y/l*.55,nz=n[2]*.45+z/l*.55;
+    const nl=Math.hypot(nx,ny,nz);
+    verts.push({x,y,z,nx:nx/nl,ny:ny/nl,nz:nz/nl});
+  }
+  for(let j=0;j<N;j++)for(let i=0;i<N;i++){
+    const p=base+j*(N+1)+i,q=p+1,r=p+N+1,s=r+1;
+    tris.push([p,q,s],[p,s,r]);
+  }
+}
+
+// ---- Math
+function rotMat(ax,ay,az){
+  const cx=Math.cos(ax),sx=Math.sin(ax),cy=Math.cos(ay),sy=Math.sin(ay),cz=Math.cos(az),sz=Math.sin(az);
+  const X=[1,0,0,0,cx,-sx,0,sx,cx],Y=[cy,0,sy,0,1,0,-sy,0,cy],Z=[cz,-sz,0,sz,cz,0,0,0,1];
+  return mul(Z,mul(Y,X));
+}
+function mul(a,b){const r=new Array(9);
+  for(let i=0;i<3;i++)for(let j=0;j<3;j++)r[i*3+j]=a[i*3]*b[j]+a[i*3+1]*b[3+j]+a[i*3+2]*b[6+j];return r;}
+const app=(m,x,y,z)=>[m[0]*x+m[1]*y+m[2]*z,m[3]*x+m[4]*y+m[5]*z,m[6]*x+m[7]*y+m[8]*z];
+
+const baseCol=[255,120,60], ambient=0.15, CAMZ=5.2, F=420;
+const P=verts.map(()=>({wx:0,wy:0,wz:0,nx:0,ny:0,nz:0,sx:0,sy:0,r:0,g:0,b:0}));
+
+function project(x,y,z){const k=F/(z+CAMZ);return [W/2+x*k,H/2-y*k];}
+
+function edge(ax,ay,bx,by,px,py){return (bx-ax)*(py-ay)-(by-ay)*(px-ax);}
+
+function raster(a,b,c){
+  const area=edge(a.sx,a.sy,b.sx,b.sy,c.sx,c.sy);
+  if(area===0)return;
+  const inv=1/area;
+  let minX=Math.max(0,Math.floor(Math.min(a.sx,b.sx,c.sx))),maxX=Math.min(W-1,Math.ceil(Math.max(a.sx,b.sx,c.sx)));
+  let minY=Math.max(0,Math.floor(Math.min(a.sy,b.sy,c.sy))),maxY=Math.min(H-1,Math.ceil(Math.max(a.sy,b.sy,c.sy)));
+  for(let y=minY;y<=maxY;y++){
+    let o=(y*W+minX)*4;
+    for(let x=minX;x<=maxX;x++,o+=4){
+      const px=x+.5,py=y+.5;
+      let w0=edge(b.sx,b.sy,c.sx,c.sy,px,py)*inv,
+          w1=edge(c.sx,c.sy,a.sx,a.sy,px,py)*inv,
+          w2=1-w0-w1;
+      const e=-1e-4;
+      if(w0<e||w1<e||w2<e)continue;
+      buf[o]=w0*a.r+w1*b.r+w2*c.r;
+      buf[o+1]=w0*a.g+w1*b.g+w2*c.g;
+      buf[o+2]=w0*a.b+w1*b.b+w2*c.b;
+      buf[o+3]=255;
+    }
+  }
+}
+
+let ang=0,lt=0,last=performance.now(),fpsT=last,frames=0,fps=0;
+function frame(now){
+  const dt=Math.min(.05,(now-last)/1000);last=now;
+  if(!paused){ang+=dt;lt+=dt;}
+  frames++;
+  if(now-fpsT>=500){fps=frames*1000/(now-fpsT);frames=0;fpsT=now;}
+
+  const m=rotMat(ang*0.7,ang*1.0,ang*0.4);
+  const L=[Math.cos(lt*1.3)*3.2,Math.sin(lt*0.9)*2.2,Math.sin(lt*1.3)*3.2+1.5]; // moving point light
+
+  // transform + per-vertex Lambert
+  for(let i=0;i<verts.length;i++){
+    const v=verts[i],p=P[i];
+    const w=app(m,v.x,v.y,v.z),n=app(m,v.nx,v.ny,v.nz);
+    p.wx=w[0];p.wy=w[1];p.wz=w[2];
+    let lx=L[0]-w[0],ly=L[1]-w[1],lz=L[2]-w[2];
+    const ll=Math.hypot(lx,ly,lz);lx/=ll;ly/=ll;lz/=ll;
+    const d=Math.max(0,n[0]*lx+n[1]*ly+n[2]*lz);
+    const k=Math.min(1,ambient+(1-ambient)*d);
+    p.r=baseCol[0]*k;p.g=baseCol[1]*k;p.b=baseCol[2]*k;
+    const s=project(w[0],w[1],w[2]);p.sx=s[0];p.sy=s[1];
+  }
+
+  // backface culling (screen-space winding; y is flipped so CCW appears CW => area<0 is front)
+  const vis=[];
+  for(const t of tris){
+    const a=P[t[0]],b=P[t[1]],c=P[t[2]];
+    // view-space cull: normal . (camera->point)
+    const ux=b.wx-a.wx,uy=b.wy-a.wy,uz=b.wz-a.wz,vx=c.wx-a.wx,vy=c.wy-a.wy,vz=c.wz-a.wz;
+    const nx=uy*vz-uz*vy,ny=uz*vx-ux*vz,nz=ux*vy-uy*vx;
+    if(nx*a.wx+ny*a.wy+nz*(a.wz+CAMZ)>=0)continue;
+    vis.push(t);
+  }
+
+  buf.fill(0);
+  if(!wire){
+    for(const t of vis)raster(P[t[0]],P[t[1]],P[t[2]]);
+  }
+  ctx.putImageData(img,0,0);
+  if(wire){
+    ctx.lineWidth=1;
+    for(const t of vis){
+      const a=P[t[0]],b=P[t[1]],c=P[t[2]];
+      ctx.strokeStyle=`rgb(${(a.r+b.r+c.r)/3+40|0},${(a.g+b.g+c.g)/3+40|0},${(a.b+b.b+c.b)/3+40|0})`;
+      ctx.beginPath();ctx.moveTo(a.sx,a.sy);ctx.lineTo(b.sx,b.sy);ctx.lineTo(c.sx,c.sy);ctx.closePath();ctx.stroke();
+    }
+  }
+  // light marker
+  const ls=project(L[0],L[1],L[2]);
+  ctx.fillStyle='#ffe98a';ctx.beginPath();ctx.arc(ls[0],ls[1],5,0,7);ctx.fill();
+  ctx.strokeStyle='rgba(255,233,138,.4)';ctx.beginPath();ctx.arc(ls[0],ls[1],10,0,7);ctx.stroke();
+
+  hud.innerHTML=`FPS: ${fps.toFixed(0)}<br>Triangles drawn: ${vis.length}<br>[W] wireframe: ${wire?'ON':'off'}<br>[P] pause: ${paused?'PAUSED':'running'}`;
+  requestAnimationFrame(frame);
+}
+addEventListener('keydown',e=>{
+  const k=e.key.toLowerCase();
+  if(k==='w')wire=!wire;else if(k==='p')paused=!paused;
+});
+requestAnimationFrame(frame);
+})();
+</script></body></html>
