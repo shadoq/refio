@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 
 const publicItems = [
   { key: "/", label: "Leaderboard" },
+  { key: "/overview", label: "Overview" },
   { key: "/results", label: "Results" },
   { key: "/compare", label: "Compare" },
   { key: "/stability", label: "Stability" },

@@ -12,6 +12,7 @@ import Stability from "@/routes/Stability";
 import Pareto from "@/routes/Pareto";
 import Agents from "@/routes/Agents";
 import Results from "@/routes/Results";
+import Overview from "@/routes/Overview";
 import Help from "@/routes/Help";
 import Queue from "@/routes/Queue";
 import ResultEditor from "@/routes/admin/ResultEditor";
@@ -85,6 +86,7 @@ export default function App() {
               <Routes>
                 <Route path="/" element={<Landing />} />
                 <Route path="/tasks/:taskId" element={<TaskDetail />} />
+                <Route path="/overview" element={<Overview />} />
                 <Route path="/results" element={<Results />} />
                 <Route path="/compare" element={<Compare />} />
                 <Route path="/stability" element={<Stability />} />
