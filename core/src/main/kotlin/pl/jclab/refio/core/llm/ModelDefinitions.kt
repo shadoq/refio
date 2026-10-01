@@ -72,6 +72,46 @@ object ModelDefinitions {
     val OPENAI_MODELS = mapOf(
 
         //
+        // GPT 6.1 (developers.openai.com/api/docs/models/gpt-6.1-sol, 2026-09-30)
+        // Sol is the only 6.1 variant the API serves; Astra and Luna stay on 6.
+        //
+        "gpt-6.1-sol" to ModelDefinition(
+            id = "gpt-6.1-sol",
+            name = "GPT-6.1 Sol",
+            provider = "openai",
+            description = "Near-Astra quality for complex coding and agentic work at Sol pricing",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION,
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 1_050_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 2.00,
+            costPer1MOutput = 10.00,
+            costPer1MCachedInput = 0.1,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.RESPONSES,
+            apiFormat = ApiFormat.RESPONSES,
+            paramMappings = mapOf(
+                "max_tokens" to "max_output_tokens"
+            ),
+            removeParams = listOf(
+                "frequency_penalty",
+                "presence_penalty",
+                "top_p",
+                "temperature"
+            ),
+            active = true
+        ),
+
+        //
         // GPT 6 (developers.openai.com/api/docs/pricing, 2026-09-27)
         // Short-context prices; above 272K input tokens OpenAI bills 2x input and 1.5x output.
         //
