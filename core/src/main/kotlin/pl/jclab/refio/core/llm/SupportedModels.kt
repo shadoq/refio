@@ -35,6 +35,8 @@ object SupportedModels {
      * Newer Codex generations (5.3+) still work on the direct API and stay listed.
      */
     private val OPENAI_SUPPORTED = setOf(
+        // GPT-6.1
+        "gpt-6.1-sol",
         // GPT-6
         "gpt-6-astra",
         "gpt-6-sol",

@@ -72,6 +72,46 @@ object ModelDefinitions {
     val OPENAI_MODELS = mapOf(
 
         //
+        // GPT 6.1 (developers.openai.com/api/docs/models/gpt-6.1-sol, 2026-09-30)
+        // Sol is the only 6.1 variant the API serves; Astra and Luna stay on 6.
+        //
+        "gpt-6.1-sol" to ModelDefinition(
+            id = "gpt-6.1-sol",
+            name = "GPT-6.1 Sol",
+            provider = "openai",
+            description = "Near-Astra quality for complex coding and agentic work at Sol pricing",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION,
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 1_050_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 2.00,
+            costPer1MOutput = 10.00,
+            costPer1MCachedInput = 0.1,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.RESPONSES,
+            apiFormat = ApiFormat.RESPONSES,
+            paramMappings = mapOf(
+                "max_tokens" to "max_output_tokens"
+            ),
+            removeParams = listOf(
+                "frequency_penalty",
+                "presence_penalty",
+                "top_p",
+                "temperature"
+            ),
+            active = true
+        ),
+
+        //
         // GPT 6 (developers.openai.com/api/docs/pricing, 2026-09-27)
         // Short-context prices; above 272K input tokens OpenAI bills 2x input and 1.5x output.
         //
@@ -2941,6 +2981,34 @@ object ModelDefinitions {
             maxOutputTokens = 32_768,
             costPer1MInput = 0.3,
             costPer1MOutput = 0.9,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.CHAT_COMPLETIONS,
+            apiFormat = ApiFormat.CHAT_COMPLETIONS,
+            active = true
+        ),
+        "glm-4.6v-flashx" to ModelDefinition(
+            id = "glm-4.6v-flashx",
+            name = "GLM-4.6V FlashX",
+            provider = "zai",
+            description = "Lightweight, high-speed, affordable GLM-4.6V multimodal (vision/video) model with tool use.",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.REASONING,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 128_000,
+            maxOutputTokens = 32_768,
+            costPer1MInput = 0.04,
+            costPer1MOutput = 0.4,
+            costPer1MCachedInput = 0.004,
             supportsVision = true,
             supportsReasoning = true,
             supportsStreaming = true,
