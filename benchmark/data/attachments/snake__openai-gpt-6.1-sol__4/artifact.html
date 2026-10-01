@@ -1,0 +1,965 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0b1020">
+  <title>Snake / Duel</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --background: #0b1020;
+      --panel: #131c30;
+      --text: #edf3ff;
+      --muted: #91a0bc;
+      --mint: #6af0bc;
+      --violet: #b59aff;
+      --orange: #ffad66;
+      --border: rgba(174, 195, 235, 0.13);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(ellipse at 15% 0%, rgba(106, 240, 188, 0.07), transparent 45%),
+        radial-gradient(ellipse at 95% 40%, rgba(181, 154, 255, 0.08), transparent 45%),
+        var(--background);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    button { font: inherit; }
+
+    button:focus-visible {
+      outline: 3px solid var(--orange);
+      outline-offset: 4px;
+    }
+
+    button {
+      cursor: pointer;
+      transition: background 150ms ease, border-color 150ms ease, transform 150ms ease;
+    }
+
+    button:hover { transform: translateY(-1px); }
+    button:active { transform: translateY(0); }
+    [hidden] { display: none !important; }
+
+    .app {
+      width: min(100% - 32px, 620px);
+      margin: 0 auto;
+      padding: 32px 0 24px;
+    }
+
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 22px;
+      gap: 12px;
+    }
+
+    .eyebrow {
+      margin: 0 0 7px;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.24em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(27px, 6vw, 38px);
+      font-weight: 850;
+      letter-spacing: -0.065em;
+      line-height: 1;
+    }
+
+    h1 span { color: var(--mint); padding: 0 5px; }
+
+    .badge {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 8px 11px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      white-space: nowrap;
+    }
+
+    .badge::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--mint);
+      box-shadow: 0 0 12px rgba(106, 240, 188, 0.45);
+    }
+
+    .scores {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .score-card {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 15px 17px;
+      background: linear-gradient(135deg, rgba(106, 240, 188, 0.06), transparent), var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+    }
+
+    .score-card.second {
+      background: linear-gradient(135deg, rgba(181, 154, 255, 0.07), transparent), var(--panel);
+    }
+
+    .player-name {
+      color: var(--mint);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .second .player-name { color: var(--violet); }
+
+    .player-detail {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .score {
+      color: var(--mint);
+      font-size: 30px;
+      font-weight: 750;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -0.06em;
+    }
+
+    .second .score { color: var(--violet); }
+
+    .board {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 1;
+      overflow: hidden;
+      border: 1px solid rgba(174, 195, 235, 0.18);
+      border-radius: 18px;
+      background: #0c1424;
+      box-shadow: 0 22px 70px rgba(0, 0, 0, 0.32);
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 22px;
+      overflow-y: auto;
+      background: rgba(7, 12, 24, 0.76);
+      backdrop-filter: blur(6px);
+    }
+
+    .dialog {
+      width: min(100%, 380px);
+      text-align: center;
+    }
+
+    .dialog .eyebrow { color: var(--mint); }
+
+    h2 {
+      margin: 9px 0 10px;
+      font-size: clamp(25px, 5vw, 36px);
+      letter-spacing: -0.05em;
+      line-height: 1.1;
+    }
+
+    .description {
+      margin: 0 0 20px;
+      color: #b0bdd2;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .mode-options {
+      display: grid;
+      gap: 8px;
+      margin-bottom: 17px;
+    }
+
+    .mode {
+      width: 100%;
+      padding: 12px 15px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: rgba(19, 28, 48, 0.85);
+      color: var(--text);
+      text-align: left;
+    }
+
+    .mode strong { display: block; font-size: 13px; }
+    .mode small { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
+
+    .mode[aria-pressed="true"] {
+      border-color: var(--mint);
+      background: rgba(106, 240, 188, 0.1);
+    }
+
+    .primary, .secondary {
+      min-height: 44px;
+      width: 100%;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 750;
+    }
+
+    .primary {
+      border: 1px solid var(--mint);
+      background: var(--mint);
+      color: #0a231b;
+    }
+
+    .primary:hover { background: #95ffd3; }
+
+    .secondary {
+      margin-top: 9px;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      color: var(--text);
+    }
+
+    .hint {
+      margin: 12px 0 0;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .results {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin: 20px 0;
+    }
+
+    .result {
+      padding: 14px;
+      border-radius: 12px;
+      background: rgba(19, 28, 48, 0.9);
+      border: 1px solid var(--border);
+    }
+
+    .result span { display: block; color: var(--mint); font-size: 11px; }
+    .result:last-child span { color: var(--violet); }
+    .result strong { display: block; margin-top: 5px; font-size: 28px; }
+
+    .toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-top: 15px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .toolbar button {
+      padding: 7px 10px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .shortcuts {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    kbd {
+      font: inherit;
+      color: #d6e1f4;
+      font-weight: 650;
+    }
+
+    .rules {
+      margin: 15px 0 0;
+      color: #7787a4;
+      text-align: center;
+      font-size: 11px;
+      line-height: 1.7;
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    @media (max-width: 440px) {
+      .app { width: calc(100% - 20px); padding-top: 20px; }
+      .header { margin-bottom: 16px; }
+      .badge { font-size: 9px; padding: 7px 9px; }
+      .score-card { padding: 12px; }
+      .overlay { padding: 15px; }
+      .description { margin-bottom: 12px; font-size: 12px; }
+      .mode { padding: 9px 12px; }
+      .mode-options { gap: 6px; margin-bottom: 12px; }
+      .dialog h2 { margin-top: 5px; }
+      .dialog .hint { margin-top: 8px; }
+      .toolbar { gap: 6px; font-size: 10px; }
+      .shortcuts { gap: 7px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      button { transition: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header class="header">
+      <div>
+        <p class="eyebrow">The classic. With a rival.</p>
+        <h1>SNAKE <span>/</span> DUEL</h1>
+      </div>
+      <div class="badge">30 × 30 ARENA</div>
+    </header>
+
+    <section class="scores" aria-label="Live scores" aria-live="polite" aria-atomic="true">
+      <div class="score-card">
+        <div>
+          <div class="player-name">Player one</div>
+          <div class="player-detail" id="detail-one">Human · WASD</div>
+        </div>
+        <div class="score" id="score-one">0</div>
+      </div>
+      <div class="score-card second">
+        <div>
+          <div class="player-name">Player two</div>
+          <div class="player-detail" id="detail-two">Human · Arrow keys</div>
+        </div>
+        <div class="score" id="score-two">0</div>
+      </div>
+    </section>
+
+    <div class="board">
+      <canvas id="arena" width="600" height="600" role="img" aria-label="Snake duel arena: a 30 by 30 grid, mint player one, violet player two, and orange food."></canvas>
+
+      <section class="overlay" id="menu-overlay" aria-labelledby="menu-title">
+        <div class="dialog">
+          <p class="eyebrow">Choose your competition</p>
+          <h2 id="menu-title">Two snakes. One arena.</h2>
+          <p class="description">Chase the orange food. Outlast your rival.<br>One wrong turn ends the round.</p>
+          <div class="mode-options" role="group" aria-label="Game mode">
+            <button class="mode" data-mode="human-human" aria-pressed="true">
+              <strong>Human vs Human</strong>
+              <small>Local duel · P1 WASD / P2 arrow keys</small>
+            </button>
+            <button class="mode" data-mode="cpu-human" aria-pressed="false">
+              <strong>CPU vs Human</strong>
+              <small>Challenge the CPU · You are P2, arrow keys</small>
+            </button>
+            <button class="mode" data-mode="cpu-cpu" aria-pressed="false">
+              <strong>CPU vs CPU</strong>
+              <small>Sit back · Two food-seeking rivals</small>
+            </button>
+          </div>
+          <button class="primary" id="start-button">Start duel</button>
+          <p class="hint">Or press Enter to start</p>
+        </div>
+      </section>
+
+      <section class="overlay" id="pause-overlay" aria-labelledby="pause-title" hidden>
+        <div class="dialog">
+          <p class="eyebrow">Take a breath</p>
+          <h2 id="pause-title">Game paused</h2>
+          <p class="description">Your next move can wait.</p>
+          <button class="primary" id="resume-button">Resume duel</button>
+          <p class="hint">Press Space to resume · Escape for menu</p>
+        </div>
+      </section>
+
+      <section class="overlay" id="over-overlay" aria-labelledby="over-title" hidden>
+        <div class="dialog">
+          <p class="eyebrow">Round complete</p>
+          <h2 id="over-title">Player one wins</h2>
+          <p class="description" id="over-reason"></p>
+          <div class="results">
+            <div class="result"><span>PLAYER ONE</span><strong id="result-one">0</strong></div>
+            <div class="result"><span>PLAYER TWO</span><strong id="result-two">0</strong></div>
+          </div>
+          <button class="primary" id="again-button">Play again</button>
+          <button class="secondary" id="menu-button">Choose a mode</button>
+          <p class="hint">Enter or R to restart</p>
+        </div>
+      </section>
+    </div>
+
+    <div class="toolbar">
+      <div class="shortcuts">
+        <span><kbd>Space</kbd> pause</span>
+        <span><kbd>R</kbd> restart</span>
+        <span><kbd>Esc</kbd> menu</span>
+      </div>
+      <button id="toolbar-menu">Menu</button>
+    </div>
+    <p class="rules">Food = +10 points &amp; one segment. Walls and bodies end the round.<br>Survival wins, not score — unless the board is full.</p>
+    <div class="sr-only" id="status" role="status" aria-live="polite" aria-atomic="true"></div>
+  </main>
+
+  <script>
+    "use strict";
+
+    const GRID = 30;
+    const CELL = 20;
+    const SIZE = GRID * CELL;
+    const TICK = 125;
+    const DIRECTIONS = [
+      { x: 0, y: -1 },
+      { x: 1, y: 0 },
+      { x: 0, y: 1 },
+      { x: -1, y: 0 }
+    ];
+    const COLORS = ["#6af0bc", "#b59aff"];
+    const canvas = document.getElementById("arena");
+    const context = canvas.getContext("2d");
+    const menuOverlay = document.getElementById("menu-overlay");
+    const pauseOverlay = document.getElementById("pause-overlay");
+    const overOverlay = document.getElementById("over-overlay");
+    const scoreElements = [
+      document.getElementById("score-one"),
+      document.getElementById("score-two")
+    ];
+    const detailElements = [
+      document.getElementById("detail-one"),
+      document.getElementById("detail-two")
+    ];
+    const modeButtons = Array.from(document.querySelectorAll(".mode"));
+    const statusElement = document.getElementById("status");
+
+    let selectedMode = "human-human";
+    let currentMode = "human-human";
+    let state = "menu";
+    let snakes = [];
+    let food = null;
+    let lastTime = null;
+    let accumulator = 0;
+
+    function keyOf(point) {
+      return point.y * GRID + point.x;
+    }
+
+    function inside(point) {
+      return point.x >= 0 && point.x < GRID && point.y >= 0 && point.y < GRID;
+    }
+
+    function samePoint(a, b) {
+      return a.x === b.x && a.y === b.y;
+    }
+
+    function isReverse(a, b) {
+      return a.x === -b.x && a.y === -b.y;
+    }
+
+    function nextPoint(point, direction) {
+      return { x: point.x + direction.x, y: point.y + direction.y };
+    }
+
+    function announce(message) {
+      statusElement.textContent = message;
+    }
+
+    function resetClock() {
+      lastTime = null;
+      accumulator = 0;
+    }
+
+    function setScreen(nextState) {
+      state = nextState;
+      menuOverlay.hidden = state !== "menu";
+      pauseOverlay.hidden = state !== "paused";
+      overOverlay.hidden = state !== "over";
+      resetClock();
+    }
+
+    function updateScores() {
+      snakes.forEach((snake, index) => {
+        const text = String(snake.score);
+        if (scoreElements[index].textContent !== text) {
+          scoreElements[index].textContent = text;
+        }
+      });
+    }
+
+    function updatePlayerTypes(mode) {
+      detailElements[0].textContent = mode === "human-human" ? "Human · WASD" : "CPU · Autopilot";
+      detailElements[1].textContent = mode === "cpu-cpu" ? "CPU · Autopilot" : "Human · Arrow keys";
+    }
+
+    function createSnakes(mode) {
+      return [
+        {
+          body: [{ x: 8, y: 14 }, { x: 7, y: 14 }, { x: 6, y: 14 }, { x: 5, y: 14 }],
+          direction: DIRECTIONS[1],
+          queue: [],
+          cpu: mode !== "human-human",
+          score: 0,
+          dead: false
+        },
+        {
+          body: [{ x: 21, y: 15 }, { x: 22, y: 15 }, { x: 23, y: 15 }, { x: 24, y: 15 }],
+          direction: DIRECTIONS[3],
+          queue: [],
+          cpu: mode === "cpu-cpu",
+          score: 0,
+          dead: false
+        }
+      ];
+    }
+
+    function spawnFood() {
+      const occupied = new Set(snakes.flatMap(snake => snake.body.map(keyOf)));
+      const empty = [];
+      for (let y = 0; y < GRID; y++) {
+        for (let x = 0; x < GRID; x++) {
+          const point = { x, y };
+          if (!occupied.has(keyOf(point))) empty.push(point);
+        }
+      }
+      food = empty.length ? empty[Math.floor(Math.random() * empty.length)] : null;
+      return food !== null;
+    }
+
+    function startGame() {
+      currentMode = selectedMode;
+      snakes = createSnakes(currentMode);
+      spawnFood();
+      updatePlayerTypes(currentMode);
+      updateScores();
+      setScreen("running");
+      if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+      announce("Duel started. Player one " + (snakes[0].cpu ? "CPU" : "WASD") +
+        ". Player two " + (snakes[1].cpu ? "CPU" : "arrow keys") + ".");
+      draw();
+    }
+
+    function restartGame() {
+      selectedMode = currentMode;
+      syncModeButtons();
+      startGame();
+    }
+
+    function syncModeButtons() {
+      modeButtons.forEach(button => {
+        button.setAttribute("aria-pressed", String(button.dataset.mode === selectedMode));
+      });
+    }
+
+    function openMenu() {
+      selectedMode = currentMode;
+      syncModeButtons();
+      updatePlayerTypes(selectedMode);
+      snakes.forEach(snake => { snake.queue = []; });
+      setScreen("menu");
+      announce("Menu opened. Select a mode and press Enter to start.");
+      document.getElementById("start-button").focus();
+    }
+
+    function togglePause() {
+      if (state === "running") {
+        snakes.forEach(snake => { snake.queue = []; });
+        setScreen("paused");
+        announce("Game paused.");
+        document.getElementById("resume-button").focus();
+      } else if (state === "paused") {
+        setScreen("running");
+        if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+        announce("Game resumed.");
+      }
+    }
+
+    function queueDirection(index, direction) {
+      const snake = snakes[index];
+      if (state !== "running" || snake.cpu || snake.queue.length >= 2) return;
+      const previous = snake.queue.length ? snake.queue[snake.queue.length - 1] : snake.direction;
+      if (isReverse(direction, previous) || samePoint(direction, previous)) return;
+      snake.queue.push(direction);
+    }
+
+    function reachableArea(start, blocked) {
+      const visited = new Set([keyOf(start)]);
+      const queue = [start];
+      for (let position = 0; position < queue.length; position++) {
+        for (const direction of DIRECTIONS) {
+          const next = nextPoint(queue[position], direction);
+          if (!inside(next)) continue;
+          const key = keyOf(next);
+          if (blocked.has(key) || visited.has(key)) continue;
+          visited.add(key);
+          queue.push(next);
+        }
+      }
+      return visited.size;
+    }
+
+    function chooseCpuDirection(index) {
+      const snake = snakes[index];
+      const opponent = snakes[1 - index];
+      const head = snake.body[0];
+      const occupied = new Set(snakes.flatMap(item => item.body.map(keyOf)));
+      const danger = new Set();
+
+      for (const direction of DIRECTIONS) {
+        if (isReverse(direction, opponent.direction)) continue;
+        const target = nextPoint(opponent.body[0], direction);
+        if (inside(target)) danger.add(keyOf(target));
+      }
+
+      const legal = DIRECTIONS.filter(direction => {
+        const target = nextPoint(head, direction);
+        return !isReverse(direction, snake.direction) &&
+          inside(target) && !occupied.has(keyOf(target));
+      });
+
+      if (!legal.length) return snake.direction;
+
+      const safer = legal.filter(direction => !danger.has(keyOf(nextPoint(head, direction))));
+      const candidates = safer.length ? safer : legal;
+      const visited = new Set([keyOf(head)]);
+      const queue = [];
+
+      for (const direction of candidates) {
+        const point = nextPoint(head, direction);
+        visited.add(keyOf(point));
+        queue.push({ point, first: direction });
+      }
+
+      for (let position = 0; position < queue.length; position++) {
+        const node = queue[position];
+        if (food && samePoint(node.point, food)) return node.first;
+
+        for (const direction of DIRECTIONS) {
+          const point = nextPoint(node.point, direction);
+          if (!inside(point)) continue;
+          const key = keyOf(point);
+          if (occupied.has(key) || visited.has(key)) continue;
+          visited.add(key);
+          queue.push({ point, first: node.first });
+        }
+      }
+
+      let bestDirection = candidates[0];
+      let bestArea = -1;
+      let bestDistance = Infinity;
+      for (const direction of candidates) {
+        const point = nextPoint(head, direction);
+        const area = reachableArea(point, occupied);
+        const distance = food ? Math.abs(point.x - food.x) + Math.abs(point.y - food.y) : 0;
+        if (area > bestArea || (area === bestArea && distance < bestDistance)) {
+          bestArea = area;
+          bestDistance = distance;
+          bestDirection = direction;
+        }
+      }
+      return bestDirection;
+    }
+
+    function finishGame(title, reason) {
+      setScreen("over");
+      document.getElementById("over-title").textContent = title;
+      document.getElementById("over-reason").textContent = reason;
+      document.getElementById("result-one").textContent = String(snakes[0].score);
+      document.getElementById("result-two").textContent = String(snakes[1].score);
+      announce(title + ". " + reason + " Final scores: " + snakes[0].score + " and " + snakes[1].score + ".");
+      document.getElementById("again-button").focus();
+    }
+
+    function tick() {
+      const directions = snakes.map((snake, index) => {
+        if (snake.cpu) return chooseCpuDirection(index);
+        return snake.queue.length ? snake.queue.shift() : snake.direction;
+      });
+      const targets = snakes.map((snake, index) => nextPoint(snake.body[0], directions[index]));
+      const growing = targets.map(target => food !== null && samePoint(target, food));
+      const occupied = new Set();
+      const causes = ["", ""];
+
+      snakes.forEach((snake, index) => {
+        const retainedLength = snake.body.length - (growing[index] ? 0 : 1);
+        for (let i = 0; i < retainedLength; i++) occupied.add(keyOf(snake.body[i]));
+      });
+
+      targets.forEach((target, index) => {
+        if (!inside(target)) causes[index] = "hit a wall";
+        else if (occupied.has(keyOf(target))) causes[index] = "hit a snake body";
+      });
+
+      const headClash = samePoint(targets[0], targets[1]);
+      const headSwap = samePoint(targets[0], snakes[1].body[0]) &&
+        samePoint(targets[1], snakes[0].body[0]);
+
+      if (headClash || headSwap) {
+        causes[0] = headClash ? "met head-on" : "swapped heads";
+        causes[1] = causes[0];
+      }
+
+      let foodEaten = false;
+      snakes.forEach((snake, index) => {
+        snake.direction = directions[index];
+        snake.dead = Boolean(causes[index]);
+        if (snake.dead) return;
+        snake.body.unshift(targets[index]);
+        if (growing[index]) {
+          snake.score += 10;
+          foodEaten = true;
+        } else {
+          snake.body.pop();
+        }
+      });
+      updateScores();
+
+      if (snakes.some(snake => snake.dead)) {
+        if (foodEaten) food = null;
+        const title = snakes[0].dead && snakes[1].dead
+          ? "It's a draw"
+          : "Player " + (snakes[0].dead ? "two" : "one") + " wins";
+        let reason;
+        if (headClash) reason = "Both snakes reached the same square.";
+        else if (headSwap) reason = "The snakes crossed head-to-head.";
+        else reason = causes.map((cause, index) => cause ? "Player " + (index + 1) + " " + cause + "." : "").filter(Boolean).join(" ");
+        finishGame(title, reason);
+      } else if (foodEaten && !spawnFood()) {
+        const title = snakes[0].score === snakes[1].score
+          ? "It's a draw"
+          : "Player " + (snakes[0].score > snakes[1].score ? "one" : "two") + " wins";
+        finishGame(title, "The board is full. This round is decided by score.");
+      }
+      draw();
+    }
+
+    function roundedRect(x, y, width, height, radius) {
+      const r = Math.min(radius, width / 2, height / 2);
+      context.beginPath();
+      context.moveTo(x + r, y);
+      context.arcTo(x + width, y, x + width, y + height, r);
+      context.arcTo(x + width, y + height, x, y + height, r);
+      context.arcTo(x, y + height, x, y, r);
+      context.arcTo(x, y, x + width, y, r);
+      context.closePath();
+    }
+
+    function draw() {
+      context.clearRect(0, 0, SIZE, SIZE);
+      context.fillStyle = "#0c1424";
+      context.fillRect(0, 0, SIZE, SIZE);
+
+      context.strokeStyle = "rgba(151, 176, 216, 0.055)";
+      context.lineWidth = 1;
+      context.beginPath();
+      for (let i = 1; i < GRID; i++) {
+        const position = i * CELL + 0.5;
+        context.moveTo(position, 0);
+        context.lineTo(position, SIZE);
+        context.moveTo(0, position);
+        context.lineTo(SIZE, position);
+      }
+      context.stroke();
+
+      if (food) {
+        const x = food.x * CELL + CELL / 2;
+        const y = food.y * CELL + CELL / 2;
+        context.save();
+        context.shadowColor = "#ffad66";
+        context.shadowBlur = 19;
+        context.fillStyle = "#ffad66";
+        context.beginPath();
+        context.arc(x, y, 6.5, 0, Math.PI * 2);
+        context.fill();
+        context.restore();
+        context.fillStyle = "#ffe0ba";
+        context.beginPath();
+        context.arc(x - 1.8, y - 2, 2, 0, Math.PI * 2);
+        context.fill();
+      }
+
+      snakes.forEach((snake, index) => {
+        snake.body.forEach((point, segment) => {
+          context.globalAlpha = snake.dead ? 0.5 : segment === 0 ? 1 : 0.82;
+          context.fillStyle = COLORS[index];
+          roundedRect(point.x * CELL + 1.5, point.y * CELL + 1.5, CELL - 3, CELL - 3, segment === 0 ? 5 : 4);
+          context.fill();
+        });
+        context.globalAlpha = 1;
+
+        const head = snake.body[0];
+        const direction = snake.direction;
+        const centerX = head.x * CELL + CELL / 2;
+        const centerY = head.y * CELL + CELL / 2;
+        const perpendicular = { x: -direction.y, y: direction.x };
+        context.fillStyle = "#101b2b";
+        for (const side of [-1, 1]) {
+          const eyeX = centerX + direction.x * 4 + perpendicular.x * 4 * side;
+          const eyeY = centerY + direction.y * 4 + perpendicular.y * 4 * side;
+          context.beginPath();
+          context.arc(eyeX, eyeY, 2.1, 0, Math.PI * 2);
+          context.fill();
+        }
+      });
+    }
+
+    function resizeCanvas() {
+      const ratio = Math.min(window.devicePixelRatio || 1, 3);
+      const pixels = Math.round(canvas.getBoundingClientRect().width * ratio);
+      if (!pixels) return;
+      canvas.width = pixels;
+      canvas.height = pixels;
+      context.setTransform(pixels / SIZE, 0, 0, pixels / SIZE, 0, 0);
+      draw();
+    }
+
+    function frame(time) {
+      if (state === "running" && !document.hidden) {
+        if (lastTime !== null) {
+          accumulator += Math.min(time - lastTime, TICK * 2);
+          let steps = 0;
+          while (accumulator >= TICK && state === "running" && steps < 2) {
+            accumulator -= TICK;
+            tick();
+            steps++;
+          }
+        }
+        lastTime = state === "running" ? time : null;
+      } else {
+        resetClock();
+      }
+      requestAnimationFrame(frame);
+    }
+
+    const movementKeys = {
+      w: [0, DIRECTIONS[0]],
+      d: [0, DIRECTIONS[1]],
+      s: [0, DIRECTIONS[2]],
+      a: [0, DIRECTIONS[3]],
+      arrowup: [1, DIRECTIONS[0]],
+      arrowright: [1, DIRECTIONS[1]],
+      arrowdown: [1, DIRECTIONS[2]],
+      arrowleft: [1, DIRECTIONS[3]]
+    };
+
+    document.addEventListener("keydown", event => {
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      const key = event.key.toLowerCase();
+      const control = movementKeys[key];
+      const focusedButton = event.target instanceof Element && event.target.closest("button");
+      const menuArrow = state === "menu" && key.startsWith("arrow");
+
+      if (control && !menuArrow) {
+        event.preventDefault();
+        queueDirection(control[0], control[1]);
+        return;
+      }
+
+      if (key === "r") {
+        event.preventDefault();
+        if (!event.repeat) {
+          if (state === "menu") startGame();
+          else restartGame();
+        }
+      } else if (key === "escape") {
+        event.preventDefault();
+        if (!event.repeat) openMenu();
+      } else if (key === "enter") {
+        if (focusedButton) return;
+        event.preventDefault();
+        if (!event.repeat) {
+          if (state === "menu") startGame();
+          else restartGame();
+        }
+      } else if (key === " ") {
+        if (focusedButton && (state === "menu" || state === "over")) return;
+        event.preventDefault();
+        if (!event.repeat) togglePause();
+      } else if (menuArrow) {
+        event.preventDefault();
+        const focusedIndex = modeButtons.indexOf(document.activeElement);
+        const selectedIndex = modeButtons.findIndex(button => button.dataset.mode === selectedMode);
+        const index = focusedIndex >= 0 ? focusedIndex : selectedIndex;
+        const step = key === "arrowup" || key === "arrowleft" ? -1 : 1;
+        const button = modeButtons[(index + step + modeButtons.length) % modeButtons.length];
+        button.focus();
+        button.click();
+      }
+    });
+
+    modeButtons.forEach(button => {
+      button.addEventListener("click", () => {
+        selectedMode = button.dataset.mode;
+        syncModeButtons();
+        updatePlayerTypes(selectedMode);
+      });
+    });
+
+    document.getElementById("start-button").addEventListener("click", startGame);
+    document.getElementById("again-button").addEventListener("click", restartGame);
+    document.getElementById("resume-button").addEventListener("click", togglePause);
+    document.getElementById("menu-button").addEventListener("click", openMenu);
+    document.getElementById("toolbar-menu").addEventListener("click", openMenu);
+
+    document.addEventListener("visibilitychange", () => {
+      resetClock();
+      if (document.hidden && state === "running") {
+        setScreen("paused");
+        snakes.forEach(snake => { snake.queue = []; });
+        announce("Game paused while the tab is hidden. Press Space to resume.");
+      }
+    });
+
+    window.addEventListener("blur", () => {
+      if (state === "running") {
+        setScreen("paused");
+        snakes.forEach(snake => { snake.queue = []; });
+        announce("Game paused. Press Space to resume.");
+      }
+    });
+
+    snakes = createSnakes(selectedMode);
+    spawnFood();
+    resizeCanvas();
+    if (typeof ResizeObserver !== "undefined") {
+      const resizeObserver = new ResizeObserver(resizeCanvas);
+      resizeObserver.observe(canvas);
+    } else {
+      window.addEventListener("resize", resizeCanvas);
+    }
+    requestAnimationFrame(frame);
+  </script>
+</body>
+</html>

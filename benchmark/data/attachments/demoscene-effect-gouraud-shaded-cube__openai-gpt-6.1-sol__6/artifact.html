@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#070d18">
+  <title>Gouraud / Software Renderer</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      background: #070d18;
+      color: #d9f4ff;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .header {
+      position: fixed;
+      top: 30px;
+      left: 32px;
+      right: 32px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      pointer-events: none;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 12px;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      line-height: 1.6;
+    }
+
+    .subtitle {
+      margin-top: 7px;
+      color: #637d92;
+      font-size: 10px;
+      letter-spacing: 0.08em;
+    }
+
+    .metrics {
+      text-align: right;
+      font-size: 11px;
+      white-space: nowrap;
+      line-height: 1.8;
+    }
+
+    #fps { color: #79dfff; }
+    #status { color: #637d92; font-size: 10px; }
+
+    .controls {
+      position: fixed;
+      bottom: 30px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 10px;
+    }
+
+    button {
+      border: 1px solid #294155;
+      border-radius: 8px;
+      padding: 12px 16px;
+      background: rgba(12, 23, 37, 0.9);
+      color: #adc9db;
+      font: inherit;
+      font-size: 11px;
+      white-space: nowrap;
+      cursor: pointer;
+      transition: border-color 150ms, background 150ms, color 150ms;
+    }
+
+    button:hover {
+      border-color: #5db9d5;
+      color: #e5faff;
+    }
+
+    button[aria-pressed="true"] {
+      background: #103347;
+      border-color: #4ac6e9;
+      color: #9aecff;
+    }
+
+    button:focus-visible {
+      outline: 2px solid #92eaff;
+      outline-offset: 4px;
+    }
+
+    .key {
+      margin-left: 10px;
+      color: #638398;
+      font-size: 10px;
+    }
+
+    @media (max-width: 540px) {
+      .header { top: 20px; left: 18px; right: 18px; }
+      h1 { font-size: 10px; letter-spacing: 0.1em; }
+      .subtitle { font-size: 9px; }
+      .controls { bottom: 22px; }
+      button { padding: 12px 14px; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="canvas" aria-label="Animated cyan cube with software Gouraud shading and a moving point light"></canvas>
+
+  <header class="header">
+    <div>
+      <h1>GOURAUD / SOFTWARE RENDERER</h1>
+      <div class="subtitle">CANVAS 2D · PER-VERTEX LIGHTING</div>
+    </div>
+    <div class="metrics">
+      <div id="fps">— FPS</div>
+      <div id="status" role="status">RUNNING</div>
+    </div>
+  </header>
+
+  <nav class="controls" aria-label="Animation controls">
+    <button id="wireframe" type="button" aria-pressed="false" aria-keyshortcuts="W">
+      Wireframe<span class="key" aria-hidden="true">W</span>
+    </button>
+    <button id="pause" type="button" aria-pressed="false" aria-keyshortcuts="P">
+      Pause<span class="key" aria-hidden="true">P</span>
+    </button>
+  </nav>
+
+  <script>
+    'use strict';
+
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const raster = document.createElement('canvas');
+    const rasterCtx = raster.getContext('2d');
+    const fpsReadout = document.getElementById('fps');
+    const statusReadout = document.getElementById('status');
+    const wireframeButton = document.getElementById('wireframe');
+    const pauseButton = document.getElementById('pause');
+
+    const vertices = [
+      [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
+      [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]
+    ];
+
+    // Each quad is wound outward; its normal follows the same winding.
+    const faces = [
+      { indices: [0, 3, 2, 1], normal: [0, 0, -1], color: [36, 190, 238] },
+      { indices: [4, 5, 6, 7], normal: [0, 0, 1], color: [36, 128, 223] },
+      { indices: [0, 4, 7, 3], normal: [-1, 0, 0], color: [30, 155, 224] },
+      { indices: [1, 2, 6, 5], normal: [1, 0, 0], color: [39, 179, 242] },
+      { indices: [0, 1, 5, 4], normal: [0, -1, 0], color: [32, 120, 201] },
+      { indices: [3, 7, 6, 2], normal: [0, 1, 0], color: [65, 211, 244] }
+    ];
+
+    let width, height, rasterWidth, rasterHeight, focalLength, image, depth;
+    let wireframe = false;
+    let paused = false;
+    let time = 0;
+    let lastTimestamp = null;
+    let fpsStart = null;
+    let fpsFrames = 0;
+
+    function resize() {
+      width = Math.max(1, window.innerWidth);
+      height = Math.max(1, window.innerHeight);
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = Math.round(width * dpr);
+      canvas.height = Math.round(height * dpr);
+      ctx.setTransform(canvas.width / width, 0, 0, canvas.height / height, 0, 0);
+
+      const scale = Math.min(1, 800 / width, 600 / height);
+      rasterWidth = Math.max(1, Math.round(width * scale));
+      rasterHeight = Math.max(1, Math.round(height * scale));
+      raster.width = rasterWidth;
+      raster.height = rasterHeight;
+      focalLength = Math.min(rasterWidth, rasterHeight) * 1.55;
+      image = rasterCtx.createImageData(rasterWidth, rasterHeight);
+      depth = new Float32Array(rasterWidth * rasterHeight);
+    }
+
+    function multiply(matrix, vector) {
+      return [
+        matrix[0] * vector[0] + matrix[1] * vector[1] + matrix[2] * vector[2],
+        matrix[3] * vector[0] + matrix[4] * vector[1] + matrix[5] * vector[2],
+        matrix[6] * vector[0] + matrix[7] * vector[1] + matrix[8] * vector[2]
+      ];
+    }
+
+    function rotationMatrices(t) {
+      const x = t * 0.43 + 0.35;
+      const y = t * 0.61 + 0.55;
+      const z = t * 0.19 + 0.12;
+      const cx = Math.cos(x), sx = Math.sin(x);
+      const cy = Math.cos(y), sy = Math.sin(y);
+      const cz = Math.cos(z), sz = Math.sin(z);
+
+      // Explicit right-handed X, Y, Z matrices, applied in that order.
+      return [
+        [1, 0, 0, 0, cx, -sx, 0, sx, cx],
+        [cy, 0, sy, 0, 1, 0, -sy, 0, cy],
+        [cz, -sz, 0, sz, cz, 0, 0, 0, 1]
+      ];
+    }
+
+    function rotate(vector, matrices) {
+      return multiply(matrices[2], multiply(matrices[1], multiply(matrices[0], vector)));
+    }
+
+    function project(position) {
+      return {
+        x: rasterWidth * 0.5 + focalLength * position[0] / position[2],
+        y: rasterHeight * 0.5 - focalLength * position[1] / position[2],
+        invZ: 1 / position[2]
+      };
+    }
+
+    function cornerColor(position, normal, baseColor, light) {
+      const dx = light[0] - position[0];
+      const dy = light[1] - position[1];
+      const dz = light[2] - position[2];
+      const distance = Math.hypot(dx, dy, dz);
+      // Lambert is evaluated only at face corners, using a flat rotated normal.
+      const lambert = Math.max(0, (normal[0] * dx + normal[1] * dy + normal[2] * dz) / distance);
+      const intensity = 0.23 + 0.98 * lambert / (1 + 0.035 * distance * distance);
+      return baseColor.map(channel => channel * intensity);
+    }
+
+    function rasterize(a, b, c) {
+      const denominator = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
+      if (Math.abs(denominator) < 1e-8) return;
+
+      const minX = Math.max(0, Math.ceil(Math.min(a.x, b.x, c.x) - 0.5));
+      const maxX = Math.min(rasterWidth - 1, Math.floor(Math.max(a.x, b.x, c.x) - 0.5));
+      const minY = Math.max(0, Math.ceil(Math.min(a.y, b.y, c.y) - 0.5));
+      const maxY = Math.min(rasterHeight - 1, Math.floor(Math.max(a.y, b.y, c.y) - 0.5));
+      const pixels = image.data;
+
+      const az = a.invZ, bz = b.invZ, cz = c.invZ;
+      const ar = a.color[0] * az, ag = a.color[1] * az, ab = a.color[2] * az;
+      const br = b.color[0] * bz, bg = b.color[1] * bz, bb = b.color[2] * bz;
+      const cr = c.color[0] * cz, cg = c.color[1] * cz, cb = c.color[2] * cz;
+
+      // Signed barycentric ratios work for either winding; sample pixel centers.
+      for (let y = minY; y <= maxY; y++) {
+        for (let x = minX; x <= maxX; x++) {
+          const px = x + 0.5;
+          const py = y + 0.5;
+          const wa = ((b.y - c.y) * (px - c.x) + (c.x - b.x) * (py - c.y)) / denominator;
+          const wb = ((c.y - a.y) * (px - c.x) + (a.x - c.x) * (py - c.y)) / denominator;
+          const wc = 1 - wa - wb;
+          if (wa < -1e-7 || wb < -1e-7 || wc < -1e-7) continue;
+
+          const invZ = wa * az + wb * bz + wc * cz;
+          const index = y * rasterWidth + x;
+          // Negative reciprocal depth permits an Infinity clear and a less-than test.
+          if (-invZ >= depth[index]) continue;
+          depth[index] = -invZ;
+
+          // Perspective-correct RGB: interpolate color/z and 1/z, then divide.
+          const offset = index * 4;
+          pixels[offset] = (wa * ar + wb * br + wc * cr) / invZ;
+          pixels[offset + 1] = (wa * ag + wb * bg + wc * cg) / invZ;
+          pixels[offset + 2] = (wa * ab + wb * bb + wc * cb) / invZ;
+          pixels[offset + 3] = 255;
+        }
+      }
+    }
+
+    function drawBackground() {
+      ctx.clearRect(0, 0, width, height);
+      const background = ctx.createRadialGradient(
+        width * 0.5, height * 0.45, 0,
+        width * 0.5, height * 0.5, Math.max(width, height) * 0.75
+      );
+      background.addColorStop(0, '#12273a');
+      background.addColorStop(0.55, '#0a1423');
+      background.addColorStop(1, '#050910');
+      ctx.fillStyle = background;
+      ctx.fillRect(0, 0, width, height);
+
+      const spacing = 48;
+      ctx.beginPath();
+      for (let x = width * 0.5 % spacing; x < width; x += spacing) {
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, height);
+      }
+      for (let y = height * 0.5 % spacing; y < height; y += spacing) {
+        ctx.moveTo(0, y);
+        ctx.lineTo(width, y);
+      }
+      ctx.strokeStyle = 'rgba(97, 166, 204, 0.055)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      const vignette = ctx.createRadialGradient(
+        width * 0.5, height * 0.5, Math.min(width, height) * 0.2,
+        width * 0.5, height * 0.5, Math.max(width, height) * 0.65
+      );
+      vignette.addColorStop(0, 'rgba(0, 0, 0, 0)');
+      vignette.addColorStop(1, 'rgba(0, 0, 0, 0.6)');
+      ctx.fillStyle = vignette;
+      ctx.fillRect(0, 0, width, height);
+    }
+
+    function drawWireframe(triangles) {
+      ctx.save();
+      ctx.scale(width / rasterWidth, height / rasterHeight);
+      ctx.strokeStyle = 'rgba(181, 243, 255, 0.72)';
+      ctx.lineWidth = rasterWidth / width;
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      for (const triangle of triangles) {
+        ctx.moveTo(triangle[0].x, triangle[0].y);
+        ctx.lineTo(triangle[1].x, triangle[1].y);
+        ctx.lineTo(triangle[2].x, triangle[2].y);
+        ctx.closePath();
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawLight(light) {
+      const projected = project(light);
+      const x = projected.x * width / rasterWidth;
+      const y = projected.y * height / rasterHeight;
+      const glow = ctx.createRadialGradient(x, y, 0, x, y, 28);
+      glow.addColorStop(0, 'rgba(156, 236, 255, 0.65)');
+      glow.addColorStop(0.2, 'rgba(93, 204, 255, 0.22)');
+      glow.addColorStop(1, 'rgba(93, 204, 255, 0)');
+      ctx.fillStyle = glow;
+      ctx.fillRect(x - 28, y - 28, 56, 56);
+      ctx.beginPath();
+      ctx.arc(x, y, 3, 0, Math.PI * 2);
+      ctx.fillStyle = '#d5faff';
+      ctx.fill();
+      ctx.font = '9px ui-monospace, monospace';
+      ctx.fillStyle = 'rgba(161, 220, 240, 0.7)';
+      ctx.fillText('POINT LIGHT', x + 11, y - 9);
+    }
+
+    function render() {
+      image.data.fill(0);
+      depth.fill(Infinity);
+      drawBackground();
+
+      const matrices = rotationMatrices(time);
+      const transformed = vertices.map(vertex => {
+        const position = rotate(vertex, matrices);
+        position[2] += 5.5;
+        return position;
+      });
+      const light = [
+        2.35 * Math.cos(time * 0.78),
+        1.65 * Math.sin(time * 0.93 + 0.6),
+        3.25 + 0.55 * Math.sin(time * 0.57)
+      ];
+      const triangles = [];
+
+      for (const face of faces) {
+        const normal = rotate(face.normal, matrices);
+        const position = transformed[face.indices[0]];
+        // Camera at the origin: only outward normals facing the camera are visible.
+        const facing = normal[0] * position[0] + normal[1] * position[1] + normal[2] * position[2];
+        if (facing >= 0) continue;
+
+        const corners = face.indices.map(index => {
+          const corner = project(transformed[index]);
+          corner.color = cornerColor(transformed[index], normal, face.color, light);
+          return corner;
+        });
+        const first = [corners[0], corners[1], corners[2]];
+        const second = [corners[0], corners[2], corners[3]];
+        rasterize(...first);
+        rasterize(...second);
+        triangles.push(first, second);
+      }
+
+      rasterCtx.putImageData(image, 0, 0);
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(raster, 0, 0, width, height);
+      if (wireframe) drawWireframe(triangles);
+      drawLight(light);
+    }
+
+    function toggleWireframe() {
+      wireframe = !wireframe;
+      wireframeButton.setAttribute('aria-pressed', String(wireframe));
+    }
+
+    function togglePause() {
+      paused = !paused;
+      pauseButton.setAttribute('aria-pressed', String(paused));
+      statusReadout.textContent = paused ? 'PAUSED' : 'RUNNING';
+    }
+
+    wireframeButton.addEventListener('click', toggleWireframe);
+    pauseButton.addEventListener('click', togglePause);
+    window.addEventListener('keydown', event => {
+      if (event.repeat || event.ctrlKey || event.metaKey || event.altKey) return;
+      const target = event.target;
+      if (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
+      const key = event.key.toLowerCase();
+      if (key === 'w') {
+        event.preventDefault();
+        toggleWireframe();
+      } else if (key === 'p') {
+        event.preventDefault();
+        togglePause();
+      }
+    });
+
+    function frame(timestamp) {
+      const delta = lastTimestamp === null ? 0 : Math.min(0.05, Math.max(0, (timestamp - lastTimestamp) / 1000));
+      lastTimestamp = timestamp;
+      if (!paused) time += delta;
+
+      if (fpsStart === null) fpsStart = timestamp;
+      else fpsFrames++;
+      const elapsed = timestamp - fpsStart;
+      if (elapsed >= 500) {
+        fpsReadout.textContent = `${Math.round(fpsFrames * 1000 / elapsed)} FPS`;
+        fpsStart = timestamp;
+        fpsFrames = 0;
+      }
+
+      render();
+      requestAnimationFrame(frame);
+    }
+
+    window.addEventListener('resize', resize);
+    resize();
+    requestAnimationFrame(frame);
+  </script>
+</body>
+</html>

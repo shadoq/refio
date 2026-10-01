@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b101a">
+  <title>Gouraud / software light study</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0b101a;
+      color: #e8eef7;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(ellipse at 50% 35%, #182338 0%, transparent 65%),
+        #0b101a;
+    }
+
+    main {
+      width: min(1120px, calc(100% - 64px));
+      margin: 0 auto;
+      padding: 44px 0 24px;
+    }
+
+    header {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 26px;
+    }
+
+    .eyebrow, .readout, .stage-label, footer, kbd {
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    }
+
+    .eyebrow {
+      margin: 0 0 12px;
+      color: #81b6c8;
+      font-size: 11px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(30px, 5vw, 52px);
+      font-weight: 550;
+      letter-spacing: -0.055em;
+      line-height: 1.1;
+    }
+
+    h1 span {
+      color: #8b9bb4;
+      font-weight: 350;
+    }
+
+    .description {
+      margin: 14px 0 0;
+      color: #8998ae;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .readout {
+      flex-shrink: 0;
+      text-align: right;
+      font-size: 11px;
+      color: #8292aa;
+      letter-spacing: 0.08em;
+    }
+
+    .readout strong {
+      display: block;
+      margin-bottom: 7px;
+      color: #d9f4f4;
+      font-size: 25px;
+      font-weight: 500;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -0.04em;
+    }
+
+    .stage {
+      position: relative;
+      overflow: hidden;
+      height: clamp(320px, 62vh, 620px);
+      border: 1px solid #29354a;
+      border-radius: 16px;
+      background: radial-gradient(ellipse at 50% 45%, #18243a, #0c131f 75%);
+      box-shadow: 0 24px 80px #00000035, inset 0 1px 0 #ffffff05;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .stage-label {
+      position: absolute;
+      top: 20px;
+      left: 22px;
+      pointer-events: none;
+      color: #7488a4;
+      font-size: 10px;
+      letter-spacing: 0.12em;
+    }
+
+    .status {
+      position: absolute;
+      right: 22px;
+      top: 20px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      color: #a2b4c9;
+      text-transform: uppercase;
+      pointer-events: none;
+    }
+
+    .status::before {
+      content: "";
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: #79e0c1;
+      box-shadow: 0 0 10px #79e0c166;
+    }
+
+    .status.paused::before {
+      background: #e2bb78;
+      box-shadow: none;
+    }
+
+    .controls {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 18px;
+      padding: 20px 0;
+    }
+
+    .buttons {
+      display: flex;
+      gap: 10px;
+    }
+
+    button {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 40px;
+      padding: 8px 13px;
+      border: 1px solid #303d52;
+      border-radius: 8px;
+      background: #151e2d;
+      color: #c4cfdf;
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background 150ms, border-color 150ms;
+    }
+
+    button:hover { background: #202d40; }
+
+    button[aria-pressed="true"] {
+      color: #b2f3e4;
+      background: #17332f;
+      border-color: #3e7167;
+    }
+
+    button:focus-visible {
+      outline: 2px solid #91dacc;
+      outline-offset: 4px;
+    }
+
+    kbd {
+      padding: 2px 5px;
+      border: 1px solid #ffffff20;
+      border-radius: 4px;
+      font-size: 10px;
+      color: #92a2b8;
+    }
+
+    .lighting-note {
+      color: #8293aa;
+      font-size: 12px;
+    }
+
+    .lighting-note::before {
+      content: "";
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      margin-right: 8px;
+      border-radius: 50%;
+      background: #f9dbad;
+    }
+
+    footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      padding-top: 16px;
+      border-top: 1px solid #253045;
+      color: #6f809a;
+      font-size: 10px;
+      letter-spacing: 0.04em;
+      line-height: 1.6;
+    }
+
+    @media (max-width: 600px) {
+      main {
+        width: calc(100% - 28px);
+        padding-top: 28px;
+      }
+
+      header { gap: 12px; }
+      h1 span { display: block; margin-top: 5px; }
+      .description { max-width: 240px; font-size: 12px; }
+      .stage { height: clamp(340px, 56vh, 520px); }
+      .stage-label { left: 14px; font-size: 9px; }
+      .status { right: 14px; font-size: 9px; }
+      .controls { flex-wrap: wrap; }
+      footer { flex-wrap: wrap; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <p class="eyebrow">Realtime rendering / study 01</p>
+        <h1>Gouraud <span>/ software light study</span></h1>
+        <p class="description">One cube. An orbiting light. Every pixel computed on the CPU.</p>
+      </div>
+      <div class="readout" aria-label="Live frames per second">
+        <strong id="fps">—</strong>
+        FRAMES / SEC
+      </div>
+    </header>
+
+    <section class="stage" aria-label="Animated Gouraud-shaded cube">
+      <canvas id="canvas" aria-label="Rotating colored cube illuminated by a moving point light">
+        This study requires a browser with Canvas 2D support.
+      </canvas>
+      <div class="stage-label">PERSPECTIVE / LAMBERT</div>
+      <div class="status" id="status" role="status">Running</div>
+    </section>
+
+    <div class="controls">
+      <div class="buttons">
+        <button id="wireframe" type="button" aria-pressed="false" aria-keyshortcuts="W">
+          <span id="wireframe-label">Wireframe off</span><kbd>W</kbd>
+        </button>
+        <button id="pause" type="button" aria-pressed="false" aria-keyshortcuts="P">
+          <span id="pause-label">Pause</span><kbd>P</kbd>
+        </button>
+      </div>
+      <div class="lighting-note">Orbiting point light · hard-edge normals</div>
+    </div>
+
+    <footer>
+      <span>8 vertices · 12 triangles · Canvas 2D</span>
+      <span>Vertex lighting → perspective-correct color → depth test</span>
+    </footer>
+  </main>
+
+  <script>
+    "use strict";
+
+    const canvas = document.getElementById("canvas");
+    const context = canvas.getContext("2d");
+    const rasterCanvas = document.createElement("canvas");
+    const rasterContext = rasterCanvas.getContext("2d");
+    const fpsLabel = document.getElementById("fps");
+    const wireframeButton = document.getElementById("wireframe");
+    const pauseButton = document.getElementById("pause");
+    const wireframeLabel = document.getElementById("wireframe-label");
+    const pauseLabel = document.getElementById("pause-label");
+    const statusLabel = document.getElementById("status");
+
+    const vertices = [
+      [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
+      [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]
+    ];
+
+    // Outward winding and separate normals preserve the cube's hard edges.
+    const faces = [
+      { indices: [0, 3, 2, 1], normal: [0, 0, -1], color: [66, 183, 226] },
+      { indices: [4, 5, 6, 7], normal: [0, 0, 1], color: [165, 116, 243] },
+      { indices: [0, 4, 7, 3], normal: [-1, 0, 0], color: [92, 214, 171] },
+      { indices: [1, 2, 6, 5], normal: [1, 0, 0], color: [241, 123, 94] },
+      { indices: [3, 7, 6, 2], normal: [0, 1, 0], color: [243, 191, 91] },
+      { indices: [0, 1, 5, 4], normal: [0, -1, 0], color: [103, 127, 235] }
+    ];
+
+    let width = 0;
+    let height = 0;
+    let displayWidth = 0;
+    let displayHeight = 0;
+    let image;
+    let pixels;
+    let depth;
+    let focalLength = 1;
+    let wireframe = false;
+    let paused = false;
+    let elapsed = 0;
+    let previousTime = performance.now();
+    let fpsTime = previousTime;
+    let smoothedFPS = 0;
+
+    function multiplyMatrices(a, b) {
+      const result = new Array(9);
+      for (let row = 0; row < 3; row++) {
+        for (let column = 0; column < 3; column++) {
+          result[row * 3 + column] =
+            a[row * 3] * b[column] +
+            a[row * 3 + 1] * b[3 + column] +
+            a[row * 3 + 2] * b[6 + column];
+        }
+      }
+      return result;
+    }
+
+    function rotationMatrix(x, y, z) {
+      const cx = Math.cos(x), sx = Math.sin(x);
+      const cy = Math.cos(y), sy = Math.sin(y);
+      const cz = Math.cos(z), sz = Math.sin(z);
+      const rx = [1, 0, 0, 0, cx, -sx, 0, sx, cx];
+      const ry = [cy, 0, sy, 0, 1, 0, -sy, 0, cy];
+      const rz = [cz, -sz, 0, sz, cz, 0, 0, 0, 1];
+      return multiplyMatrices(rz, multiplyMatrices(ry, rx));
+    }
+
+    function transform(matrix, vector) {
+      return [
+        matrix[0] * vector[0] + matrix[1] * vector[1] + matrix[2] * vector[2],
+        matrix[3] * vector[0] + matrix[4] * vector[1] + matrix[5] * vector[2],
+        matrix[6] * vector[0] + matrix[7] * vector[1] + matrix[8] * vector[2]
+      ];
+    }
+
+    function project(vertex) {
+      return {
+        x: width * 0.5 + vertex[0] * focalLength / vertex[2],
+        y: height * 0.5 - vertex[1] * focalLength / vertex[2],
+        inverseZ: 1 / vertex[2]
+      };
+    }
+
+    function resize() {
+      const bounds = canvas.getBoundingClientRect();
+      displayWidth = bounds.width;
+      displayHeight = bounds.height;
+      if (displayWidth <= 0 || displayHeight <= 0) return;
+
+      const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+      const outputWidth = Math.max(1, Math.round(displayWidth * dpr));
+      const outputHeight = Math.max(1, Math.round(displayHeight * dpr));
+      if (canvas.width !== outputWidth || canvas.height !== outputHeight) {
+        canvas.width = outputWidth;
+        canvas.height = outputHeight;
+      }
+
+      // Keep the software buffer modest; the display canvas handles upscaling.
+      const scale = Math.min(1, 700 / displayWidth, 450 / displayHeight);
+      const nextWidth = Math.max(1, Math.round(displayWidth * scale));
+      const nextHeight = Math.max(1, Math.round(displayHeight * scale));
+      if (nextWidth !== width || nextHeight !== height) {
+        width = nextWidth;
+        height = nextHeight;
+        rasterCanvas.width = width;
+        rasterCanvas.height = height;
+        image = rasterContext.createImageData(width, height);
+        pixels = image.data;
+        depth = new Float32Array(width * height);
+        focalLength = Math.min(width, height) * 1.35;
+      }
+    }
+
+    function rasterizeTriangle(a, b, c) {
+      const area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+      if (Math.abs(area) < 0.00001) return;
+
+      const minX = Math.max(0, Math.floor(Math.min(a.x, b.x, c.x)));
+      const maxX = Math.min(width - 1, Math.ceil(Math.max(a.x, b.x, c.x)));
+      const minY = Math.max(0, Math.floor(Math.min(a.y, b.y, c.y)));
+      const maxY = Math.min(height - 1, Math.ceil(Math.max(a.y, b.y, c.y)));
+      const inverseArea = 1 / area;
+
+      for (let y = minY; y <= maxY; y++) {
+        const py = y + 0.5;
+        for (let x = minX; x <= maxX; x++) {
+          const px = x + 0.5;
+          // Signed barycentrics work for either screen-space winding.
+          const wa = ((b.x - px) * (c.y - py) - (b.y - py) * (c.x - px)) * inverseArea;
+          const wb = ((c.x - px) * (a.y - py) - (c.y - py) * (a.x - px)) * inverseArea;
+          const wc = 1 - wa - wb;
+          if (wa < -0.000001 || wb < -0.000001 || wc < -0.000001) continue;
+
+          const za = wa * a.inverseZ;
+          const zb = wb * b.inverseZ;
+          const zc = wc * c.inverseZ;
+          const z = 1 / (za + zb + zc);
+          const index = y * width + x;
+          if (z >= depth[index]) continue;
+
+          depth[index] = z;
+          const offset = index * 4;
+          // Interpolate RGB / z, then divide by interpolated 1 / z.
+          pixels[offset] = (za * a.color[0] + zb * b.color[0] + zc * c.color[0]) * z;
+          pixels[offset + 1] = (za * a.color[1] + zb * b.color[1] + zc * c.color[1]) * z;
+          pixels[offset + 2] = (za * a.color[2] + zb * b.color[2] + zc * c.color[2]) * z;
+          pixels[offset + 3] = 255;
+        }
+      }
+    }
+
+    function drawBackground() {
+      context.clearRect(0, 0, displayWidth, displayHeight);
+      const glow = context.createRadialGradient(
+        displayWidth * 0.5, displayHeight * 0.5, 0,
+        displayWidth * 0.5, displayHeight * 0.5, Math.max(displayWidth, displayHeight) * 0.55
+      );
+      glow.addColorStop(0, "rgba(66, 111, 157, 0.12)");
+      glow.addColorStop(1, "rgba(66, 111, 157, 0)");
+      context.fillStyle = glow;
+      context.fillRect(0, 0, displayWidth, displayHeight);
+
+      context.beginPath();
+      const spacing = 40;
+      for (let x = (displayWidth * 0.5) % spacing; x < displayWidth; x += spacing) {
+        context.moveTo(x, 0);
+        context.lineTo(x, displayHeight);
+      }
+      for (let y = (displayHeight * 0.5) % spacing; y < displayHeight; y += spacing) {
+        context.moveTo(0, y);
+        context.lineTo(displayWidth, y);
+      }
+      context.strokeStyle = "rgba(126, 159, 195, 0.055)";
+      context.lineWidth = 1;
+      context.stroke();
+    }
+
+    function drawLight(light) {
+      const position = project(light);
+      const ix = Math.floor(position.x);
+      const iy = Math.floor(position.y);
+      if (ix < 0 || iy < 0 || ix >= width || iy >= height) return;
+      if (light[2] > depth[iy * width + ix] + 0.02) return;
+
+      const x = position.x * displayWidth / width;
+      const y = position.y * displayHeight / height;
+      const glow = context.createRadialGradient(x, y, 0, x, y, 28);
+      glow.addColorStop(0, "rgba(255, 229, 175, 0.65)");
+      glow.addColorStop(0.25, "rgba(255, 207, 126, 0.18)");
+      glow.addColorStop(1, "rgba(255, 207, 126, 0)");
+      context.fillStyle = glow;
+      context.fillRect(x - 28, y - 28, 56, 56);
+      context.beginPath();
+      context.arc(x, y, 3, 0, Math.PI * 2);
+      context.fillStyle = "#fff2d7";
+      context.fill();
+      context.beginPath();
+      context.arc(x, y, 7, 0, Math.PI * 2);
+      context.strokeStyle = "rgba(255, 228, 176, 0.45)";
+      context.lineWidth = 1;
+      context.stroke();
+    }
+
+    function render() {
+      if (!image || displayWidth <= 0 || displayHeight <= 0) return;
+      pixels.fill(0);
+      depth.fill(Infinity);
+
+      const matrix = rotationMatrix(
+        0.42 + elapsed * 0.29,
+        -0.58 + elapsed * 0.42,
+        0.08 + Math.sin(elapsed * 0.23) * 0.18
+      );
+      const transformed = vertices.map(vertex => {
+        const result = transform(matrix, vertex);
+        result[2] += 5.5;
+        return result;
+      });
+      const projected = transformed.map(project);
+      const light = [
+        Math.cos(elapsed * 0.72 + 0.4) * 2.05,
+        0.6 + Math.sin(elapsed * 0.91 + 0.7) * 0.85,
+        4.15 + Math.sin(elapsed * 0.72 + 0.4) * 1.05
+      ];
+      const visibleTriangles = [];
+
+      for (const face of faces) {
+        const normal = transform(matrix, face.normal);
+        const first = transformed[face.indices[0]];
+        // Camera is at the origin looking along positive z.
+        const facing = -(normal[0] * first[0] + normal[1] * first[1] + normal[2] * first[2]);
+        if (facing <= 0) continue;
+
+        const corners = face.indices.map(index => {
+          const vertex = transformed[index];
+          const lx = light[0] - vertex[0];
+          const ly = light[1] - vertex[1];
+          const lz = light[2] - vertex[2];
+          const inverseLength = 1 / Math.max(0.000001, Math.hypot(lx, ly, lz));
+          const lambert = Math.max(0, (normal[0] * lx + normal[1] * ly + normal[2] * lz) * inverseLength);
+          const intensity = 0.22 + 0.78 * lambert;
+          return {
+            ...projected[index],
+            color: face.color.map(channel => channel * intensity)
+          };
+        });
+
+        const triangles = [
+          [corners[0], corners[1], corners[2]],
+          [corners[0], corners[2], corners[3]]
+        ];
+        for (const triangle of triangles) {
+          rasterizeTriangle(...triangle);
+          if (wireframe) visibleTriangles.push(triangle);
+        }
+      }
+
+      rasterContext.putImageData(image, 0, 0);
+      context.setTransform(canvas.width / displayWidth, 0, 0, canvas.height / displayHeight, 0, 0);
+      drawBackground();
+      context.imageSmoothingEnabled = true;
+      context.drawImage(rasterCanvas, 0, 0, displayWidth, displayHeight);
+
+      if (wireframe) {
+        context.beginPath();
+        for (const triangle of visibleTriangles) {
+          context.moveTo(triangle[0].x * displayWidth / width, triangle[0].y * displayHeight / height);
+          context.lineTo(triangle[1].x * displayWidth / width, triangle[1].y * displayHeight / height);
+          context.lineTo(triangle[2].x * displayWidth / width, triangle[2].y * displayHeight / height);
+          context.closePath();
+        }
+        context.strokeStyle = "rgba(225, 246, 255, 0.65)";
+        context.lineWidth = 1;
+        context.lineJoin = "round";
+        context.stroke();
+      }
+
+      drawLight(light);
+    }
+
+    // Buttons and keyboard shortcuts share the same accessible state updates.
+    function toggleWireframe() {
+      wireframe = !wireframe;
+      wireframeButton.setAttribute("aria-pressed", String(wireframe));
+      wireframeLabel.textContent = wireframe ? "Wireframe on" : "Wireframe off";
+    }
+
+    function togglePause() {
+      paused = !paused;
+      pauseButton.setAttribute("aria-pressed", String(paused));
+      pauseLabel.textContent = paused ? "Resume" : "Pause";
+      statusLabel.textContent = paused ? "Paused" : "Running";
+      statusLabel.classList.toggle("paused", paused);
+    }
+
+    wireframeButton.addEventListener("click", toggleWireframe);
+    pauseButton.addEventListener("click", togglePause);
+    window.addEventListener("keydown", event => {
+      if (event.repeat || event.ctrlKey || event.metaKey || event.altKey) return;
+      const target = event.target;
+      if (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
+      const key = event.key.toLowerCase();
+      if (key === "w") {
+        event.preventDefault();
+        toggleWireframe();
+      } else if (key === "p") {
+        event.preventDefault();
+        togglePause();
+      }
+    });
+
+    function frame(now) {
+      const delta = Math.max(0, (now - previousTime) / 1000);
+      previousTime = now;
+      if (!paused) elapsed += Math.min(delta, 0.05);
+
+      if (delta > 0) {
+        const instantaneousFPS = 1 / delta;
+        const weight = 1 - Math.exp(-delta * 3);
+        smoothedFPS = smoothedFPS
+          ? smoothedFPS + (instantaneousFPS - smoothedFPS) * weight
+          : instantaneousFPS;
+      }
+      if (now - fpsTime >= 250) {
+        fpsLabel.textContent = smoothedFPS.toFixed(0);
+        fpsTime = now;
+      }
+
+      render();
+      requestAnimationFrame(frame);
+    }
+
+    const resizeObserver = new ResizeObserver(resize);
+    resizeObserver.observe(canvas);
+    window.addEventListener("resize", resize);
+    resize();
+    requestAnimationFrame(frame);
+  </script>
+</body>
+</html>

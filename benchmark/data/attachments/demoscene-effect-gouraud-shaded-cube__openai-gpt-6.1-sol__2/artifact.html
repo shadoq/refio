@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#080f20">
+  <title>Gouraud Cube — Canvas 2D</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #080f20;
+      color: #edf3ff;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .header {
+      position: fixed;
+      top: 30px;
+      left: 32px;
+      right: 32px;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 24px;
+      pointer-events: none;
+    }
+
+    .eyebrow {
+      margin: 0 0 9px;
+      color: #75c9dc;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: .22em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(20px, 3vw, 28px);
+      font-weight: 550;
+      letter-spacing: -.04em;
+    }
+
+    .description {
+      max-width: 350px;
+      margin: 10px 0 0;
+      color: #91a1bb;
+      font-size: 12px;
+      line-height: 1.7;
+    }
+
+    .stats {
+      flex-shrink: 0;
+      padding: 10px 14px;
+      border: 1px solid #ffffff12;
+      border-radius: 10px;
+      background: #0c1628b3;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .fps {
+      font-size: 18px;
+      font-weight: 600;
+    }
+
+    .fps span {
+      margin-left: 4px;
+      color: #91a1bb;
+      font-size: 10px;
+      font-weight: 400;
+      letter-spacing: .08em;
+    }
+
+    .status {
+      margin-top: 4px;
+      color: #7ddbc0;
+      font-size: 10px;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .footer {
+      position: fixed;
+      bottom: 28px;
+      left: 32px;
+      right: 32px;
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 20px;
+    }
+
+    .note {
+      margin: 0;
+      color: #657892;
+      font-size: 10px;
+      line-height: 1.8;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      pointer-events: none;
+    }
+
+    .controls {
+      display: flex;
+      gap: 8px;
+    }
+
+    button {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 11px 14px;
+      border: 1px solid #ffffff19;
+      border-radius: 9px;
+      background: #101c30e6;
+      color: #bfcee3;
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background .15s, border-color .15s;
+    }
+
+    button:hover {
+      background: #1a2b43;
+      border-color: #83d7e866;
+    }
+
+    button[aria-pressed="true"] {
+      background: #163148;
+      border-color: #75c9dc80;
+      color: #c2f5ff;
+    }
+
+    button:focus-visible {
+      outline: 2px solid #8ce4f5;
+      outline-offset: 4px;
+    }
+
+    kbd {
+      display: inline-grid;
+      place-items: center;
+      width: 20px;
+      height: 20px;
+      border: 1px solid #ffffff24;
+      border-radius: 4px;
+      color: #83a1c2;
+      font-family: inherit;
+      font-size: 10px;
+    }
+
+    .fallback {
+      position: fixed;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      padding: 30px;
+      background: #080f20;
+      text-align: center;
+    }
+
+    .fallback[hidden] {
+      display: none;
+    }
+
+    @media (max-width: 560px) {
+      .header {
+        top: 22px;
+        left: 20px;
+        right: 20px;
+        gap: 12px;
+      }
+
+      .description {
+        max-width: 220px;
+        font-size: 11px;
+      }
+
+      .footer {
+        bottom: 20px;
+        left: 20px;
+        right: 20px;
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      button {
+        padding: 10px 12px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="canvas" aria-label="Animated Gouraud-shaded cube illuminated by an orbiting point light">
+    Your browser does not support Canvas 2D. Please use a modern browser to view this demo.
+  </canvas>
+
+  <header class="header">
+    <div>
+      <p class="eyebrow">Software rendering / Canvas 2D</p>
+      <h1>Gouraud Cube</h1>
+      <p class="description">Eight vertices, one orbiting light. Smooth corner lighting interpolated across every triangle.</p>
+    </div>
+    <div class="stats">
+      <div class="fps"><output id="fps">—</output><span>FPS</span></div>
+      <div class="status" id="status" role="status">Running</div>
+    </div>
+  </header>
+
+  <footer class="footer">
+    <p class="note">Lambert lighting · Perspective-correct color<br>Triangle rasterization · Reciprocal-depth buffer</p>
+    <div class="controls" role="group" aria-label="Animation controls">
+      <button id="wireframe" type="button" aria-pressed="false" aria-keyshortcuts="w">
+        <kbd aria-hidden="true">W</kbd> Wireframe
+      </button>
+      <button id="pause" type="button" aria-pressed="false" aria-keyshortcuts="p">
+        <kbd aria-hidden="true">P</kbd> <span id="pause-label">Pause</span>
+      </button>
+    </div>
+  </footer>
+
+  <div class="fallback" id="fallback" hidden>Canvas 2D is unavailable in this browser.</div>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const canvas = document.getElementById("canvas");
+      const context = canvas.getContext("2d", { alpha: false });
+      const surface = document.createElement("canvas");
+      const rasterContext = surface.getContext("2d", { alpha: false });
+
+      if (!context || !rasterContext) {
+        document.getElementById("fallback").hidden = false;
+        return;
+      }
+
+      const fpsOutput = document.getElementById("fps");
+      const status = document.getElementById("status");
+      const wireButton = document.getElementById("wireframe");
+      const pauseButton = document.getElementById("pause");
+      const pauseLabel = document.getElementById("pause-label");
+
+      // Explicit cube geometry: each quad is wound outward.
+      const vertices = [
+        [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
+        [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]
+      ];
+      const faces = [
+        { indices: [0, 3, 2, 1], color: [76, 193, 239] },
+        { indices: [4, 5, 6, 7], color: [110, 143, 244] },
+        { indices: [0, 4, 7, 3], color: [89, 127, 232] },
+        { indices: [1, 2, 6, 5], color: [75, 218, 195] },
+        { indices: [3, 7, 6, 2], color: [144, 177, 255] },
+        { indices: [0, 1, 5, 4], color: [90, 160, 212] }
+      ];
+
+      function normalize(v) {
+        const length = Math.hypot(v[0], v[1], v[2]) || 1;
+        return [v[0] / length, v[1] / length, v[2] / length];
+      }
+
+      function subtract(a, b) {
+        return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+      }
+
+      function cross(a, b) {
+        return [
+          a[1] * b[2] - a[2] * b[1],
+          a[2] * b[0] - a[0] * b[2],
+          a[0] * b[1] - a[1] * b[0]
+        ];
+      }
+
+      function dot(a, b) {
+        return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+      }
+
+      // Smooth corner normals intentionally blend adjacent cube faces.
+      // Unlike flat face normals, these produce varying vertex illumination.
+      const normals = vertices.map(normalize);
+
+      function multiply(a, b) {
+        const result = new Array(9);
+        for (let row = 0; row < 3; row++) {
+          for (let column = 0; column < 3; column++) {
+            result[row * 3 + column] =
+              a[row * 3] * b[column] +
+              a[row * 3 + 1] * b[column + 3] +
+              a[row * 3 + 2] * b[column + 6];
+          }
+        }
+        return result;
+      }
+
+      function transform(matrix, v) {
+        return [
+          matrix[0] * v[0] + matrix[1] * v[1] + matrix[2] * v[2],
+          matrix[3] * v[0] + matrix[4] * v[1] + matrix[5] * v[2],
+          matrix[6] * v[0] + matrix[7] * v[1] + matrix[8] * v[2]
+        ];
+      }
+
+      function rotation(x, y, z) {
+        const cx = Math.cos(x), sx = Math.sin(x);
+        const cy = Math.cos(y), sy = Math.sin(y);
+        const cz = Math.cos(z), sz = Math.sin(z);
+        const rx = [1, 0, 0, 0, cx, -sx, 0, sx, cx];
+        const ry = [cy, 0, sy, 0, 1, 0, -sy, 0, cy];
+        const rz = [cz, -sz, 0, sz, cz, 0, 0, 0, 1];
+        return multiply(rz, multiply(ry, rx));
+      }
+
+      let width = 1;
+      let height = 1;
+      let focalLength = 1;
+      let image;
+      let pixels;
+      let background;
+      let depth;
+      let paused = false;
+      let wireframe = false;
+      let time = 0;
+      let lastTimestamp = null;
+      let fpsElapsed = 0;
+      let fpsFrames = 0;
+
+      function resize() {
+        const displayWidth = Math.max(1, window.innerWidth);
+        const displayHeight = Math.max(1, window.innerHeight);
+        canvas.width = displayWidth;
+        canvas.height = displayHeight;
+
+        // Cap software work and avoid devicePixelRatio-sized allocations.
+        const scale = Math.min(1, 800 / displayWidth, 650 / displayHeight);
+        width = Math.max(1, Math.round(displayWidth * scale));
+        height = Math.max(1, Math.round(displayHeight * scale));
+        surface.width = width;
+        surface.height = height;
+        focalLength = Math.min(width, height) * 1.18;
+        image = rasterContext.createImageData(width, height);
+        pixels = image.data;
+        background = new Uint8ClampedArray(pixels.length);
+        depth = new Float32Array(width * height);
+
+        for (let y = 0; y < height; y++) {
+          for (let x = 0; x < width; x++) {
+            const radius = Math.hypot(
+              (x - width * .5) / Math.max(width * .65, 1),
+              (y - height * .5) / Math.max(height * .7, 1)
+            );
+            const glow = Math.max(0, 1 - radius);
+            const offset = (y * width + x) * 4;
+            background[offset] = 7 + glow * 5;
+            background[offset + 1] = 13 + glow * 11;
+            background[offset + 2] = 27 + glow * 18;
+            background[offset + 3] = 255;
+          }
+        }
+        context.imageSmoothingEnabled = true;
+        context.imageSmoothingQuality = "high";
+      }
+
+      function project(position) {
+        const q = 1 / position[2];
+        return {
+          x: width * .5 + focalLength * position[0] * q,
+          y: height * .5 - focalLength * position[1] * q,
+          q
+        };
+      }
+
+      function edge(a, b, x, y) {
+        return (b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x);
+      }
+
+      // Barycentric software rasterization; signed area supports either winding.
+      function rasterize(a, b, c) {
+        const area = edge(a, b, c.x, c.y);
+        if (Math.abs(area) < 1e-8) return;
+
+        const minX = Math.max(0, Math.floor(Math.min(a.x, b.x, c.x)));
+        const maxX = Math.min(width - 1, Math.ceil(Math.max(a.x, b.x, c.x)));
+        const minY = Math.max(0, Math.floor(Math.min(a.y, b.y, c.y)));
+        const maxY = Math.min(height - 1, Math.ceil(Math.max(a.y, b.y, c.y)));
+        const inverseArea = 1 / area;
+        const ar = a.color[0] * a.q, ag = a.color[1] * a.q, ab = a.color[2] * a.q;
+        const br = b.color[0] * b.q, bg = b.color[1] * b.q, bb = b.color[2] * b.q;
+        const cr = c.color[0] * c.q, cg = c.color[1] * c.q, cb = c.color[2] * c.q;
+
+        for (let y = minY; y <= maxY; y++) {
+          for (let x = minX; x <= maxX; x++) {
+            const px = x + .5;
+            const py = y + .5;
+            const wa = edge(b, c, px, py) * inverseArea;
+            const wb = edge(c, a, px, py) * inverseArea;
+            const wc = edge(a, b, px, py) * inverseArea;
+            if (wa < -1e-9 || wb < -1e-9 || wc < -1e-9) continue;
+
+            const q = wa * a.q + wb * b.q + wc * c.q;
+            const index = y * width + x;
+            if (q <= depth[index]) continue;
+            depth[index] = q;
+
+            // Interpolate color/z and 1/z, then divide for perspective correctness.
+            const offset = index * 4;
+            pixels[offset] = (wa * ar + wb * br + wc * cr) / q;
+            pixels[offset + 1] = (wa * ag + wb * bg + wc * cg) / q;
+            pixels[offset + 2] = (wa * ab + wb * bb + wc * cb) / q;
+            pixels[offset + 3] = 255;
+          }
+        }
+      }
+
+      function drawLight(light) {
+        const point = project(light);
+        const x = Math.floor(point.x);
+        const y = Math.floor(point.y);
+        if (x < 0 || x >= width || y < 0 || y >= height) return;
+        if (point.q < depth[y * width + x]) return;
+
+        const glow = context.createRadialGradient(point.x, point.y, 0, point.x, point.y, 23);
+        glow.addColorStop(0, "rgba(255, 227, 169, .85)");
+        glow.addColorStop(.16, "rgba(255, 198, 111, .35)");
+        glow.addColorStop(1, "rgba(255, 180, 90, 0)");
+        context.fillStyle = glow;
+        context.fillRect(point.x - 23, point.y - 23, 46, 46);
+        context.beginPath();
+        context.arc(point.x, point.y, 3, 0, Math.PI * 2);
+        context.fillStyle = "#ffe6b7";
+        context.fill();
+        context.font = "9px ui-sans-serif, system-ui, sans-serif";
+        context.fillStyle = "#d3b584";
+        context.fillText("LIGHT", point.x + 11, point.y - 9);
+      }
+
+      function render() {
+        pixels.set(background);
+        depth.fill(0);
+
+        // Model rotation -> camera-space translation -> perspective projection.
+        // The camera is at the origin, looking along +Z; the cube stays safely ahead.
+        const matrix = rotation(.4 + time * .32, -.55 + time * .46, .12 + time * .19);
+        const positions = vertices.map(vertex => {
+          const position = transform(matrix, vertex);
+          position[2] += 5.5;
+          return position;
+        });
+        const transformedNormals = normals.map(normal => transform(matrix, normal));
+        const projected = positions.map(project);
+        const light = [
+          2.7 * Math.cos(time * .79 + .4),
+          1.6 + 1.2 * Math.sin(time * .61),
+          3.5 + .8 * Math.sin(time * .79 + .4)
+        ];
+
+        // Lambert lighting is evaluated only at vertices, never per pixel.
+        const intensities = positions.map((position, index) => {
+          const direction = normalize(subtract(light, position));
+          return .23 + .77 * Math.max(0, dot(transformedNormals[index], direction));
+        });
+        const visibleFaces = [];
+
+        for (const face of faces) {
+          const [i0, i1, i2, i3] = face.indices;
+          const normal = cross(
+            subtract(positions[i1], positions[i0]),
+            subtract(positions[i2], positions[i0])
+          );
+
+          // Outward normal pointing away from the camera means a hidden face.
+          if (dot(normal, positions[i0]) >= 0) continue;
+
+          const corners = [i0, i1, i2, i3].map(index => ({
+            ...projected[index],
+            color: face.color.map(channel => channel * intensities[index])
+          }));
+          rasterize(corners[0], corners[1], corners[2]);
+          rasterize(corners[0], corners[2], corners[3]);
+          visibleFaces.push(corners);
+        }
+
+        rasterContext.putImageData(image, 0, 0);
+        context.setTransform(1, 0, 0, 1, 0, 0);
+        context.drawImage(surface, 0, 0, canvas.width, canvas.height);
+        context.setTransform(canvas.width / width, 0, 0, canvas.height / height, 0, 0);
+
+        if (wireframe) {
+          context.lineWidth = .8;
+          context.strokeStyle = "rgba(218, 247, 255, .68)";
+          for (const corners of visibleFaces) {
+            context.beginPath();
+            context.moveTo(corners[0].x, corners[0].y);
+            for (let i = 1; i < 4; i++) {
+              context.lineTo(corners[i].x, corners[i].y);
+            }
+            context.closePath();
+            context.moveTo(corners[0].x, corners[0].y);
+            context.lineTo(corners[2].x, corners[2].y);
+            context.stroke();
+          }
+        }
+
+        drawLight(light);
+        context.setTransform(1, 0, 0, 1, 0, 0);
+      }
+
+      function toggleWireframe() {
+        wireframe = !wireframe;
+        wireButton.setAttribute("aria-pressed", String(wireframe));
+      }
+
+      function togglePause() {
+        paused = !paused;
+        pauseButton.setAttribute("aria-pressed", String(paused));
+        pauseLabel.textContent = paused ? "Resume" : "Pause";
+        status.textContent = paused ? "Paused" : "Running";
+        status.style.color = paused ? "#e5be80" : "#7ddbc0";
+      }
+
+      wireButton.addEventListener("click", toggleWireframe);
+      pauseButton.addEventListener("click", togglePause);
+      window.addEventListener("keydown", event => {
+        if (event.repeat || event.ctrlKey || event.metaKey || event.altKey) return;
+        const key = event.key.toLowerCase();
+        if (key === "w") {
+          event.preventDefault();
+          toggleWireframe();
+        } else if (key === "p") {
+          event.preventDefault();
+          togglePause();
+        }
+      });
+      window.addEventListener("resize", resize);
+
+      function frame(timestamp) {
+        const elapsed = lastTimestamp === null ? 0 : Math.max(0, (timestamp - lastTimestamp) / 1000);
+        lastTimestamp = timestamp;
+        if (!paused) time += Math.min(elapsed, .05);
+        render();
+
+        fpsElapsed += elapsed;
+        fpsFrames++;
+        if (fpsElapsed >= .4) {
+          fpsOutput.textContent = Math.round(fpsFrames / fpsElapsed);
+          fpsElapsed = 0;
+          fpsFrames = 0;
+        }
+        requestAnimationFrame(frame);
+      }
+
+      resize();
+      requestAnimationFrame(frame);
+    })();
+  </script>
+</body>
+</html>

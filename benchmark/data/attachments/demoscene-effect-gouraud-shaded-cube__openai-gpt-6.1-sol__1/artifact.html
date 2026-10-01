@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark">
+  <title>GOURAUD / rotating light study</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --navy: #080f1c;
+      --panel: #0c1727;
+      --line: rgba(144, 185, 211, 0.15);
+      --text: #e3edf4;
+      --muted: #8c9fb3;
+      --cyan: #73e0ed;
+      --coral: #ffab91;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        linear-gradient(rgba(111, 161, 192, 0.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(111, 161, 192, 0.025) 1px, transparent 1px),
+        var(--navy);
+      background-size: 48px 48px;
+      color: var(--text);
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    main {
+      width: min(1160px, calc(100% - 64px));
+      margin: 0 auto;
+      padding: 48px 0 30px;
+    }
+
+    .eyebrow, .badge, .stage-label, .key, .foot-label {
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    }
+
+    .eyebrow {
+      margin: 0 0 17px;
+      color: var(--cyan);
+      font-size: 11px;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+    }
+
+    header {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 26px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(32px, 5vw, 58px);
+      font-weight: 500;
+      line-height: 1.08;
+      letter-spacing: -0.05em;
+    }
+
+    h1 span {
+      display: block;
+      margin-top: 9px;
+      color: var(--muted);
+      font-size: clamp(16px, 2.2vw, 23px);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+    }
+
+    .badge {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+      padding: 11px 14px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: rgba(12, 23, 39, 0.8);
+      color: var(--cyan);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--cyan);
+      box-shadow: 0 0 10px rgba(115, 224, 237, 0.5);
+    }
+
+    .exhibit {
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--panel);
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.24);
+    }
+
+    .stage {
+      position: relative;
+      height: clamp(360px, 58vw, 620px);
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .stage-label {
+      position: absolute;
+      z-index: 1;
+      pointer-events: none;
+      color: #6b8199;
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .stage-label.top { top: 22px; left: 24px; }
+    .stage-label.bottom { bottom: 20px; left: 24px; }
+
+    .legend {
+      position: absolute;
+      top: 22px;
+      right: 24px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      color: #b89d97;
+      font-size: 11px;
+      pointer-events: none;
+    }
+
+    .legend i {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--coral);
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 17px 22px;
+      border-top: 1px solid var(--line);
+      background: rgba(7, 14, 25, 0.55);
+    }
+
+    .controls { display: flex; gap: 10px; }
+
+    button {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 42px;
+      padding: 8px 13px;
+      border: 1px solid rgba(144, 185, 211, 0.22);
+      border-radius: 6px;
+      background: #111e30;
+      color: var(--text);
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+      transition: border-color 150ms, background 150ms;
+    }
+
+    button:hover { background: #182b3e; border-color: var(--cyan); }
+    button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 4px; }
+    button[aria-pressed="true"] { color: var(--cyan); border-color: #4b899a; background: #14303b; }
+
+    .key {
+      display: grid;
+      place-items: center;
+      width: 23px;
+      height: 23px;
+      border: 1px solid var(--line);
+      border-radius: 3px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .status {
+      color: var(--muted);
+      font-size: 11px;
+      text-align: right;
+      letter-spacing: 0.02em;
+    }
+
+    footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 36px;
+      padding-top: 24px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.75;
+    }
+
+    footer p { margin: 0; max-width: 620px; }
+    .foot-label { color: var(--cyan); font-size: 10px; letter-spacing: 0.12em; }
+    .technical { flex-shrink: 0; text-align: right; color: #657b91; }
+
+    @media (max-width: 600px) {
+      main { width: calc(100% - 28px); padding-top: 28px; }
+      header { gap: 12px; align-items: center; }
+      .badge { padding: 10px; font-size: 11px; }
+      .stage { height: clamp(360px, 100vw, 500px); }
+      .stage-label.top, .stage-label.bottom { left: 16px; font-size: 9px; }
+      .legend { right: 16px; font-size: 10px; }
+      .toolbar { padding: 14px; flex-wrap: wrap; gap: 12px; }
+      .status { text-align: left; }
+      footer { flex-direction: column; gap: 12px; }
+      .technical { text-align: left; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      button { transition: none; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="eyebrow">Realtime studies / 001</p>
+    <header>
+      <h1>GOURAUD<span>/ rotating light study</span></h1>
+      <div class="badge" aria-label="Current frames per second">
+        <span class="dot" aria-hidden="true"></span>
+        <span id="fps">— FPS</span>
+      </div>
+    </header>
+
+    <section class="exhibit" aria-label="Interactive Gouraud-shaded cube">
+      <div class="stage" id="stage">
+        <div class="stage-label top">View space / perspective</div>
+        <div class="legend"><i aria-hidden="true"></i> Moving point light</div>
+        <canvas id="canvas" aria-label="Rotating cyan cube with interpolated vertex lighting and an orbiting warm light">
+          Your browser needs Canvas 2D support to display this study.
+        </canvas>
+        <div class="stage-label bottom">08 vertices · 12 triangles · Lambert</div>
+      </div>
+      <div class="toolbar">
+        <div class="controls">
+          <button id="wireframe" type="button" aria-pressed="false" aria-keyshortcuts="W">
+            Wireframe <span class="key" aria-hidden="true">W</span>
+          </button>
+          <button id="pause" type="button" aria-pressed="false" aria-keyshortcuts="P">
+            Pause <span class="key" aria-hidden="true">P</span>
+          </button>
+        </div>
+        <span class="status" id="status">Live · software rasterization</span>
+      </div>
+    </section>
+
+    <footer>
+      <p><span class="foot-label">LIGHT AT THE CORNERS</span><br>
+        Lambert lighting is sampled at each vertex, then color flows across the triangles.
+        The orbiting warm light reveals the cube’s smooth, interpolated surface.</p>
+      <p class="technical">Canvas 2D only / no GPU pipeline<br>Perspective-correct color · depth-tested pixels</p>
+    </footer>
+  </main>
+
+  <script>
+    (() => {
+      'use strict';
+
+      const canvas = document.getElementById('canvas');
+      const stage = document.getElementById('stage');
+      const context = canvas.getContext('2d');
+      const wireButton = document.getElementById('wireframe');
+      const pauseButton = document.getElementById('pause');
+      const fpsLabel = document.getElementById('fps');
+      const statusLabel = document.getElementById('status');
+
+      const rasterCanvas = document.createElement('canvas');
+      const rasterContext = rasterCanvas.getContext('2d');
+      const backgroundCanvas = document.createElement('canvas');
+      const backgroundContext = backgroundCanvas.getContext('2d');
+
+      const vertices = [
+        [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
+        [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]
+      ];
+
+      // Outward winding: -Z, +Z, -X, +X, -Y, +Y.
+      const faces = [
+        [0, 3, 2, 1],
+        [4, 5, 6, 7],
+        [0, 4, 7, 3],
+        [1, 2, 6, 5],
+        [0, 1, 5, 4],
+        [3, 7, 6, 2]
+      ];
+
+      const transformed = vertices.map(() => ({
+        x: 0, y: 0, z: 0, sx: 0, sy: 0,
+        iz: 0, rz: 0, gz: 0, bz: 0
+      }));
+      const visibleFaces = new Uint8Array(6);
+      const rotationX = new Float64Array(9);
+      const rotationY = new Float64Array(9);
+      const rotationZ = new Float64Array(9);
+      const intermediate = new Float64Array(9);
+      const rotation = new Float64Array(9);
+      const inverseCornerLength = 1 / Math.sqrt(3);
+
+      let width = 1;
+      let height = 1;
+      let cssWidth = 1;
+      let cssHeight = 1;
+      let focalLength = 1;
+      let image;
+      let pixels;
+      let depth;
+      let lightX = 0;
+      let lightY = 0;
+      let lightZ = 0;
+      let time = 0;
+      let paused = false;
+      let wireframe = false;
+      let previousTimestamp = null;
+      let fpsElapsed = 0;
+      let fpsFrames = 0;
+      let smoothedFPS = 0;
+
+      function multiplyMatrices(a, b, out) {
+        for (let row = 0; row < 3; row++) {
+          for (let column = 0; column < 3; column++) {
+            out[row * 3 + column] =
+              a[row * 3] * b[column] +
+              a[row * 3 + 1] * b[3 + column] +
+              a[row * 3 + 2] * b[6 + column];
+          }
+        }
+      }
+
+      function updateRotation() {
+        const ax = 0.42 + time * 0.31;
+        const ay = 0.62 + time * 0.47;
+        const az = -0.13 + time * 0.17;
+        const cx = Math.cos(ax), sx = Math.sin(ax);
+        const cy = Math.cos(ay), sy = Math.sin(ay);
+        const cz = Math.cos(az), sz = Math.sin(az);
+
+        // Explicit right-handed X/Y/Z matrices, using column vectors.
+        rotationX[0] = 1; rotationX[1] = 0; rotationX[2] = 0;
+        rotationX[3] = 0; rotationX[4] = cx; rotationX[5] = -sx;
+        rotationX[6] = 0; rotationX[7] = sx; rotationX[8] = cx;
+
+        rotationY[0] = cy; rotationY[1] = 0; rotationY[2] = sy;
+        rotationY[3] = 0; rotationY[4] = 1; rotationY[5] = 0;
+        rotationY[6] = -sy; rotationY[7] = 0; rotationY[8] = cy;
+
+        rotationZ[0] = cz; rotationZ[1] = -sz; rotationZ[2] = 0;
+        rotationZ[3] = sz; rotationZ[4] = cz; rotationZ[5] = 0;
+        rotationZ[6] = 0; rotationZ[7] = 0; rotationZ[8] = 1;
+
+        multiplyMatrices(rotationY, rotationX, intermediate);
+        multiplyMatrices(rotationZ, intermediate, rotation);
+      }
+
+      function drawBackground() {
+        const ctx = backgroundContext;
+        ctx.setTransform(
+          backgroundCanvas.width / cssWidth, 0, 0,
+          backgroundCanvas.height / cssHeight, 0, 0
+        );
+
+        const gradient = ctx.createRadialGradient(
+          cssWidth * 0.5, cssHeight * 0.46, 0,
+          cssWidth * 0.5, cssHeight * 0.46, Math.max(cssWidth, cssHeight) * 0.7
+        );
+        gradient.addColorStop(0, '#14273b');
+        gradient.addColorStop(0.55, '#0d1b2c');
+        gradient.addColorStop(1, '#091322');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, cssWidth, cssHeight);
+
+        ctx.strokeStyle = 'rgba(121, 171, 203, 0.065)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        const step = 40;
+        for (let x = (cssWidth / 2) % step; x < cssWidth; x += step) {
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x, cssHeight);
+        }
+        for (let y = (cssHeight / 2) % step; y < cssHeight; y += step) {
+          ctx.moveTo(0, y);
+          ctx.lineTo(cssWidth, y);
+        }
+        ctx.stroke();
+
+        ctx.strokeStyle = 'rgba(121, 171, 203, 0.12)';
+        ctx.setLineDash([3, 7]);
+        ctx.beginPath();
+        ctx.moveTo(cssWidth / 2, 0);
+        ctx.lineTo(cssWidth / 2, cssHeight);
+        ctx.moveTo(0, cssHeight / 2);
+        ctx.lineTo(cssWidth, cssHeight / 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      function resize() {
+        const rect = stage.getBoundingClientRect();
+        const nextCSSWidth = Math.max(1, rect.width);
+        const nextCSSHeight = Math.max(1, rect.height);
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        const backingWidth = Math.max(1, Math.round(nextCSSWidth * dpr));
+        const backingHeight = Math.max(1, Math.round(nextCSSHeight * dpr));
+        const scale = Math.min(1, 720 / nextCSSWidth, 540 / nextCSSHeight);
+        const nextWidth = Math.max(1, Math.round(nextCSSWidth * scale));
+        const nextHeight = Math.max(1, Math.round(nextCSSHeight * scale));
+
+        if (image && cssWidth === nextCSSWidth && cssHeight === nextCSSHeight &&
+            canvas.width === backingWidth && canvas.height === backingHeight) {
+          return;
+        }
+
+        cssWidth = nextCSSWidth;
+        cssHeight = nextCSSHeight;
+        canvas.width = backingWidth;
+        canvas.height = backingHeight;
+        backgroundCanvas.width = backingWidth;
+        backgroundCanvas.height = backingHeight;
+
+        // All pixel/depth buffers persist between frames; only resizing reallocates.
+        if (!image || width !== nextWidth || height !== nextHeight) {
+          width = nextWidth;
+          height = nextHeight;
+          rasterCanvas.width = width;
+          rasterCanvas.height = height;
+          image = rasterContext.createImageData(width, height);
+          pixels = image.data;
+          depth = new Float32Array(width * height);
+        }
+
+        focalLength = Math.min(width, height) * 1.12;
+        drawBackground();
+      }
+
+      function transformAndLight() {
+        updateRotation();
+        lightX = 1.45 * Math.cos(time * 0.79 + 0.6);
+        lightY = 1.1 * Math.sin(time * 0.63 + 0.8) + 0.15;
+        lightZ = 3.7 + 0.25 * Math.sin(time * 0.51);
+
+        for (let i = 0; i < vertices.length; i++) {
+          const source = vertices[i];
+          const vertex = transformed[i];
+          const x = rotation[0] * source[0] + rotation[1] * source[1] + rotation[2] * source[2];
+          const y = rotation[3] * source[0] + rotation[4] * source[1] + rotation[5] * source[2];
+          const z = rotation[6] * source[0] + rotation[7] * source[1] + rotation[8] * source[2];
+
+          // Camera at the origin looking +Z; the entire cube remains in front.
+          vertex.x = x;
+          vertex.y = y;
+          vertex.z = z + 5.5;
+          vertex.iz = 1 / vertex.z;
+          vertex.sx = width * 0.5 + x * focalLength * vertex.iz;
+          vertex.sy = height * 0.5 - y * focalLength * vertex.iz;
+
+          // Smooth normals are normalized original corners, rotated without translation.
+          const nx = x * inverseCornerLength;
+          const ny = y * inverseCornerLength;
+          const nz = z * inverseCornerLength;
+          const lx = lightX - vertex.x;
+          const ly = lightY - vertex.y;
+          const lz = lightZ - vertex.z;
+          const inverseLightLength = 1 / Math.hypot(lx, ly, lz);
+          const lambert = Math.max(0, (nx * lx + ny * ly + nz * lz) * inverseLightLength);
+
+          // Gouraud: evaluate Lambert only here, at vertices. Flat shading would use
+          // one face normal; Phong shading would interpolate normals and light pixels.
+          const ambient = 0.19;
+          const diffuse = 0.96 * lambert;
+          const red = Math.min(255, 103 * (ambient + diffuse));
+          const green = Math.min(255, 216 * (ambient + diffuse * 0.86));
+          const blue = Math.min(255, 233 * (ambient + diffuse * 0.73));
+          vertex.rz = red * vertex.iz;
+          vertex.gz = green * vertex.iz;
+          vertex.bz = blue * vertex.iz;
+        }
+      }
+
+      function rasterizeTriangle(a, b, c) {
+        const area = (b.sx - a.sx) * (c.sy - a.sy) -
+                     (b.sy - a.sy) * (c.sx - a.sx);
+        if (Math.abs(area) < 0.00001) return;
+
+        const minX = Math.max(0, Math.ceil(Math.min(a.sx, b.sx, c.sx) - 0.5));
+        const maxX = Math.min(width - 1, Math.floor(Math.max(a.sx, b.sx, c.sx) - 0.5));
+        const minY = Math.max(0, Math.ceil(Math.min(a.sy, b.sy, c.sy) - 0.5));
+        const maxY = Math.min(height - 1, Math.floor(Math.max(a.sy, b.sy, c.sy) - 0.5));
+        if (minX > maxX || minY > maxY) return;
+
+        // Signed barycentric edge functions work for either screen-space winding.
+        const inverseArea = 1 / area;
+        const w0dx = (b.sy - c.sy) * inverseArea;
+        const w0dy = (c.sx - b.sx) * inverseArea;
+        const w1dx = (c.sy - a.sy) * inverseArea;
+        const w1dy = (a.sx - c.sx) * inverseArea;
+        const px = minX + 0.5;
+        const py = minY + 0.5;
+        let rowW0 = ((b.sx - px) * (c.sy - py) - (b.sy - py) * (c.sx - px)) * inverseArea;
+        let rowW1 = ((c.sx - px) * (a.sy - py) - (c.sy - py) * (a.sx - px)) * inverseArea;
+
+        for (let y = minY; y <= maxY; y++) {
+          let w0 = rowW0;
+          let w1 = rowW1;
+          let index = y * width + minX;
+          for (let x = minX; x <= maxX; x++, index++) {
+            const w2 = 1 - w0 - w1;
+            if (w0 >= -0.0000001 && w1 >= -0.0000001 && w2 >= -0.0000001) {
+              // Reciprocal Z is linear in screen space; larger means closer.
+              const iz = w0 * a.iz + w1 * b.iz + w2 * c.iz;
+              if (iz > depth[index]) {
+                depth[index] = iz;
+                const offset = index * 4;
+                const z = 1 / iz;
+                // Perspective-correct interpolation of vertex colors, not lighting.
+                pixels[offset] = (w0 * a.rz + w1 * b.rz + w2 * c.rz) * z;
+                pixels[offset + 1] = (w0 * a.gz + w1 * b.gz + w2 * c.gz) * z;
+                pixels[offset + 2] = (w0 * a.bz + w1 * b.bz + w2 * c.bz) * z;
+                pixels[offset + 3] = 255;
+              }
+            }
+            w0 += w0dx;
+            w1 += w1dx;
+          }
+          rowW0 += w0dy;
+          rowW1 += w1dy;
+        }
+      }
+
+      function renderCube() {
+        pixels.fill(0);
+        depth.fill(0);
+        transformAndLight();
+
+        for (let i = 0; i < faces.length; i++) {
+          const face = faces[i];
+          const a = transformed[face[0]];
+          const b = transformed[face[1]];
+          const c = transformed[face[2]];
+          const abX = b.x - a.x, abY = b.y - a.y, abZ = b.z - a.z;
+          const acX = c.x - a.x, acY = c.y - a.y, acZ = c.z - a.z;
+          const nx = abY * acZ - abZ * acY;
+          const ny = abZ * acX - abX * acZ;
+          const nz = abX * acY - abY * acX;
+
+          // Outward face normal dotted with (camera - face): positive is visible.
+          const facingCamera = nx * -a.x + ny * -a.y + nz * -a.z;
+          visibleFaces[i] = facingCamera > 0 ? 1 : 0;
+          if (!visibleFaces[i]) continue;
+
+          rasterizeTriangle(a, b, c);
+          rasterizeTriangle(a, c, transformed[face[3]]);
+        }
+
+        rasterContext.putImageData(image, 0, 0);
+        context.setTransform(1, 0, 0, 1, 0, 0);
+        context.drawImage(backgroundCanvas, 0, 0);
+        context.imageSmoothingEnabled = true;
+        context.drawImage(rasterCanvas, 0, 0, canvas.width, canvas.height);
+
+        context.setTransform(canvas.width / width, 0, 0, canvas.height / height, 0, 0);
+        if (wireframe) drawWireframe();
+        drawLight();
+      }
+
+      function drawWireframe() {
+        context.strokeStyle = 'rgba(172, 244, 251, 0.76)';
+        context.lineWidth = width / cssWidth;
+        context.lineJoin = 'round';
+        context.beginPath();
+        for (let i = 0; i < faces.length; i++) {
+          if (!visibleFaces[i]) continue;
+          const face = faces[i];
+          const a = transformed[face[0]];
+          const b = transformed[face[1]];
+          const c = transformed[face[2]];
+          const d = transformed[face[3]];
+          context.moveTo(a.sx, a.sy);
+          context.lineTo(b.sx, b.sy);
+          context.lineTo(c.sx, c.sy);
+          context.lineTo(d.sx, d.sy);
+          context.closePath();
+          // The shared diagonal exposes the actual two-triangle rasterization.
+          context.moveTo(a.sx, a.sy);
+          context.lineTo(c.sx, c.sy);
+        }
+        context.stroke();
+      }
+
+      function drawLight() {
+        const x = width * 0.5 + lightX * focalLength / lightZ;
+        const y = height * 0.5 - lightY * focalLength / lightZ;
+        const unit = width / cssWidth;
+        const radius = 25 * unit;
+        const glow = context.createRadialGradient(x, y, 0, x, y, radius);
+        glow.addColorStop(0, 'rgba(255, 200, 162, 0.7)');
+        glow.addColorStop(0.2, 'rgba(255, 164, 133, 0.22)');
+        glow.addColorStop(1, 'rgba(255, 164, 133, 0)');
+        context.fillStyle = glow;
+        context.beginPath();
+        context.arc(x, y, radius, 0, Math.PI * 2);
+        context.fill();
+
+        context.strokeStyle = 'rgba(255, 171, 145, 0.4)';
+        context.lineWidth = unit;
+        context.beginPath();
+        context.arc(x, y, 7 * unit, 0, Math.PI * 2);
+        context.stroke();
+        context.fillStyle = '#ffe2cd';
+        context.beginPath();
+        context.arc(x, y, 2.5 * unit, 0, Math.PI * 2);
+        context.fill();
+      }
+
+      function toggleWireframe() {
+        wireframe = !wireframe;
+        wireButton.setAttribute('aria-pressed', String(wireframe));
+      }
+
+      function togglePause() {
+        paused = !paused;
+        pauseButton.setAttribute('aria-pressed', String(paused));
+        statusLabel.textContent = paused
+          ? 'Paused · rotation & light frozen'
+          : 'Live · software rasterization';
+      }
+
+      wireButton.addEventListener('click', toggleWireframe);
+      pauseButton.addEventListener('click', togglePause);
+
+      window.addEventListener('keydown', event => {
+        const target = event.target;
+        if (event.repeat || event.ctrlKey || event.metaKey || event.altKey ||
+            (target instanceof Element &&
+             (target.closest('input, textarea, select') || target.isContentEditable))) {
+          return;
+        }
+        const key = event.key.toLowerCase();
+        if (key === 'w') {
+          event.preventDefault();
+          toggleWireframe();
+        } else if (key === 'p') {
+          event.preventDefault();
+          togglePause();
+        }
+      });
+
+      function animate(timestamp) {
+        if (previousTimestamp !== null) {
+          const delta = Math.max(0, (timestamp - previousTimestamp) / 1000);
+          // Bound simulation steps after tab switches, but measure uncapped actual FPS.
+          if (!paused) time += Math.min(delta, 0.05);
+          fpsElapsed += delta;
+          fpsFrames++;
+          if (fpsElapsed >= 0.4) {
+            const measuredFPS = fpsFrames / fpsElapsed;
+            smoothedFPS = smoothedFPS === 0
+              ? measuredFPS
+              : smoothedFPS * 0.55 + measuredFPS * 0.45;
+            fpsLabel.textContent = Math.round(smoothedFPS) + ' FPS';
+            fpsElapsed = 0;
+            fpsFrames = 0;
+          }
+        }
+        previousTimestamp = timestamp;
+        renderCube();
+        // Keep presenting while paused: toggles remain immediate and FPS stays live.
+        requestAnimationFrame(animate);
+      }
+
+      resize();
+      if ('ResizeObserver' in window) {
+        const observer = new ResizeObserver(resize);
+        observer.observe(stage);
+      }
+      window.addEventListener('resize', resize);
+      requestAnimationFrame(animate);
+    })();
+  </script>
+</body>
+</html>
