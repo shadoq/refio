@@ -92,6 +92,20 @@ describe("upsertTaskDated", () => {
     expect(out[0]).toBe(existing); // same object reference
   });
 
+  // The catalog owns a task's content, not the reviewer's settings on it: regenerating
+  // a changed case must not unhide a hidden task or drop the judge's guidance.
+  it("keeps fields the catalog does not own when the content changes", () => {
+    const tuned: Task = {
+      ...existing,
+      hidden: true,
+      judgeInstructions: "The CPU snake must actually chase the food.",
+    };
+    const out = upsertTaskDated([tuned], changedCore, now);
+    expect(out[0].systemPrompt).toBe("new prompt");
+    expect(out[0].hidden).toBe(true);
+    expect(out[0].judgeInstructions).toBe("The CPU snake must actually chase the food.");
+  });
+
   it("does not mutate the input array on update", () => {
     const input = [existing];
     upsertTaskDated(input, changedCore, now);

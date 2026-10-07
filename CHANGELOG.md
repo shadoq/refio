@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The benchmark scores every criterion on one 0-6 scale (0 missing, 2 partial, 3 works with clear defects, 4 good, 5 very good, 6 exceptional) instead of 0 / 0.5 / 1 and a 0-2 look scale. On the old scale the strongest models scored the top mark on every criterion but look in most attempts, so their ranking came down to look and chance. Existing human and judge scores were rescaled with the old top mark at 4, because the old scale could not say whether the work was good or exceptional; only the old "excellent" look became 6. Every old result is now two thirds of its former value and the judge ranking is unchanged; two pairs of neighbours in the human ranking that were within 0.01 of each other swapped places because of the look exception. The pass threshold moved from 70% to 50% (3 of 6), score colours in the leaderboard and the task attempts table change every 25% (red, orange, yellow-green from the pass mark, green for the top quarter) instead of bands set for the old scale, the human-versus-judge divergence badge to 2 points, and the deterministic queue check awards 0, 2 or 4, leaving 5 and 6 to a reviewer or a judge.
+- Every benchmark task carries `judgeInstructions`, a description of how the LLM judge should score that task: what to check in the code, what matters most and what caps a score. All 25 tasks have one, it is editable in the task editor, and the judge receives it as its own section of the instructions; the model under test never sees it. The judge now gives a reason for every score, and is told to keep 6 for work that goes beyond the task.
+
+- Editing a benchmark result in the admin view shows the result itself: the scores and notes sit at the top in one row, the live artifact and the judges' scores with their reasons below them, and the task, model, metrics and attachments are folded into a "Run details" section. A score is listed as its number and meaning ("4 - good"). Creating a new result or duplicating one keeps the previous form.
+
+- A benchmark model records what its weights are: quantization, dense or mixture-of-experts with the active parameter count, the longest context it supports, capabilities (tools, thinking, vision), license, size on disk and the digest of the exact weights. The leaderboard shows a short line under each model name ("Q4_K_M · MoE A3B · 256k ctx · 23.9 GB") and the model editor has fields for all of it. The local models were filled in from the Ollama server they ran on; this corrected the quantization of both gpt-oss models (MXFP4, previously recorded as Q4) and replaced rounded parameter counts with the server's figures.
+
+- Every benchmark attempt on a local model records what the Ollama server served and how the model sat in memory: the digest of the exact weights, the server version and the sampling defaults baked into the model (temperature, top_p, top_k, stop sequences), read once when the sweep starts, and after each attempt the memory the model took, the share of it on the GPU and the context window it was actually loaded with. The model digest stored on the model itself is only what the server holds today; the one on the attempt says which weights that attempt ran on, so a tag pulled again between two sweeps no longer looks like the same model. A GPU share below 1 marks an attempt that partly ran on the CPU and whose timing cannot be compared with a full GPU run. Anything the server does not answer is left out and never fails the run. Attempts recorded before this have none of these fields.
+- A benchmark model also records its release date, knowledge cutoff and list price per million input and output tokens. The prices of the 17 Anthropic, OpenAI and Z.AI models were filled in from Refio's own model definitions; the OpenRouter models are left empty because Refio reads their prices live, and no release dates or cutoffs were filled in.
+- Editing a benchmark result no longer runs the artifact as soon as the window opens. Model-written HTML can loop forever and hang the browser, so it starts only after "Run artifact" is pressed.
+
+### Fixed
+
+- Regenerating a benchmark task from a changed catalog case kept its `hidden` flag. The generator replaced the whole task, so a hidden task reappeared in the results after any edit to its case.
+
+## [0.0.2.1] - 2026-10-01
+
 ### Added
 
 - The run document now records what the turn loop actually did, not just whether it ended well: how many iterations were used against the cap, why it stopped (a named reason per exit, from a clean completion through every guardrail to an uncaught exception), how often each guardrail fired, what the context budget was and how much of it was used, which files were written and whether the content actually changed, and whether the native tool channel had to be given up mid-turn. Comparing two models on the same task previously meant reading a status field and guessing: a turn that hit the iteration cap, one that was stopped by the repetition guard and one that simply finished all reported the same way. Tool calls carry whether each one succeeded and its error, and a tool result carries its own metadata, so a run can be read without the debug log beside it.
@@ -24,6 +43,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Deliberately wrong solutions live under `test_data/e2e/negative/<id>/` and the scenario validator requires every one of them to be rejected: a truncated file, a changed neighbouring function, a deleted test, an edited test script, a constant answer.
 - Six new multi-file scenarios aimed at local models: finding the active validator among 600 archived copies, repairing a bug next to an unrelated failing test, a CSV report contract spread over several modules, a Kotlin configuration-precedence fix derived from a real Refio bug, an offline JSONL report, and driving a local CLI from its documentation. Each has a golden solution, individually protected files and rejected wrong solutions. Two scenarios keep the MCP tool calls covered in the Refio dialect now that the main ones use the specification dialect.
 - `modelRanBuildCmd` in the harness results counts terminal commands in which the model itself ran the scenario's build command, kept apart from `self_verified`, which reports Refio's loop verifier.
+- GPT-6 (Astra, Sol, Luna) and GPT-6.1 Sol on the OpenAI API, Claude Opus 5.5, Opus 5 and Sonnet 5.5 on Anthropic, the GLM-5.3 family (`glm-5.3`, `glm-5.3-flash`, `glm-5.3-flashx`, `glm-4.6v-flashx`) on Z.AI, and Opus 5.5 plus Gemini 3.8 Flash on OpenRouter. Each carries its own context window, output cap and published prices, so a session on one of them is offered in the model list and costed from the rate it is actually billed at instead of a neighbouring model's.
+- The benchmark sweep pins Refio's reasoning level for the run it is measuring and records the level the run used: `--thinking-level low|medium|high`, applied as a run-scope `general.reasoning_effort` override. Left to the configuration file, a recorded result stated what the sweep was told rather than what the model ran at, and two rows for the same model were not comparable.
+- The benchmark viewer has an Overview page: pass rate, scores, cost and time per model, per task, and as a model-by-task matrix, over reviewed runs, queue runs or both, with a run promoted from the queue counted once.
 
 ### Changed
 
@@ -35,6 +57,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A repetition abort on a read-only tool tells the model that the search or read keeps returning the same result and to change the query or act. It used to say that edits were not changing runtime behaviour, which was untrue when nothing had been edited.
 - When the approval gate refuses to delete a file inside the project, the refusal suggests rewriting the file with `advance_code_editing`. A model that wanted to replace a file it had written tried `rm`, `rm -f` and `unlink` in turn and ended the turn on repeated denials without ever being told another way.
 - The `multi-file-notes-api-hidden-tests` scenario describes its tests as visible, protected acceptance tests. The id is kept so older results still line up.
+- Claude models from Opus 4.7 on, and the whole Claude 5 family, are sent a reasoning effort instead of an extended-thinking token budget, which they reject. The id is matched anywhere, so a Bedrock-prefixed id is covered too.
+- A model that reasons unless told otherwise (Opus 5.5, Opus 5, Sonnet 5.5, Gemini 3.8 Flash, Kimi K3) runs at its lowest effort when reasoning is switched OFF, rather than at its own default, on Anthropic and on OpenRouter alike. The toggle was a silent no-op for these models, and a turn paid for thinking nobody had asked for.
+- A reasoning model reached through OpenRouter accepts the thinking toggle at all. OpenRouter drives reasoning through one unified field, but these definitions declared no thinking support, so the turn gate forced it off before the request was built.
+- An Anthropic cache write is billed at 1.25x the input rate, the published price of the default five-minute cache, instead of the plain input rate.
 
 ### Fixed
 
@@ -48,6 +74,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The context accounting reported by a run is reset per turn instead of carrying the previous turn's dropped-message counters.
 - The SSE stream of an MCP server was opened with a call that waits for the whole response body. An event stream never ends, so no event ever reached the client. It is now read as it arrives.
 - A tool-template error from Ollama is recognised in more than one wording. A failure such as `parse ... call ... malformed ... parameter` from another template family was treated as an ordinary 500, retried six times and ended the turn, although it is the same deterministic failure and the text-channel fallback was available. The words are matched whole, so an unrelated 500 mentioning a "parser" or something "called" is still retried.
+- A streamed call was costed from the local price table even when the provider had reported what it actually charged. The adapters already preferred the reported figure; the client recomputed it after assembling the stream, so a model billed at a rate Refio does not know - a router applying its own prices - was reported at the wrong cost, and the same session cost a different amount depending on whether the answer streamed.
+- An agent turn prompt lost the boundary that marks its cacheable system prefix on the way to the adapter. The prefix (instructions plus tool schemas) was then sent as plain text, so every iteration of every turn re-billed it at the full input rate instead of the cache rate.
+- Gemini reached through OpenRouter failed on every turn that had used a tool. Tool results travel as assistant text, so the conversation ended on a model turn, which Google rejects outright; the last message is now handed over as a user turn.
+- The deterministic judge read a correctly drawn artifact as a blank page. It sampled only the first 200x200 pixels of a canvas, so a scene drawn in the middle - a centred cube - was flat everywhere it looked, and a game board that is legitimately blank under its start menu counted as empty as well. The whole canvas is now sampled on a grid, and a blank canvas only counts as empty when there is little text around it.
 
 ## [0.0.2.0] - 2026-09-07
 

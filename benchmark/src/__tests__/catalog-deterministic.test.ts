@@ -40,14 +40,14 @@ describe("isSubsequence", () => {
 
 describe("complianceFromNeedles", () => {
   const text = "<canvas> score Game Over";
-  it("scores 1 with no rationale when every needle matches", () => {
+  it("scores 4 (good) with no rationale when every needle matches", () => {
     const r = complianceFromNeedles(text, [{ regex: "<canvas" }, { text: "score" }]);
-    expect(r?.value).toBe(1);
+    expect(r?.value).toBe(4);
     expect(r?.rationale).toBeUndefined();
   });
-  it("scores 0.5 with a rationale when only some match", () => {
+  it("scores 2 (partial) with a rationale when only some match", () => {
     const r = complianceFromNeedles(text, [{ regex: "<canvas" }, { text: "absent" }]);
-    expect(r?.value).toBe(0.5);
+    expect(r?.value).toBe(2);
     expect(r?.rationale).toMatch(/1\/2/);
   });
   it("scores 0 when none match", () => {
@@ -58,12 +58,12 @@ describe("complianceFromNeedles", () => {
 });
 
 describe("worksFromRender", () => {
-  it("scores 1 when the artifact renders with no console errors", () => {
-    expect(worksFromRender({ rendered: true, consoleErrors: [] })).toEqual({ value: 1 });
+  it("scores 4 (good) when the artifact renders with no console errors", () => {
+    expect(worksFromRender({ rendered: true, consoleErrors: [] })).toEqual({ value: 4 });
   });
-  it("scores 0.5 when it renders but logs console errors", () => {
+  it("scores 2 (partial) when it renders but logs console errors", () => {
     const r = worksFromRender({ rendered: true, consoleErrors: ["TypeError x"] });
-    expect(r?.value).toBe(0.5);
+    expect(r?.value).toBe(2);
     expect(r?.rationale).toBeDefined();
   });
   it("scores 0 when the artifact fails to render", () => {
@@ -88,22 +88,22 @@ describe("agentLogicFromRun", () => {
     ).toBeNull();
   });
 
-  it("scores 1 when the expected actions appear in order", () => {
+  it("scores 4 (good) when the expected actions appear in order", () => {
     const r = agentLogicFromRun({
       status: "SUCCESS",
       classOrder: ["read", "write"],
       expectedToolOrder: ["create_new_file"],
     });
-    expect(r?.value).toBe(1);
+    expect(r?.value).toBe(4);
   });
 
-  it("scores 0.5 when the expected action never happened", () => {
+  it("scores 2 (partial) when the expected action never happened", () => {
     const r = agentLogicFromRun({
       status: "SUCCESS",
       classOrder: ["read"],
       expectedToolOrder: ["grep_search"],
     });
-    expect(r?.value).toBe(0.5);
+    expect(r?.value).toBe(2);
     expect(r?.rationale).toBeDefined();
   });
 
@@ -119,7 +119,7 @@ describe("agentLogicFromRun", () => {
           classOrder: ["read", "write"],
           expectedToolOrder: [expected],
         })?.value,
-      ).toBe(1);
+      ).toBe(4);
     }
   });
 
@@ -131,7 +131,7 @@ describe("agentLogicFromRun", () => {
       classOrder: ["write"],
       expectedToolOrder: ["grep_search", "advance_code_editing"],
     });
-    expect(r?.value).toBe(0.5);
+    expect(r?.value).toBe(2);
     expect(r?.rationale).toBeDefined();
   });
 
@@ -143,7 +143,7 @@ describe("agentLogicFromRun", () => {
       expectedToolOrder: ["create_new_file"],
       loop: { writes: 2, toolCalls: 8, duplicateCalls: 0, toolErrors: 0, recoveredFromError: null },
     });
-    expect(clean?.value).toBe(1);
+    expect(clean?.value).toBe(4);
 
     const idle = agentLogicFromRun({
       status: "SUCCESS",
@@ -214,7 +214,7 @@ describe("buildDeterministicJudge", () => {
     });
     const ids = set.scores.map((s) => s.criterionId).sort();
     expect(ids).toEqual(["compliance"]);
-    expect(set.scores.find((s) => s.criterionId === "compliance")?.value).toBe(1);
+    expect(set.scores.find((s) => s.criterionId === "compliance")?.value).toBe(4);
   });
 
   // A self-recovery sequence (delete a truncated file, retry via a shell script) can
@@ -261,7 +261,7 @@ describe("buildDeterministicJudge", () => {
       judgedAt: "2026-07-25T12:00:00.000Z",
       screenshots: [],
     });
-    expect(set.scores.find((s) => s.criterionId === "agent_logic")?.value).toBe(1);
+    expect(set.scores.find((s) => s.criterionId === "agent_logic")?.value).toBe(4);
   });
 });
 
@@ -288,7 +288,7 @@ describe("works_out_of_box from a build command", () => {
       rendered: null,
       build: { exitCode: 0, outputTail: "ok" },
     });
-    expect(judge.scores.find((s) => s.criterionId === "works_out_of_box")?.value).toBe(1);
+    expect(judge.scores.find((s) => s.criterionId === "works_out_of_box")?.value).toBe(4);
   });
 
   it("scores a failing build as broken and says what the output was", () => {
@@ -313,7 +313,7 @@ describe("works_out_of_box from a build command", () => {
       rendered: true,
       build: { exitCode: 1, outputTail: "irrelevant" },
     });
-    expect(judge.scores.find((s) => s.criterionId === "works_out_of_box")?.value).toBe(1);
+    expect(judge.scores.find((s) => s.criterionId === "works_out_of_box")?.value).toBe(4);
   });
 });
 
@@ -323,7 +323,7 @@ describe("agentLogicFromTrace", () => {
   const clean = { writes: 1, toolCalls: 10, duplicateCalls: 0, toolErrors: 0, recoveredFromError: null };
 
   it("gives full marks to a run that delivered without thrashing", () => {
-    expect(agentLogicFromTrace(clean, true).value).toBe(1);
+    expect(agentLogicFromTrace(clean, true).value).toBe(4);
   });
 
   it("scores zero when the agent produced no file at all", () => {
@@ -333,7 +333,7 @@ describe("agentLogicFromTrace", () => {
   });
 
   it("does not expect a file from a run that was never meant to produce one", () => {
-    expect(agentLogicFromTrace({ ...clean, writes: 0 }, false).value).toBe(1);
+    expect(agentLogicFromTrace({ ...clean, writes: 0 }, false).value).toBe(4);
   });
 
   it("scores zero when a deliverable check says nothing was found, even if a write was called", () => {
@@ -343,22 +343,22 @@ describe("agentLogicFromTrace", () => {
   });
 
   it("trusts the write count when no deliverable check was made", () => {
-    expect(agentLogicFromTrace(clean, true).value).toBe(1);
-    expect(agentLogicFromTrace(clean, true, true).value).toBe(1);
+    expect(agentLogicFromTrace(clean, true).value).toBe(4);
+    expect(agentLogicFromTrace(clean, true, true).value).toBe(4);
   });
 
   it("docks a run that stopped at its last failing call", () => {
     const r = agentLogicFromTrace({ ...clean, toolErrors: 2, recoveredFromError: false }, true);
-    expect(r?.value).toBe(0.5);
+    expect(r?.value).toBe(2);
   });
 
   it("does not dock a run that failed and then carried on", () => {
-    expect(agentLogicFromTrace({ ...clean, toolErrors: 2, recoveredFromError: true }, true).value).toBe(1);
+    expect(agentLogicFromTrace({ ...clean, toolErrors: 2, recoveredFromError: true }, true).value).toBe(4);
   });
 
   it("docks a run that mostly repeated itself", () => {
     const r = agentLogicFromTrace({ ...clean, toolCalls: 10, duplicateCalls: 6 }, true);
-    expect(r?.value).toBe(0.5);
+    expect(r?.value).toBe(2);
     expect(r?.rationale).toContain("repeated");
   });
 });
@@ -410,25 +410,25 @@ describe("agentLogicFromToolOrder is asked in a vocabulary every harness speaks"
   it("passes a run whose actions contain the expected ones in order", () => {
     expect(
       agentLogicFromToolOrder({ classOrder: ["read", "read", "write"], expected: ["write"] }).value,
-    ).toBe(1);
+    ).toBe(4);
     expect(
       agentLogicFromToolOrder({
         classOrder: ["search", "read", "write", "shell"],
         expected: ["read", "write"],
       }).value,
-    ).toBe(1);
+    ).toBe(4);
   });
 
   it("marks a run that never did the expected thing", () => {
     const r = agentLogicFromToolOrder({ classOrder: ["read", "read"], expected: ["write"] });
-    expect(r.value).toBe(0.5);
+    expect(r.value).toBe(2);
     expect(r.rationale).toMatch(/write/);
   });
 
   it("marks a run that did the expected things in the wrong order", () => {
     expect(
       agentLogicFromToolOrder({ classOrder: ["write", "read"], expected: ["read", "write"] }).value,
-    ).toBe(0.5);
+    ).toBe(2);
   });
 });
 
@@ -450,7 +450,7 @@ describe("agentLogicFromRun scores a shell-only harness like a tool-named one", 
       loop,
     });
     expect(refio?.value).toBe(codex?.value);
-    expect(refio?.value).toBe(1);
+    expect(refio?.value).toBe(4);
   });
 
   // A run whose actions were never recorded is unmeasured on this part, not a miss.
@@ -460,7 +460,7 @@ describe("agentLogicFromRun scores a shell-only harness like a tool-named one", 
       expectedToolOrder: ["write"],
       loop,
     });
-    expect(r?.value).toBe(1);
+    expect(r?.value).toBe(4);
   });
 });
 
@@ -473,7 +473,7 @@ describe("worksFromBuild against a suite that was green to begin with", () => {
   const green = { exitCode: 0, outputTail: "" };
 
   it("credits a passing build to a run that changed something", () => {
-    expect(worksFromBuild(green, { wrote: true }).value).toBe(1);
+    expect(worksFromBuild(green, { wrote: true }).value).toBe(4);
   });
 
   it("refuses to credit a passing build to a run that wrote nothing", () => {
@@ -490,7 +490,7 @@ describe("worksFromBuild against a suite that was green to begin with", () => {
   // A run whose actions were never recorded cannot be held against: unmeasured writes
   // must not turn a genuine pass into a zero.
   it("credits the build when there is no action log to check", () => {
-    expect(worksFromBuild(green).value).toBe(1);
+    expect(worksFromBuild(green).value).toBe(4);
   });
 });
 
@@ -505,12 +505,12 @@ describe("agentLogicFromVerification", () => {
   });
 
   it("passes a run that ran the build or the tests after writing", () => {
-    expect(agentLogicFromVerification(true, true)?.value).toBe(1);
+    expect(agentLogicFromVerification(true, true)?.value).toBe(4);
   });
 
   it("marks down a run that finished without checking its own work", () => {
     const r = agentLogicFromVerification(false, true);
-    expect(r?.value).toBe(0.5);
+    expect(r?.value).toBe(2);
     expect(r?.rationale).toMatch(/never|check/i);
   });
 
@@ -530,7 +530,7 @@ describe("agentLogicFromRun with a case that requires self-verification", () => 
       loop: { ...clean, selfVerified: false },
       expectsSelfVerification: true,
     });
-    expect(r?.value).toBe(0.5);
+    expect(r?.value).toBe(2);
   });
 
   it("leaves a clean verified run at full marks", () => {
@@ -540,7 +540,7 @@ describe("agentLogicFromRun with a case that requires self-verification", () => 
       loop: { ...clean, selfVerified: true },
       expectsSelfVerification: true,
     });
-    expect(r?.value).toBe(1);
+    expect(r?.value).toBe(4);
   });
 
   // The generation tasks: nobody verifies, nothing to verify, so the criterion must
@@ -551,6 +551,6 @@ describe("agentLogicFromRun with a case that requires self-verification", () => 
       expectedToolOrder: [],
       loop: { ...clean, selfVerified: false },
     });
-    expect(r?.value).toBe(1);
+    expect(r?.value).toBe(4);
   });
 });

@@ -10,6 +10,7 @@ import {
   formatTokens,
   formatScore,
   formatTokensPerSecond,
+  scoreColor,
 } from "@/lib/format";
 import { estimateTokenProcessing } from "@/lib/tokenSpeed";
 import { ResultDetailModal } from "@/components/results/ResultDetailModal";
@@ -179,8 +180,7 @@ export function TaskAttemptsTable({
       const score = row.scores[c.id];
       if (score == null) return "—";
       const pct = score * 100;
-      const color = pct >= 80 ? "#52c41a" : pct >= 50 ? "#faad14" : "#ff4d4f";
-      return <span style={{ color }}>{pct.toFixed(0)}%</span>;
+      return <span style={{ color: scoreColor(score) }}>{pct.toFixed(0)}%</span>;
     },
   }));
 

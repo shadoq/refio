@@ -50,7 +50,7 @@ import {
   NATIVE_TOOLS_MODES,
   type NativeToolsMode,
 } from "../../src/lib/catalog/harness-routing";
-import { harnessVersion, warmUpOllama } from "./lib/run-context";
+import { harnessVersion, readLoadedModel, readServedModel, warmUpOllama } from "./lib/run-context";
 import { limitsForTier, DEFAULT_AGENT_LIMITS } from "../../src/lib/catalog/agent-limits";
 import { toRunJson } from "../../src/lib/catalog/agent-run";
 import { resolveModelTemplate } from "../../../tools/e2e/src/emit-scenario";
@@ -385,6 +385,10 @@ async function main(): Promise<void> {
     );
   }
   const version = await harnessVersion(args.harness);
+  // What exactly the server will serve under this tag: digest, version, sampling defaults.
+  const served = localModel && !args.dryRun && !args.fromRun
+    ? await readServedModel(args.ollamaHost, localModel)
+    : {};
 
   // Everything a later reader needs to run this attempt again and get a comparable one.
   const runContextFor = (
@@ -397,6 +401,7 @@ async function main(): Promise<void> {
     ...(contextWindow !== undefined && warmedUp ? { contextWindow } : {}),
     ...(args.maxOutputTokens !== undefined ? { maxOutputTokens: args.maxOutputTokens } : {}),
     ...(localModel ? { modelServer: args.ollamaHost } : {}),
+    ...served,
     ...(permissionModeOf(args.harness) ? { permissionMode: permissionModeOf(args.harness) } : {}),
     timeoutMs: limits.timeoutMs,
     maxTurns: limits.maxTurns,
@@ -543,6 +548,10 @@ async function main(): Promise<void> {
             }
           }
         }
+      }
+      // Read while the model is still resident: memory, GPU share and the loaded window.
+      if (localModel && outcome.runContext) {
+        outcome.runContext = { ...outcome.runContext, ...(await readLoadedModel(args.ollamaHost, localModel)) };
       }
       const entry = await buildEntry(l, args.model, args.env, args.harness, attempt, outcome, paths, args.noRender, !args.dryRun);
 

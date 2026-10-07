@@ -33,7 +33,7 @@ const emptyCriterion = () => ({
   id: generateId(),
   name: "",
   description: "",
-  scale: { values: [0, 0.5, 1] },
+  scale: { values: [0, 1, 2, 3, 4, 5, 6] },
   weight: 1.0,
 });
 
@@ -303,7 +303,12 @@ export default function TaskEditor() {
 
   async function onSubmit(data: TaskFormData) {
     if (!tasksData) return;
-    await upsert.mutateAsync({ current: tasksData, task: data as Task });
+    // An emptied field removes the instructions instead of storing a blank string.
+    const { judgeInstructions, ...rest } = data as Task;
+    const task: Task = judgeInstructions?.trim()
+      ? { ...rest, judgeInstructions: judgeInstructions.trim() }
+      : rest;
+    await upsert.mutateAsync({ current: tasksData, task });
     handleClose();
   }
 
@@ -479,6 +484,24 @@ export default function TaskEditor() {
                   rows={5}
                   placeholder="Exact prompt given to the model"
                   style={{ fontFamily: "monospace" }}
+                />
+              )}
+            />
+          </Form.Item>
+
+          <Form.Item
+            label="Judge instructions"
+            extra="How the LLM judge should score this task: what to check, what matters most, what caps a score. Sent to the judge only; the model under test never sees it."
+          >
+            <Controller
+              name="judgeInstructions"
+              control={control}
+              render={({ field }) => (
+                <Input.TextArea
+                  {...field}
+                  value={field.value ?? ""}
+                  rows={6}
+                  placeholder="e.g. A CPU snake that ignores the food caps compliance at 2."
                 />
               )}
             />

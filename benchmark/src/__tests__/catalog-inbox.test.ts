@@ -66,20 +66,29 @@ describe("makeInboxId", () => {
 describe("deterministicVerdict", () => {
   it("is PASS when compliance is full and the artifact worked", () => {
     const v = deterministicVerdict([
-      { criterionId: "compliance", value: 1 },
-      { criterionId: "works_out_of_box", value: 1 },
-      { criterionId: "agent_logic", value: 1 },
+      { criterionId: "compliance", value: 4 },
+      { criterionId: "works_out_of_box", value: 4 },
+      { criterionId: "agent_logic", value: 4 },
     ]);
     expect(v.verdict).toBe("PASS");
   });
   it("is FAIL when compliance is partial", () => {
     const v = deterministicVerdict([
-      { criterionId: "compliance", value: 0.5 },
-      { criterionId: "works_out_of_box", value: 1 },
-      { criterionId: "agent_logic", value: 1 },
+      { criterionId: "compliance", value: 2 },
+      { criterionId: "works_out_of_box", value: 4 },
+      { criterionId: "agent_logic", value: 4 },
     ]);
     expect(v.verdict).toBe("FAIL");
     expect(v.reasons.length).toBeGreaterThan(0);
+  });
+  // A reviewed run scored above "good" on the 0-6 scale must not fail the overview's
+  // pass count for exceeding what the deterministic check can award.
+  it("is PASS when a reviewer scored compliance above good", () => {
+    const v = deterministicVerdict([
+      { criterionId: "compliance", value: 6 },
+      { criterionId: "works_out_of_box", value: 5 },
+    ]);
+    expect(v.verdict).toBe("PASS");
   });
 });
 
@@ -361,13 +370,13 @@ describe("thinking mode on the queue entry", () => {
 // neither a pass nor a failure, and the reasons have to say which is which.
 describe("deterministicVerdict over partly measured criteria", () => {
   it("names the criteria that were not measured", () => {
-    const v = deterministicVerdict([{ criterionId: "agent_logic", value: 1 }]);
+    const v = deterministicVerdict([{ criterionId: "agent_logic", value: 4 }]);
     expect(v.reasons).toContain("compliance=not measured");
     expect(v.reasons).toContain("works_out_of_box=not measured");
   });
 
   it("does not fail a run only because a criterion could not be measured", () => {
-    expect(deterministicVerdict([{ criterionId: "agent_logic", value: 1 }]).verdict).toBe("PASS");
+    expect(deterministicVerdict([{ criterionId: "agent_logic", value: 4 }]).verdict).toBe("PASS");
   });
 
   it("cannot pass a run with nothing measured at all", () => {
@@ -376,8 +385,8 @@ describe("deterministicVerdict over partly measured criteria", () => {
 
   it("still fails a run whose compliance was measured and fell short", () => {
     const v = deterministicVerdict([
-      { criterionId: "compliance", value: 0.5 },
-      { criterionId: "agent_logic", value: 1 },
+      { criterionId: "compliance", value: 2 },
+      { criterionId: "agent_logic", value: 4 },
     ]);
     expect(v.verdict).toBe("FAIL");
   });

@@ -35,7 +35,8 @@ import { estimateResultTokenProcessing } from "@/lib/tokenSpeed";
 import type { Environment, Result } from "@/schema/results";
 import type { Criterion, Task, TasksFile } from "@/schema/tasks";
 
-const DIVERGENCE_THRESHOLD = 0.5;
+// Two points on the 0-6 scale: a human "good" (4) against a judge "partial" (2).
+const DIVERGENCE_THRESHOLD = 2;
 
 // Full criteria set a judge scores: human core + task extra + judge-only.
 function judgeCriteriaFor(tasks: TasksFile, task: Task | undefined): Criterion[] {

@@ -13,6 +13,10 @@ export const TaskSchema = z.object({
   description: z.string(),
   systemPrompt: z.string(),
   extraCriteria: z.array(CriterionSchema).default([]),
+  // How the LLM judge should score this task: what to check, what matters most, what
+  // caps a score. Passed to the judge as its own section of the instructions; a human
+  // reviewer edits it in the task editor. Absent = criterion descriptions alone.
+  judgeInstructions: z.string().optional(),
   // When true, the task and its results are hidden from the public results view
   // and excluded from all measurements. Admin editors still see it. Absent = visible.
   hidden: z.boolean().optional(),

@@ -16,7 +16,7 @@ const entry = (
   environmentId: over.environmentId ?? "dgx-local",
   harnessId: over.harnessId ?? "refio",
   resultIds: ["r1", "r2"],
-  deterministic: over.deterministic ?? { scoreVariance: 0.1, codeSimilarity: 0.4 },
+  deterministic: over.deterministic ?? { scoreVariance: 0.6, codeSimilarity: 0.4 },
   judges: Object.entries(over.judgeValues ?? {}).map(([judgeId, value]) => ({
     judgeId,
     judgeModel: `${judgeId}-model`,
@@ -31,13 +31,13 @@ describe("scoreConsistency", () => {
     expect(scoreConsistency(0)).toBe(1);
   });
 
-  it("uses the same 0.5 ceiling as the leaderboard reliability score", () => {
-    expect(scoreConsistency(0.1)).toBeCloseTo(0.8);
-    expect(scoreConsistency(0.25)).toBeCloseTo(0.5);
+  it("treats half of the 0-6 scale as unrelated attempts, like the reliability score", () => {
+    expect(scoreConsistency(0.6)).toBeCloseTo(0.8);
+    expect(scoreConsistency(1.5)).toBeCloseTo(0.5);
   });
 
   it("never goes negative for attempts that swing across the whole scale", () => {
-    expect(scoreConsistency(0.7)).toBe(0);
+    expect(scoreConsistency(4.2)).toBe(0);
   });
 });
 
@@ -45,7 +45,7 @@ describe("entryStability", () => {
   it("blends score consistency, code similarity and the median judge verdict", () => {
     const s = entryStability(
       entry({
-        deterministic: { scoreVariance: 0.1, codeSimilarity: 0.4 },
+        deterministic: { scoreVariance: 0.6, codeSimilarity: 0.4 },
         judgeValues: { "claude-code": 0, codex: 1, other: 0.5 },
       }),
     );
@@ -65,7 +65,7 @@ describe("modelStability", () => {
   it("averages each dimension over the model's tasks and keeps a per-task score", () => {
     const entries = [
       entry({ taskId: "snake", deterministic: { scoreVariance: 0, codeSimilarity: 0.2 }, judgeValues: { codex: 1 } }),
-      entry({ taskId: "todo", deterministic: { scoreVariance: 0.25, codeSimilarity: 0.6 }, judgeValues: { codex: 0 } }),
+      entry({ taskId: "todo", deterministic: { scoreVariance: 1.5, codeSimilarity: 0.6 }, judgeValues: { codex: 0 } }),
       entry({ modelId: "ollama/b", taskId: "snake", judgeValues: { codex: 1 } }),
     ];
     const m = modelStability(entries, "ollama/a")!;

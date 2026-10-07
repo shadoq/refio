@@ -34,9 +34,9 @@ const file = {
       modelId: "a/fast",
       attemptNumber: 1,
       scores: [
-        { criterionId: "compliance", value: 1 },
-        { criterionId: "works_out_of_box", value: 1 },
-        { criterionId: "agent_logic", value: 1 },
+        { criterionId: "compliance", value: 4 },
+        { criterionId: "works_out_of_box", value: 4 },
+        { criterionId: "agent_logic", value: 4 },
       ],
       judgeScores: [],
       costUsd: 0.1,
@@ -57,7 +57,7 @@ const file = {
           judgeModel: "refio-cli",
           judgedAt: base.runAt,
           scores: [
-            { criterionId: "works_out_of_box", value: 1 },
+            { criterionId: "works_out_of_box", value: 4 },
             { criterionId: "agent_logic", value: 0 },
           ],
           screenshots: [],

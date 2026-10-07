@@ -5,7 +5,7 @@
 // criteria to the strong LLM judges (they cannot be measured mechanically).
 //
 // Pure, no IO: importable by vitest (@ alias) and by the tsx importer (relative).
-import { snapToScale } from "../judge/scoring";
+import { GOOD_SCORE, snapToScale } from "../judge/scoring";
 import { classifyTool } from "../trace/tool-classes";
 import type { ToolClass } from "../trace/types";
 import type { JudgeScoreSet } from "../../schema/results";
@@ -20,7 +20,11 @@ export interface DetScore {
   rationale?: string;
 }
 
-const BINARY_SCALE = [0, 0.5, 1];
+// A mechanical check tells "done" from "partly done" from "not done", never good from
+// exceptional, so on the 0-6 scale it tops out at GOOD_SCORE and leaves 5 and 6 to
+// the human and the LLM judges.
+const PARTIAL_SCORE = 2;
+const DETERMINISTIC_SCALE = [0, PARTIAL_SCORE, GOOD_SCORE];
 
 // POSIX ERE bracket classes used by the e2e needles, mapped to JS regex snippets.
 // They always appear inside [...], e.g. [[:space:]] -> [\s], which is valid JS.
@@ -64,8 +68,8 @@ export function isSubsequence(expected: string[], actual: string[]): boolean {
   return i === expected.length;
 }
 
-// compliance: fraction of the deliverable needles that matched. All -> 1, some ->
-// 0.5, none -> 0.
+// compliance: fraction of the deliverable needles that matched. All -> GOOD_SCORE, some ->
+// PARTIAL_SCORE, none -> 0.
 //
 // A case that declares no needles has nothing to compare the artifact against, so the
 // criterion is left UNMEASURED rather than scored full marks. Scoring it 1 handed every
@@ -74,16 +78,16 @@ export function isSubsequence(expected: string[], actual: string[]): boolean {
 export function complianceFromNeedles(deliverable: string, needles: Needle[]): DetScore | null {
   if (needles.length === 0) return null;
   const hits = needles.filter((n) => needleMatches(n, deliverable)).length;
-  const raw = hits === needles.length ? 1 : hits === 0 ? 0 : 0.5;
-  const value = snapToScale(raw, BINARY_SCALE);
-  return value === 1 ? { value } : { value, rationale: `${hits}/${needles.length} needles matched` };
+  const raw = hits === needles.length ? GOOD_SCORE : hits === 0 ? 0 : PARTIAL_SCORE;
+  const value = snapToScale(raw, DETERMINISTIC_SCALE);
+  return value === GOOD_SCORE ? { value } : { value, rationale: `${hits}/${needles.length} needles matched` };
 }
 
 // compliance for PLAN/CHAT: the run's final output must contain the needle.
 export function complianceFromOutput(finalOutput: string, needleRegex: string): DetScore {
   const matched = needleMatches({ regex: needleRegex }, finalOutput);
   return matched
-    ? { value: 1 }
+    ? { value: GOOD_SCORE }
     : { value: 0, rationale: "expected needle not found in the run output" };
 }
 
@@ -128,9 +132,9 @@ export function worksFromRender(opts: {
     return { value: 0, rationale: "rendered, but the page shows nothing" };
   }
   if (opts.consoleErrors.length > 0) {
-    return { value: 0.5, rationale: `rendered with ${opts.consoleErrors.length} console error(s)` };
+    return { value: PARTIAL_SCORE, rationale: `rendered with ${opts.consoleErrors.length} console error(s)` };
   }
-  return { value: 1 };
+  return { value: GOOD_SCORE };
 }
 
 // File-authoring tools are interchangeable for agent_logic: creating a new file and
@@ -159,7 +163,7 @@ export function worksFromBuild(
   if (activity && !activity.wrote) {
     return { value: 0, rationale: "build passes, but the run wrote nothing to make it pass" };
   }
-  return { value: 1 };
+  return { value: GOOD_SCORE };
 }
 
 // What the run's own action log says about how the loop behaved. Harness-neutral by
@@ -207,10 +211,10 @@ export function agentLogicFromTrace(
     faults.push(`${Math.round(wasteRatio * 100)}% of its calls repeated an earlier one`);
   }
 
-  if (faults.length === 0) return { value: 1 };
+  if (faults.length === 0) return { value: GOOD_SCORE };
   // Producing nothing is not a degree of quality, it is the absence of the work.
   if (wroteNothing || faults.length > 1) return { value: 0, rationale: faults.join("; ") };
-  return { value: 0.5, rationale: faults[0] };
+  return { value: PARTIAL_SCORE, rationale: faults[0] };
 }
 
 // agent_logic from what the run actually did, in order. The expectation is written in
@@ -223,16 +227,16 @@ export function agentLogicFromToolOrder(opts: {
   classOrder: ToolClass[];
   expected: ToolClass[];
 }): DetScore {
-  if (isSubsequence(opts.expected, opts.classOrder)) return { value: 1 };
+  if (isSubsequence(opts.expected, opts.classOrder)) return { value: GOOD_SCORE };
   return {
-    value: 0.5,
+    value: PARTIAL_SCORE,
     rationale: `expected ${opts.expected.join(" -> ")} in that order, ran ${opts.classOrder.join(" -> ") || "nothing"}`,
   };
 }
 
 // Did the run check its own work? Only asked where the case says checking is part of
 // the job: a page-generation task has no suite to run, and scoring it everywhere would
-// take the same half point off every harness and measure nothing. Null when the case
+// take the same points off every harness and measure nothing. Null when the case
 // did not ask, or when the run recorded no action log to answer from.
 export function agentLogicFromVerification(
   selfVerified: boolean | null | undefined,
@@ -240,8 +244,8 @@ export function agentLogicFromVerification(
 ): DetScore | null {
   if (!expected) return null;
   if (selfVerified === null || selfVerified === undefined) return null;
-  if (selfVerified) return { value: 1 };
-  return { value: 0.5, rationale: "finished without ever running the build or the tests it was told to check" };
+  if (selfVerified) return { value: GOOD_SCORE };
+  return { value: PARTIAL_SCORE, rationale: "finished without ever running the build or the tests it was told to check" };
 }
 
 // agent_logic overall: a failed run scores zero, otherwise every measurable view of

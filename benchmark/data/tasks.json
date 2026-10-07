@@ -4,17 +4,25 @@
     {
       "id": "compliance",
       "name": "Compliance",
-      "description": "Are the requirements from the prompt covered in the produced artifact? 1 = covered, 0.5 = partial, 0 = missing.",
+      "description": "Are the requirements from the prompt covered in the produced artifact? 0 = none of it, 2 = important requirements missing, 3 = the essentials are there but some requirements are missing or only partly done, 4 = everything required with small gaps, 5 = everything required, done well, 6 = everything required and more, done with evident care.",
       "scale": {
         "values": [
           0,
-          0.5,
-          1
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
         ],
         "labels": {
           "0": "missing",
-          "1": "covered",
-          "0.5": "partial"
+          "1": "fragment",
+          "2": "partial",
+          "3": "flawed",
+          "4": "good",
+          "5": "very good",
+          "6": "exceptional"
         }
       },
       "weight": 1
@@ -22,17 +30,25 @@
     {
       "id": "works_out_of_box",
       "name": "Works out of the box",
-      "description": "Does it run and behave as expected without manual fixes? 1 = OK, 0.5 = logic bugs, 0 = doesn't run.",
+      "description": "Does it run and behave as expected without manual fixes? 0 = doesn't run, 1 = runs but is unusable, 2 = serious bugs that block a main feature, 3 = main features work with noticeable bugs, 4 = works, minor bugs only, 5 = works, no bugs found, 6 = works flawlessly, including edge cases and unusual input.",
       "scale": {
         "values": [
           0,
-          0.5,
-          1
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
         ],
         "labels": {
-          "0": "broken",
-          "1": "works",
-          "0.5": "bugs"
+          "0": "missing",
+          "1": "fragment",
+          "2": "partial",
+          "3": "flawed",
+          "4": "good",
+          "5": "very good",
+          "6": "exceptional"
         }
       },
       "weight": 1
@@ -40,21 +56,25 @@
     {
       "id": "look",
       "name": "Look",
-      "description": "Visual quality. 2 = better than expected, 1.5 = good, 1 = OK, 0.5 = defects, 0 = broken.",
+      "description": "Visual quality. 0 = broken, 1 = barely styled, 2 = clear visual defects, 3 = acceptable, 4 = good, 5 = polished, 6 = better than expected, a design someone would ship.",
       "scale": {
         "values": [
           0,
-          0.5,
           1,
-          1.5,
-          2
+          2,
+          3,
+          4,
+          5,
+          6
         ],
         "labels": {
-          "0": "broken",
-          "1": "OK",
-          "2": "excellent",
-          "0.5": "defects",
-          "1.5": "good"
+          "0": "missing",
+          "1": "fragment",
+          "2": "partial",
+          "3": "flawed",
+          "4": "good",
+          "5": "very good",
+          "6": "exceptional"
         }
       },
       "weight": 1
@@ -62,17 +82,25 @@
     {
       "id": "code",
       "name": "Code quality",
-      "description": "Subjective code quality. 1 = OK, 0.5 = could be better, 0 = mess / unfinished.",
+      "description": "Subjective code quality. 0 = mess / unfinished, 2 = hard to follow, 3 = acceptable, 4 = clean, 5 = clean and well organised, 6 = exemplary.",
       "scale": {
         "values": [
           0,
-          0.5,
-          1
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
         ],
         "labels": {
-          "0": "mess",
-          "1": "clean",
-          "0.5": "mediocre"
+          "0": "missing",
+          "1": "fragment",
+          "2": "partial",
+          "3": "flawed",
+          "4": "good",
+          "5": "very good",
+          "6": "exceptional"
         }
       },
       "weight": 0.25
@@ -80,17 +108,25 @@
     {
       "id": "agent_logic",
       "name": "Agent logic",
-      "description": "Does the model follow the agent workflow (check files, edit, verify, summarize)?",
+      "description": "Does the model follow the agent workflow (check files, edit, verify, summarize)? 0 = ignored, 2 = partly, with many wasted or wrong steps, 3 = followed with some wasted steps, 4 = followed, 5 = followed efficiently, 6 = followed efficiently and verified its own work.",
       "scale": {
         "values": [
           0,
-          0.5,
-          1
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
         ],
         "labels": {
-          "0": "ignored",
-          "1": "followed",
-          "0.5": "partial"
+          "0": "missing",
+          "1": "fragment",
+          "2": "partial",
+          "3": "flawed",
+          "4": "good",
+          "5": "very good",
+          "6": "exceptional"
         }
       },
       "weight": 0.25
@@ -100,17 +136,25 @@
     {
       "id": "code_structure",
       "name": "Code structure",
-      "description": "Structure, naming, duplication, dead code. 1 = clean, 0.5 = mediocre, 0 = mess.",
+      "description": "Structure, naming, duplication, dead code. 0 = mess, 2 = poor, 3 = acceptable, 4 = clean, 5 = clean and well organised, 6 = exemplary.",
       "scale": {
         "values": [
           0,
-          0.5,
-          1
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
         ],
         "labels": {
-          "0": "mess",
-          "1": "clean",
-          "0.5": "mediocre"
+          "0": "missing",
+          "1": "fragment",
+          "2": "partial",
+          "3": "flawed",
+          "4": "good",
+          "5": "very good",
+          "6": "exceptional"
         }
       },
       "weight": 0.25
@@ -118,17 +162,25 @@
     {
       "id": "logic_correctness",
       "name": "Logic correctness",
-      "description": "Correctness of the logic judged from reading the code, not only from the screen. 1 = correct, 0.5 = minor flaws, 0 = broken logic.",
+      "description": "Correctness of the logic judged from reading the code, not only from the screen. 0 = broken logic, 2 = major flaws, 3 = the main path works with noticeable flaws, 4 = correct, minor flaws, 5 = correct, no flaws found, 6 = correct and robust, edge cases handled.",
       "scale": {
         "values": [
           0,
-          0.5,
-          1
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
         ],
         "labels": {
-          "0": "broken",
-          "1": "correct",
-          "0.5": "minor flaws"
+          "0": "missing",
+          "1": "fragment",
+          "2": "partial",
+          "3": "flawed",
+          "4": "good",
+          "5": "very good",
+          "6": "exceptional"
         }
       },
       "weight": 0.5
@@ -141,6 +193,7 @@
       "description": "Create a working Snake game in a single HTML file. The game must be playable in a browser with arrow key controls, score display, and game-over state.",
       "systemPrompt": "Write a snake game in javascript, css, html in one file. Build a classic Snake game on a 30x30 grid. The snake moves continuously in one of four directions and grows when eating food. If it hits a wall or itself, the game ends. Implement keyboard controls for player movement. Add a CPU-controlled snake mode that automatically searches for food. Add the three game modes: human vs human, cpu vs human, cpu vs cpu. Display the score during gameplay. Include a start menu and game over screen. Allow restarting the game with a keypress. Use file name \"snake_{{MODEL_ID}}_01.html\"",
       "extraCriteria": [],
+      "judgeInstructions": "The core of this task is the CPU snake and the three modes, not a single-player snake. Read the code to check that the CPU snake really steers toward the food (pathing or at least greedy steering with collision avoidance), not random or fixed movement, and that all three modes exist: human vs human (two key sets), CPU vs human and CPU vs CPU. A missing mode or a CPU that ignores the food caps compliance at 2. Check the 30x30 grid, wall and self collision ending the game, growth on eating, a visible score, a start menu, a game over screen and restart by keypress. In two-snake modes, snake-to-snake collisions must be handled; if they are not, works_out_of_box is at most 3. A 5 needs smooth, fair play with clear per-player scores; a 6 needs something beyond the brief done well, such as a CPU that plans paths and avoids traps, or a polished menu and game over flow.",
       "createdAt": "2026-04-01T10:00:00.000Z",
       "updatedAt": "2026-04-28T11:59:11.124Z"
     },
@@ -157,13 +210,27 @@
           "scale": {
             "values": [
               0,
-              0.5,
-              1
-            ]
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ],
+            "labels": {
+              "0": "missing",
+              "1": "fragment",
+              "2": "partial",
+              "3": "flawed",
+              "4": "good",
+              "5": "very good",
+              "6": "exceptional"
+            }
           },
           "weight": 1
         }
       ],
+      "judgeInstructions": "Check all five requirements in code and on screen: adding a todo (ignoring empty input), toggling complete with a strikethrough, deleting, the All / Active / Completed filters, and localStorage persistence that restores todos and their completed state on reload. Persistence that saves but never loads, or loses the completed flag, caps the persistence criterion at 2. Filters that hide items by changing the DOM but break after an add or delete cap works_out_of_box at 3. This is a small task: a clean, correct, accessible app with a pleasant layout is a 4 or 5; reserve 6 for clear extras done well, such as inline editing, clear-completed, item counts and keyboard support, without bugs.",
       "createdAt": "2026-04-10T10:00:00.000Z",
       "updatedAt": "2026-04-30T22:29:36.785Z"
     },
@@ -180,9 +247,22 @@
           "scale": {
             "values": [
               0,
-              0.5,
-              1
-            ]
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ],
+            "labels": {
+              "0": "missing",
+              "1": "fragment",
+              "2": "partial",
+              "3": "flawed",
+              "4": "good",
+              "5": "very good",
+              "6": "exceptional"
+            }
           },
           "weight": 1
         },
@@ -193,13 +273,27 @@
           "scale": {
             "values": [
               0,
-              0.5,
-              1
-            ]
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ],
+            "labels": {
+              "0": "missing",
+              "1": "fragment",
+              "2": "partial",
+              "3": "flawed",
+              "4": "good",
+              "5": "very good",
+              "6": "exceptional"
+            }
           },
           "weight": 1
         }
       ],
+      "judgeInstructions": "Judge the animation from the timed shots: growth must visibly progress between shot-1 and shot-3 and the scene must stay alive after growth ends (pulses keep travelling). A static or frozen canvas caps works_out_of_box at 1. Check the exact neon palette and an 800x800 canvas on a dark background. The dat.gui panel must have the four folders (Growth, Synapses, Pulses, Visuals), the listed controls and the three buttons (regenerate, clear, pause/resume); read the code to confirm each control is wired to the simulation and takes effect in real time, not just declared. Controls that do nothing cap gui-controls at 2. Synapses must form between nearby branch tips without duplicates and pulses must travel along connections, otherwise network-growth is at most 3. The code should be split into the requested sections (setup, GUI, growth, synapses, pulses, rendering).",
       "createdAt": "2026-05-08T19:36:42.431Z",
       "updatedAt": "2026-05-11T10:45:09.772Z"
     },
@@ -209,6 +303,7 @@
       "description": "MUSEUM NIGHT — cinematic event landing + .ics generator",
       "systemPrompt": "\nCreate a production-ready single-file website in one html file.\n\nGOAL\nBuild a premium event landing page for **“ARTIFACT: Museum Night”** — a ticketed night museum event with ticket selection, but no real payment.\n\nTECH / STRICT\n- One html file only.\n- HTML, CSS, and Vanilla JavaScript only.\n- No frameworks.\n- No libraries.\n- Inline CSS and inline JS.\n- Remote images are allowed.\n- Must work by opening the file directly in a browser.\n\nDESIGN DIRECTION\nCreate a visually striking cinematic museum-night website.\n\nThe design should feel like:\n- luxury museum after dark\n- velvet darkness\n- golden spotlights\n- quiet mystery\n- art-house cinema\n- premium cultural event\n\nVisual style:\n- dark velvet / near-black background\n- deep burgundy and midnight navy gradients\n- soft spotlight effects\n- elegant serif headlines\n- modern readable sans-serif body text\n- thin gold dividers\n- subtle grain/noise overlay using CSS only\n- large editorial hero layout\n- asymmetric image cards\n- glass-like dark panels\n- premium ticket cards\n- smooth hover states\n- scroll reveal animations\n- strong typography hierarchy\n\nColor palette:\n- Background: `#070506`\n- Velvet: `#1a0710`\n- Burgundy: `#3a0f1d`\n- Midnight navy: `#07111f`\n- Gold: `#d6ad60`\n- Soft gold: `#f3d79b`\n- Ivory text: `#f8efe2`\n- Muted text: `#b9a999`\n- Panel: `rgba(255, 244, 220, 0.06)`\n- Border: `rgba(214, 173, 96, 0.28)`\n\nTYPOGRAPHY\nUse CSS font stacks only:\n- Headlines: `Georgia`, `Times New Roman`, serif\n- Body: `Inter`, `system-ui`, `Segoe UI`, sans-serif\n\nLAYOUT\nSingle-page landing with sticky navbar and smooth scrolling.\n\nSECTIONS\n\n1. Navbar\n- Logo: ARTIFACT\n- Links:\n  - Program\n  - Artists\n  - Venue\n  - Tickets\n  - FAQ\n- CTA button: “Get Tickets”\n- Active nav state while scrolling\n- Mobile responsive menu\n\n2. Hero\n- Full cinematic hero section\n- Large serif headline:\n  “Museum Night, Reimagined”\n- Event name:\n  “ARTIFACT: Museum Night”\n- Date/time/place:\n  - 18 October 2026\n  - 19:00–02:00\n  - The Old Gallery, Warsaw\n- CTAs:\n  - Get Tickets\n  - Save to Calendar\n- Hero image:\n  `https://source.unsplash.com/featured/2400x1400?museum,night`\n- Add dark overlay and spotlight gradient\n- Add small event metadata badges\n\n3. Concept / Intro\n- Short editorial paragraph about the event\n- 3 feature cards:\n  - After-hours exhibitions\n  - Live performances\n  - Guided hidden-room tours\n\n4. Program Timeline\nHour-by-hour vertical timeline:\n- 19:00 — Doors Open\n- 19:30 — Curator Welcome\n- 20:00 — Hidden Collection Tour\n- 21:00 — Live Ambient Performance\n- 22:00 — Sculpture Hall Projection\n- 23:00 — Artist Talk\n- 00:00 — Midnight Gallery Walk\n- 01:00 — Closing Sound Session\n\nEach timeline item should have:\n- time\n- title\n- short description\n- location tag\n\n5. Artists / Speakers\nShow 8 artist/speaker cards.\n\nEach card:\n- image\n- name\n- role\n- short teaser\n- “View details” button\n\nUse these images:\n1. `https://source.unsplash.com/featured/1200x900?gallery,art`\n2. `https://source.unsplash.com/featured/1200x900?exhibition,lights`\n3. `https://source.unsplash.com/featured/1200x900?sculpture,museum`\n4. `https://source.unsplash.com/featured/1200x900?museum,crowd`\n5. `https://source.unsplash.com/featured/1200x900?art,installation`\n6. `https://source.unsplash.com/featured/1200x900?theater,stage`\n\nReuse images if needed.\n\nArtist modal:\n- accessible modal\n- name\n- role\n- image\n- longer bio\n- session time\n- close button\n- close on ESC\n- close on backdrop click\n\n6. Venue\nVenue section should include:\n- venue name\n- address\n- travel tips\n- accessibility notes\n- parking / public transport notes\n\nAdd a simple inline SVG map mock:\n- gallery block\n- nearby street lines\n- metro/bus marker\n- entrance marker\n- gold route line\n\n7. Ticket Tiers\nShow 3 premium ticket cards:\n\nTier 1:\n- Night Pass\n- €29\n- Entry after 19:00\n- Main exhibition access\n- Program access\n\nTier 2:\n- Curator Pass\n- €59\n- Everything in Night Pass\n- Hidden collection tour\n- Reserved artist talk seating\n\nTier 3:\n- Patron Pass\n- €129\n- Everything in Curator Pass\n- VIP lounge access\n- Signed event print\n- Priority entrance\n\nEach card:\n- select tier button\n- recommended badge for Curator Pass\n- hover highlight\n\nTicket modal checkout mock:\n- selected tier\n- attendee name\n- email\n- number of tickets\n- total price\n- checkbox for terms\n- confirm reservation button\n- validation\n- success message / toast\n- no real payment\n\n8. FAQ Accordion\nInclude at least 6 questions:\n- Is payment processed on this page?\n- Can I arrive late?\n- Are photos allowed?\n- Is the venue accessible?\n- Can I change my ticket tier?\n- How do I save the event to my calendar?\n\n9. Newsletter\n- Email input\n- Submit button\n- Inline validation\n- Toast after signup\n\n10. Footer\n- ARTIFACT logo\n- event credits\n- social-style text links\n- copyright\n- small note: “Demo landing page — no real ticket purchase.”\n\nSPECIAL FEATURE — SAVE TO CALENDAR\nAdd a “Save to Calendar” button.\n\nRequirements:\n- Generate a downloadable `.ics` file client-side using JavaScript.\n- Event title:\n  `ARTIFACT: Museum Night`\n- Start:\n  `20261018T190000`\n- End:\n  `20261019T020000`\n- Location:\n  `The Old Gallery, Warsaw`\n- Description:\n  `A cinematic after-hours museum event with exhibitions, performances, talks, and guided tours.`\n- File name:\n  `artifact-museum-night.ics`\n- Use a Blob and temporary download link.\n- The button must work without backend.\n\nINTERACTIONS / POLISH\n- Smooth scroll for nav links.\n- Active nav state.\n- Scroll reveal animations.\n- Accessible modals.\n- FAQ accordion.\n- Toast notifications.\n- Ticket tier selection modal.\n- Form validation.\n- Mobile responsive layout.\n- Buttons must have visible hover/focus states.\n- No console errors.\n\nSEO / META\nInclude:\n- title\n- meta description\n- Open Graph title\n- Open Graph description\n- Open Graph image\n- simple inline SVG favicon using data URI\n\nIMAGERY\nHero:\n`https://source.unsplash.com/featured/2400x1400?museum,night`\n\nGallery images:\n1. `https://source.unsplash.com/featured/1200x900?gallery,art`\n2. `https://source.unsplash.com/featured/1200x900?exhibition,lights`\n3. `https://source.unsplash.com/featured/1200x900?sculpture,museum`\n4. `https://source.unsplash.com/featured/1200x900?museum,crowd`\n5. `https://source.unsplash.com/featured/1200x900?art,installation`\n6. `https://source.unsplash.com/featured/1200x900?theater,stage`\n\nACCEPTANCE CRITERIA\n- One working html file.\n- No external libraries.\n- Remote images load correctly.\n- Sticky navbar works.\n- Active nav state works.\n- Hero looks cinematic and premium.\n- Program timeline is visible and readable.\n- 8 artist/speaker cards exist.\n- Artist modal works.\n- Venue section includes inline SVG map mock.\n- 3 ticket tiers exist.\n- Ticket modal checkout mock works.\n- FAQ accordion works.\n- Newsletter form validates email.\n- Toast notifications appear.\n- `.ics` file downloads correctly.\n- Page is responsive on mobile.\n- No console errors.\n\nDELIVERABLE\n- Save the implementation to the file \"website_museum_{{MODEL_ID}}_01.html\"\n- Create a production-ready single-file website in one html file.\n",
       "extraCriteria": [],
+      "judgeInstructions": "This is a long brief: score compliance by how many of the ten sections and their listed contents are actually present (navbar with active state and mobile menu, hero with date/time/place and two CTAs, concept cards, the eight-item timeline, eight artist cards with an accessible modal, venue with an inline SVG map, three ticket tiers with the Curator recommended badge, the ticket checkout modal with validation, an FAQ with at least six questions, newsletter, footer with the demo note). Missing whole sections caps compliance at 2; minor content gaps lower it to 3 or 4. Read the code for the Save to Calendar feature: a client-side .ics built with a Blob, the exact title, start 20261018T190000, end 20261019T020000, location and file name artifact-museum-night.ics; a button that does nothing caps works_out_of_box at 3. Check modals close on ESC and backdrop click. Judge look against the stated direction (velvet dark, burgundy and navy, gold accents, serif headlines, the given palette). Broken remote images are not the model's fault if the layout degrades gracefully.",
       "hidden": false,
       "createdAt": "2026-05-27T20:10:46.856Z",
       "updatedAt": "2026-07-25T10:10:06.526Z"
@@ -219,6 +314,7 @@
       "description": "Read-only PLAN analysis of a small Kotlin pipeline: name the components and the data-flow direction, without editing files.",
       "systemPrompt": "Do not modify any files. This is a read-only analysis task.\n\nAnalyze the architecture of the module under `src/pipeline`.\n\nIn your answer:\n- name each component class in the module, and\n- describe the direction in which data flows between them (which component hands its\n  result to which).",
       "extraCriteria": [],
+      "judgeInstructions": "This is a read-only analysis task; the deliverable is the answer, not a file. The answer must name every component class in src/pipeline and state the direction of data flow between them (which component hands its result to which). A missing class or a reversed or wrong flow caps compliance at 2. Any modification of the project files is a failure of the task. Reward a precise, verifiable answer over a long generic one; a 6 needs the complete, correct map stated clearly with references to where each hand-off happens.",
       "hidden": true,
       "createdAt": "2026-07-25T07:54:07.713Z",
       "updatedAt": "2026-07-25T10:09:44.440Z"
@@ -229,6 +325,7 @@
       "description": "Realtime Gouraud-shaded rotating cube in Canvas 2D (no WebGL): 3D pipeline, triangle rasterizer with per-vertex lighting interpolation, moving light, wireframe toggle, pause, FPS.",
       "systemPrompt": "Build a realtime Gouraud-shaded rotating cube in a single self-contained file\n`effect_gouraud_shaded_cube_{{MODEL_ID}}_01.html` using Canvas 2D only (no WebGL, no external libraries).\n\nImplement a minimal 3D pipeline: vertices, rotation matrices, perspective projection, and backface\nculling. Split faces into triangles and do per-vertex lighting (Lambert), then rasterize the\ntriangles with color interpolation across each face (Gouraud shading). Add a moving light source,\na wireframe toggle (W), and pause (P). Display the current FPS.\n\nDeliver the one file `effect_gouraud_shaded_cube_{{MODEL_ID}}_01.html`.",
       "extraCriteria": [],
+      "judgeInstructions": "Read the code to confirm a real minimal 3D pipeline in Canvas 2D: vertex list, rotation matrices, perspective projection, backface culling, faces split into triangles, per-vertex Lambert lighting and a rasterizer that interpolates color across each triangle. Filling each face with one flat color, or using a canvas gradient that only imitates shading, is not Gouraud shading and caps compliance at 2; WebGL or any library is a violation of the brief. The light source must move, W must toggle wireframe, P must pause, and an FPS counter must be visible and live. The cube must visibly rotate between the timed shots. Visible seams, holes or cracks between triangles are defects in works_out_of_box and look. A 6 needs smooth, correct shading at a stable frame rate with clean, well-structured math code.",
       "hidden": false,
       "createdAt": "2026-07-25T07:54:07.713Z",
       "updatedAt": "2026-07-25T18:27:09.575Z"
@@ -239,6 +336,7 @@
       "description": "Interactive single-layer perceptron: 2D plane + live decision boundary next to a neuron diagram, train controls, live weights/bias/epoch/accuracy, random datasets, XOR note; fixed side-by-side layout.",
       "systemPrompt": "Write an interactive neural network visualization in a single self-contained file\n`network_perceptron_{{MODEL_ID}}_01.html` (HTML + CSS + vanilla JavaScript inline; no external libraries).\n\nBuild a visual demo of a single-layer perceptron that classifies 2D points on a coordinate plane.\nShow input points from two classes with different colors. Display the perceptron as a neuron with\nweighted inputs, bias, and output. Visualize the decision boundary line updating during training.\nAdd controls to start, pause, reset, and step through training one iteration at a time. Show\ncurrent weights, bias, learning rate, epoch number, and classification accuracy. Allow generating\nrandom datasets and switching between linearly separable and non-separable data. Animate how the\nweights change after each mistake. Add a small panel explaining why a single-layer perceptron\ncannot solve XOR.\n\nLayout: top toolbar (title, dataset preset, start/pause/step/reset, randomize); left config panel;\ncenter workspace split into two permanently visible sections - left the 2D point plane with the\ndecision boundary, right the perceptron diagram (inputs, weights, bias, output); right diagnostics\npanel; bottom analysis (accuracy history, mistakes, log). The plane and the schematic must stay\nvisible at the same time.\n\nDeliver the one file `network_perceptron_{{MODEL_ID}}_01.html`.",
       "extraCriteria": [],
+      "judgeInstructions": "Check the perceptron is really trained by the perceptron rule in code (weights and bias updated on mistakes), not animated with a precomputed line. The decision boundary must move during training, and start, pause, step and reset must all work; a step that does not advance one iteration caps works_out_of_box at 3. Weights, bias, learning rate, epoch and accuracy must be shown and update live. Both separable and non-separable datasets and random generation are required, and the XOR explanation panel must be present. The layout rule matters: the point plane and the perceptron diagram must be visible at the same time; hiding one behind tabs caps compliance at 3. Judge the diagnostics and the bottom analysis (accuracy history, mistakes, log) as part of compliance.",
       "hidden": true,
       "createdAt": "2026-07-25T07:54:07.713Z",
       "updatedAt": "2026-07-25T10:09:41.517Z"
@@ -249,6 +347,7 @@
       "description": "Transformer attention visualizer: tokenize -> embeddings -> positional -> self-attention heatmap -> multi-head -> feed-forward/residual/norm -> output probabilities; step controls, architecture diagram + live stage side-by-side.",
       "systemPrompt": "Write an interactive educational visualization in a single self-contained file\n`network_transformer_{{MODEL_ID}}_01.html` (HTML + CSS + JavaScript inline; no external libraries or CDNs).\n\nExplain how a Transformer neural network works by showing the flow of data for a typed sentence,\nstep by step: tokenization, embeddings, positional encoding, self-attention (with a live attention\nmatrix/heatmap), multi-head attention, feed-forward layers, residual connections, layer\nnormalization, and final output token probabilities.\n\nControls: a text input with preset example sentences, play, pause, previous step, next step, reset,\nan animation speed slider, a simplified/advanced toggle, and an encoder-only / decoder-only /\nencoder-decoder selector.\n\nLayout: keep a persistent architecture diagram (tokens -> embeddings -> positional -> attention\nblocks -> feed-forward -> normalization -> output head) visible next to the live step visualization\nat all times; do not hide the diagram behind tabs. Show Q/K/V in an understandable way, an attention\nheatmap that updates live, and beginner-friendly explanations of the current stage.\n\nDeliver the one file `network_transformer_{{MODEL_ID}}_01.html`.",
       "extraCriteria": [],
+      "judgeInstructions": "The key requirement is a step-by-step flow for the typed sentence through tokenization, embeddings, positional encoding, self-attention with a live attention heatmap, multi-head attention, feed-forward, residual connections, layer normalization and output probabilities. Count which stages are really visualized; text-only stages count as partial. The attention heatmap must change with the input sentence and the step, computed in code, not a fixed image or table. Check all controls: text input with presets, play, pause, previous, next, reset, speed slider, simplified/advanced toggle and the encoder-only / decoder-only / encoder-decoder selector; a selector that changes nothing is a defect. The architecture diagram must stay visible next to the step view; hiding it behind tabs caps compliance at 3. Explanations should be correct and beginner-friendly; factual errors about the transformer lower logic_correctness.",
       "hidden": true,
       "createdAt": "2026-07-25T07:54:07.713Z",
       "updatedAt": "2026-07-25T10:09:37.504Z"
@@ -259,6 +358,7 @@
       "description": "Artificial-life ecosystem simulator: genome-driven organisms, food/predation, day/night, live trait charts, inspector, seeded generation + save/load. Large stress case.",
       "systemPrompt": "Create a complete single self-contained file `website_app_bioforge_{{MODEL_ID}}_01.html` (HTML + CSS + JavaScript inline; no\nexternal libraries, CDNs, assets or backend). Simulate an evolving 2D ecosystem.\n\nThe world contains plants, herbivores, carnivores, food, water and obstacles. Each organism has a\ngenome: size, speed, vision range, metabolism, reproduction threshold, aggression, mutation rate,\nlifespan. Organisms search for food, move, consume energy, avoid threats, reproduce, mutate, age\nand die, and compete for limited resources. Use spatial partitioning so it stays fast.\n\nAdd environmental systems: a day/night cycle, temperature, rainfall, vegetation growth, and\noccasional disease, with controls to influence them.\n\nThe interface must fill the viewport and provide: pause and speed, an organism inspector, a genome\nviewer, population counts, average-trait charts over generations (drawn with canvas or SVG, no\nchart libraries), an event log, a seed input, and spawn/disaster controls. Support save/load via\nlocalStorage and JSON export/import.\n\nThe simulation should stay responsive with at least ~1000 organisms. Do not leave TODOs or empty\nfunctions. Deliver the one file `website_app_bioforge_{{MODEL_ID}}_01.html`.",
       "extraCriteria": [],
+      "judgeInstructions": "This is a large brief; score compliance by coverage of its systems: the six world entity kinds, the genome with all listed traits, behaviour (search, move, consume energy, avoid threats, reproduce, mutate, age, die), spatial partitioning, the environmental systems (day/night, temperature, rainfall, vegetation, disease) with controls, and the UI list (pause/speed, inspector, genome viewer, population counts, trait charts over generations, event log, seed input, spawn/disaster controls, localStorage save/load, JSON export/import). Read the code to confirm mutation and inheritance really happen and traits change over generations; cosmetic random numbers are a logic defect. TODOs, empty functions or stub buttons cap compliance at 3. Check from the timed shots that the simulation runs and the population changes. Judge performance from the code: a spatial grid or similar structure is required for the ~1000 organism target.",
       "hidden": true,
       "createdAt": "2026-07-25T07:54:07.713Z",
       "updatedAt": "2026-07-25T10:09:36.385Z"
@@ -269,6 +369,7 @@
       "description": "Digital logic simulator: draggable gates/flip-flops/adders, interactive wires, state propagation, single-step, truth tables + timing diagram, save/load, examples. No libraries.",
       "systemPrompt": "Create a complete single self-contained file `circuitsmith_{{MODEL_ID}}_01.html` (HTML + CSS + JavaScript inline;\nno external libraries, CDNs, assets or backend). Build a digital logic circuit simulator.\n\nProvide a visual editor with draggable components, input/output pins, interactive wires, wire\nrouting, pan/zoom, snap-to-grid, multi-selection, copy/paste, undo/redo, rotation and deletion.\n\nComponents: input switch, push button, clock, constants, NOT, AND, NAND, OR, NOR, XOR, XNOR,\ntri-state buffer, LED, seven-segment display, multiplexer/demultiplexer, half and full adders,\nD and JK flip-flops, register and counter.\n\nThe engine must propagate digital states, support 0/1/undefined and high-impedance, detect unstable\nfeedback with an iteration limit, simulate clocks, visualize wire states, and support single-cycle\nstepping.\n\nAdd truth-table generation, timing diagrams, a configurable clock, probes, a component inspector\nand circuit validation. Provide example circuits (half adder, 4-bit adder, binary counter). Support\nsave/load via localStorage and JSON import/export. Every visible control must work; no fake\nsimulation states. Deliver the one file `circuitsmith_{{MODEL_ID}}_01.html`.",
       "extraCriteria": [],
+      "judgeInstructions": "Read the simulation engine first: it must propagate states through the graph with 0, 1, undefined and high-impedance values, detect unstable feedback with an iteration limit, and run clocks and single-cycle stepping. Gates whose outputs are hardcoded or that do not recompute when inputs change cap works_out_of_box at 2. Check the component list is complete, especially the sequential parts (D and JK flip-flops, register, counter) and the seven-segment display; each missing family lowers compliance. Check the editor features (drag, wiring, pan/zoom, snap, multi-select, copy/paste, undo/redo, rotate, delete), truth tables, timing diagrams, probes and the three example circuits; the half adder and the binary counter must actually work when loaded. The brief forbids fake simulation states; a visible control that does nothing is a defect.",
       "hidden": true,
       "createdAt": "2026-07-25T07:54:07.713Z",
       "updatedAt": "2026-07-25T10:09:35.427Z"
@@ -279,6 +380,7 @@
       "description": "Data-analysis workbench: CSV/JSON import, typed columns, filter/pivot, self-drawn charts (line/bar/scatter/histogram/pie) + dashboard panels, stats, export. No chart libraries.",
       "systemPrompt": "Create a complete single self-contained file `website_app_data_observatory_{{MODEL_ID}}_01.html` (HTML + CSS + JavaScript\ninline; no external libraries, charting packages or backend). Build an interactive data-analysis\nworkbench.\n\nLet the user paste CSV data, upload CSV or JSON, or generate sample datasets; inspect and edit\ninferred column types; handle missing values; sort, filter, search; create calculated columns using\na safe expression subset (do NOT use unrestricted eval); group, aggregate and build pivot summaries;\nand export the transformed data.\n\nImplement charts using canvas or SVG only: line, bar, stacked bar, scatter, histogram, heat map and\npie/donut, with tooltips, legends, zoom, selection and responsive resizing. Add a dashboard editor\nwhere panels can be added, moved, resized and removed.\n\nAdd descriptive statistics (min, max, mean, median, standard deviation, percentiles, unique and\nmissing counts, correlations). Support at least 10,000 rows without freezing (use chunked\nprocessing where needed). Persist dashboards and settings via localStorage and support JSON\nimport/export. Deliver the one file `website_app_data_observatory_{{MODEL_ID}}_01.html`.",
       "extraCriteria": [],
+      "judgeInstructions": "Check the expression engine for calculated columns: the brief forbids unrestricted eval, so eval, new Function or similar on user input caps logic_correctness at 2 and compliance at 3. Verify the data pipeline in code: CSV paste and upload, JSON upload, sample data, type inference with editing, missing values, sort, filter, search, group, aggregate, pivot and export. Count the chart types (line, bar, stacked bar, scatter, histogram, heat map, pie/donut) drawn with canvas or SVG and check tooltips, legends, zoom and selection. Check the dashboard editor can add, move, resize and remove panels. Statistics must be computed correctly (median, standard deviation, percentiles, correlations); wrong formulas lower logic_correctness. The 10,000-row requirement needs chunked or otherwise non-blocking processing visible in the code.",
       "hidden": true,
       "createdAt": "2026-07-25T07:54:07.713Z",
       "updatedAt": "2026-07-25T10:09:34.497Z"
@@ -289,6 +391,7 @@
       "description": "Invoicing SPA: clients + invoices, live net/VAT/gross line items, statuses, print/PDF via @media print, JSON export/import, validation + toasts. Hash routing + localStorage.",
       "systemPrompt": "Create a complete single self-contained file `invoice_pilot_{{MODEL_ID}}_01.html` (HTML + CSS + JavaScript inline;\nno frameworks or external libraries, no build step). Build \"INVOICE PILOT\", a clients + invoices\napp as a single-page app with hash routing and localStorage persistence. It must work by opening\nthe file directly in a browser.\n\nRoutes: `#/dashboard`, `#/clients`, `#/client/:id`, `#/invoices`, `#/invoice/new`,\n`#/invoice/:id`, `#/settings`.\n\nFeatures:\n- Clients CRUD (name, email, address, tax id, notes).\n- An invoice builder with a line-items table (description, qty, unit price, VAT rate, discount) and\n  live net / VAT / gross totals.\n- Invoice statuses Draft / Sent / Paid / Overdue (overdue computed from the due date).\n- An invoice preview with a \"Print / Save as PDF\" button using window.print and a dedicated\n  `@media print` layout that looks clean as a PDF.\n- JSON export/import.\n- Validation with inline errors, toasts and confirm dialogs before destructive actions.\n\nSeed a little demo data on first load. Deliver the one file `invoice_pilot_{{MODEL_ID}}_01.html`.",
       "extraCriteria": [],
+      "judgeInstructions": "Check all seven hash routes exist and render. Read the totals logic: net, VAT and gross must be computed per line from quantity, unit price, VAT rate and discount and summed correctly, with sensible rounding to cents; wrong totals cap logic_correctness at 2. The Overdue status must be computed from the due date, not stored as a static label. The print preview must have a dedicated @media print layout that hides the app chrome. Check clients CRUD, invoice CRUD, JSON export/import, inline validation, toasts, confirm dialogs before deletion and the seeded demo data on first load. Data must survive a reload through localStorage.",
       "hidden": true,
       "createdAt": "2026-07-25T07:54:07.713Z",
       "updatedAt": "2026-07-25T10:09:32.419Z"
@@ -299,6 +402,7 @@
       "description": "Single-file SaaS-style SPA: hash routing, localStorage, projects/tasks CRUD, kanban board, search/filters, validation, toasts, JSON export/import, demo data.",
       "systemPrompt": "Build \"PROJECT BOARD MINI\" - a lightweight project and task management app - as a single\nself-contained file `project_board_{{MODEL_ID}}_01.html` (HTML + CSS + vanilla JavaScript inline; no frameworks,\nno external libraries, no build step). Use hash routing and persist to localStorage. It must work\nby opening the file directly in a browser.\n\nRoutes: `#/dashboard`, `#/projects`, `#/project/:id`, `#/tasks`, `#/task/new`, `#/task/:id`,\n`#/settings`.\n\nFeatures:\n- Dashboard with summary cards (total projects, open/overdue/completed tasks) and recent tasks.\n- Projects CRUD (name, description, status, client, start/due dates).\n- Tasks CRUD (title, description, project, assignee, priority, status, due date).\n- Kanban board on the project page with columns Todo / In Progress / Review / Done, with\n  controls to move tasks between columns.\n- Search and filters on the tasks page (by project, status, priority; sort by due date/priority).\n- Required-field validation with inline errors.\n- Toast notifications and confirm dialogs; empty states.\n- Settings: reset demo data, export all data as JSON, import JSON.\n- Seed realistic demo data on first load (a few projects, a dozen tasks, some overdue).\n\nDeliver the one file `project_board_{{MODEL_ID}}_01.html`. No console errors.",
       "extraCriteria": [],
+      "judgeInstructions": "Check all seven hash routes render and that projects and tasks CRUD work with required-field validation and inline errors. The Kanban board on the project page must have the four columns and working controls to move tasks between them, with the change persisted. Check the tasks page search, the filters by project, status and priority, and sorting by due date and priority. The dashboard cards must be computed from the data (overdue from due dates), not hardcoded. Seeded demo data must include some overdue tasks. Settings must reset demo data and export and import JSON. The brief requires no console errors: any error in console-errors.json caps works_out_of_box at 3.",
       "hidden": true,
       "createdAt": "2026-07-25T07:54:07.713Z",
       "updatedAt": "2026-07-25T10:09:31.404Z"
@@ -309,6 +413,7 @@
       "description": "Web Audio modular synth + 16-step sequencer: oscillators/ADSR/filters/FX, 8 tracks, keyboard, oscilloscope + spectrum, presets, save/load. Audio on user gesture. Stress case.",
       "systemPrompt": "Create a complete single self-contained file `website_app_signal_forge_{{MODEL_ID}}_01.html` (HTML + CSS + JavaScript inline;\nno external libraries, samples or assets). Build a Web Audio modular synthesizer and music\nsequencer.\n\nUsing the Web Audio API implement: multiple oscillators (sine, square, triangle, sawtooth, noise),\nADSR envelopes, low/high/band-pass filters, LFO modulation, delay, distortion, a compressor, a\ngenerated reverb impulse, master volume, and polyphonic playback with voice stealing.\n\nAdd a 16-step sequencer with at least eight tracks; each track has note or drum mode, mute/solo,\nvolume, pan, probability, velocity and per-step parameter locks. Add a piano keyboard, computer\nkeyboard input, tempo, swing, pattern length and chaining, a playback position and a metronome.\n\nProvide oscilloscope and frequency-spectrum visualizers on canvas, a settled envelope preview and\nan active-voice count. Generate drum sounds procedurally (no files). Add presets and save/load via\nlocalStorage plus JSON import/export.\n\nAudio must start only after a user interaction, with no clicks or unstable gain changes. The layout\nfills the viewport and stays usable on smaller screens. Deliver the one file `website_app_signal_forge_{{MODEL_ID}}_01.html`.",
       "extraCriteria": [],
+      "judgeInstructions": "Audio cannot be heard from screenshots, so read the Web Audio code: oscillators of all five types including noise, ADSR envelopes applied to gain, the three filter types, LFO modulation, delay, distortion, compressor, a generated reverb impulse and master volume, connected into a real audio graph. Polyphony with voice stealing must exist in code. The sequencer needs 16 steps, at least eight tracks, note or drum mode, mute/solo, volume, pan, probability, velocity and per-step parameter locks; check the scheduler uses audio time (a lookahead scheduler), not setInterval alone, otherwise timing is a logic defect. Drums must be synthesized procedurally. The AudioContext must start only after a user gesture. Gain changes should use ramps to avoid clicks; abrupt value setting on gain lowers logic_correctness. Check the oscilloscope and spectrum visualizers are drawn from an AnalyserNode.",
       "hidden": true,
       "createdAt": "2026-07-25T07:54:07.713Z",
       "updatedAt": "2026-07-25T10:09:29.370Z"
@@ -319,6 +424,7 @@
       "description": "Large single-file voxel survival prototype: chunked world, movement/collision/gravity, mining/placement, inventory, day/night, HUD; viewport-filling and stable (stress case).",
       "systemPrompt": "Create a complete single self-contained file `website_game_voxel_frontier_{{MODEL_ID}}_01.html` (HTML + CSS + JavaScript inline;\nno external libraries, frameworks, CDNs, or assets). Use raw WebGL/WebGL2 or an efficient\nCanvas-based pseudo-3D renderer; generate all geometry and textures procedurally.\n\nBuild a procedurally generated voxel world divided into chunks. The player explores, gathers\nresources, and builds:\n- chunk-based voxel terrain with a few biomes and underground caves,\n- first-person or third-person movement with collision detection, gravity and jumping,\n- block mining and placement, a hotbar and inventory,\n- a day/night cycle and simple weather,\n- an on-screen HUD (health/hunger/hotbar).\n\nThe page must fill the viewport (100vw x 100vh) and resize without resetting the world. Keep it\nstable with several loaded chunks. Do not leave TODOs, placeholder buttons, or empty functions.\nPrioritize a stable, playable loop over graphics.\n\nDeliver the one file `website_game_voxel_frontier_{{MODEL_ID}}_01.html`.",
       "extraCriteria": [],
+      "judgeInstructions": "The brief says to prioritise a stable, playable loop over graphics; judge accordingly. Check chunk-based terrain with more than one biome and caves, movement with gravity, jumping and real collision against blocks, mining and placing blocks that changes the world, a hotbar and inventory, a day/night cycle, simple weather and a HUD with health, hunger and the hotbar. A world that renders but cannot be walked in or edited caps works_out_of_box at 2. The page must fill the viewport and a resize must not regenerate the world (read the resize handler). TODOs, placeholder buttons or empty functions cap compliance at 3. Graphics quality matters only for look.",
       "hidden": true,
       "createdAt": "2026-07-25T07:54:07.713Z",
       "updatedAt": "2026-07-25T10:09:28.546Z"
@@ -329,6 +435,7 @@
       "description": "Polish single-file cafe landing page: sticky nav + CTA, hero + USP, offer (menu/promotions/reservations/catering/location/hours), social proof, gallery, About, FAQ, schema.org footer, accessible.",
       "systemPrompt": "Create a modern, sales-oriented website for the Polish cafe \"Pod Bukiem\" as a single\nself-contained file `site-cafe_{{MODEL_ID}}_01.html` (HTML + CSS + JavaScript inline; no frameworks or external\nlibraries).\n\nThe visible site content and copy must be in Polish (it is a Polish cafe); keep code identifiers\nin English. Present the cafe's offer and convey its unique atmosphere. Design desktop and\nmobile-first versions following modern UX/UI, performance, SEO and accessibility best practices\n(WCAG 2.2 AA), with persuasive Polish microcopy.\n\nInclude:\n- sticky navigation with a CTA,\n- a hero section with a value proposition and a USP,\n- the offer: menu, promotions, reservations, catering/events, location, opening hours,\n- social proof (reviews/ratings),\n- a gallery,\n- an \"About\" (\"O nas\") section,\n- an FAQ,\n- a footer with schema.org structured data (JSON-LD).\n\nAdd Open Graph meta tags, a favicon, semantic markup and aria-labels. Deliver everything in the\none file `site-cafe_{{MODEL_ID}}_01.html`.",
       "extraCriteria": [],
+      "judgeInstructions": "The visible copy must be in Polish; English visible copy caps compliance at 2. Check every listed section: sticky navigation with CTA, hero with value proposition and USP, menu, promotions, reservations, catering/events, location, opening hours, reviews, gallery, O nas, FAQ and footer. Read the head for Open Graph tags, a favicon and JSON-LD structured data of a cafe type (CafeOrCoffeeShop or LocalBusiness) with address and opening hours; missing structured data lowers compliance. Check semantic markup, aria-labels, alt texts, visible focus and contrast as part of the WCAG 2.2 AA requirement. Judge the copy itself: persuasive, natural Polish without obvious errors counts toward look and compliance. Check the mobile layout from the code (media queries, mobile navigation).",
       "hidden": true,
       "createdAt": "2026-07-25T07:54:07.713Z",
       "updatedAt": "2026-07-25T10:09:27.588Z"
@@ -339,6 +446,7 @@
       "description": "Dark luxury single-file travel landing page: glass navbar+CTA, animated hero, destinations grid with accessible modal, tiers, carousel, validated form + toast, IntersectionObserver reveals, active-nav.",
       "systemPrompt": "Create a production-ready, visually striking single-file website in one `web_aurora_{{MODEL_ID}}.html` using\nonly HTML + CSS + vanilla JavaScript (inline; no external JS/CSS libraries, no build tools). It\nmust work by opening the file in a browser.\n\nBrand: \"AURORA LUXE TRAVEL\" - ultra-premium concierge trips. Futuristic luxury look: dark mode,\nglassmorphism, neon accents, animated gradients, premium typography (system fonts). Respect\nprefers-reduced-motion and accessibility.\n\nSections:\n- Skip link + sticky glass navbar (logo + anchors + CTA \"Request Itinerary\").\n- Hero: big headline, subtext, primary + secondary CTAs, animated gradient overlay.\n- Destinations grid (6 cards: name, region, vibe, \"from EUR X\"); a card opens an accessible modal\n  with details (focus trap, ESC to close).\n- Signature experiences, membership tiers (3), a testimonials carousel (vanilla, keyboard\n  accessible).\n- Concierge form (name, email, dates, travelers, budget, notes) with client validation, inline\n  errors, and a submit toast.\n- Footer.\n\nPolish: section reveal on scroll via IntersectionObserver, active-section highlight in the navbar,\na floating CTA on mobile, SEO meta + inline SVG favicon.\n\nDeliver the one file `web_aurora_{{MODEL_ID}}.html`.",
       "extraCriteria": [],
+      "judgeInstructions": "Check the accessibility requirements in code, they are the hard part: a skip link, a destination modal with a real focus trap and ESC to close, a testimonials carousel operable by keyboard, prefers-reduced-motion respected, and visible focus states. A modal without a focus trap caps compliance at 3. Check six destination cards with name, region, vibe and price, three membership tiers, the concierge form with client validation, inline errors and a submit toast, IntersectionObserver reveal, the active navbar highlight, a floating CTA on mobile, SEO meta and an inline SVG favicon. External JS or CSS libraries violate the brief. Judge look against the stated direction: dark luxury, glassmorphism, neon accents and animated gradients.",
       "hidden": true,
       "createdAt": "2026-07-25T07:54:07.713Z",
       "updatedAt": "2026-07-25T10:09:26.695Z"
@@ -349,6 +457,7 @@
       "description": "Classic 30x30 Snake with a 4-CPU-players mode: continuous movement, growth, wall/self collision, arrow keys, CPU search-for-food, three modes (human vs human, cpu vs human, 4 cpu), live score, start + game-over screens, restart.",
       "systemPrompt": "Write a snake game in javascript, css, html in one file. Build a classic Snake game on a 30x30\ngrid. The snake moves continuously in one of four directions and grows when eating food. If it\nhits a wall or itself, the game ends. Implement keyboard controls for player movement. Add a\nCPU-controlled snake mode that automatically searches for food. Add the three game modes: human vs\nhuman, cpu vs human, 4 cpu (4cpu players). Display the score during gameplay. Include a start menu\nand game over screen. Allow restarting the game with a keypress. Use file name\n\"snake4cpu_{{MODEL_ID}}.html\".",
       "extraCriteria": [],
+      "judgeInstructions": "Like the classic snake task, but the third mode is four CPU snakes playing at once. Read the code to check each CPU snake really steers toward the food and avoids walls, itself and other snakes; snakes that move randomly or in a fixed pattern cap compliance at 2. All three modes must exist: human vs human, CPU vs human and 4 CPU. Collisions between snakes must be resolved consistently (who dies, what happens to the board), otherwise works_out_of_box is at most 3. Check the 30x30 grid, visible scores for every player, the start menu, the game over screen and restart by keypress. A 6 needs CPU snakes that compete sensibly for food and survive long games.",
       "hidden": true,
       "createdAt": "2026-07-25T08:15:08.910Z",
       "updatedAt": "2026-07-25T10:09:25.729Z"
@@ -359,6 +468,7 @@
       "description": "Single-file CHIP-8 emulator: full instruction set, timers, keypad, 64x32 canvas display with sprite collision, built-in demo ROM, ROM loading, pause, step, speed control, register debugger.",
       "systemPrompt": "Create a complete single self-contained file `chip8_{{MODEL_ID}}_01.html` (HTML + CSS + JavaScript inline;\nno external libraries, CDNs, assets or backend). Build a working CHIP-8 emulator.\n\nImplement the interpreter properly: 4 KB of memory with the font set loaded at 0x050 and programs at 0x200,\nsixteen 8-bit registers V0 to VF, the 16-bit index register, the program counter, a call stack, and the\ndelay and sound timers counting down at 60 Hz. Decode and execute the complete instruction set of 35\ninstructions, including the arithmetic and logic group with the carry and borrow flags in VF, the shift\ninstructions, jumps and calls, the random instruction, BCD conversion, register save and load, and the key\ntests.\n\nThe display is 64 by 32 pixels drawn on a canvas scaled to a readable size, with sprites drawn by XOR and\nthe collision flag set in VF. The 16-key keypad is mapped to a 4 by 4 block of keyboard keys shown in the\ninterface; key press and release must both reach the emulator.\n\nInclude a small demo ROM as a byte array inside the file: a real program, assembled by you, that draws a\nsprite and moves or reacts to a key, so that the emulator can be tried without any download. Also allow\nloading a ROM from a local file.\n\nAdd run, pause, single step and reset controls, an adjustable instructions-per-frame speed, and a debugger\npanel showing the registers, the index register, the program counter, the stack and the decoded current\ninstruction. Every visible control must work. Deliver the one file `chip8_{{MODEL_ID}}_01.html`.",
       "extraCriteria": [],
+      "judgeInstructions": "Read the interpreter: 4 KB memory, the font at 0x050, programs at 0x200, V0-VF, I, PC, stack, and delay and sound timers decremented at 60 Hz independently of the instruction speed. Check the instruction set against the 35 CHIP-8 opcodes, with special care for the 8XY_ group (VF carry and borrow set after the result, shifts), DXYN drawing by XOR with wrap or clip and the collision flag, FX33 BCD, FX55/FX65 and the key instructions EX9E, EXA1 and FX0A. Each wrong or missing opcode lowers logic_correctness; several wrong caps it at 2. The demo ROM must be real bytecode that draws a sprite and reacts to a key, not canvas drawing that bypasses the emulator; a fake demo caps compliance at 2. Check run, pause, single step, reset, the speed control and the debugger panel (registers, I, PC, stack, decoded instruction) all work.",
       "hidden": true,
       "createdAt": "2026-09-11T11:19:23.677Z",
       "updatedAt": "2026-09-14T08:41:38.865Z"
@@ -369,6 +479,7 @@
       "description": "Multi-file Node API for notes built against a hidden test suite: validation, paging, tag filter, ETag conditional requests, error envelopes, no dependencies.",
       "systemPrompt": "This project is a directory, not a single file. Read `README.md` first: it is the complete specification of\nan HTTP API for notes, and `test/api.test.js` is the acceptance suite that will be run against your work.\n\nImplement the API so that `node --test` passes from the project root. The suite starts `src/server.js` as a\nchild process with the port in the `PORT` environment variable and then drives the API over HTTP, so the\nserver must listen on that port and answer `/health` as soon as it is up.\n\nUse only Node's standard library: no dependencies, no install step, no framework. The data lives in memory\nfor the lifetime of the process.\n\nSplit the work across several modules instead of one long file: `src/server.js` is the entry point that\nowns the socket and nothing else, and at least a storage module and a routing or rules module sit behind\nit, each required from `src/server.js` or from one another with a relative path.\n\nDo not modify `test/api.test.js` or `README.md`. Everything the suite checks is described in the README:\nthe status codes, the response shapes, the validation rules and field names, the paging and sorting, the\n`ETag` header with `If-None-Match` and `If-Match`, and the error envelopes. Read it carefully rather than\nguessing, and run the suite yourself until it passes. Deliver the working server rooted at `src/server.js`.",
       "extraCriteria": [],
+      "judgeInstructions": "The acceptance suite is the main evidence: a server that fails it cannot score above 3 on works_out_of_box. Beyond passing, check the structure the brief asks for: src/server.js only owns the socket and delegates, with at least a storage module and a routing or rules module required by relative path. Everything in one file caps compliance at 3. Check status codes, response shapes, validation messages, paging and sorting, ETag with If-None-Match (304) and If-Match (412) and the error envelope follow the README. Only the Node standard library is allowed; any dependency is a violation. The test file and README must be unchanged.",
       "hidden": true,
       "createdAt": "2026-09-11T11:19:23.677Z",
       "updatedAt": "2026-09-14T08:41:40.946Z"
@@ -379,6 +490,7 @@
       "description": "Refactor a 250-line tangled shop module into inventory, pricing, report and date modules behind an unchanged facade, with the original test suite still green.",
       "systemPrompt": "This project is a directory, not a single file. `src/legacy.js` is one module that has grown to hold four\nunrelated jobs at once: inventory with batches and expiry dates, pricing with tiered discounts, coupons and\nper-category tax, reporting in text and CSV, and a handful of date and rounding helpers everything uses.\n`test/legacy.test.js` pins its behaviour and currently passes.\n\nSplit it into `src/inventory.js`, `src/pricing.js`, `src/report.js` and `src/dates.js`, each owning one of\nthose jobs, with the shared date and rounding helpers living in `src/dates.js` only. `src/legacy.js` stays\nas the entry point: it requires the new modules with relative paths and re-exports exactly the same public\nnames it exports today, so every existing caller keeps working.\n\nChange no behaviour. Every number, message, error text and output format must stay identical, including the\nrounding and the padding in the reports. Do not modify `test/legacy.test.js`, and do not add dependencies:\nNode's standard library only.\n\nEach new module must require only what it actually uses, and no helper may end up copied into more than one\nmodule. Run `node --test` from the project root yourself and keep running it until the whole suite passes\nunchanged. Deliver the split with `src/legacy.js` as the facade.",
       "extraCriteria": [],
+      "judgeInstructions": "This is a behaviour-preserving refactor. The unchanged suite must pass; a failing or edited test caps works_out_of_box at 0. Check the split: src/inventory.js, src/pricing.js, src/report.js and src/dates.js each own one job, the shared date and rounding helpers live in src/dates.js only and are not copied into other modules, and src/legacy.js is a facade that requires the new modules and re-exports exactly the same public names. Each module must require only what it uses. Check that numbers, messages, error texts, rounding and report padding are unchanged by comparing with the original logic. Leftover logic still living in legacy.js lowers compliance.",
       "hidden": true,
       "createdAt": "2026-09-11T11:19:23.677Z",
       "updatedAt": "2026-09-14T08:41:41.986Z"
@@ -389,6 +501,7 @@
       "description": "Single-file spreadsheet: 26x100 grid, formula engine with ranges and functions, dependency-driven recalculation, cycle and error reporting, undo/redo, CSV, localStorage.",
       "systemPrompt": "Create a complete single self-contained file `spreadsheet_{{MODEL_ID}}_01.html` (HTML + CSS + JavaScript inline;\nno external libraries, CDNs, assets or backend). Build a working spreadsheet with a real formula engine.\n\nThe grid has 26 columns (A to Z) and 100 rows, with a column and row header, a selected cell, a visible\nformula bar and in-cell editing. Keyboard navigation must work: arrows, Tab, Enter, Escape to cancel an\nedit, Delete to clear, and a range selection with Shift plus arrows.\n\nA cell holds a literal (number or text) or a formula starting with `=`. The formula language supports\nnumbers, strings, the operators + - * / ^ and parentheses, comparisons, single cell references such as A1,\nranges such as B2:B10, and the functions SUM, AVG, MIN, MAX, COUNT and IF.\n\nBuild a dependency graph between cells: editing one cell recalculates only the cells that depend on it,\nnot the whole sheet. Detect circular references and show `#CYCLE` in every cell of the cycle instead of\nhanging. A reference to an invalid cell shows `#REF`, a division by zero shows `#DIV/0`, and a formula that\ncannot be parsed shows `#ERROR`, each with the underlying cause visible somewhere in the interface.\n\nAdd multi-level undo and redo for edits, clears and pastes, copy and paste of a range, import from pasted\nCSV text and export of the sheet to CSV, and persistence of the whole sheet in localStorage so a reload\nrestores it. Every visible control must work and every displayed value must come from the engine, never\nfrom a hardcoded table. Deliver the one file `spreadsheet_{{MODEL_ID}}_01.html`.",
       "extraCriteria": [],
+      "judgeInstructions": "Read the formula engine: a real tokenizer and parser with operator precedence, including ^ and comparisons, cell references, ranges and the functions SUM, AVG, MIN, MAX, COUNT and IF. Using eval or new Function on the formula text caps logic_correctness at 2. Check the dependency graph: an edit must recalculate only dependent cells, not the whole sheet; a full recalc on every edit lowers logic_correctness to 3. Check #CYCLE marks every cell of a cycle without hanging, and #REF, #DIV/0 and #ERROR appear with the cause visible. Check keyboard navigation (arrows, Tab, Enter, Escape, Delete, Shift range selection), multi-level undo and redo for edits, clears and pastes, range copy and paste, CSV import and export, and localStorage persistence.",
       "hidden": true,
       "createdAt": "2026-09-11T11:19:23.677Z",
       "updatedAt": "2026-09-14T08:41:42.970Z"
@@ -399,6 +512,7 @@
       "description": "A shop cart whose test suite fails from the first second: the discount threshold is off by one and the tax is applied as a multiplier instead of a surcharge. Nothing states what is wrong, so the agent has to run the tests, read them and repair the code.",
       "systemPrompt": "This project's test suite does not pass. Run it, read what it says, and fix the source so that every test passes.\n\nThe tests in `test/` describe the behaviour the shop needs and are correct. Do not change them, and do not delete or skip any of them. The fix belongs in `src/`.\n\nRun the suite yourself before you finish and make sure it is green.",
       "extraCriteria": [],
+      "judgeInstructions": "The whole suite in test/ must pass with the tests unchanged; a deleted, skipped or edited test is a failure of the task. The fix must be in src/ and address the real cause of each failing test, not special-case the test inputs; a fix that hardcodes expected values caps logic_correctness at 2. Check the change is minimal and does not break unrelated behaviour. The agent should have run the suite itself before finishing.",
       "hidden": true,
       "createdAt": "2026-09-14T09:19:25.952Z",
       "updatedAt": "2026-09-18T18:26:43.784Z"
@@ -409,6 +523,7 @@
       "description": "A helper gains an optional parameter. Its one meaningful caller sits in a deep package path under a filename that does not mention the helper, so the change cannot be completed without searching the tree first.",
       "systemPrompt": "`slugify` in `src/lib/text.js` always returns the whole slug. The public site cannot render slugs longer than a set limit.\n\nGive `slugify` an optional second argument: a maximum length. When it is given, cut the slug to that length and make sure it does not end with a dash. When it is not given, behave exactly as today.\n\nThen update every place in this repository that should pass a limit. There is a caller outside `src/` that needs it; the site's limit is 12 characters and belongs next to that caller, not inside the helper.\n\nDo not change the tests. Run the suite yourself before you finish.",
       "extraCriteria": [],
+      "judgeInstructions": "Check slugify takes an optional maximum length, cuts the slug to it, never leaves a trailing dash, and behaves exactly as before when the argument is absent. The key part of the task is the caller outside src/: it must pass the site's limit of 12, and that constant must live next to that caller, not inside the helper. Missing that caller caps compliance at 2. Tests must be unchanged and pass. Other callers should only be changed if they really render on the site.",
       "hidden": true,
       "createdAt": "2026-09-14T09:19:25.952Z",
       "updatedAt": "2026-09-18T18:26:41.798Z"
@@ -419,6 +534,7 @@
       "description": "Two modules export a function of the same name; only one of them is imported anywhere. An agent that edits by name instead of by who calls what changes the wrong file and leaves the tests red.",
       "systemPrompt": "Long amounts on the receipt are hard to read: `123456789` prints as `1234567.89 PLN`.\n\nGroup the thousands with a single space, so that amount prints as `1 234 567.89 PLN`. Short amounts must keep printing exactly as they do now, and the currency stays `PLN`.\n\nThe test suite in `test/` already covers both cases. Do not change the tests. Run them yourself before you finish.",
       "extraCriteria": [],
+      "judgeInstructions": "The repository contains a decoy module that looks like the right place to edit but is not used by the receipt. Check the change was made in the module the receipt actually uses; editing only the decoy caps compliance at 0, whatever its quality. Long amounts must be grouped with a single space (123456789 prints as 1 234 567.89 PLN), short amounts must print exactly as before, and the currency stays PLN. Tests must be unchanged and pass.",
       "createdAt": "2026-09-14T09:19:25.952Z",
       "updatedAt": "2026-09-18T18:26:45.069Z",
       "hidden": true

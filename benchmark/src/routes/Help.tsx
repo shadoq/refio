@@ -19,7 +19,7 @@ const leaderboardMetrics = [
     name: "Pass Rate",
     formula: "passing attempts / all attempts",
     description:
-      "Share of attempts where the normalized result score is at least 70%. It is a quick success-rate signal.",
+      "Share of attempts where the normalized result score is at least 50% (3 of 6: it works, even if with visible defects). It is a quick success-rate signal.",
   },
   {
     name: "First-shot",
@@ -128,9 +128,12 @@ export default function Help() {
       <Card className="glass-card" title="Score Normalization">
         <Paragraph>
           Raw criterion values use the scale defined in <Text code>tasks.json</Text>.
-          A score is normalized as <Text code>value / max(scale.values)</Text>. For
-          example, a value of 1 on a 0-1 scale is 100%, and a value of 1.5 on a
-          0-2 scale is 75%.
+          Every criterion uses one 0-6 scale: 0 missing, 1 fragment, 2 partial, 3
+          works with clear defects, 4 good, 5 very good, 6 exceptional. A score is
+          normalized as <Text code>value / max(scale.values)</Text>, so 6 is 100%, 4
+          is 67% and 3 is 50%. Results scored before the 0-6 scale were rescaled
+          with their top mark at 4 (good), since the old scale could not tell good
+          from exceptional; only the old "excellent" look became 6.
         </Paragraph>
         <Paragraph>
           Result score is the average of all normalized criterion scores present in
@@ -252,7 +255,7 @@ export default function Help() {
                   never stored. The Results page shows an aggregate{" "}
                   <Text strong>Auto (judges)</Text> column with a{" "}
                   <Text strong>divergence badge</Text> when the human and the judge
-                  aggregate differ by at least 0.5 on a shared criterion. The
+                  aggregate differ by at least 2 points on a shared criterion. The
                   Leaderboard, Compare and Pareto pages expose the per-model{" "}
                   <Text strong>Judge Score</Text> summary, and Compare adds a dedicated
                   judge radar.
@@ -294,9 +297,10 @@ export default function Help() {
                   <Text>
                     <Text strong>Score consistency</Text> - how close the judge scores of
                     the attempts are to each other:{" "}
-                    <Text code>clamp(1 - scoreVariance / 0.5, 0, 1)</Text>, where{" "}
+                    <Text code>clamp(1 - scoreVariance / 3, 0, 1)</Text>, where{" "}
                     <Text code>scoreVariance</Text> is the mean absolute deviation between
-                    attempts. It uses the same 0.5 ceiling as Reliability.
+                    attempts on the 0-6 scale. Like Reliability, it treats a deviation of
+                    half the scale as unrelated attempts.
                   </Text>
                   <Text>
                     <Text strong>Code similarity</Text> - token overlap (Jaccard) between

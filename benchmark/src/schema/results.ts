@@ -5,6 +5,33 @@ export const ModelSchema = z.object({
   name: z.string(),
   provider: z.string(),
   parameterCount: z.string().optional(),
+  // What the weights actually are, so two rows of "27B" can be told apart. For local
+  // models these come from the model server (Ollama /api/show); a cloud API does not
+  // expose most of them and leaves them empty.
+  // Weight format as served, e.g. Q4_K_M, MXFP4, F16.
+  quantization: z.string().optional(),
+  // Mixture-of-experts models run only part of their weights per token, which is what
+  // their speed follows; dense ones run all of them.
+  architecture: z.enum(["dense", "moe"]).optional(),
+  // Parameters active per token of a MoE model, e.g. "3B". Only as published by the
+  // model's authors; the server does not report it.
+  activeParameterCount: z.string().optional(),
+  // Longest context the model supports, in tokens (not the window a run used).
+  contextWindow: z.number().int().positive().optional(),
+  // What the served model declares: tools, thinking, vision.
+  capabilities: z.array(z.string()).optional(),
+  license: z.string().optional(),
+  // Size of the weights on disk, the floor for the memory a local run needs.
+  sizeGb: z.number().positive().optional(),
+  // Short digest of the exact weights on the server; a re-pulled tag changes it.
+  digest: z.string().optional(),
+  // When the model was published and how recent its training data is, as stated by
+  // its authors. A task whose stack is newer than the cutoff tests guessing, not skill.
+  releasedAt: z.string().optional(),
+  knowledgeCutoff: z.string().optional(),
+  // List price in USD per million tokens, for cloud models billed per token.
+  inputPricePerMTok: z.number().nonnegative().optional(),
+  outputPricePerMTok: z.number().nonnegative().optional(),
   notes: z.string().optional(),
 });
 
@@ -212,6 +239,20 @@ export const RunContextSchema = z.object({
   // Host extensions switched off for this run, so a later reader knows the agent was
   // measured as it ships rather than as this machine is configured.
   pluginsDisabled: z.array(z.string()).optional(),
+  // What a local model server actually served, read when the sweep starts. The digest
+  // tells two runs of the same tag apart after the tag was pulled again; the version
+  // and the sampling defaults baked into the model change its behaviour just as much.
+  modelDigest: z.string().optional(),
+  serverVersion: z.string().optional(),
+  generationParams: z
+    .record(z.string(), z.union([z.number(), z.string(), z.array(z.string())]))
+    .optional(),
+  // How the model sat in memory right after this attempt. A share below 1 means part of
+  // it ran on the CPU, which makes its timing incomparable with a full GPU run.
+  memoryGb: z.number().positive().optional(),
+  gpuShare: z.number().min(0).max(1).optional(),
+  // The window the server really loaded, as opposed to the one the sweep asked for.
+  loadedContextWindow: z.number().int().positive().optional(),
 });
 
 // Whether the model was allowed to reason before answering, and whether it actually

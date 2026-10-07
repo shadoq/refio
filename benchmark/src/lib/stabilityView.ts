@@ -1,8 +1,9 @@
 import type { StabilityEntry } from "@/schema/results";
 
-// Same ceiling as the leaderboard reliability score: a mean deviation of 0.5 between
-// attempts (half the normalized scale) already means the attempts are unrelated.
-const DEVIATION_CEILING = 0.5;
+// Same ceiling as the leaderboard reliability score: a mean deviation of half the
+// scale between attempts (3 points on the 0-6 scale every criterion uses) already
+// means the attempts are unrelated.
+const DEVIATION_CEILING = 3;
 
 export function scoreConsistency(scoreVariance: number): number {
   return Math.min(1, Math.max(0, 1 - scoreVariance / DEVIATION_CEILING));

@@ -37,7 +37,8 @@ export interface LeaderboardRow {
   judgedAttempts: number;
 }
 
-const PASS_THRESHOLD = 0.7;
+// 3 of 6: it works, even if with visible defects.
+const PASS_THRESHOLD = 0.5;
 const FIRST_SHOT_CRITERION_ID = "works_out_of_box";
 const COMPLIANCE_CRITERION_ID = "compliance";
 

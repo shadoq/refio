@@ -13,6 +13,7 @@ import type {
   Thinking,
   TraceSummary,
 } from "../../schema/results";
+import { GOOD_SCORE } from "../judge/scoring";
 
 // What the loop said about itself, as opposed to what the model did. Only a harness
 // that exposes these fills them in.
@@ -135,7 +136,7 @@ export function makeInboxId(
 }
 
 // A deterministic PASS/FAIL summary from the deterministic scores: every criterion
-// that WAS measured has to hold - compliance in full, the rest above zero - and at
+// that WAS measured has to hold - compliance at least good, the rest above zero - and at
 // least one has to have been measured at all.
 //
 // A criterion that could not be measured is neither a pass nor a failure, and it is
@@ -151,7 +152,7 @@ export function deterministicVerdict(
 
   const pass =
     scores.length > 0 &&
-    (compliance === undefined || compliance === 1) &&
+    (compliance === undefined || compliance >= GOOD_SCORE) &&
     (works === undefined || works > 0) &&
     (agentLogic === undefined || agentLogic > 0);
 

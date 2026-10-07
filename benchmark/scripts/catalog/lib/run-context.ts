@@ -5,6 +5,12 @@
 import { execShell } from "../../judge/lib/exec";
 import { ollamaBaseUrl, ollamaWarmUpRequest } from "../../../src/lib/catalog/harness-routing";
 import { agentSearchPath } from "../../../src/lib/catalog/agent-isolation";
+import {
+  loadedModelFacts,
+  servedModelFacts,
+  type LoadedModelFacts,
+  type ServedModelFacts,
+} from "../../../src/lib/catalog/ollama-facts";
 
 const VERSION_TIMEOUT_MS = 20_000;
 const WARMUP_TIMEOUT_MS = 10 * 60 * 1000;
@@ -60,4 +66,37 @@ export async function warmUpOllama(
   } catch {
     return false;
   }
+}
+
+const FACTS_TIMEOUT_MS = 15_000;
+
+async function ollamaJson<T>(host: string, path: string, body?: unknown): Promise<T | null> {
+  try {
+    const response = await fetch(`${ollamaBaseUrl(host)}${path}`, {
+      method: body === undefined ? "GET" : "POST",
+      headers: { "content-type": "application/json" },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      signal: AbortSignal.timeout(FACTS_TIMEOUT_MS),
+    });
+    return response.ok ? ((await response.json()) as T) : null;
+  } catch {
+    return null; // a missing fact is recorded as absent, never as a failed run
+  }
+}
+
+// The digest, server version and baked-in sampling defaults of the model the sweep is
+// about to run. Read once per sweep: none of them change between attempts.
+export async function readServedModel(host: string, model: string): Promise<ServedModelFacts> {
+  const [tags, show, version] = await Promise.all([
+    ollamaJson<Parameters<typeof servedModelFacts>[1]>(host, "/api/tags"),
+    ollamaJson<Parameters<typeof servedModelFacts>[2]>(host, "/api/show", { model }),
+    ollamaJson<Parameters<typeof servedModelFacts>[3]>(host, "/api/version"),
+  ]);
+  return servedModelFacts(model, tags, show, version);
+}
+
+// Memory, GPU share and loaded window right after an attempt, while the model is
+// still resident. Empty when the server already unloaded it.
+export async function readLoadedModel(host: string, model: string): Promise<LoadedModelFacts> {
+  return loadedModelFacts(model, await ollamaJson(host, "/api/ps"));
 }

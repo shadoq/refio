@@ -1,4 +1,5 @@
 import { deterministicVerdict } from "@/lib/catalog/inbox";
+import { GOOD_SCORE } from "@/lib/judge/scoring";
 import type { ResultsFile } from "@/schema/results";
 
 // Reviewed runs carry human scores; queue runs only the automatic verdict of the
@@ -135,8 +136,8 @@ export function summarizeByModel(runs: OverviewRun[], file: ResultsFile): ModelS
     reasoning: commonLabel(group.map((r) => r.reasoning)),
     attempts: group.length,
     passed: group.filter((r) => r.passed).length,
-    worksFull: group.filter((r) => r.works === 1).length,
-    agentLogicFull: group.filter((r) => r.agentLogic === 1).length,
+    worksFull: group.filter((r) => r.works != null && r.works >= GOOD_SCORE).length,
+    agentLogicFull: group.filter((r) => r.agentLogic != null && r.agentLogic >= GOOD_SCORE).length,
     costUsd: total(group.map((r) => r.costUsd)),
     avgDurationMs: average(group.map((r) => r.durationMs)),
     sources: [...new Set(group.map((r) => r.source))],

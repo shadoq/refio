@@ -40,7 +40,7 @@ import {
   refioThinking,
   DEFAULT_OLLAMA_CONTEXT,
 } from "../../src/lib/catalog/harness-routing";
-import { harnessVersion, warmUpOllama } from "./lib/run-context";
+import { harnessVersion, readLoadedModel, readServedModel, warmUpOllama } from "./lib/run-context";
 import { DEFAULT_AGENT_LIMITS } from "../../src/lib/catalog/agent-limits";
 import { toRunJson } from "../../src/lib/catalog/agent-run";
 import { buildTraceForRun, thinkingForRun } from "./lib/land-trace";
@@ -61,6 +61,7 @@ import { saveResultsAtomic } from "../judge/lib/store";
 import {
   InboxEntrySchema,
   type Attachment,
+  type RunContext,
   type Thinking,
   type TraceSummary,
 } from "../../src/schema/results";
@@ -181,6 +182,8 @@ async function main(): Promise<void> {
     ...(contextWindow !== undefined && warmedUp ? { contextWindow } : {}),
     ...(args.maxOutputTokens !== undefined ? { maxOutputTokens: args.maxOutputTokens } : {}),
     ...(localModel ? { modelServer: args.ollamaHost } : {}),
+    // What exactly the server serves under this tag: digest, version, sampling defaults.
+    ...(localModel && !args.dryRun ? await readServedModel(args.ollamaHost, localModel) : {}),
     ...(permissionModeOf(args.harness) ? { permissionMode: permissionModeOf(args.harness) } : {}),
     timeoutMs: DEFAULT_AGENT_LIMITS.timeoutMs,
     maxTurns: DEFAULT_AGENT_LIMITS.maxTurns,
@@ -357,8 +360,10 @@ async function main(): Promise<void> {
       screenshots,
     });
 
+    // Read while the model is still resident: memory, GPU share and the loaded window.
+    const loaded = localModel && !args.dryRun ? await readLoadedModel(args.ollamaHost, localModel) : {};
     const entry = buildInboxEntry({
-      runContext,
+      runContext: { ...runContext, ...loaded },
       caseId: args.taskId,
       mode: "AGENT",
       modelId: args.model,

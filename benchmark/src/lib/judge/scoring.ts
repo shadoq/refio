@@ -7,6 +7,12 @@
 // covered by the judge-only "logic_correctness" criterion instead.
 export const JUDGE_EXCLUDED_CRITERIA = ["agent_logic"];
 
+// On the 0-6 scale every criterion uses, 4 means complete with minor defects at most.
+// It is what "covered / works / clean" (the top of the old 0-0.5-1 scale) became, so
+// it marks full credit for checks that cannot tell good from exceptional - a
+// deterministic measurement, the queue's pass verdict, the overview's "works" count.
+export const GOOD_SCORE = 4;
+
 // A judge run that fails (a CLI timeout, a provider usage limit) must never turn a
 // verdict an earlier run already produced into an error stub. Given a result's
 // existing judge entries, decide whether a fresh failure for `judgeId` may be

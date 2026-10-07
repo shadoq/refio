@@ -34,6 +34,7 @@ export function renderPrompt(
   template: string,
   systemPrompt: string,
   criteria: Criterion[],
+  judgeInstructions?: string,
 ): string {
   const criteriaBlock = criteria
     .map(
@@ -41,9 +42,14 @@ export function renderPrompt(
         `- ${c.id} (${c.name}): ${c.description}\n  allowed values: [${c.scale.values.join(", ")}]`,
     )
     .join("\n");
+  const instructions = judgeInstructions?.trim();
+  const instructionsBlock = instructions
+    ? `## How to judge this task\n\n${instructions}\n\n`
+    : "";
   return template
     .replace("{{systemPrompt}}", () => systemPrompt)
-    .replace("{{criteria}}", () => criteriaBlock);
+    .replace("{{criteria}}", () => criteriaBlock)
+    .replace("{{judgeInstructions}}", () => instructionsBlock);
 }
 
 // Appended to INSTRUCTIONS.md when the artifact failed to render, so the judge
@@ -108,7 +114,7 @@ export async function buildEvidence(opts: {
     screenshots.push(`attachments/${result.id}/_judge/${name}`);
   }
 
-  let promptText = renderPrompt(promptTemplate, task.systemPrompt, criteria);
+  let promptText = renderPrompt(promptTemplate, task.systemPrompt, criteria, task.judgeInstructions);
   promptText += describeInteractions(interaction.records);
   if (render.renderError) {
     promptText += renderFailureNote(render.renderError, screenshots.length);

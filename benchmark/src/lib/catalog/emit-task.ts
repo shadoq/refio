@@ -42,7 +42,8 @@ export function taskContentEqual(a: TaskCore, b: TaskCore): boolean {
 // Insert or update a task from its content, applying timestamps idempotently so
 // re-running the generator on an unchanged case produces no diff:
 // - new id: createdAt = updatedAt = now
-// - existing id, content changed: keep createdAt, bump updatedAt to now
+// - existing id, content changed: keep createdAt, bump updatedAt to now, and keep the
+//   fields the catalog does not own (`hidden`, `judgeInstructions`)
 // - existing id, content unchanged: return the input array untouched (same refs)
 export function upsertTaskDated(tasks: Task[], core: TaskCore, now: string): Task[] {
   const idx = tasks.findIndex((t) => t.id === core.id);
@@ -50,6 +51,6 @@ export function upsertTaskDated(tasks: Task[], core: TaskCore, now: string): Tas
   const existing = tasks[idx];
   if (taskContentEqual(existing, core)) return tasks;
   const next = [...tasks];
-  next[idx] = { ...core, createdAt: existing.createdAt, updatedAt: now };
+  next[idx] = { ...existing, ...core, createdAt: existing.createdAt, updatedAt: now };
   return next;
 }

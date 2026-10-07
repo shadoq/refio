@@ -329,10 +329,10 @@ Six criterion changes came with those metrics, and all of them are deliberate:
   refactoring case ships a suite that is green before the agent starts - keeping it green is the
   task - so a passing build said nothing about a run that read three files and stopped, and handed
   it full marks for the fixture's own health.
-- `agent_logic` drops to 0.5 when the case declares `assert.selfVerified` and the run never built
+- `agent_logic` drops to 2 (partial) when the case declares `assert.selfVerified` and the run never built
   or tested what it wrote. Asked only where the case asked for it: no harness has ever verified
   itself on a page-generation task, because there is nothing there to run, so scoring it everywhere
-  would take the same half point off everyone and measure nothing.
+  would take the same points off everyone and measure nothing.
 
 A case whose `deliverable` is not an HTML page (the `multi-file` category) is attached as a
 plain file and scored by running its `assert.buildCmd` in the work dir: exit 0 AND at least one
@@ -376,9 +376,14 @@ The evidence folder holds `artifact.html`, `console-errors.json`,
 - Judges score the same criteria as the human (`coreCriteria` + task `extraCriteria`)
   plus judge-only `judgeCriteria` (code structure, logic correctness). Blind:
   a judge never sees the human scores or another judge's scores.
+- Every criterion uses one 0-6 scale (0 missing ... 4 good ... 6 exceptional). A task
+  carries `judgeInstructions`: how the LLM judge should score that task (what to check,
+  what matters most, what caps a score). It is edited in the task editor (Admin, Tasks)
+  and sent to the judge as a "How to judge this task" section; the model under test
+  never sees it.
 - The per-criterion aggregate (median across judges) is computed in the viewer,
   never stored. Toggle "Judges" on the Results page for the aggregate column and a
-  divergence badge when human and judges differ by >= 0.5 on a shared criterion;
+  divergence badge when human and judges differ by >= 2 on a shared criterion;
   open a result for the per-judge breakdown.
 - Stability (`--stability`) records deterministic metrics (score variance across
   attempts + token-Jaccard code similarity) plus a judge verdict over all attempts,

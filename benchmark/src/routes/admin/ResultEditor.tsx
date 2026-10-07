@@ -19,6 +19,7 @@ import {
   Segmented,
   Pagination,
   Empty,
+  Collapse,
 } from "antd";
 import {
   PlusOutlined,
@@ -37,6 +38,7 @@ import { useTasks, useResults } from "@/data/queries";
 import { useUpsertResult, useDeleteResult } from "@/data/mutations";
 import { uploadAttachment } from "@/data/saver";
 import { ResultPreviewModal } from "./ResultPreviewModal";
+import { ResultEvidencePanel } from "./ResultEvidencePanel";
 import { ResultCard } from "@/components/results/ResultCard";
 import { generateId } from "@/lib/ids";
 import { formatDuration, formatCost } from "@/lib/format";
@@ -68,14 +70,14 @@ function ScoreRow({
   index: number;
 }) {
   const scaleOptions = criterion.scale.values.map((v) => ({
-    label: criterion.scale.labels?.[String(v)] ?? String(v),
+    label: criterion.scale.labels?.[String(v)] ? `${v} - ${criterion.scale.labels[String(v)]}` : String(v),
     value: v,
   }));
 
   return (
     <Form.Item
       key={criterion.id}
-      label={`${criterion.name} (${criterion.scale.values.join(", ")})`}
+      label={criterion.name}
       style={{ marginBottom: 8 }}
     >
       <Controller
@@ -85,7 +87,7 @@ function ScoreRow({
           <Select
             {...field}
             options={scaleOptions}
-            style={{ width: 200 }}
+            style={{ width: "100%" }}
             placeholder="Select score"
           />
         )}
@@ -104,6 +106,8 @@ export default function ResultEditor() {
   const [modalMode, setModalMode] = useState<"new" | "edit" | "duplicate">("new");
   const [open, setOpen] = useState(false);
   const [previewResult, setPreviewResult] = useState<Result | null>(null);
+  // The stored result being edited, shown below the scores while they are changed.
+  const [editingResult, setEditingResult] = useState<Result | null>(null);
   const [uploading, setUploading] = useState(false);
   const [modelFilter, setModelFilter] = useState<string[]>([]);
   const [taskFilter, setTaskFilter] = useState<string[]>([]);
@@ -143,6 +147,12 @@ export default function ResultEditor() {
     return [...core, ...(task?.extraCriteria ?? [])];
   }, [tasksData, selectedTaskId]);
 
+  // Name lookup for the judge breakdown: everything a judge may have scored.
+  const judgeCriteria: Criterion[] = useMemo(
+    () => (tasksData ? [...activeCriteria, ...tasksData.judgeCriteria] : []),
+    [tasksData, activeCriteria],
+  );
+
   // Whenever activeCriteria changes, rebuild the scores array in the form
   useEffect(() => {
     if (activeCriteria.length === 0) return;
@@ -156,6 +166,7 @@ export default function ResultEditor() {
 
   function openNew() {
     setModalMode("new");
+    setEditingResult(null);
     reset({
       id: generateId(),
       taskId: "",
@@ -173,6 +184,7 @@ export default function ResultEditor() {
 
   function openEdit(result: Result) {
     setModalMode("edit");
+    setEditingResult(result);
     reset({
       ...result,
     });
@@ -195,6 +207,7 @@ export default function ResultEditor() {
   function openDuplicate(result: Result) {
     const duplicatedAt = new Date().toISOString();
     setModalMode("duplicate");
+    setEditingResult(null);
     reset({
       ...result,
       id: generateId(),
@@ -208,6 +221,7 @@ export default function ResultEditor() {
 
   function handleClose() {
     setOpen(false);
+    setEditingResult(null);
     setModalMode("new");
   }
 
@@ -468,6 +482,271 @@ export default function ResultEditor() {
     },
   ];
 
+  // The form is split into blocks so the edit dialog can lead with the scores and the
+  // result itself, and fold the run details away, while new and duplicate keep the
+  // original top-to-bottom order.
+  const identityFields = (
+    <>
+      <Form.Item
+        label="Task"
+        validateStatus={errors.taskId ? "error" : ""}
+        help={errors.taskId?.message}
+      >
+        <Controller
+          name="taskId"
+          control={control}
+          render={({ field }) => (
+            <Select
+              {...field}
+              options={taskOptions}
+              placeholder="Select task"
+              showSearch
+            />
+          )}
+        />
+      </Form.Item>
+
+      <Form.Item
+        label="Model"
+        validateStatus={errors.modelId ? "error" : ""}
+        help={errors.modelId?.message}
+      >
+        <Controller
+          name="modelId"
+          control={control}
+          render={({ field }) => (
+            <Select
+              {...field}
+              options={modelOptions}
+              placeholder="Select model"
+              showSearch
+            />
+          )}
+        />
+      </Form.Item>
+
+      <Form.Item
+        label="Environment"
+        validateStatus={errors.environmentId ? "error" : ""}
+        help={errors.environmentId?.message}
+      >
+        <Controller
+          name="environmentId"
+          control={control}
+          render={({ field }) => (
+            <Select
+              {...field}
+              options={envOptions}
+              placeholder="Select environment"
+            />
+          )}
+        />
+      </Form.Item>
+
+      <Form.Item
+        label="Harness"
+        validateStatus={errors.harnessId ? "error" : ""}
+        help={errors.harnessId?.message}
+      >
+        <Controller
+          name="harnessId"
+          control={control}
+          render={({ field }) => (
+            <Select {...field} options={harnessOptions} placeholder="Select harness" />
+          )}
+        />
+      </Form.Item>
+
+      <Form.Item
+        label="Attempt #"
+        validateStatus={errors.attemptNumber ? "error" : ""}
+        help={errors.attemptNumber?.message}
+      >
+        <Controller
+          name="attemptNumber"
+          control={control}
+          render={({ field }) => (
+            <InputNumber {...field} min={1} style={{ width: 100 }} />
+          )}
+        />
+      </Form.Item>
+    </>
+  );
+
+  const scoreFields = activeCriteria.length > 0 && (
+    <>
+      <Divider>Scores</Divider>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
+          columnGap: 16,
+        }}
+      >
+        {activeCriteria.map((criterion, idx) => (
+          <ScoreRow key={criterion.id} criterion={criterion} control={control} index={idx} />
+        ))}
+      </div>
+    </>
+  );
+
+  const metricsFields = (
+    <>
+      <Divider>Metrics (optional)</Divider>
+
+      <Form.Item label="Duration (seconds)">
+        <Controller
+          name="durationMs"
+          control={control}
+          render={({ field }) => (
+            <InputNumber
+              value={durationMsToSeconds(field.value)}
+              onBlur={field.onBlur}
+              onChange={(value) => field.onChange(durationSecondsToMs(value))}
+              min={0}
+              step={1}
+              precision={1}
+              style={{ width: 160 }}
+              placeholder="e.g. 45"
+            />
+          )}
+        />
+      </Form.Item>
+
+      <Form.Item label="Tokens In">
+        <Controller
+          name="tokensIn"
+          control={control}
+          render={({ field }) => (
+            <InputNumber
+              {...field}
+              value={field.value ?? undefined}
+              min={0}
+              style={{ width: 160 }}
+            />
+          )}
+        />
+      </Form.Item>
+
+      <Form.Item label="Tokens Out">
+        <Controller
+          name="tokensOut"
+          control={control}
+          render={({ field }) => (
+            <InputNumber
+              {...field}
+              value={field.value ?? undefined}
+              min={0}
+              style={{ width: 160 }}
+            />
+          )}
+        />
+      </Form.Item>
+
+      <Form.Item label="Cost (USD)">
+        <Controller
+          name="costUsd"
+          control={control}
+          render={({ field }) => (
+            <InputNumber
+              {...field}
+              value={field.value ?? undefined}
+              min={0}
+              step={0.001}
+              precision={4}
+              style={{ width: 160 }}
+              placeholder="e.g. 0.024"
+            />
+          )}
+        />
+      </Form.Item>
+
+      <Form.Item label="Run At">
+        <Controller
+          name="runAt"
+          control={control}
+          render={({ field }) => (
+            <DatePicker
+              showTime
+              value={field.value ? dayjs(field.value) : null}
+              onChange={(d) => field.onChange(d?.toISOString() ?? now)}
+              style={{ width: 220 }}
+            />
+          )}
+        />
+      </Form.Item>
+    </>
+  );
+
+  const notesField = (
+    <>
+      <Form.Item label="Notes">
+        <Controller
+          name="notes"
+          control={control}
+          render={({ field }) => (
+            <Input.TextArea
+              {...field}
+              value={field.value ?? ""}
+              rows={3}
+              placeholder="Observations about this run"
+            />
+          )}
+        />
+      </Form.Item>
+    </>
+  );
+
+  const attachmentFields = (
+    <>
+      <Divider>Attachments</Divider>
+
+      <Form.Item label="Upload result file (image / html / video / zip)">
+        <Upload
+          beforeUpload={handleFileUpload}
+          showUploadList={false}
+          accept="image/*,.html,.htm,.mp4,.webm,.mov,.zip,.7z,.tar,.gz"
+        >
+          <Button icon={<UploadOutlined />} loading={uploading}>
+            Upload Attachment
+          </Button>
+        </Upload>
+      </Form.Item>
+
+      <Controller
+        name="attachments"
+        control={control}
+        render={({ field }) => (
+          <div>
+            {(field.value ?? []).map((att, idx) => (
+              <div
+                key={idx}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  marginBottom: 4,
+                }}
+              >
+                <Tag>{att.type}</Tag>
+                <Text style={{ flex: 1, fontSize: 12 }}>{att.src}</Text>
+                <Button
+                  size="small"
+                  danger
+                  onClick={() =>
+                    field.onChange(field.value?.filter((_, i) => i !== idx))
+                  }
+                >
+                  Remove
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      />
+    </>
+  );
+
   return (
     <div>
       <Space style={{ marginBottom: 16 }} wrap>
@@ -606,251 +885,43 @@ export default function ResultEditor() {
         onOk={handleSubmit(onSubmit)}
         confirmLoading={upsert.isPending}
         destroyOnClose
-        width={700}
+        width={editingResult ? "94vw" : 700}
+        style={editingResult ? { top: 16 } : undefined}
       >
         <Form layout="vertical" style={{ marginTop: 16 }}>
-          <Form.Item
-            label="Task"
-            validateStatus={errors.taskId ? "error" : ""}
-            help={errors.taskId?.message}
-          >
-            <Controller
-              name="taskId"
-              control={control}
-              render={({ field }) => (
-                <Select
-                  {...field}
-                  options={taskOptions}
-                  placeholder="Select task"
-                  showSearch
-                />
-              )}
-            />
-          </Form.Item>
-
-          <Form.Item
-            label="Model"
-            validateStatus={errors.modelId ? "error" : ""}
-            help={errors.modelId?.message}
-          >
-            <Controller
-              name="modelId"
-              control={control}
-              render={({ field }) => (
-                <Select
-                  {...field}
-                  options={modelOptions}
-                  placeholder="Select model"
-                  showSearch
-                />
-              )}
-            />
-          </Form.Item>
-
-          <Form.Item
-            label="Environment"
-            validateStatus={errors.environmentId ? "error" : ""}
-            help={errors.environmentId?.message}
-          >
-            <Controller
-              name="environmentId"
-              control={control}
-              render={({ field }) => (
-                <Select
-                  {...field}
-                  options={envOptions}
-                  placeholder="Select environment"
-                />
-              )}
-            />
-          </Form.Item>
-
-          <Form.Item
-            label="Harness"
-            validateStatus={errors.harnessId ? "error" : ""}
-            help={errors.harnessId?.message}
-          >
-            <Controller
-              name="harnessId"
-              control={control}
-              render={({ field }) => (
-                <Select {...field} options={harnessOptions} placeholder="Select harness" />
-              )}
-            />
-          </Form.Item>
-
-          <Form.Item
-            label="Attempt #"
-            validateStatus={errors.attemptNumber ? "error" : ""}
-            help={errors.attemptNumber?.message}
-          >
-            <Controller
-              name="attemptNumber"
-              control={control}
-              render={({ field }) => (
-                <InputNumber {...field} min={1} style={{ width: 100 }} />
-              )}
-            />
-          </Form.Item>
-
-          {activeCriteria.length > 0 && (
+          {editingResult ? (
             <>
-              <Divider>Scores</Divider>
-              {activeCriteria.map((criterion, idx) => (
-                <ScoreRow
-                  key={criterion.id}
-                  criterion={criterion}
-                  control={control}
-                  index={idx}
-                />
-              ))}
+              {scoreFields}
+              {notesField}
+              <Divider>Result</Divider>
+              <ResultEvidencePanel result={editingResult} criteria={judgeCriteria} />
+              <Collapse
+                ghost
+                style={{ marginTop: 16 }}
+                items={[
+                  {
+                    key: "details",
+                    label: "Run details: task, model, metrics, attachments",
+                    children: (
+                      <>
+                        {identityFields}
+                        {metricsFields}
+                        {attachmentFields}
+                      </>
+                    ),
+                  },
+                ]}
+              />
+            </>
+          ) : (
+            <>
+              {identityFields}
+              {scoreFields}
+              {metricsFields}
+              {notesField}
+              {attachmentFields}
             </>
           )}
-
-          <Divider>Metrics (optional)</Divider>
-
-          <Form.Item label="Duration (seconds)">
-            <Controller
-              name="durationMs"
-              control={control}
-              render={({ field }) => (
-                <InputNumber
-                  value={durationMsToSeconds(field.value)}
-                  onBlur={field.onBlur}
-                  onChange={(value) => field.onChange(durationSecondsToMs(value))}
-                  min={0}
-                  step={1}
-                  precision={1}
-                  style={{ width: 160 }}
-                  placeholder="e.g. 45"
-                />
-              )}
-            />
-          </Form.Item>
-
-          <Form.Item label="Tokens In">
-            <Controller
-              name="tokensIn"
-              control={control}
-              render={({ field }) => (
-                <InputNumber
-                  {...field}
-                  value={field.value ?? undefined}
-                  min={0}
-                  style={{ width: 160 }}
-                />
-              )}
-            />
-          </Form.Item>
-
-          <Form.Item label="Tokens Out">
-            <Controller
-              name="tokensOut"
-              control={control}
-              render={({ field }) => (
-                <InputNumber
-                  {...field}
-                  value={field.value ?? undefined}
-                  min={0}
-                  style={{ width: 160 }}
-                />
-              )}
-            />
-          </Form.Item>
-
-          <Form.Item label="Cost (USD)">
-            <Controller
-              name="costUsd"
-              control={control}
-              render={({ field }) => (
-                <InputNumber
-                  {...field}
-                  value={field.value ?? undefined}
-                  min={0}
-                  step={0.001}
-                  precision={4}
-                  style={{ width: 160 }}
-                  placeholder="e.g. 0.024"
-                />
-              )}
-            />
-          </Form.Item>
-
-          <Form.Item label="Run At">
-            <Controller
-              name="runAt"
-              control={control}
-              render={({ field }) => (
-                <DatePicker
-                  showTime
-                  value={field.value ? dayjs(field.value) : null}
-                  onChange={(d) => field.onChange(d?.toISOString() ?? now)}
-                  style={{ width: 220 }}
-                />
-              )}
-            />
-          </Form.Item>
-
-          <Form.Item label="Notes">
-            <Controller
-              name="notes"
-              control={control}
-              render={({ field }) => (
-                <Input.TextArea
-                  {...field}
-                  value={field.value ?? ""}
-                  rows={3}
-                  placeholder="Observations about this run"
-                />
-              )}
-            />
-          </Form.Item>
-
-          <Divider>Attachments</Divider>
-
-          <Form.Item label="Upload result file (image / html / video / zip)">
-            <Upload
-              beforeUpload={handleFileUpload}
-              showUploadList={false}
-              accept="image/*,.html,.htm,.mp4,.webm,.mov,.zip,.7z,.tar,.gz"
-            >
-              <Button icon={<UploadOutlined />} loading={uploading}>
-                Upload Attachment
-              </Button>
-            </Upload>
-          </Form.Item>
-
-          <Controller
-            name="attachments"
-            control={control}
-            render={({ field }) => (
-              <div>
-                {(field.value ?? []).map((att, idx) => (
-                  <div
-                    key={idx}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 8,
-                      marginBottom: 4,
-                    }}
-                  >
-                    <Tag>{att.type}</Tag>
-                    <Text style={{ flex: 1, fontSize: 12 }}>{att.src}</Text>
-                    <Button
-                      size="small"
-                      danger
-                      onClick={() =>
-                        field.onChange(field.value?.filter((_, i) => i !== idx))
-                      }
-                    >
-                      Remove
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            )}
-          />
         </Form>
       </Modal>
 

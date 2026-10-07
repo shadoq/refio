@@ -13,6 +13,8 @@ import {
   formatCost,
   formatScore,
   formatTokensPerSecond,
+  scoreColor,
+  formatModelSpec,
 } from "@/lib/format";
 
 const { Text } = Typography;
@@ -59,11 +61,21 @@ export function LeaderboardTable() {
     {
       title: "Model",
       key: "model",
-      render: (_: unknown, row: LeaderboardRow) => (
-        <Text strong className="model-name">
-          {row.model.name}
-        </Text>
-      ),
+      render: (_: unknown, row: LeaderboardRow) => {
+        const spec = formatModelSpec(row.model);
+        return (
+          <>
+            <Text strong className="model-name">
+              {row.model.name}
+            </Text>
+            {spec && (
+              <Text type="secondary" style={{ display: "block", fontSize: 11 }}>
+                {spec}
+              </Text>
+            )}
+          </>
+        );
+      },
       sorter: (a: LeaderboardRow, b: LeaderboardRow) =>
         a.model.name.localeCompare(b.model.name),
     },
@@ -249,11 +261,6 @@ function rowKey(row: LeaderboardRow): string {
   return `${row.modelId}::${row.environmentId}::${row.harnessId}`;
 }
 
-function scoreColor(score: number): string {
-  if (score >= 0.8) return "var(--accent)";
-  if (score >= 0.6) return "#ffd166";
-  return "#ff4d4f";
-}
 
 function formatNullableScore(score: number | null): string {
   if (score == null) return "-";
