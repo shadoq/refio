@@ -1,3 +1,5 @@
+import { useT } from "@/i18n/LanguageProvider";
+
 interface VideoPlayerProps {
   src: string;
   type: "video" | "video-embed";
@@ -5,6 +7,7 @@ interface VideoPlayerProps {
 }
 
 export function VideoPlayer({ src, type, caption }: VideoPlayerProps) {
+  const t = useT();
   return (
     <div>
       {type === "video-embed" ? (
@@ -13,7 +16,7 @@ export function VideoPlayer({ src, type, caption }: VideoPlayerProps) {
           style={{ width: "100%", height: 400, border: "none", borderRadius: 4 }}
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
           allowFullScreen
-          title={caption ?? "Video"}
+          title={caption ?? t("resultView.videoTitle")}
         />
       ) : (
         // No <track>: these are screen recordings of benchmark runs, captured without audio,

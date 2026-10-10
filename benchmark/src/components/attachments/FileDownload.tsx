@@ -1,5 +1,6 @@
 import { DownloadOutlined, FileOutlined, FileZipOutlined } from "@ant-design/icons";
 import { Button, Space, Typography } from "antd";
+import { useT } from "@/i18n/LanguageProvider";
 
 interface FileDownloadProps {
   src: string;
@@ -14,6 +15,7 @@ function filenameFromSrc(src: string): string {
 }
 
 export function FileDownload({ src, type, caption }: FileDownloadProps) {
+  const t = useT();
   const url = src.startsWith("http") ? src : `/data/${src}`;
   const filename = filenameFromSrc(src);
   const Icon = type === "archive" ? FileZipOutlined : FileOutlined;
@@ -25,7 +27,7 @@ export function FileDownload({ src, type, caption }: FileDownloadProps) {
         <Typography.Text>{caption ?? filename}</Typography.Text>
       </Space>
       <Button icon={<DownloadOutlined />} href={url} download={filename}>
-        Download {type === "archive" ? "archive" : "file"}
+        {t(type === "archive" ? "resultView.downloadArchive" : "resultView.downloadFile")}
       </Button>
     </Space>
   );

@@ -17,6 +17,7 @@ import { PlusOutlined, EditOutlined, DeleteOutlined } from "@ant-design/icons";
 import { HarnessSchema, type Harness } from "@/schema/results";
 import { useResults } from "@/data/queries";
 import { useUpsertHarness, useDeleteHarness } from "@/data/mutations";
+import { useT } from "@/i18n/LanguageProvider";
 
 const { Title, Paragraph } = Typography;
 
@@ -27,6 +28,7 @@ type FormData = Harness;
 // own planning, tools and self-checking, so what it scores is the whole system, not the
 // model alone. `conditions` is what makes that comparison readable, so fill it in.
 export default function HarnessEditor() {
+  const t = useT();
   const [editing, setEditing] = useState<Harness | null>(null);
   const [open, setOpen] = useState(false);
   const { data: resultsData } = useResults();
@@ -71,10 +73,10 @@ export default function HarnessEditor() {
   }
 
   const columns = [
-    { title: "ID", dataIndex: "id", key: "id", width: 160 },
-    { title: "Name", dataIndex: "name", key: "name", width: 180 },
+    { title: t("admin.colId"), dataIndex: "id", key: "id", width: 160 },
+    { title: t("admin.colName"), dataIndex: "name", key: "name", width: 180 },
     {
-      title: "Kind",
+      title: t("admin.harnessKind"),
       dataIndex: "kind",
       key: "kind",
       width: 110,
@@ -82,19 +84,19 @@ export default function HarnessEditor() {
         <Tag color={kind === "refio" ? "geekblue" : "orange"}>{kind}</Tag>
       ),
     },
-    { title: "Version", dataIndex: "version", key: "version", width: 120 },
-    { title: "Run conditions", dataIndex: "conditions", key: "conditions" },
+    { title: t("admin.harnessVersion"), dataIndex: "version", key: "version", width: 120 },
+    { title: t("admin.harnessConditions"), dataIndex: "conditions", key: "conditions" },
     {
-      title: "Actions",
+      title: t("admin.colActions"),
       key: "actions",
       width: 120,
       render: (_: unknown, record: Harness) => (
         <Space>
           <Button icon={<EditOutlined />} size="small" onClick={() => openEdit(record)} />
           <Popconfirm
-            title="Delete this harness?"
+            title={t("admin.harnessDeleteConfirm")}
             onConfirm={() => handleDelete(record.id)}
-            okText="Delete"
+            okText={t("admin.deleteOk")}
             okButtonProps={{ danger: true }}
           >
             <Button icon={<DeleteOutlined />} size="small" danger />
@@ -108,17 +110,13 @@ export default function HarnessEditor() {
     <div>
       <Space style={{ marginBottom: 8 }}>
         <Title level={3} style={{ margin: 0 }}>
-          Harnesses
+          {t("admin.harnessTitle")}
         </Title>
         <Button type="primary" icon={<PlusOutlined />} onClick={openNew}>
-          New Harness
+          {t("admin.harnessNew")}
         </Button>
       </Space>
-      <Paragraph type="secondary">
-        What drove the agent. Only the Refio harness appears in the main leaderboard;
-        external agents form the reference track. Record the run conditions - network
-        access, permission mode, turn limit - so the comparison can be read honestly.
-      </Paragraph>
+      <Paragraph type="secondary">{t("admin.harnessIntro")}</Paragraph>
 
       <Table
         columns={columns}
@@ -129,7 +127,7 @@ export default function HarnessEditor() {
       />
 
       <Modal
-        title={editing ? "Edit Harness" : "New Harness"}
+        title={editing ? t("admin.harnessEditTitle") : t("admin.harnessNew")}
         open={open}
         onCancel={handleClose}
         onOk={handleSubmit(onSubmit)}
@@ -138,7 +136,7 @@ export default function HarnessEditor() {
       >
         <Form layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item
-            label="ID"
+            label={t("admin.fieldId")}
             validateStatus={errors.id ? "error" : ""}
             help={errors.id?.message}
           >
@@ -146,25 +144,25 @@ export default function HarnessEditor() {
               name="id"
               control={control}
               render={({ field }) => (
-                <Input {...field} disabled={!!editing} placeholder="e.g. claude-code" />
+                <Input {...field} disabled={!!editing} placeholder={t("admin.example", { value: "claude-code" })} />
               )}
             />
           </Form.Item>
 
           <Form.Item
-            label="Name"
+            label={t("admin.fieldName")}
             validateStatus={errors.name ? "error" : ""}
             help={errors.name?.message}
           >
             <Controller
               name="name"
               control={control}
-              render={({ field }) => <Input {...field} placeholder="Display name" />}
+              render={({ field }) => <Input {...field} placeholder={t("admin.displayNamePlaceholder")} />}
             />
           </Form.Item>
 
           <Form.Item
-            label="Kind"
+            label={t("admin.harnessKind")}
             validateStatus={errors.kind ? "error" : ""}
             help={errors.kind?.message}
           >
@@ -175,25 +173,25 @@ export default function HarnessEditor() {
                 <Select
                   {...field}
                   options={[
-                    { label: "Refio (main track)", value: "refio" },
-                    { label: "External agent (reference track)", value: "external" },
+                    { label: t("admin.harnessKindRefio"), value: "refio" },
+                    { label: t("admin.harnessKindExternal"), value: "external" },
                   ]}
                 />
               )}
             />
           </Form.Item>
 
-          <Form.Item label="Version">
+          <Form.Item label={t("admin.harnessVersion")}>
             <Controller
               name="version"
               control={control}
               render={({ field }) => (
-                <Input {...field} value={field.value ?? ""} placeholder="e.g. 2.1.266" />
+                <Input {...field} value={field.value ?? ""} placeholder={t("admin.example", { value: "2.1.266" })} />
               )}
             />
           </Form.Item>
 
-          <Form.Item label="Run conditions">
+          <Form.Item label={t("admin.harnessConditions")}>
             <Controller
               name="conditions"
               control={control}
@@ -202,13 +200,13 @@ export default function HarnessEditor() {
                   {...field}
                   value={field.value ?? ""}
                   rows={2}
-                  placeholder="e.g. network on, acceptEdits, max 60 turns"
+                  placeholder={t("admin.harnessConditionsPlaceholder")}
                 />
               )}
             />
           </Form.Item>
 
-          <Form.Item label="Notes">
+          <Form.Item label={t("admin.fieldNotes")}>
             <Controller
               name="notes"
               control={control}
@@ -217,7 +215,7 @@ export default function HarnessEditor() {
                   {...field}
                   value={field.value ?? ""}
                   rows={2}
-                  placeholder="Optional notes"
+                  placeholder={t("admin.notesPlaceholder")}
                 />
               )}
             />

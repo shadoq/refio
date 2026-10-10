@@ -1,0 +1,38 @@
+import type { Translation } from "../../core";
+import type { leaderboard as en } from "../en/leaderboard";
+
+export const leaderboard: Translation<typeof en> = {
+  refioLabel: "Refio Score:",
+  absolute: "Bezwzgl.",
+  vsLeader: "Lider",
+  vsLeaderHint:
+    "Refio Score bezwzględny albo względem lidera: wtedy w każdym zadaniu wynik odnosimy do najlepszego, więc lider ma 100%.",
+  viewLabel: "Pokaż:",
+  viewScores: "Oceny",
+  viewReliability: "Niezawodność",
+  viewSpeedCost: "Czas i koszt",
+  viewAll: "Wszystko",
+  colRank: "Miejsce",
+  colModel: "Model",
+  colEnvironment: "Środowisko",
+  colHarness: "Narzędzie",
+  colTasks: "Zadania",
+  colAttempts: "Próby",
+  colRefio: "Refio Score",
+  colAvgScore: "Średnia ocena",
+  colJudge: "Ocena sędziów",
+  colPassRate: "Zaliczone",
+  colFirstShot: "Pierwsza próba",
+  firstShotOk: "OK",
+  firstShotFix: "Do poprawy",
+  colReliability: "Niezawodność",
+  colStability: "Średnia stabilność",
+  colLocalViability: "Przydatność lokalna",
+  cloudBaseline: "punkt odniesienia",
+  colDuration: "Średni czas",
+  colLlmEst: "Szac. czas LLM",
+  colTokenSpeed: "Tokeny/s",
+  tokenIn: "wej.",
+  tokenOut: "wyj.",
+  colCost: "Średni koszt",
+};

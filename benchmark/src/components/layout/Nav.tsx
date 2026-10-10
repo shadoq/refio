@@ -1,36 +1,46 @@
 import { Menu } from "antd";
 import { useNavigate, useLocation } from "react-router-dom";
+import { useT } from "@/i18n/LanguageProvider";
+import type { MessageKey } from "@/i18n/messages";
 
-const publicItems = [
-  { key: "/", label: "Leaderboard" },
-  { key: "/overview", label: "Overview" },
-  { key: "/results", label: "Results" },
-  { key: "/compare", label: "Compare" },
-  { key: "/stability", label: "Stability" },
-  { key: "/pareto", label: "Pareto" },
-  { key: "/agents", label: "Agents" },
-  { key: "/help", label: "Help" },
+interface NavItem {
+  key: string;
+  label: MessageKey;
+}
+
+const publicItems: NavItem[] = [
+  { key: "/", label: "layout.navLeaderboard" },
+  { key: "/overview", label: "layout.navOverview" },
+  { key: "/results", label: "layout.navResults" },
+  { key: "/compare", label: "layout.navCompare" },
+  { key: "/stability", label: "layout.navStability" },
+  { key: "/pareto", label: "layout.navPareto" },
+  { key: "/agents", label: "layout.navAgents" },
+  { key: "/help", label: "layout.navHelp" },
 ];
 
-const adminItems = import.meta.env.DEV
+const adminItems: NavItem[] = import.meta.env.DEV
   ? [
-      { key: "/admin/queue", label: "Queue" },
-      { key: "/admin/results", label: "Results" },
-      { key: "/admin/tasks", label: "Tasks" },
-      { key: "/admin/models", label: "Models" },
-      { key: "/admin/environments", label: "Environments" },
-      { key: "/admin/harnesses", label: "Harnesses" },
+      { key: "/admin/queue", label: "layout.navQueue" },
+      { key: "/admin/results", label: "layout.navResults" },
+      { key: "/admin/tasks", label: "layout.navTasks" },
+      { key: "/admin/models", label: "layout.navModels" },
+      { key: "/admin/environments", label: "layout.navEnvironments" },
+      { key: "/admin/harnesses", label: "layout.navHarnesses" },
     ]
   : [];
 
 export function Nav() {
   const navigate = useNavigate();
   const location = useLocation();
+  const t = useT();
+  const translate = (list: NavItem[]) =>
+    list.map((item) => ({ key: item.key, label: t(item.label) }));
 
   const items = [
-    ...publicItems,
+    ...translate(publicItems),
     ...(adminItems.length > 0
-      ? [{ key: "admin", label: "Admin", children: adminItems }]
+      ? [{ key: "admin", label: t("layout.navAdmin"), children: translate(adminItems) }]
       : []),
   ];
 

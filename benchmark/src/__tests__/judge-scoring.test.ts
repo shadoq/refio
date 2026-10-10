@@ -2,6 +2,7 @@
 import { describe, it, expect } from "vitest";
 import {
   snapToScale,
+  collapseRepeatedErrors,
   validateVerdict,
   aggregateJudgeScores,
   scoreVariance,
@@ -182,5 +183,16 @@ describe("mayRecordJudgeError", () => {
   it("replaces a prior error stub for the same judge", () => {
     const existing = [{ judgeId: "codex", error: "timed out" }];
     expect(mayRecordJudgeError(existing, "codex")).toBe(true);
+  });
+});
+
+describe("collapseRepeatedErrors", () => {
+  it("keeps one copy of an error a game loop throws every frame", () => {
+    const draw = "TypeError: Cannot read properties of undefined (reading 'draw')";
+    expect(collapseRepeatedErrors([draw, draw, draw, "ReferenceError: x", draw])).toEqual([
+      draw,
+      "ReferenceError: x",
+      draw,
+    ]);
   });
 });

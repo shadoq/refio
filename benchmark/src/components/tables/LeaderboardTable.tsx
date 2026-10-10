@@ -1,13 +1,21 @@
-import { useMemo } from "react";
-import { Table, Tag, Typography } from "antd";
+import { useMemo, useState } from "react";
+import { Segmented, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useNavigate } from "react-router-dom";
-import { compareLeaderboardRows, leaderboard, type LeaderboardRow } from "@/lib/stats";
+import {
+  compareLeaderboardRows,
+  leaderboard,
+  leaderboardRowKey,
+  localRowsOnly,
+  withRefioMode,
+  type LeaderboardRow,
+} from "@/lib/stats";
 import { applyFilters, useFilters } from "@/store/filters";
+import { useRefioMode } from "@/store/refioMode";
 import { COMPARE_SELECT_PARAM } from "@/store/compareSelection";
-import { filterStabilityEntries, modelStability } from "@/lib/stabilityView";
 import { useTasks } from "@/data/queries";
 import { useResults } from "@/data/queries";
+import { useT, type Translate } from "@/i18n/LanguageProvider";
 import {
   formatDuration,
   formatCost,
@@ -19,39 +27,61 @@ import {
 
 const { Text } = Typography;
 
+// The table opens on the three quality scores; the rest sits behind a view switch so
+// the first look is not a wall of numbers.
+type ColumnView = "scores" | "reliability" | "speedCost" | "all";
+
+const VIEW_COLUMNS: Record<Exclude<ColumnView, "all">, string[]> = {
+  scores: ["refioScore", "avgScore", "judgeScore"],
+  reliability: ["refioScore", "passRate", "firstShot", "reliability", "stability"],
+  speedCost: ["refioScore", "localViability", "duration", "estimatedLlm", "tokenSpeed", "avgCost"],
+};
+
+// Identity columns are shown in every view.
+const ALWAYS_SHOWN = new Set(["rank", "model", "env", "harness"]);
+
+const VIEW_STORAGE_KEY = "benchmark-leaderboard-view";
+
+function initialView(): ColumnView {
+  try {
+    const saved = localStorage.getItem(VIEW_STORAGE_KEY);
+    if (saved === "reliability" || saved === "speedCost" || saved === "all") return saved;
+  } catch {
+    // Storage blocked: fall back to the default view.
+  }
+  return "scores";
+}
+
 export function LeaderboardTable() {
   const navigate = useNavigate();
   const filters = useFilters();
+  const t = useT();
   const { data: tasksData, isLoading: tasksLoading } = useTasks();
   const { data: resultsData, isLoading: resultsLoading } = useResults();
 
+  const refioMode = useRefioMode((s) => s.mode);
   const rows = useMemo(() => {
     if (!tasksData || !resultsData) return [];
-    const filtered = applyFilters(resultsData.results, filters);
-    return leaderboard(filtered, resultsData, tasksData);
-  }, [tasksData, resultsData, filters]);
+    const filtered = applyFilters(resultsData.results, { ...filters, localOnly: false });
+    const rows = localRowsOnly(leaderboard(filtered, resultsData, tasksData), filters.localOnly);
+    return withRefioMode(rows, refioMode);
+  }, [tasksData, resultsData, filters, refioMode]);
 
-  // Same overall stability as the Stability page, per leaderboard row (model, env, harness).
-  const stabilityByRow = useMemo(() => {
-    const out = new Map<string, number>();
-    if (!tasksData || !resultsData) return out;
-    const hidden = new Set(tasksData.tasks.filter((t) => t.hidden === true).map((t) => t.id));
-    const entries = filterStabilityEntries(resultsData.stability, filters, hidden);
-    for (const row of rows) {
-      const own = entries.filter(
-        (e) => e.environmentId === row.environmentId && e.harnessId === row.harnessId,
-      );
-      const s = modelStability(own, row.modelId);
-      if (s) out.set(rowKey(row), s.overall);
+  const [view, setView] = useState<ColumnView>(initialView);
+  const changeView = (next: ColumnView) => {
+    setView(next);
+    try {
+      localStorage.setItem(VIEW_STORAGE_KEY, next);
+    } catch {
+      // Storage blocked: the choice holds for this visit.
     }
-    return out;
-  }, [tasksData, resultsData, filters, rows]);
+  };
 
   const showHarness = new Set(rows.map((r) => r.harnessId)).size > 1;
 
-  const columns: ColumnsType<LeaderboardRow> = [
+  const allColumns: ColumnsType<LeaderboardRow> = [
     {
-      title: "Rank",
+      title: t("leaderboard.colRank"),
       key: "rank",
       width: 72,
       render: (_: unknown, _row: LeaderboardRow, index: number) => (
@@ -59,7 +89,7 @@ export function LeaderboardTable() {
       ),
     },
     {
-      title: "Model",
+      title: t("leaderboard.colModel"),
       key: "model",
       render: (_: unknown, row: LeaderboardRow) => {
         const spec = formatModelSpec(row.model);
@@ -80,7 +110,7 @@ export function LeaderboardTable() {
         a.model.name.localeCompare(b.model.name),
     },
     {
-      title: "Environment",
+      title: t("leaderboard.colEnvironment"),
       key: "env",
       render: (_: unknown, row: LeaderboardRow) => (
         <Tag color={row.environment.type === "cloud" ? "blue" : "green"}>
@@ -93,7 +123,7 @@ export function LeaderboardTable() {
     ...(showHarness
       ? [
           {
-            title: "Harness",
+            title: t("leaderboard.colHarness"),
             key: "harness",
             render: (_: unknown, row: LeaderboardRow) => (
               <Tag color={row.harness.kind === "refio" ? "geekblue" : "orange"}>
@@ -104,7 +134,7 @@ export function LeaderboardTable() {
         ]
       : []),
     {
-      title: "Tasks",
+      title: t("leaderboard.colTasks"),
       dataIndex: "tasksEvaluated",
       key: "tasks",
       width: 78,
@@ -112,16 +142,33 @@ export function LeaderboardTable() {
         a.tasksEvaluated - b.tasksEvaluated,
     },
     {
-      title: "Attempts",
+      title: t("leaderboard.colAttempts"),
       dataIndex: "attemptCount",
       key: "attempts",
       width: 96,
     },
     {
-      title: "Avg Score",
+      title: t("leaderboard.colRefio"),
+      key: "refioScore",
+      width: 130,
+      defaultSortOrder: "descend",
+      sorter: (a: LeaderboardRow, b: LeaderboardRow) =>
+        (a.refioScore ?? -1) - (b.refioScore ?? -1),
+      render: (_: unknown, row: LeaderboardRow) => {
+        const value = row.refioScore;
+        return value == null ? (
+          <Text type="secondary">-</Text>
+        ) : (
+          <Text strong style={{ color: scoreColor(value) }}>
+            {formatScore(value)}
+          </Text>
+        );
+      },
+    },
+    {
+      title: t("leaderboard.colAvgScore"),
       key: "avgScore",
       width: 120,
-      defaultSortOrder: "descend",
       sorter: (a: LeaderboardRow, b: LeaderboardRow) => compareLeaderboardRows(b, a),
       render: (_: unknown, row: LeaderboardRow) => (
         <Text strong className="score-pill" style={{ color: scoreColor(row.avgScore) }}>
@@ -130,7 +177,7 @@ export function LeaderboardTable() {
       ),
     },
     {
-      title: "Judge Score",
+      title: t("leaderboard.colJudge"),
       key: "judgeScore",
       width: 128,
       sorter: (a: LeaderboardRow, b: LeaderboardRow) =>
@@ -150,14 +197,14 @@ export function LeaderboardTable() {
         ),
     },
     {
-      title: "Pass Rate",
+      title: t("leaderboard.colPassRate"),
       key: "passRate",
       width: 110,
       sorter: (a: LeaderboardRow, b: LeaderboardRow) => a.passRate - b.passRate,
       render: (_: unknown, row: LeaderboardRow) => formatScore(row.passRate),
     },
     {
-      title: "First-shot",
+      title: t("leaderboard.colFirstShot"),
       key: "firstShot",
       width: 122,
       sorter: (a: LeaderboardRow, b: LeaderboardRow) =>
@@ -170,14 +217,14 @@ export function LeaderboardTable() {
               color={row.firstShotSuccess ? "green" : "red"}
               style={{ marginLeft: 6 }}
             >
-              {row.firstShotSuccess ? "OK" : "Fix"}
+              {row.firstShotSuccess ? t("leaderboard.firstShotOk") : t("leaderboard.firstShotFix")}
             </Tag>
           )}
         </span>
       ),
     },
     {
-      title: "Reliability",
+      title: t("leaderboard.colReliability"),
       key: "reliability",
       width: 122,
       sorter: (a: LeaderboardRow, b: LeaderboardRow) =>
@@ -186,16 +233,15 @@ export function LeaderboardTable() {
         formatNullableScore(row.reliabilityScore),
     },
     {
-      title: "Avg Stability",
+      title: t("leaderboard.colStability"),
       key: "stability",
       width: 130,
       sorter: (a: LeaderboardRow, b: LeaderboardRow) =>
-        (stabilityByRow.get(rowKey(a)) ?? -1) - (stabilityByRow.get(rowKey(b)) ?? -1),
-      render: (_: unknown, row: LeaderboardRow) =>
-        formatNullableScore(stabilityByRow.get(rowKey(row)) ?? null),
+        (a.stabilityScore ?? -1) - (b.stabilityScore ?? -1),
+      render: (_: unknown, row: LeaderboardRow) => formatNullableScore(row.stabilityScore),
     },
     {
-      title: "Local Viability",
+      title: t("leaderboard.colLocalViability"),
       key: "localViability",
       width: 140,
       sorter: (a: LeaderboardRow, b: LeaderboardRow) =>
@@ -203,10 +249,10 @@ export function LeaderboardTable() {
       render: (_: unknown, row: LeaderboardRow) =>
         row.environment.type === "local"
           ? formatNullableScore(row.localViabilityScore)
-          : "cloud baseline",
+          : t("leaderboard.cloudBaseline"),
     },
     {
-      title: "Avg Duration",
+      title: t("leaderboard.colDuration"),
       key: "duration",
       width: 130,
       sorter: (a: LeaderboardRow, b: LeaderboardRow) =>
@@ -214,7 +260,7 @@ export function LeaderboardTable() {
       render: (_: unknown, row: LeaderboardRow) => formatDuration(row.avgDurationMs),
     },
     {
-      title: "LLM Est.",
+      title: t("leaderboard.colLlmEst"),
       key: "estimatedLlm",
       width: 118,
       sorter: (a: LeaderboardRow, b: LeaderboardRow) =>
@@ -223,13 +269,13 @@ export function LeaderboardTable() {
         formatDuration(row.avgEstimatedLlmMs),
     },
     {
-      title: "Token Speed",
+      title: t("leaderboard.colTokenSpeed"),
       key: "tokenSpeed",
       width: 132,
-      render: (_: unknown, row: LeaderboardRow) => renderTokenSpeed(row),
+      render: (_: unknown, row: LeaderboardRow) => renderTokenSpeed(row, t),
     },
     {
-      title: "Avg Cost",
+      title: t("leaderboard.colCost"),
       key: "avgCost",
       width: 120,
       sorter: (a: LeaderboardRow, b: LeaderboardRow) =>
@@ -238,45 +284,65 @@ export function LeaderboardTable() {
     },
   ];
 
+  const columns = allColumns.filter((column) => {
+    const key = String(column.key);
+    return view === "all" || ALWAYS_SHOWN.has(key) || VIEW_COLUMNS[view].includes(key);
+  });
+
   return (
-    <Table<LeaderboardRow>
-      columns={columns}
-      dataSource={rows}
-      rowKey={rowKey}
-      loading={tasksLoading || resultsLoading}
-      pagination={false}
-      size="middle"
-      scroll={{ x: 1518 }}
-      onRow={(row, index) => ({
-        onClick: () =>
-          navigate(`/compare?${COMPARE_SELECT_PARAM}=${encodeURIComponent(row.modelId)}`),
-        className: index === 0 ? "leaderboard-row-top" : "",
-        style: { cursor: "pointer" },
-      })}
-    />
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div className="leaderboard-view-bar">
+        <Text type="secondary">{t("leaderboard.viewLabel")}</Text>
+        <Segmented
+          className="leaderboard-view-switch"
+          value={view}
+          onChange={(next) => changeView(next as ColumnView)}
+          options={[
+            { label: t("leaderboard.viewScores"), value: "scores" },
+            { label: t("leaderboard.viewReliability"), value: "reliability" },
+            { label: t("leaderboard.viewSpeedCost"), value: "speedCost" },
+            { label: t("leaderboard.viewAll"), value: "all" },
+          ]}
+        />
+      </div>
+      <Table<LeaderboardRow>
+        columns={columns}
+        dataSource={rows}
+        rowKey={rowKey}
+        loading={tasksLoading || resultsLoading}
+        pagination={false}
+        size="middle"
+        scroll={{ x: "max-content" }}
+        onRow={(row, index) => ({
+          onClick: () =>
+            navigate(`/compare?${COMPARE_SELECT_PARAM}=${encodeURIComponent(row.modelId)}`),
+          className: index === 0 ? "leaderboard-row-top" : "",
+          style: { cursor: "pointer" },
+        })}
+      />
+    </div>
   );
 }
 
 function rowKey(row: LeaderboardRow): string {
-  return `${row.modelId}::${row.environmentId}::${row.harnessId}`;
+  return leaderboardRowKey(row);
 }
-
 
 function formatNullableScore(score: number | null): string {
   if (score == null) return "-";
   return formatScore(score);
 }
 
-function renderTokenSpeed(row: LeaderboardRow) {
+function renderTokenSpeed(row: LeaderboardRow, t: Translate) {
   if (row.avgPrefillTokensPerSecond == null && row.avgDecodeTokensPerSecond == null) {
     return "-";
   }
 
   return (
     <span style={{ whiteSpace: "nowrap" }}>
-      in {formatTokensPerSecond(row.avgPrefillTokensPerSecond)}
+      {t("leaderboard.tokenIn")} {formatTokensPerSecond(row.avgPrefillTokensPerSecond)}
       <br />
-      out {formatTokensPerSecond(row.avgDecodeTokensPerSecond)}
+      {t("leaderboard.tokenOut")} {formatTokensPerSecond(row.avgDecodeTokensPerSecond)}
     </span>
   );
 }

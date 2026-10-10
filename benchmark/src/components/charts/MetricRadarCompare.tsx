@@ -11,7 +11,11 @@ import {
 } from "recharts";
 import type { Result, ResultsFile } from "@/schema/results";
 import type { TasksFile } from "@/schema/tasks";
-import { leaderboard, type LeaderboardRow } from "@/lib/stats";
+import { leaderboard, localRowsOnly, withRefioMode, type LeaderboardRow } from "@/lib/stats";
+import { useRefioMode } from "@/store/refioMode";
+import { useFilters } from "@/store/filters";
+import { useT } from "@/i18n/LanguageProvider";
+import type { MessageKey } from "@/i18n/messages";
 
 interface MetricRadarCompareProps {
   results: Result[];
@@ -35,7 +39,7 @@ const CEILING_PERCENTILE = 0.95;
 const FLOOR_PERCENTILE = 0.05;
 
 interface Metric {
-  label: string;
+  label: MessageKey;
   getNormalized: (row: LeaderboardRow) => number | null;
 }
 
@@ -47,8 +51,12 @@ export function MetricRadarCompare({
   modelNames,
   height = 420,
 }: MetricRadarCompareProps) {
+  const t = useT();
+  const refioMode = useRefioMode((s) => s.mode);
+  const localOnly = useFilters((s) => s.localOnly);
   const chartData = useMemo(() => {
-    const rows = leaderboard(results, resultsFile, tasksFile);
+    const all = leaderboard(results, resultsFile, tasksFile);
+    const rows = withRefioMode(localRowsOnly(all, localOnly), refioMode);
 
     const collect = (selector: (row: LeaderboardRow) => number | null): number[] =>
       rows.map(selector).filter((v): v is number => v != null);
@@ -59,28 +67,29 @@ export function MetricRadarCompare({
     const costFloor = floor(collect((r) => r.avgCostUsd));
 
     const metrics: Metric[] = [
-      { label: "Avg Score", getNormalized: (r) => clampNullable(r.avgScore) },
-      { label: "Pass Rate", getNormalized: (r) => clampNullable(r.passRate) },
-      { label: "First-shot", getNormalized: (r) => clampNullable(r.firstShotScore) },
-      { label: "Reliability", getNormalized: (r) => clampNullable(r.reliabilityScore) },
+      { label: "charts.metricRefioScore", getNormalized: (r) => clampNullable(r.refioScore) },
+      { label: "charts.metricAvgScore", getNormalized: (r) => clampNullable(r.avgScore) },
+      { label: "charts.metricPassRate", getNormalized: (r) => clampNullable(r.passRate) },
+      { label: "charts.metricFirstShot", getNormalized: (r) => clampNullable(r.firstShotScore) },
+      { label: "charts.metricReliability", getNormalized: (r) => clampNullable(r.reliabilityScore) },
       {
-        label: "Local Viability",
+        label: "charts.metricLocalViability",
         getNormalized: (r) => clampNullable(r.localViabilityScore),
       },
       {
-        label: "Input Speed",
+        label: "charts.metricInputSpeed",
         getNormalized: (r) => normalizeHigher(r.avgPrefillTokensPerSecond, prefillCeil),
       },
       {
-        label: "Output Speed",
+        label: "charts.metricOutputSpeed",
         getNormalized: (r) => normalizeHigher(r.avgDecodeTokensPerSecond, decodeCeil),
       },
       {
-        label: "Avg Speed",
+        label: "charts.metricAvgSpeed",
         getNormalized: (r) => normalizeLower(r.avgDurationMs, durationFloor),
       },
       {
-        label: "API Cost",
+        label: "charts.metricApiCost",
         getNormalized: (r) => normalizeLower(r.avgCostUsd, costFloor),
       },
     ];
@@ -92,13 +101,13 @@ export function MetricRadarCompare({
       });
       // Drop axis if any selected model has no data — partial coverage is misleading.
       if (perModel.some((entry) => entry.value == null)) return [];
-      const point: Record<string, string | number> = { metric: metric.label };
+      const point: Record<string, string | number> = { metric: t(metric.label) };
       for (const { modelId, value } of perModel) {
         point[modelId] = value ?? 0;
       }
       return [point];
     });
-  }, [results, resultsFile, selectedModelIds, tasksFile]);
+  }, [results, resultsFile, selectedModelIds, tasksFile, t, refioMode, localOnly]);
 
   if (selectedModelIds.length === 0 || chartData.length === 0) return null;
 

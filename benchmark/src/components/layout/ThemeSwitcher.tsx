@@ -1,5 +1,6 @@
 import { Segmented, Select } from "antd";
 import { palettes, type ThemeId } from "@/theme/palettes";
+import { useT } from "@/i18n/LanguageProvider";
 
 interface ThemeSwitcherProps {
   value: ThemeId;
@@ -12,8 +13,9 @@ const options = Object.values(palettes).map((palette) => ({
 }));
 
 export function ThemeSwitcher({ value, onChange }: ThemeSwitcherProps) {
+  const t = useT();
   return (
-    <div className="theme-switcher" aria-label="Theme switcher">
+    <div className="theme-switcher" aria-label={t("layout.themeSwitcher")}>
       <Segmented
         className="theme-switcher-full"
         size="small"
@@ -28,7 +30,7 @@ export function ThemeSwitcher({ value, onChange }: ThemeSwitcherProps) {
         value={value}
         onChange={(next) => onChange(next as ThemeId)}
         popupMatchSelectWidth={false}
-        aria-label="Theme"
+        aria-label={t("layout.theme")}
       />
     </div>
   );

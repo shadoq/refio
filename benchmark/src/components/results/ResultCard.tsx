@@ -1,5 +1,6 @@
 import { Card, Space, Tag, Button, Popconfirm, Descriptions, Typography } from "antd";
 import { EyeOutlined, EditOutlined, CopyOutlined, DeleteOutlined } from "@ant-design/icons";
+import { useT } from "@/i18n/LanguageProvider";
 import { ArtifactPreview } from "@/components/attachments/ArtifactPreview";
 import { inboxScreenshots } from "@/lib/adminArtifacts";
 import { formatDuration, formatCost } from "@/lib/format";
@@ -30,7 +31,8 @@ export function ResultCard({
   onDuplicate,
   onDelete,
 }: ResultCardProps) {
-  const task = tasksData?.tasks.find((t) => t.id === result.taskId);
+  const t = useT();
+  const task = tasksData?.tasks.find((tk) => tk.id === result.taskId);
   const model = resultsData?.models.find((m) => m.id === result.modelId);
   const env = resultsData?.environments.find((e) => e.id === result.environmentId);
 
@@ -48,36 +50,36 @@ export function ResultCard({
           <Text strong>{task?.name ?? result.taskId}</Text>
           <Text type="secondary">{model?.name ?? result.modelId}</Text>
           {env && <Tag color={env.type === "cloud" ? "blue" : "green"}>{env.name}</Tag>}
-          <Tag>attempt {result.attemptNumber}</Tag>
+          <Tag>{t("resultView.attempt", { n: result.attemptNumber })}</Tag>
         </Space>
       }
       extra={
         <Space>
           <Button
-            aria-label="Preview result"
+            aria-label={t("resultView.previewResult")}
             icon={<EyeOutlined />}
             size="small"
             onClick={() => onPreview(result)}
           />
           <Button
-            aria-label="Edit result"
+            aria-label={t("resultView.editResult")}
             icon={<EditOutlined />}
             size="small"
             onClick={() => onEdit(result)}
           />
           <Button
-            aria-label="Duplicate result"
+            aria-label={t("resultView.duplicateResult")}
             icon={<CopyOutlined />}
             size="small"
             onClick={() => onDuplicate(result)}
           />
           <Popconfirm
-            title="Delete this result?"
+            title={t("resultView.deleteConfirm")}
             onConfirm={() => onDelete(result.id)}
-            okText="Delete"
+            okText={t("resultView.deleteOk")}
             okButtonProps={{ danger: true }}
           >
-            <Button aria-label="Delete result" icon={<DeleteOutlined />} size="small" danger />
+            <Button aria-label={t("resultView.deleteResult")} icon={<DeleteOutlined />} size="small" danger />
           </Popconfirm>
         </Space>
       }
@@ -87,20 +89,20 @@ export function ResultCard({
           {html || screenshots.length > 0 ? (
             <ArtifactPreview htmlSrc={html?.src ?? null} screenshots={screenshots} />
           ) : (
-            <Text type="secondary">No artifact</Text>
+            <Text type="secondary">{t("resultView.noArtifact")}</Text>
           )}
         </div>
         <div>
           <Descriptions size="small" column={1} style={{ marginBottom: 12 }}>
-            <Descriptions.Item label="Duration">{formatDuration(result.durationMs)}</Descriptions.Item>
-            <Descriptions.Item label="Tokens out">{result.tokensOut ?? "-"}</Descriptions.Item>
-            <Descriptions.Item label="Cost">{formatCost(result.costUsd)}</Descriptions.Item>
+            <Descriptions.Item label={t("resultView.duration")}>{formatDuration(result.durationMs)}</Descriptions.Item>
+            <Descriptions.Item label={t("resultView.tokensOut")}>{result.tokensOut ?? "-"}</Descriptions.Item>
+            <Descriptions.Item label={t("resultView.cost")}>{formatCost(result.costUsd)}</Descriptions.Item>
           </Descriptions>
 
-          <Text strong>Scores</Text>
+          <Text strong>{t("resultView.scores")}</Text>
           <div style={{ margin: "6px 0", display: "flex", flexWrap: "wrap", gap: 4 }}>
             {result.scores.length === 0 ? (
-              <Text type="secondary">none</Text>
+              <Text type="secondary">{t("resultView.noScores")}</Text>
             ) : (
               result.scores.map((s) => (
                 <Tag key={s.criterionId}>

@@ -1,6 +1,7 @@
 import type { TasksFile, Criterion } from "@/schema/tasks";
 import type { Result, ResultsFile, Model, Environment, Harness } from "@/schema/results";
 import { estimateTokenProcessing } from "@/lib/tokenSpeed";
+import { modelStability } from "@/lib/stabilityView";
 import {
   aggregateJudgeScores,
   weightedNormalized,
@@ -35,6 +36,10 @@ export interface LeaderboardRow {
   localQualityRatio: number | null;
   judgeAvgScore: number | null;
   judgedAttempts: number;
+  stabilityScore: number | null;
+  refioScore: number | null;
+  // Quality (human and judge halves) per task the row ran, before stability.
+  taskQuality: Record<string, number>;
 }
 
 // 3 of 6: it works, even if with visible defects.
@@ -141,6 +146,99 @@ function compareNullableDesc(a: number | null, b: number | null): number {
   return (b ?? -1) - (a ?? -1);
 }
 
+// How much of the quality an entirely unstable model keeps. Stability can take away
+// at most the rest, and never adds to the quality itself.
+const REFIO_STABILITY_FLOOR = 0.8;
+// The human score is the owner's own verdict; the judges are a second opinion.
+const REFIO_HUMAN_WEIGHT = 2 / 3;
+
+// Single 0-1 indicator: human quality weighted 2/3 and judge quality 1/3 (human alone
+// when no judge scored the row), scaled by cross-attempt stability. Multiplying keeps a
+// model that fails the same way every time from earning points for consistency.
+// Null without a stability measurement - a missing one is not a perfect one.
+export function refioScore(
+  human: number,
+  judge: number | null,
+  stability: number | null,
+): number | null {
+  if (stability == null) return null;
+  return blendQuality(human, judge) * stabilityFactor(stability);
+}
+
+function blendQuality(human: number, judge: number | null): number {
+  return judge == null
+    ? human
+    : human * REFIO_HUMAN_WEIGHT + judge * (1 - REFIO_HUMAN_WEIGHT);
+}
+
+function stabilityFactor(stability: number): number {
+  return REFIO_STABILITY_FLOOR + (1 - REFIO_STABILITY_FLOOR) * stability;
+}
+
+export function leaderboardRowKey(
+  row: Pick<LeaderboardRow, "modelId" | "environmentId" | "harnessId">,
+): string {
+  return `${row.modelId}::${row.environmentId}::${row.harnessId}`;
+}
+
+// Refio Score as a share of the leader, keyed by leaderboardRowKey. Each task's
+// quality is first divided by the best quality any row reached on that task, so a
+// hard task lowers nobody who did as well as possible on it. Unlike the absolute
+// score this moves whenever a stronger model or a new task arrives. Rows without a
+// stability measurement are left out, as they are from the absolute score.
+export function leaderRelativeScores(
+  rows: Array<
+    Pick<LeaderboardRow, "modelId" | "environmentId" | "harnessId" | "taskQuality" | "stabilityScore">
+  >,
+): Map<string, number> {
+  const bestByTask = new Map<string, number>();
+  for (const row of rows) {
+    for (const [taskId, q] of Object.entries(row.taskQuality)) {
+      bestByTask.set(taskId, Math.max(bestByTask.get(taskId) ?? 0, q));
+    }
+  }
+
+  const raw = new Map<string, number>();
+  for (const row of rows) {
+    const tasks = Object.entries(row.taskQuality);
+    if (row.stabilityScore == null || tasks.length === 0) continue;
+    const adjusted =
+      tasks.reduce((sum, [taskId, q]) => {
+        const best = bestByTask.get(taskId) ?? 0;
+        return sum + (best > 0 ? q / best : 0);
+      }, 0) / tasks.length;
+    raw.set(leaderboardRowKey(row), adjusted * stabilityFactor(row.stabilityScore));
+  }
+
+  const leader = Math.max(0, ...raw.values());
+  const out = new Map<string, number>();
+  for (const [key, value] of raw) out.set(key, leader > 0 ? value / leader : 0);
+  return out;
+}
+
+export type RefioMode = "absolute" | "relative";
+
+// Local viability is measured against the best cloud run, so the leaderboard is
+// built with cloud runs in and the local-only view drops them afterwards.
+export function localRowsOnly<T extends { environment: { type: string } }>(
+  rows: T[],
+  localOnly: boolean,
+): T[] {
+  return localOnly ? rows.filter((row) => row.environment.type === "local") : rows;
+}
+
+// Pages read row.refioScore directly, so the chosen view is applied once to the rows
+// instead of in every place that shows the score.
+export function withRefioMode<
+  T extends Parameters<typeof leaderRelativeScores>[0][number] & {
+    refioScore: number | null;
+  },
+>(rows: T[], mode: RefioMode): T[] {
+  if (mode === "absolute") return rows;
+  const relative = leaderRelativeScores(rows);
+  return rows.map((row) => ({ ...row, refioScore: relative.get(leaderboardRowKey(row)) ?? null }));
+}
+
 export function compareLeaderboardRows(a: LeaderboardRow, b: LeaderboardRow): number {
   return (
     b.avgScore - a.avgScore ||
@@ -174,7 +272,8 @@ function withoutSelfJudge(result: Result, options: LeaderboardOptions): Result {
 
 export function leaderboard(
   results: Result[],
-  resultsFile: Pick<ResultsFile, "models" | "environments"> & Partial<Pick<ResultsFile, "harnesses">>,
+  resultsFile: Pick<ResultsFile, "models" | "environments"> &
+    Partial<Pick<ResultsFile, "harnesses" | "stability">>,
   tasks: TasksFile,
   options: LeaderboardOptions = {},
 ): LeaderboardRow[] {
@@ -208,6 +307,31 @@ export function leaderboard(
       .filter((v): v is number => v != null);
     const judgeAvgScore =
       judgeVals.length > 0 ? judgeVals.reduce((a, b) => a + b, 0) / judgeVals.length : null;
+    // Judges score blind, so the Refio Score always counts every verdict, whatever a
+    // page chooses to hide in its own judge column.
+    const blindJudgeScore = avgNullable(group.map((r) => getResultJudgeScore(r, tasks)));
+    const taskQuality: Record<string, number> = {};
+    for (const taskId of new Set(group.map((r) => r.taskId))) {
+      const own = group.filter((r) => r.taskId === taskId);
+      const human = own.reduce((sum, r) => sum + normalizeResult(r, tasks), 0) / own.length;
+      taskQuality[taskId] = blendQuality(
+        human,
+        avgNullable(own.map((r) => getResultJudgeScore(r, tasks))),
+      );
+    }
+    // The row's own stability groups, limited to the tasks it was measured on, so
+    // hidden or filtered-out tasks drop out exactly as they do from the scores.
+    const groupTasks = new Set(group.map((r) => r.taskId));
+    const stabilityScore =
+      modelStability(
+        (resultsFile.stability ?? []).filter(
+          (e) =>
+            e.environmentId === environmentId &&
+            (e.harnessId ?? "refio") === harnessId &&
+            groupTasks.has(e.taskId),
+        ),
+        modelId,
+      )?.overall ?? null;
     const avgWorksOutOfBoxScore = avgNullable(
       group.map((r) => getResultCriterionScore(r, tasks, FIRST_SHOT_CRITERION_ID)),
     );
@@ -291,6 +415,9 @@ export function leaderboard(
       localQualityRatio: null,
       judgeAvgScore,
       judgedAttempts: judgeVals.length,
+      stabilityScore,
+      refioScore: refioScore(avgScore, blindJudgeScore, stabilityScore),
+      taskQuality,
     });
   }
 

@@ -8,6 +8,7 @@ import { formatScore } from "@/lib/format";
 import { getResultCriterionScore } from "@/lib/stats";
 import type { Result, ResultsFile } from "@/schema/results";
 import type { TasksFile } from "@/schema/tasks";
+import { useT } from "@/i18n/LanguageProvider";
 
 const { Text } = Typography;
 
@@ -28,6 +29,7 @@ export function ResultPreviewModal({
   resultsData,
   onClose,
 }: ResultPreviewModalProps) {
+  const t = useT();
   const task = useMemo(
     () => (result && tasksData ? tasksData.tasks.find((t) => t.id === result.taskId) : undefined),
     [result, tasksData],
@@ -83,7 +85,7 @@ export function ResultPreviewModal({
 
   const title = result
     ? `${model?.name ?? result.modelId} - ${task?.name ?? result.taskId}`
-    : "Result preview";
+    : t("admin.previewFallbackTitle");
 
   return (
     <Modal
@@ -98,7 +100,7 @@ export function ResultPreviewModal({
       {result && (
         <Space direction="vertical" size="middle" style={{ width: "100%" }}>
           <Divider titlePlacement="start" style={{ marginTop: 0 }}>
-            Administrative
+            {t("admin.previewAdministrative")}
           </Divider>
           <Descriptions bordered size="small" column={1}>
             {facts.map((fact) => (
@@ -116,7 +118,7 @@ export function ResultPreviewModal({
 
           {result.attachments.length > 0 && (
             <div>
-              <Text strong>Attachment paths</Text>
+              <Text strong>{t("admin.previewAttachmentPaths")}</Text>
               <div style={{ marginTop: 6 }}>
                 {result.attachments.map((att, index) => (
                   <div
@@ -133,24 +135,24 @@ export function ResultPreviewModal({
             </div>
           )}
 
-          <Divider titlePlacement="start">Scores</Divider>
+          <Divider titlePlacement="start">{t("admin.resultScores")}</Divider>
           <Table
             size="small"
             pagination={false}
             rowKey="id"
             dataSource={scoreDetails}
-            locale={{ emptyText: "No scores" }}
+            locale={{ emptyText: t("admin.previewNoScores") }}
             columns={[
-              { title: "Criterion", dataIndex: "name", key: "name" },
+              { title: t("admin.previewColCriterion"), dataIndex: "name", key: "name" },
               {
-                title: "Raw",
+                title: t("admin.previewColRaw"),
                 dataIndex: "raw",
                 key: "raw",
                 width: 90,
                 render: (value: number | undefined) => value ?? "-",
               },
               {
-                title: "Normalized",
+                title: t("admin.previewColNormalized"),
                 dataIndex: "normalized",
                 key: "normalized",
                 width: 130,
@@ -163,7 +165,7 @@ export function ResultPreviewModal({
 
           {htmlAttachments.length > 0 && (
             <>
-              <Divider titlePlacement="start">HTML preview</Divider>
+              <Divider titlePlacement="start">{t("admin.previewHtml")}</Divider>
               {htmlAttachments.map((att, index) => (
                 <HtmlSandbox
                   key={`${att.src}-${index}`}
@@ -177,7 +179,7 @@ export function ResultPreviewModal({
 
           {otherAttachments.length > 0 && (
             <>
-              <Divider titlePlacement="start">Attachments</Divider>
+              <Divider titlePlacement="start">{t("admin.resultAttachments")}</Divider>
               {otherAttachments.map((att, index) => (
                 <div key={`${att.src}-${index}`}>
                   {att.caption && (
@@ -192,17 +194,17 @@ export function ResultPreviewModal({
           )}
 
           {result.attachments.length === 0 && (
-            <Empty description="No attachments for this result." />
+            <Empty description={t("admin.previewNoAttachments")} />
           )}
 
           <Collapse
             items={[
               {
                 key: "json",
-                label: "Raw JSON",
+                label: t("admin.previewRawJson"),
                 children: (
                   <Space direction="vertical" size="small" style={{ width: "100%" }}>
-                    <Text copyable={{ text: json }}>Copy JSON</Text>
+                    <Text copyable={{ text: json }}>{t("admin.previewCopyJson")}</Text>
                     <pre
                       style={{
                         maxHeight: 340,

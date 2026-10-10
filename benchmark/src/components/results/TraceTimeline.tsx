@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Table, Tag, Empty, Spin, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
+import { useT } from "@/i18n/LanguageProvider";
 import type { TraceSummary } from "@/schema/results";
 import type { TraceEvent } from "@/lib/trace/types";
 
@@ -30,6 +31,7 @@ export function TraceTimeline({ trace }: { trace: TraceSummary }) {
 }
 
 function TraceTimelineForPath({ path }: { path: string }) {
+  const t = useT();
   const [events, setEvents] = useState<TraceEvent[] | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -58,24 +60,24 @@ function TraceTimelineForPath({ path }: { path: string }) {
     };
   }, [path]);
 
-  if (failed) return <Empty description="Run log not found next to this result" />;
+  if (failed) return <Empty description={t("resultView.traceNotFound")} />;
   if (events === null) return <Spin />;
-  if (events.length === 0) return <Empty description="The run log is empty" />;
+  if (events.length === 0) return <Empty description={t("resultView.traceEmpty")} />;
 
   const columns: ColumnsType<TraceEvent> = [
     { title: "#", dataIndex: "i", width: 60 },
-    { title: "t", key: "t", width: 70, render: (_, e) => formatTime(e.tMs) },
-    { title: "turn", dataIndex: "turn", width: 60 },
-    { title: "kind", dataIndex: "kind", width: 120 },
+    { title: t("resultView.colTime"), key: "t", width: 70, render: (_, e) => formatTime(e.tMs) },
+    { title: t("resultView.colTurn"), dataIndex: "turn", width: 60 },
+    { title: t("resultView.colKind"), dataIndex: "kind", width: 120 },
     {
-      title: "tool",
+      title: t("resultView.colTool"),
       key: "tool",
       width: 180,
       render: (_, e) =>
         e.tool ? <Tag color={CLASS_COLOR[e.cls ?? "other"]}>{e.tool}</Tag> : null,
     },
     {
-      title: "detail",
+      title: t("resultView.colDetail"),
       key: "detail",
       render: (_, e) => (
         <Text type="secondary" style={{ fontSize: 12 }}>
@@ -84,11 +86,11 @@ function TraceTimelineForPath({ path }: { path: string }) {
       ),
     },
     {
-      title: "ok",
+      title: t("resultView.colOk"),
       key: "ok",
       width: 60,
       render: (_, e) =>
-        e.ok === null ? null : <Tag color={e.ok ? "green" : "red"}>{e.ok ? "ok" : "err"}</Tag>,
+        e.ok === null ? null : <Tag color={e.ok ? "green" : "red"}>{t(e.ok ? "resultView.stepOk" : "resultView.stepErr")}</Tag>,
     },
   ];
 

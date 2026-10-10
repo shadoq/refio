@@ -1,4 +1,5 @@
 import { Component, type ReactNode, type ErrorInfo } from "react";
+import { useT } from "@/i18n/LanguageProvider";
 import { Result, Button } from "antd";
 
 interface Props {
@@ -31,18 +32,26 @@ export class ErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.hasError) {
       return (
-        <Result
-          status="error"
-          title="Something went wrong"
-          subTitle={this.state.error?.message ?? "An unexpected error occurred"}
-          extra={
-            <Button type="primary" onClick={this.reset}>
-              Try again
-            </Button>
-          }
-        />
+        <ErrorView message={this.state.error?.message ?? null} onRetry={this.reset} />
       );
     }
     return this.props.children;
   }
+}
+
+// Hooks are not available in the class above, so the translated text lives here.
+function ErrorView({ message, onRetry }: { message: string | null; onRetry: () => void }) {
+  const t = useT();
+  return (
+    <Result
+      status="error"
+      title={t("layout.errorTitle")}
+      subTitle={message ?? t("layout.errorUnexpected")}
+      extra={
+        <Button type="primary" onClick={onRetry}>
+          {t("layout.errorRetry")}
+        </Button>
+      }
+    />
+  );
 }

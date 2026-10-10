@@ -14,6 +14,7 @@ import {
 } from "@/lib/format";
 import { estimateTokenProcessing } from "@/lib/tokenSpeed";
 import { ResultDetailModal } from "@/components/results/ResultDetailModal";
+import { useT } from "@/i18n/LanguageProvider";
 
 const { Text } = Typography;
 
@@ -57,6 +58,7 @@ export function TaskAttemptsTable({
   modelNames,
   environmentNames,
 }: TaskAttemptsTableProps) {
+  const t = useT();
   const [detailResult, setDetailResult] = useState<Result | null>(null);
 
   const criteriaById = useMemo(
@@ -148,7 +150,7 @@ export function TaskAttemptsTable({
   // Fixed columns
   const fixedColumns: ColumnsType<RowData> = [
     {
-      title: "Model",
+      title: t("taskDetail.colModel"),
       key: "model",
       width: 160,
       render: (_: unknown, row: RowData) => (
@@ -167,7 +169,7 @@ export function TaskAttemptsTable({
       key: "attempt",
       width: 50,
       render: (v: number | "Avg") =>
-        v === "Avg" ? <Text strong>Avg</Text> : v,
+        v === "Avg" ? <Text strong>{t("taskDetail.avgRow")}</Text> : v,
     },
   ];
 
@@ -178,7 +180,7 @@ export function TaskAttemptsTable({
     width: 90,
     render: (_: unknown, row: RowData) => {
       const score = row.scores[c.id];
-      if (score == null) return "—";
+      if (score == null) return "-";
       const pct = score * 100;
       return <span style={{ color: scoreColor(score) }}>{pct.toFixed(0)}%</span>;
     },
@@ -187,53 +189,53 @@ export function TaskAttemptsTable({
   // Metric + action columns
   const metricColumns: ColumnsType<RowData> = [
     {
-      title: "Avg Score",
+      title: t("taskDetail.colAvgScore"),
       key: "avgScore",
       width: 90,
       render: (_: unknown, row: RowData) =>
         row.avgScore != null ? (
           <Text strong>{formatScore(row.avgScore)}</Text>
-        ) : "—",
+        ) : "-",
     },
     {
-      title: "Duration",
+      title: t("taskDetail.colDuration"),
       key: "duration",
       width: 90,
       render: (_: unknown, row: RowData) => formatDuration(row.durationMs),
     },
     {
-      title: "Tokens",
+      title: t("taskDetail.colTokens"),
       key: "tokens",
       width: 90,
       render: (_: unknown, row: RowData) =>
-        row.tokensOut != null ? formatTokens(row.tokensOut) : "—",
+        row.tokensOut != null ? formatTokens(row.tokensOut) : "-",
     },
     {
-      title: "Cost",
+      title: t("taskDetail.colCost"),
       key: "cost",
       width: 80,
       render: (_: unknown, row: RowData) => formatCost(row.costUsd),
     },
     {
-      title: "LLM Est.",
+      title: t("taskDetail.colLlmEst"),
       key: "estimatedLlm",
       width: 90,
       render: (_: unknown, row: RowData) => formatDuration(row.estimatedLlmMs),
     },
     {
-      title: "Speed",
+      title: t("taskDetail.colSpeed"),
       key: "speed",
       width: 120,
       render: (_: unknown, row: RowData) => (
         <span>
-          {formatTokensPerSecond(row.prefillTokensPerSecond)} in
+          {t("taskDetail.speedIn", { value: formatTokensPerSecond(row.prefillTokensPerSecond) })}
           <br />
-          {formatTokensPerSecond(row.decodeTokensPerSecond)} out
+          {t("taskDetail.speedOut", { value: formatTokensPerSecond(row.decodeTokensPerSecond) })}
         </span>
       ),
     },
     {
-      title: "Files",
+      title: t("taskDetail.colFiles"),
       key: "att",
       width: 60,
       render: (_: unknown, row: RowData) =>
@@ -248,7 +250,7 @@ export function TaskAttemptsTable({
           >
             {row.attachmentCount} 📎
           </Button>
-        ) : "—",
+        ) : "-",
     },
   ];
 

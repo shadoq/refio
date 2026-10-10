@@ -26,6 +26,7 @@ import type { JudgeAdapter } from "./lib/judges/types";
 import { groupForStability, computeStabilityEntry } from "./lib/stability";
 import { stabilityNeedsJudging, stabilityKey } from "../../src/lib/judge/stability-merge";
 import { extractJson } from "../../src/lib/judge/parse";
+import { runPool, createSerialQueue, scoredSince } from "../../src/lib/judge/pool";
 import {
   validateVerdict,
   needsNoArtifactVerdict,
@@ -58,10 +59,22 @@ interface Args {
   // reviewer the judges' opinion before they score, which is a different method -
   // so it has to be asked for.
   inbox: boolean;
+  // How many results (or stability groups) are judged at once. Each one still asks
+  // its judges in turn; the speed-up comes from overlapping rendering and CLI waits.
+  concurrency: number;
+  // Resume an interrupted --re-judge: redo only verdicts older than this ISO time.
+  reJudgeSince?: string;
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { limit: 20, reJudge: false, stability: false, dryRun: false, inbox: false };
+  const args: Args = {
+    limit: 20,
+    reJudge: false,
+    stability: false,
+    dryRun: false,
+    inbox: false,
+    concurrency: 1,
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => argv[++i];
@@ -74,6 +87,12 @@ function parseArgs(argv: string[]): Args {
     else if (a === "--stability") args.stability = true;
     else if (a === "--dry-run") args.dryRun = true;
     else if (a === "--inbox") args.inbox = true;
+    else if (a === "--concurrency") args.concurrency = Math.max(1, Number(next()) || 1);
+    else if (a === "--re-judge-since") {
+      const since = new Date(next());
+      if (Number.isNaN(since.getTime())) throw new Error("--re-judge-since needs an ISO date");
+      args.reJudgeSince = since.toISOString();
+    }
     else console.warn(`ignoring unknown flag: ${a}`);
   }
   return args;
@@ -103,7 +122,12 @@ async function runStability(
   const byKey = new Map(
     (file.stability ?? []).map((s) => [stabilityKey(s), s]),
   );
-  if (!args.reJudge) {
+  const since = args.reJudgeSince;
+  const stale = (g: (typeof groups)[number], judgeId: string) =>
+    !scoredSince(byKey.get(stabilityKey(g))?.judges ?? [], judgeId, since!);
+  if (since) {
+    groups = groups.filter((g) => adapters.some((a) => stale(g, a.id)));
+  } else if (!args.reJudge) {
     const judgeIds = adapters.map((a) => a.id);
     groups = groups.filter((g) =>
       stabilityNeedsJudging(byKey.get(stabilityKey(g)), judgeIds),
@@ -118,13 +142,16 @@ async function runStability(
 
   let computed = 0;
   const skipped: string[] = [];
-  for (const group of groups) {
+  const save = createSerialQueue();
+  await runPool(groups, args.concurrency, async (group) => {
     const existing = byKey.get(stabilityKey(group));
     // Top up only what is missing: re-running a judge that already scored the
     // group would spend a CLI call to overwrite its own verdict.
-    const groupAdapters = args.reJudge
-      ? adapters
-      : adapters.filter((a) => !(existing?.judges ?? []).some((j) => j.judgeId === a.id));
+    const groupAdapters = since
+      ? adapters.filter((a) => stale(group, a.id))
+      : args.reJudge
+        ? adapters
+        : adapters.filter((a) => !(existing?.judges ?? []).some((j) => j.judgeId === a.id));
     const entry = await computeStabilityEntry({
       benchmarkDir,
       group,
@@ -136,7 +163,7 @@ async function runStability(
     });
     if ("skipped" in entry) {
       skipped.push(entry.skipped);
-      continue;
+      return;
     }
     if (args.dryRun) {
       console.log(
@@ -145,17 +172,17 @@ async function runStability(
           `scoreVariance ${entry.deterministic.scoreVariance.toFixed(3)}, ` +
           `codeSimilarity ${entry.deterministic.codeSimilarity.toFixed(3)}`,
       );
-      continue;
+      return;
     }
     upsertStability(file, entry);
-    await saveResultsAtomic(benchmarkDir, file);
+    await save(() => saveResultsAtomic(benchmarkDir, file));
     computed++;
     const verdicts = entry.judges.map((j) => `${j.judgeId}=${j.value}`).join(", ");
     console.log(
       `  ${group.taskId}/${group.modelId}: var ${entry.deterministic.scoreVariance.toFixed(2)} ` +
         `sim ${entry.deterministic.codeSimilarity.toFixed(2)} [${verdicts}]`,
     );
-  }
+  });
 
   console.log(`\ndone: stability computed ${computed}, skipped ${skipped.length}`);
   skipped.forEach((s) => console.log(`  skipped ${s}`));
@@ -171,7 +198,10 @@ async function writeNoArtifactVerdicts(
   results: RawResult[],
   args: Args,
 ): Promise<number> {
-  const pending = results.filter((r) => args.reJudge || needsNoArtifactVerdict(r));
+  // No CLI is involved, so a resumed re-judge simply rewrites these zeros.
+  const pending = results.filter(
+    (r) => args.reJudge || args.reJudgeSince != null || needsNoArtifactVerdict(r),
+  );
   if (pending.length === 0) return 0;
 
   if (args.dryRun) {
@@ -250,25 +280,32 @@ async function main() {
 
   let candidates = pool.filter((r) => hasHtml(r) && inScope(r));
 
+  const since = args.reJudgeSince;
   const needing = (r: RawResult) =>
-    adapters.filter((a) => args.reJudge || !successfulEntry(r, a.id));
+    adapters.filter((a) =>
+      since
+        ? !scoredSince(r.judgeScores ?? [], a.id, since)
+        : args.reJudge || !successfulEntry(r, a.id),
+    );
   candidates = candidates.filter((r) => needing(r).length > 0);
   if (args.limit > 0) candidates = candidates.slice(0, args.limit);
 
   console.log(
     `scanning: ${candidates.length} result(s), judges: [${adapters.map((a) => a.id).join(", ")}]` +
+      `, concurrency ${args.concurrency}` +
       (args.dryRun ? " (dry-run)" : ""),
   );
 
   let judged = 0;
   let errors = 0;
   const skipped: string[] = [];
+  const save = createSerialQueue();
 
-  for (const r of candidates) {
+  await runPool(candidates, args.concurrency, async (r) => {
     const task = tasks.tasks.find((t) => t.id === r.taskId);
     if (!task) {
       skipped.push(`${r.id}: unknown task "${r.taskId}"`);
-      continue;
+      return;
     }
     const criteria = resolveCriteria(tasks, r.taskId);
 
@@ -283,7 +320,7 @@ async function main() {
       });
     } catch (e) {
       skipped.push(`${r.id}: evidence failed: ${(e as Error).message}`);
-      continue;
+      return;
     }
 
     if (args.dryRun) {
@@ -292,7 +329,7 @@ async function main() {
       console.log(`console errors: ${evidence.consoleErrors.length}`);
       console.log(`would run: [${needing(r).map((a) => a.id).join(", ")}]`);
       console.log(`--- INSTRUCTIONS.md ---\n${evidence.promptText}`);
-      continue;
+      return;
     }
 
     for (const adapter of needing(r)) {
@@ -327,7 +364,7 @@ async function main() {
           consoleErrors: evidence.consoleErrors,
           error: null,
         });
-        await saveResultsAtomic(benchmarkDir, file);
+        await save(() => saveResultsAtomic(benchmarkDir, file));
         judged++;
         const avg = scores.length
           ? (scores.reduce((a, s) => a + s.value, 0) / scores.length).toFixed(2)
@@ -347,13 +384,13 @@ async function main() {
           consoleErrors: evidence.consoleErrors,
           error: (e as Error).message,
         });
-        if (wrote) await saveResultsAtomic(benchmarkDir, file);
+        if (wrote) await save(() => saveResultsAtomic(benchmarkDir, file));
         errors++;
         const kept = wrote ? "" : " (kept prior score)";
         console.error(`  ${r.id}/${adapter.id}: ERROR${kept} ${(e as Error).message}`);
       }
     }
-  }
+  });
 
   console.log(
     `\ndone: judged ${judged}, no-artifact zeros ${zeroed}, ` +

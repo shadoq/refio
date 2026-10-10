@@ -1,4 +1,6 @@
 import { Space, Tag, Tooltip } from "antd";
+import { useT } from "@/i18n/LanguageProvider";
+import type { MessageKey } from "@/i18n/messages";
 import type { TraceSummary } from "@/schema/results";
 
 // How a run ended, in a word and a colour. A run killed by its cap reads the same as
@@ -12,64 +14,86 @@ const END_REASON_COLOR: Record<TraceSummary["endReason"], string> = {
   unknown: "default",
 };
 
+const END_REASON_LABEL: Record<TraceSummary["endReason"], MessageKey> = {
+  completed: "resultView.endCompleted",
+  failed: "resultView.endFailed",
+  incomplete: "resultView.endIncomplete",
+  cancelled: "resultView.endCancelled",
+  limit: "resultView.endLimit",
+  unknown: "resultView.endUnknown",
+};
+
 // The one-line shape of a run: how many turns it took, how many tools it called, how
 // that split between reading, writing and running commands, how much of that work it
 // had already done before, whether it survived its own failures and whether it checked
 // its own output.
 export function TraceSummaryTags({ trace }: { trace: TraceSummary }) {
+  const t = useT();
   const wastedRate = trace.toolCalls > 0 ? trace.duplicateCalls / trace.toolCalls : 0;
+  const endLabel = END_REASON_LABEL[trace.endReason];
   return (
     <Space wrap size={4}>
-      <Tag color={END_REASON_COLOR[trace.endReason]}>{trace.endReason}</Tag>
-      <Tag>{trace.turns} turns</Tag>
-      <Tag>{trace.toolCalls} tools</Tag>
-      <Tooltip title="reads / writes / shell commands">
+      <Tag color={END_REASON_COLOR[trace.endReason]}>
+        {endLabel ? t(endLabel) : trace.endReason}
+      </Tag>
+      <Tag>{t("resultView.turns", { count: trace.turns })}</Tag>
+      <Tag>{t("resultView.tools", { count: trace.toolCalls })}</Tag>
+      <Tooltip title={t("resultView.callSplitTooltip")}>
         <Tag color="blue">
-          {trace.reads}R / {trace.writes}W / {trace.shellRuns}sh
+          {t("resultView.callSplit", {
+            reads: trace.reads,
+            writes: trace.writes,
+            shell: trace.shellRuns,
+          })}
         </Tag>
       </Tooltip>
-      <Tooltip title="the model itself ran a build or a test">
+      <Tooltip title={t("resultView.selfCheckTooltip")}>
         <Tag color={trace.selfVerified ? "green" : "default"}>
-          self-check {trace.selfVerified ? "yes" : "no"}
+          {t(trace.selfVerified ? "resultView.selfCheckYes" : "resultView.selfCheckNo")}
         </Tag>
       </Tooltip>
-      {trace.firstWriteAtCall !== null && <Tag>first write @{trace.firstWriteAtCall}</Tag>}
+      {trace.firstWriteAtCall !== null && (
+        <Tag>{t("resultView.firstWrite", { n: trace.firstWriteAtCall })}</Tag>
+      )}
       {trace.duplicateCalls > 0 && (
-        <Tooltip title="calls that repeated one the agent had already made">
+        <Tooltip title={t("resultView.repeatedTooltip")}>
           <Tag color={wastedRate > 0.3 ? "red" : "orange"}>
-            {trace.duplicateCalls} repeated ({Math.round(wastedRate * 100)}%)
+            {t("resultView.repeated", {
+              count: trace.duplicateCalls,
+              percent: Math.round(wastedRate * 100),
+            })}
           </Tag>
         </Tooltip>
       )}
       {trace.repeatedFailedCallStreak > 0 && (
-        <Tooltip title="longest run of identical calls that kept failing">
-          <Tag color="red">stuck x{trace.repeatedFailedCallStreak}</Tag>
+        <Tooltip title={t("resultView.stuckTooltip")}>
+          <Tag color="red">{t("resultView.stuck", { count: trace.repeatedFailedCallStreak })}</Tag>
         </Tooltip>
       )}
       {trace.toolErrors > 0 && (
-        <Tooltip title="the tool call itself was rejected or errored">
-          <Tag color="red">{trace.toolErrors} tool errors</Tag>
+        <Tooltip title={t("resultView.toolErrorsTooltip")}>
+          <Tag color="red">{t("resultView.toolErrors", { count: trace.toolErrors })}</Tag>
         </Tooltip>
       )}
       {trace.nonZeroExits > 0 && (
-        <Tooltip title="shell commands that returned non-zero, which is not the same as a failed call">
-          <Tag>{trace.nonZeroExits} non-zero exits</Tag>
+        <Tooltip title={t("resultView.nonZeroTooltip")}>
+          <Tag>{t("resultView.nonZeroExits", { count: trace.nonZeroExits })}</Tag>
         </Tooltip>
       )}
       {trace.recoveredFromError !== null && (
-        <Tooltip title="did the agent do anything useful after its last failing call">
+        <Tooltip title={t("resultView.recoveredTooltip")}>
           <Tag color={trace.recoveredFromError ? "green" : "red"}>
-            {trace.recoveredFromError ? "recovered" : "gave up after failure"}
+            {t(trace.recoveredFromError ? "resultView.recovered" : "resultView.gaveUp")}
           </Tag>
         </Tooltip>
       )}
       {trace.loop?.contextOverflow && (
-        <Tooltip title="the prompt did not fit the model's window">
-          <Tag color="volcano">context overflow</Tag>
+        <Tooltip title={t("resultView.contextOverflowTooltip")}>
+          <Tag color="volcano">{t("resultView.contextOverflow")}</Tag>
         </Tooltip>
       )}
       {trace.loop?.failureMarker && (
-        <Tooltip title="the loop's own name for how this run went wrong">
+        <Tooltip title={t("resultView.failureMarkerTooltip")}>
           <Tag color="volcano">{trace.loop.failureMarker}</Tag>
         </Tooltip>
       )}

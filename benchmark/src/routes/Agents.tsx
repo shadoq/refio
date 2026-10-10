@@ -17,6 +17,8 @@ import { formatDuration, formatScore } from "@/lib/format";
 import { TraceSummaryTags } from "@/components/results/TraceSummaryTags";
 import { TraceTimeline } from "@/components/results/TraceTimeline";
 import type { Result } from "@/schema/results";
+import { useT } from "@/i18n/LanguageProvider";
+import type { MessageKey } from "@/i18n/messages";
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -33,6 +35,7 @@ function fmt(value: number | null, digits = 1): string {
 // It ignores the global harness filter on purpose - this page IS the cross-harness
 // view - while model, task, environment and date still narrow it.
 export default function Agents() {
+  const t = useT();
   const filters = useFilters();
   const { data: tasksData } = useTasks();
   const { data: resultsData } = useResults();
@@ -102,7 +105,7 @@ export default function Agents() {
 
   const agentColumns: ColumnsType<LeaderboardRow> = [
     {
-      title: "Agent",
+      title: t("agents.colAgent"),
       key: "harness",
       render: (_, row) => (
         <Space direction="vertical" size={0}>
@@ -110,7 +113,7 @@ export default function Agents() {
           {row.harness.conditions && (
             <Tooltip title={row.harness.conditions}>
               <Text type="secondary" style={{ fontSize: 11 }}>
-                run conditions
+                {t("agents.runConditions")}
               </Text>
             </Tooltip>
           )}
@@ -118,7 +121,7 @@ export default function Agents() {
       ),
     },
     {
-      title: "Model",
+      title: t("agents.colModel"),
       key: "model",
       render: (_, row) => (
         <Text strong className="model-name">
@@ -126,10 +129,10 @@ export default function Agents() {
         </Text>
       ),
     },
-    { title: "Tasks", key: "tasks", width: 80, render: (_, row) => row.tasksEvaluated },
-    { title: "Attempts", key: "attempts", width: 90, render: (_, row) => row.attemptCount },
+    { title: t("agents.colTasks"), key: "tasks", width: 80, render: (_, row) => row.tasksEvaluated },
+    { title: t("agents.colAttempts"), key: "attempts", width: 90, render: (_, row) => row.attemptCount },
     {
-      title: "Avg score",
+      title: t("agents.colAvgScore"),
       key: "avgScore",
       width: 110,
       render: (_, row) => formatScore(row.avgScore),
@@ -138,8 +141,8 @@ export default function Agents() {
     },
     {
       title: (
-        <Tooltip title="a judge's verdict on a run its own agent produced is excluded here">
-          <span>Judges</span>
+        <Tooltip title={t("agents.colJudgesTip")}>
+          <span>{t("agents.colJudges")}</span>
         </Tooltip>
       ),
       key: "judgeScore",
@@ -148,14 +151,14 @@ export default function Agents() {
         row.judgeAvgScore == null ? <Text type="secondary">-</Text> : formatScore(row.judgeAvgScore),
     },
     {
-      title: "Avg turns",
+      title: t("agents.colAvgTurns"),
       key: "turns",
       width: 100,
       render: (_, row) =>
         fmt(tracesByRow.get(`${row.modelId}::${row.environmentId}::${row.harnessId}`)?.avgTurns ?? null),
     },
     {
-      title: "Avg tools",
+      title: t("agents.colAvgTools"),
       key: "tools",
       width: 100,
       render: (_, row) =>
@@ -165,7 +168,7 @@ export default function Agents() {
         ),
     },
     {
-      title: "Avg writes",
+      title: t("agents.colAvgWrites"),
       key: "writes",
       width: 100,
       render: (_, row) =>
@@ -176,8 +179,8 @@ export default function Agents() {
     },
     {
       title: (
-        <Tooltip title="share of runs where the model itself ran a build or a test">
-          <span>Self-check</span>
+        <Tooltip title={t("agents.colSelfCheckTip")}>
+          <span>{t("agents.colSelfCheck")}</span>
         </Tooltip>
       ),
       key: "selfCheck",
@@ -191,8 +194,8 @@ export default function Agents() {
     },
     {
       title: (
-        <Tooltip title="share of tool calls that repeated one the agent had already made">
-          <span>Wasted</span>
+        <Tooltip title={t("agents.colWastedTip")}>
+          <span>{t("agents.colWasted")}</span>
         </Tooltip>
       ),
       key: "wasted",
@@ -206,8 +209,8 @@ export default function Agents() {
     },
     {
       title: (
-        <Tooltip title="of the runs that hit a failing tool call, how many carried on afterwards">
-          <span>Recovered</span>
+        <Tooltip title={t("agents.colRecoveredTip")}>
+          <span>{t("agents.colRecovered")}</span>
         </Tooltip>
       ),
       key: "recovered",
@@ -221,8 +224,8 @@ export default function Agents() {
     },
     {
       title: (
-        <Tooltip title="runs that ended other than by finishing: a cap, a timeout, a crash">
-          <span>Unfinished</span>
+        <Tooltip title={t("agents.colUnfinishedTip")}>
+          <span>{t("agents.colUnfinished")}</span>
         </Tooltip>
       ),
       key: "unfinished",
@@ -235,7 +238,7 @@ export default function Agents() {
       },
     },
     {
-      title: "Avg duration",
+      title: t("agents.colAvgDuration"),
       key: "duration",
       width: 130,
       render: (_, row) => formatDuration(row.avgDurationMs ?? undefined),
@@ -243,14 +246,14 @@ export default function Agents() {
   ];
 
   const deltaColumns: ColumnsType<HarnessDeltaRow> = [
-    { title: "Model", dataIndex: "modelId", key: "modelId" },
-    { title: "Environment", dataIndex: "environmentId", key: "environmentId", width: 150 },
+    { title: t("agents.colModel"), dataIndex: "modelId", key: "modelId" },
+    { title: t("agents.colEnvironment"), dataIndex: "environmentId", key: "environmentId", width: 150 },
     {
       title: "Refio",
       key: "baseline",
       width: 110,
       render: (_, row) =>
-        row.baselineScore == null ? <Text type="secondary">not run</Text> : formatScore(row.baselineScore),
+        row.baselineScore == null ? <Text type="secondary">{t("agents.notRun")}</Text> : formatScore(row.baselineScore),
     },
     ...externalHarnesses.map((harness) => ({
       title: harness.name,
@@ -265,8 +268,8 @@ export default function Agents() {
     })),
     {
       title: (
-        <Tooltip title="averaged task by task over the tasks BOTH agents ran; the count is how many that was">
-          <span>Delta</span>
+        <Tooltip title={t("agents.colDeltaTip")}>
+          <span>{t("agents.colDelta")}</span>
         </Tooltip>
       ),
       key: "delta",
@@ -275,13 +278,13 @@ export default function Agents() {
           {Object.entries(row.delta).map(([harnessId, value]) => (
             <Tag key={harnessId} color={value >= 0 ? "green" : "red"}>
               {harnessId} {value >= 0 ? "+" : ""}
-              {value.toFixed(2)} ({row.pairedTasks[harnessId] ?? 0} shared)
+              {value.toFixed(2)} {t("agents.sharedTasks", { count: row.pairedTasks[harnessId] ?? 0 })}
             </Tag>
           ))}
           {Object.entries(row.pairedTasks)
             .filter(([harnessId, count]) => count === 0 && row.delta[harnessId] === undefined)
             .map(([harnessId]) => (
-              <Tag key={harnessId}>{harnessId}: no shared task</Tag>
+              <Tag key={harnessId}>{t("agents.noSharedTask", { harness: harnessId })}</Tag>
             ))}
         </Space>
       ),
@@ -289,7 +292,7 @@ export default function Agents() {
   ];
 
   const matrixColumns: ColumnsType<TaskHarnessRow> = [
-    { title: "Task", dataIndex: "taskName", key: "taskName" },
+    { title: t("agents.colTask"), dataIndex: "taskName", key: "taskName" },
     ...harnessIdsInData.map((harnessId) => ({
       title: harnessId,
       key: harnessId,
@@ -320,39 +323,32 @@ export default function Agents() {
     selectedA?.trace && selectedB?.trace
       ? (
           [
-            ["turns", selectedA.trace.turns, selectedB.trace.turns],
-            ["tool calls", selectedA.trace.toolCalls, selectedB.trace.toolCalls],
-            ["reads", selectedA.trace.reads, selectedB.trace.reads],
-            ["writes", selectedA.trace.writes, selectedB.trace.writes],
-            ["shell runs", selectedA.trace.shellRuns, selectedB.trace.shellRuns],
+            ["agents.metricTurns", selectedA.trace.turns, selectedB.trace.turns],
+            ["agents.metricToolCalls", selectedA.trace.toolCalls, selectedB.trace.toolCalls],
+            ["agents.metricReads", selectedA.trace.reads, selectedB.trace.reads],
+            ["agents.metricWrites", selectedA.trace.writes, selectedB.trace.writes],
+            ["agents.metricShellRuns", selectedA.trace.shellRuns, selectedB.trace.shellRuns],
             [
-              "self-check",
+              "agents.metricSelfCheck",
               selectedA.trace.selfVerified ? 1 : 0,
               selectedB.trace.selfVerified ? 1 : 0,
             ],
             [
-              "time to first write (s)",
+              "agents.metricTimeToFirstWrite",
               Math.round((selectedA.trace.timeToFirstWriteMs ?? 0) / 1000),
               Math.round((selectedB.trace.timeToFirstWriteMs ?? 0) / 1000),
             ],
-          ] as Array<[string, number, number]>
-        ).map(([metric, a, b]) => ({ key: metric, metric, a, b, diff: b - a }))
+          ] as Array<[MessageKey, number, number]>
+        ).map(([metric, a, b]) => ({ key: metric, metric: t(metric), a, b, diff: b - a }))
       : [];
 
   return (
     <div>
-      <Title level={2}>Agents</Title>
-      <Paragraph type="secondary">
-        The same tasks run by external coding agents - Claude Code, Codex, Gemini CLI - on
-        their own planning, tools and self-checking, next to Refio. Measured on the same
-        criteria and kept off the leaderboard: this page answers how far Refio's agent loop
-        is from what is already on people's desks, and whether a strong model behaves
-        differently when a different agent drives it. A model id starting with ollama/ was
-        run locally under both, which is the pairing the delta table below is for.
-      </Paragraph>
+      <Title level={2}>{t("agents.title")}</Title>
+      <Paragraph type="secondary">{t("agents.intro")}</Paragraph>
 
       {externalHarnesses.length === 0 ? (
-        <Empty description="No external agent runs yet. Import one with import-runs --harness claude-code." />
+        <Empty description={t("agents.emptyExternal")} />
       ) : (
         <Row gutter={[16, 16]}>
           <Col span={24}>
@@ -361,7 +357,7 @@ export default function Agents() {
                 <Card key={harness.id} size="small" style={{ minWidth: 220 }}>
                   <Space direction="vertical" size={0}>
                     <Text strong>{harness.name}</Text>
-                    {harness.version && <Text type="secondary">version {harness.version}</Text>}
+                    {harness.version && <Text type="secondary">{t("agents.version", { version: harness.version })}</Text>}
                     {harness.conditions && (
                       <Text type="secondary" style={{ fontSize: 12 }}>
                         {harness.conditions}
@@ -374,7 +370,7 @@ export default function Agents() {
           </Col>
 
           <Col span={24}>
-            <Card title="Agents leaderboard" className="glass-card">
+            <Card title={t("agents.leaderboardTitle")} className="glass-card">
               <Table
                 dataSource={rows}
                 columns={agentColumns}
@@ -387,9 +383,9 @@ export default function Agents() {
           </Col>
 
           <Col span={24}>
-            <Card title="Same model, two harnesses" className="glass-card">
+            <Card title={t("agents.sameModelTitle")} className="glass-card">
               {deltaRows.length === 0 ? (
-                <Empty description="Run the same ollama/... model under Refio and under an external agent to see this table" />
+                <Empty description={t("agents.sameModelEmpty")} />
               ) : (
                 <Table
                   dataSource={deltaRows}
@@ -404,7 +400,7 @@ export default function Agents() {
           </Col>
 
           <Col span={24}>
-            <Card title="Task x harness" className="glass-card">
+            <Card title={t("agents.matrixTitle")} className="glass-card">
               <Table
                 dataSource={matrixRows}
                 columns={matrixColumns}
@@ -417,16 +413,16 @@ export default function Agents() {
           </Col>
 
           <Col span={24}>
-            <Card title="Compare two runs" className="glass-card">
+            <Card title={t("agents.compareRunsTitle")} className="glass-card">
               {tracedRuns.length < 2 ? (
-                <Empty description="At least two runs with a recorded trace are needed" />
+                <Empty description={t("agents.compareRunsEmpty")} />
               ) : (
                 <Space direction="vertical" style={{ width: "100%" }} size="middle">
                   <Space wrap>
                     <Select
                       showSearch
                       optionFilterProp="label"
-                      placeholder="Run A"
+                      placeholder={t("agents.runA")}
                       style={{ minWidth: 360 }}
                       value={runA}
                       onChange={(value) => {
@@ -438,7 +434,7 @@ export default function Agents() {
                     <Select
                       showSearch
                       optionFilterProp="label"
-                      placeholder="Run B (same task)"
+                      placeholder={t("agents.runB")}
                       style={{ minWidth: 360 }}
                       value={runB}
                       onChange={setRunB}
@@ -452,7 +448,7 @@ export default function Agents() {
                       <Table
                         dataSource={metricRows}
                         columns={[
-                          { title: "Metric", dataIndex: "metric", key: "metric" },
+                          { title: t("agents.colMetric"), dataIndex: "metric", key: "metric" },
                           { title: "A", dataIndex: "a", key: "a", width: 90 },
                           { title: "B", dataIndex: "b", key: "b", width: 90 },
                           {

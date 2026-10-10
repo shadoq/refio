@@ -1,123 +1,98 @@
 import { Card, Col, Collapse, Row, Space, Tag, Typography } from "antd";
+import { useT } from "@/i18n/LanguageProvider";
+import type { MessageKey } from "@/i18n/messages";
 
 const { Title, Paragraph, Text } = Typography;
 
-const leaderboardMetrics = [
+const leaderboardMetrics: { name: MessageKey; formula: string; description: MessageKey }[] = [
   {
-    name: "Avg Score",
+    name: "help.metricRefioScoreName",
+    formula: "(2 * Avg + Judge) / 3 * (0.8 + 0.2 * Stability)",
+    description: "help.metricRefioScoreDesc",
+  },
+  {
+    name: "help.metricAvgScoreName",
     formula: "average(normalized criterion scores)",
-    description:
-      "Overall quality score for a result group. Each criterion value is normalized by its maximum scale value, then averaged across criteria and attempts.",
+    description: "help.metricAvgScoreDesc",
   },
   {
-    name: "Judge Score",
+    name: "help.metricJudgeScoreName",
     formula: "average(weighted-normalized judge aggregate per result)",
-    description:
-      "Overall quality as scored by strong-judge agents (Claude Code, Codex), independent of the human Avg Score. Per result the judges' median value per criterion is weighted-normalized like the human score, then averaged over judged attempts. The count shows judged / all attempts.",
+    description: "help.metricJudgeScoreDesc",
   },
   {
-    name: "Pass Rate",
+    name: "help.metricPassRateName",
     formula: "passing attempts / all attempts",
-    description:
-      "Share of attempts where the normalized result score is at least 50% (3 of 6: it works, even if with visible defects). It is a quick success-rate signal.",
+    description: "help.metricPassRateDesc",
   },
   {
-    name: "First-shot",
+    name: "help.metricFirstShotName",
     formula: "score of attempt #1",
-    description:
-      "Normalized score for the first attempt. The OK/Fix tag is based on the works_out_of_box criterion when available, otherwise on the first-shot score.",
+    description: "help.metricFirstShotDesc",
   },
   {
-    name: "Reliability",
+    name: "help.metricReliabilityName",
     formula: "1 - standardDeviation(scores) / 0.5",
-    description:
-      "Stability across attempts. It is clamped to 0-100%. A model with consistent scores gets a higher reliability value.",
+    description: "help.metricReliabilityDesc",
   },
   {
-    name: "Avg Stability",
+    name: "help.metricAvgStabilityName",
     formula: "mean(score consistency, code similarity, median judge verdict)",
-    description:
-      "How consistent a model is across repeated attempts at the same task, averaged over tasks. Unlike Reliability it also checks whether the attempts are built the same way and asks the judges. Shows '-' when the model has no stability groups. See the Stability section below.",
+    description: "help.metricAvgStabilityDesc",
   },
   {
-    name: "Local Viability",
+    name: "help.metricLocalViabilityName",
     formula: "localQualityRatio * 0.7 + stability * 0.3",
-    description:
-      "Local-only metric. localQualityRatio compares the local average score against the best cloud average score. Stability uses Reliability when available, otherwise Pass Rate.",
+    description: "help.metricLocalViabilityDesc",
   },
   {
-    name: "Avg Duration",
+    name: "help.metricAvgDurationName",
     formula: "average(duration) in seconds",
-    description:
-      "Average runtime for the filtered attempts in a model and environment group. The admin form accepts seconds, and the UI formats longer values as minutes and seconds.",
+    description: "help.metricAvgDurationDesc",
   },
   {
-    name: "LLM Est.",
+    name: "help.metricLlmEstName",
     formula: "duration split into 20% prefill and 80% decode",
-    description:
-      "Estimated token-processing time split into prefill and decode. This uses the measured attempt duration because the current benchmark data does not store TTFT/decode telemetry separately.",
+    description: "help.metricLlmEstDesc",
   },
   {
-    name: "Token Speed",
+    name: "help.metricTokenSpeedName",
     formula: "tokensIn / estimated prefill time, tokensOut / estimated decode time",
-    description:
-      "Effective prefill and decode throughput derived from each run's token counts and duration. Treat it as benchmark-effective speed, not raw provider telemetry.",
+    description: "help.metricTokenSpeedDesc",
   },
   {
-    name: "Avg API Cost",
+    name: "help.metricAvgApiCostName",
     formula: "average(costUsd)",
-    description:
-      "Average cloud/API cost per attempt for the filtered model and environment group. This is usually the better cost metric for comparing one run against another.",
+    description: "help.metricAvgApiCostDesc",
   },
 ];
 
-const resultFields = [
-  {
-    name: "Task",
-    description: "Benchmark scenario being evaluated, for example Snake.",
-  },
-  {
-    name: "Model",
-    description: "Model identifier and display name from results.json.",
-  },
-  {
-    name: "Environment",
-    description: "Runtime target, such as local DGX or cloud API. Environment type is local or cloud.",
-  },
-  {
-    name: "Attempt",
-    description: "Attempt number for the same task, model and environment combination.",
-  },
-  {
-    name: "Tokens",
-    description:
-      "Displayed as input / output tokens when token counts are available. Token counts also drive the estimated prefill/decode speed metrics.",
-  },
-  {
-    name: "Attachments",
-    description:
-      "Optional screenshots, HTML previews, videos or embeds attached to a specific benchmark result.",
-  },
+const resultFields: { name: MessageKey; description: MessageKey }[] = [
+  { name: "help.fieldTaskName", description: "help.fieldTaskDesc" },
+  { name: "help.fieldModelName", description: "help.fieldModelDesc" },
+  { name: "help.fieldEnvironmentName", description: "help.fieldEnvironmentDesc" },
+  { name: "help.fieldAttemptName", description: "help.fieldAttemptDesc" },
+  { name: "help.fieldTokensName", description: "help.fieldTokensDesc" },
+  { name: "help.fieldAttachmentsName", description: "help.fieldAttachmentsDesc" },
 ];
 
 export default function Help() {
+  const t = useT();
   return (
     <div className="page-stack">
       <div className="section-heading">
         <div>
-          <Title level={2}>Help</Title>
-          <Paragraph>
-            Metric definitions used by the benchmark views and individual result pages.
-          </Paragraph>
+          <Title level={2}>{t("help.title")}</Title>
+          <Paragraph>{t("help.intro")}</Paragraph>
         </div>
       </div>
 
       <Row gutter={[16, 16]}>
         {leaderboardMetrics.map((metric) => (
           <Col key={metric.name} xs={24} md={12} xl={8}>
-            <Card className="glass-card" title={metric.name}>
+            <Card className="glass-card" title={t(metric.name)}>
               <Space direction="vertical" size="small">
-                <Text>{metric.description}</Text>
+                <Text>{t(metric.description)}</Text>
                 <Tag color="blue">{metric.formula}</Tag>
               </Space>
             </Card>
@@ -125,26 +100,25 @@ export default function Help() {
         ))}
       </Row>
 
-      <Card className="glass-card" title="Score Normalization">
+      <Card className="glass-card" title={t("help.normTitle")}>
         <Paragraph>
-          Raw criterion values use the scale defined in <Text code>tasks.json</Text>.
-          Every criterion uses one 0-6 scale: 0 missing, 1 fragment, 2 partial, 3
-          works with clear defects, 4 good, 5 very good, 6 exceptional. A score is
-          normalized as <Text code>value / max(scale.values)</Text>, so 6 is 100%, 4
-          is 67% and 3 is 50%. Results scored before the 0-6 scale were rescaled
-          with their top mark at 4 (good), since the old scale could not tell good
-          from exceptional; only the old "excellent" look became 6.
+          {t("help.normP1a")}
+          <Text code>tasks.json</Text>
+          {t("help.normP1b")}
+          <Text code>value / max(scale.values)</Text>
+          {t("help.normP1c")}
         </Paragraph>
+        <Paragraph>{t("help.normP2")}</Paragraph>
         <Paragraph>
-          Result score is the average of all normalized criterion scores present in
-          that result. Leaderboard rows then aggregate those result scores for each
-          model and environment pair after the active filters are applied.
-        </Paragraph>
-        <Paragraph>
-          Leaderboard ranking is sorted by <Text strong>Avg Score</Text>. If two
-          rows have the same Avg Score, ties are broken by average{" "}
-          <Text code>works_out_of_box</Text>, then average{" "}
-          <Text code>compliance</Text>, then <Text strong>First-shot</Text>.
+          {t("help.normP3a")}
+          <Text strong>{t("help.metricAvgScoreName")}</Text>
+          {t("help.normP3b")}
+          <Text code>works_out_of_box</Text>
+          {t("help.normP3c")}
+          <Text code>compliance</Text>
+          {t("help.normP3d")}
+          <Text strong>{t("help.metricFirstShotName")}</Text>
+          {t("help.normP3e")}
         </Paragraph>
       </Card>
 
@@ -152,13 +126,13 @@ export default function Help() {
         items={[
           {
             key: "fields",
-            label: "Fields on the Results page",
+            label: t("help.fieldsLabel"),
             children: (
               <Space direction="vertical" style={{ width: "100%" }}>
                 {resultFields.map((field) => (
                   <div key={field.name}>
-                    <Text strong>{field.name}: </Text>
-                    <Text>{field.description}</Text>
+                    <Text strong>{t(field.name)}: </Text>
+                    <Text>{t(field.description)}</Text>
                   </div>
                 ))}
               </Space>
@@ -166,287 +140,214 @@ export default function Help() {
           },
           {
             key: "reference-track",
-            label: "Agents track: Claude Code, Codex, Gemini CLI, Hermes",
+            label: t("help.agentsLabel"),
             children: (
               <Space direction="vertical">
                 <Paragraph>
-                  Every result records a <Text strong>harness</Text>: what drove the agent.
-                  Almost all of them say <Text code>refio</Text>, our own headless CLI. The
-                  agents track is the same tasks run by an external coding agent - Claude
-                  Code, Codex or Gemini CLI - on its own model. It has its own page,
-                  Agents; the leaderboard, Results, Compare and Pareto all show the Refio
-                  track by default.
+                  {t("help.agentsP1a")}
+                  <Text strong>{t("help.agentsP1Harness")}</Text>
+                  {t("help.agentsP1b")}
+                  <Text code>refio</Text>
+                  {t("help.agentsP1c")}
+                </Paragraph>
+                <Paragraph>{t("help.agentsP2")}</Paragraph>
+                <Paragraph>
+                  {t("help.agentsP3a")}
+                  <Text code>ollama/</Text>
+                  {t("help.agentsP3b")}
                 </Paragraph>
                 <Paragraph>
-                  It is kept out of the leaderboard on purpose. The leaderboard answers
-                  "which model should Refio default to", and an external agent brings its
-                  own planning, tools, retries and self-checking, so what it scores is the
-                  whole system rather than the model. Mixing the two would make both
-                  unreadable. The agents track answers a different question: how far a
-                  local model is from what people already have on their desks, and whether
-                  a strong model behaves differently when a different agent drives it.
+                  <Text strong>{t("help.agentsP4Trace")}</Text>
+                  {t("help.agentsP4a")}
+                  <Text strong>{t("help.agentsP4SelfCheck")}</Text>
+                  {t("help.agentsP4b")}
                 </Paragraph>
                 <Paragraph>
-                  A model id starting with <Text code>ollama/</Text> means the agent was
-                  pointed at the local Ollama endpoint rather than its own cloud provider,
-                  so the same local model can be measured under Refio and under an external
-                  agent. Those pairs are what the delta table on the Agents page shows.
+                  {t("help.agentsP5a")}
+                  <Text strong>agent_logic</Text>
+                  {t("help.agentsP5b")}
+                  <Text strong>{t("help.agentsP5Cost")}</Text>
+                  {t("help.agentsP5c")}
                 </Paragraph>
-                <Paragraph>
-                  <Text strong>The run trace.</Text> Every run now records what the agent
-                  actually did, step by step: each assistant turn, each tool call with the
-                  file or command it touched, each result. The numbers next to a run -
-                  turns, tool calls, reads, writes, shell commands, when the first write
-                  happened - are counted from that log by plain arithmetic, never by asking
-                  a model. <Text strong>Self-check</Text> means the model itself ran a build
-                  or a test during the run; a loop that verifies on the model's behalf does
-                  not count, so the comparison stays about the model's own discipline. The
-                  log never contains file contents: the artifact already has those.
-                </Paragraph>
-                <Paragraph>
-                  Three things to keep in mind when reading it.{" "}
-                  <Text strong>agent_logic</Text> measures the harness in this track, not
-                  the model - that is what the track is for. <Text strong>Cost</Text> is not
-                  comparable: an external agent bills by subscription, so any figure shown
-                  is a per-token estimate, never a charged amount, and the Pareto view says
-                  so when it is on the chart. And the judges are themselves Claude Code and
-                  Codex: on the Agents page a judge's verdict on a run its own agent
-                  produced is dropped from the aggregate, because marking your own work is
-                  not a measurement. Elsewhere the aggregate is unchanged.
-                </Paragraph>
-                <Paragraph>
-                  The run conditions of each harness - network access, permission mode,
-                  version - are recorded on the harness record and shown on the Agents
-                  page. How long an agent may work and how many turns it gets scale with
-                  the task's difficulty: 15 minutes for an easy task, 30 for a medium one,
-                  an hour for a hard one and two hours for a stress task. A cap that bites
-                  would measure the cap rather than the agent.
-                </Paragraph>
+                <Paragraph>{t("help.agentsP6")}</Paragraph>
               </Space>
             ),
           },
           {
             key: "strong-judge",
-            label: "Strong-judge scoring",
+            label: t("help.judgeLabel"),
             children: (
               <Space direction="vertical">
                 <Paragraph>
-                  On top of the manual scores, artifacts can be scored by{" "}
-                  <Text strong>strong-judge agents</Text> - external CLI agents
-                  (Claude Code and Codex) run headless and read-only via{" "}
-                  <Text code>npm run judge</Text>. Each artifact is rendered with
-                  Playwright (two screenshots plus captured console errors), and every
-                  judge scores it blind: it never sees the human scores or the other
-                  judge's scores.
+                  {t("help.judgeP1a")}
+                  <Text strong>{t("help.judgeP1Agents")}</Text>
+                  {t("help.judgeP1b")}
+                  <Text code>npm run judge</Text>
+                  {t("help.judgeP1c")}
                 </Paragraph>
                 <Paragraph>
-                  <Text strong>Criteria.</Text> Judges score the same criteria as the
-                  human (Compliance, Works out of the box, Look, Code quality) plus two
-                  judge-only criteria: <Text code>code_structure</Text> (structure,
-                  naming, duplication, dead code) and <Text code>logic_correctness</Text>{" "}
-                  (correctness read from the code, not only the screen). The human{" "}
-                  <Text code>agent_logic</Text> criterion is <Text strong>not</Text>{" "}
-                  judged - it rates the coding agent's workflow (check files, edit,
-                  verify, summarize), which cannot be seen in a static artifact.
+                  <Text strong>{t("help.judgeP2Criteria")}</Text>
+                  {t("help.judgeP2a")}
+                  <Text code>code_structure</Text>
+                  {t("help.judgeP2b")}
+                  <Text code>logic_correctness</Text>
+                  {t("help.judgeP2c")}
+                  <Text code>agent_logic</Text>
+                  {t("help.judgeP2d")}
+                  <Text strong>{t("help.judgeP2Not")}</Text>
+                  {t("help.judgeP2e")}
                 </Paragraph>
                 <Paragraph>
-                  <Text strong>Aggregate and divergence.</Text> Per criterion the
-                  aggregate is the median across judges, computed in the viewer and
-                  never stored. The Results page shows an aggregate{" "}
-                  <Text strong>Auto (judges)</Text> column with a{" "}
-                  <Text strong>divergence badge</Text> when the human and the judge
-                  aggregate differ by at least 2 points on a shared criterion. The
-                  Leaderboard, Compare and Pareto pages expose the per-model{" "}
-                  <Text strong>Judge Score</Text> summary, and Compare adds a dedicated
-                  judge radar.
+                  <Text strong>{t("help.judgeP3Title")}</Text>
+                  {t("help.judgeP3a")}
+                  <Text strong>{t("help.judgeP3AutoColumn")}</Text>
+                  {t("help.judgeP3b")}
+                  <Text strong>{t("help.judgeP3Badge")}</Text>
+                  {t("help.judgeP3c")}
+                  <Text strong>{t("help.metricJudgeScoreName")}</Text>
+                  {t("help.judgeP3d")}
                 </Paragraph>
                 <Paragraph>
-                  <Text strong>Stability.</Text> Across repeated attempts of one model
-                  on a task, stability records deterministic metrics -{" "}
-                  <Text code>scoreVariance</Text> (mean absolute deviation of the judge
-                  aggregate between attempts, lower is more stable) and{" "}
-                  <Text code>codeSimilarity</Text> (token-Jaccard over the artifacts) -
-                  plus a judge verdict over all attempts. It shows on the task page, and the
-                  Stability page compares models on it with radars and a ranking.
+                  <Text strong>{t("help.judgeP4Title")}</Text>
+                  {t("help.judgeP4a")}
+                  <Text code>scoreVariance</Text>
+                  {t("help.judgeP4b")}
+                  <Text code>codeSimilarity</Text>
+                  {t("help.judgeP4c")}
                 </Paragraph>
                 <Paragraph>
-                  <Text strong>Review.</Text> Judge scores are advisory: they never
-                  overwrite the manual scores, and a human reads them in the result
-                  detail alongside the human ones.
+                  <Text strong>{t("help.judgeP5Title")}</Text>
+                  {t("help.judgeP5")}
                 </Paragraph>
               </Space>
             ),
           },
           {
             key: "stability",
-            label: "Stability page and Avg Stability",
+            label: t("help.stabilityLabel"),
             children: (
               <Space direction="vertical">
-                <Paragraph>
-                  Stability answers a different question than quality: if you run the same
-                  model on the same task again, do you get the same kind of result? It is
-                  computed per group - all attempts of one model on one task in one
-                  environment and harness. A group needs at least two attempts with an HTML
-                  artifact.
-                </Paragraph>
-                <Paragraph>
-                  Each group gets three signals, each on a 0-100% scale where higher means
-                  more stable:
-                </Paragraph>
+                <Paragraph>{t("help.stabilityP1")}</Paragraph>
+                <Paragraph>{t("help.stabilityP2")}</Paragraph>
                 <Space direction="vertical" size={4}>
                   <Text>
-                    <Text strong>Score consistency</Text> - how close the judge scores of
-                    the attempts are to each other:{" "}
-                    <Text code>clamp(1 - scoreVariance / 3, 0, 1)</Text>, where{" "}
-                    <Text code>scoreVariance</Text> is the mean absolute deviation between
-                    attempts on the 0-6 scale. Like Reliability, it treats a deviation of
-                    half the scale as unrelated attempts.
+                    <Text strong>{t("help.stabilityScoreTitle")}</Text>
+                    {t("help.stabilityScoreA")}
+                    <Text code>clamp(1 - scoreVariance / 3, 0, 1)</Text>
+                    {t("help.stabilityScoreB")}
+                    <Text code>scoreVariance</Text>
+                    {t("help.stabilityScoreC")}
                   </Text>
                   <Text>
-                    <Text strong>Code similarity</Text> - token overlap (Jaccard) between
-                    the attempts' artifacts. Low values mean the model writes the solution
-                    differently every time, even when the scores are close.
+                    <Text strong>{t("help.stabilityCodeTitle")}</Text>
+                    {t("help.stabilityCode")}
                   </Text>
                   <Text>
-                    <Text strong>Judge verdict</Text> - each strong judge looks at all
-                    attempts at once and answers <Text code>1</Text> (same approach,
-                    comparable quality), <Text code>0.5</Text> (same approach, variable
-                    quality) or <Text code>0</Text> (different approaches or wildly
-                    different quality). The group uses the median across judges.
+                    <Text strong>{t("help.stabilityVerdictTitle")}</Text>
+                    {t("help.stabilityVerdictA")}
+                    <Text code>1</Text>
+                    {t("help.stabilityVerdictB")}
+                    <Text code>0.5</Text>
+                    {t("help.stabilityVerdictC")}
+                    <Text code>0</Text>
+                    {t("help.stabilityVerdictD")}
                   </Text>
                 </Space>
                 <Paragraph>
-                  <Text strong>Overall stability</Text> of a group is the equal-weight mean
-                  of the three signals. A group no judge has scored yet is averaged over the
-                  two deterministic signals only, so a missing verdict never counts as 0.
-                  The model value (<Text strong>Avg Stability</Text> on the Leaderboard) is
-                  the mean over its tasks.
+                  <Text strong>{t("help.stabilityOverallTitle")}</Text>
+                  {t("help.stabilityOverallA")}
+                  <Text strong>{t("help.metricAvgStabilityName")}</Text>
+                  {t("help.stabilityOverallB")}
                 </Paragraph>
                 <Paragraph>
-                  <Text strong>Avg Stability vs Reliability.</Text> Reliability only looks
-                  at how much the scores move between attempts. Avg Stability also asks
-                  whether the attempts are built the same way and what the judges think,
-                  so the two can differ a lot: a model can score equally badly every time
-                  (high Reliability) while producing a different program on each attempt
-                  (low Avg Stability), or the other way round.
+                  <Text strong>{t("help.stabilityVsTitle")}</Text>
+                  {t("help.stabilityVs")}
                 </Paragraph>
                 <Paragraph>
-                  <Text strong>The Stability page</Text> shows two radars for up to six
-                  selected models - stability per task and per signal (with one axis per
-                  judge) - plus the same values as tables, where the best value in each
-                  row is highlighted, and a ranking of all models. Clicking a ranking row
-                  adds the model to the comparison or removes it. The selection is shared
-                  with the Compare page. Global environment, task and harness filters
-                  apply; hidden tasks are left out.
+                  <Text strong>{t("help.stabilityPageTitle")}</Text>
+                  {t("help.stabilityPage")}
                 </Paragraph>
               </Space>
             ),
           },
           {
             key: "pareto",
-            label: "Pareto Explorer",
-            children: (
-              <Paragraph>
-                Pareto charts compare two metrics at once. For quality, reliability,
-                first-shot, pass rate, token speed and local viability, higher is
-                better. For cost, duration and estimated LLM time, lower is better.
-                Points near the better edge on both axes represent stronger trade-offs.
-              </Paragraph>
-            ),
+            label: t("help.paretoLabel"),
+            children: <Paragraph>{t("help.paretoP")}</Paragraph>,
           },
           {
             key: "compare-radars",
-            label: "Compare page radars",
+            label: t("help.radarsLabel"),
             children: (
               <Space direction="vertical">
+                <Paragraph>{t("help.radarsP1")}</Paragraph>
                 <Paragraph>
-                  The Compare page renders three radar charts. Each axis is plotted on
-                  a 0-100% scale where higher is always better.
+                  <Text strong>{t("help.radarsCriterionTitle")}</Text>
+                  {t("help.radarsCriterionA")}
+                  <Text code>score.value / max(scale.values)</Text>
+                  {t("help.radarsCriterionB")}
                 </Paragraph>
                 <Paragraph>
-                  <Text strong>Average Score per Criterion</Text> uses raw normalized
-                  scores per criterion (Compliance, Works out of the box, Look, Code
-                  quality, Agent logic). For each model the value on a given axis is
-                  the mean of <Text code>score.value / max(scale.values)</Text> across
-                  all attempts of that model on that criterion.
-                </Paragraph>
-                <Paragraph>
-                  <Text strong>Derived Benchmark Metrics</Text> aggregates leaderboard
-                  fields per model. To keep values stable when models are added or
-                  removed from the selection, normalization uses fixed reference
-                  points computed from the full leaderboard (all models, after global
-                  filters):
+                  <Text strong>{t("help.radarsDerivedTitle")}</Text>
+                  {t("help.radarsDerived")}
                 </Paragraph>
                 <Space direction="vertical" size={4}>
                   <Text>
-                    <Text strong>Avg Score, Pass Rate, First-shot, Reliability,
-                    Local Viability</Text> — already in the 0-1 range, used as raw
-                    values clamped to [0, 1].
+                    <Text strong>{t("help.radarsRatioTitle")}</Text>
+                    {t("help.radarsRatio")}
                   </Text>
                   <Text>
-                    <Text strong>Input Speed, Output Speed</Text> — higher is better.
-                    Value is divided by the 95th percentile of all leaderboard rows
-                    and clamped to 1: <Text code>clamp(tps / p95(tps), 0, 1)</Text>.
-                    The top tier hits 100%, slower models scale linearly.
+                    <Text strong>{t("help.radarsSpeedTitle")}</Text>
+                    {t("help.radarsSpeedA")}
+                    <Text code>clamp(tps / p95(tps), 0, 1)</Text>
+                    {t("help.radarsSpeedB")}
                   </Text>
                   <Text>
-                    <Text strong>Avg Speed (duration), API Cost</Text> — lower is
-                    better. Value is mapped against the 5th percentile floor of all
-                    leaderboard rows: <Text code>clamp(p5(value) / value, 0, 1)</Text>.
-                    The fastest/cheapest model hits 100%; a model 2× slower or
-                    more expensive sits at 50%, 10× at 10%. Values never collapse
-                    to 0 just for being above the median.
+                    <Text strong>{t("help.radarsCostTitle")}</Text>
+                    {t("help.radarsCostA")}
+                    <Text code>clamp(p5(value) / value, 0, 1)</Text>
+                    {t("help.radarsCostB")}
                   </Text>
                 </Space>
                 <Paragraph>
-                  When a model has multiple environment rows in the leaderboard, the
-                  per-axis value is averaged across them. An axis is dropped from the
-                  chart whenever <Text strong>any</Text> selected model has no data
-                  for it — partial coverage would force the missing model to 0% and
-                  visually distort the polygon. In practice this means mixing cloud
-                  and local models hides API Cost (null for local) and Local
-                  Viability (null for cloud), so only directly comparable metrics
-                  remain. Selecting different models does not change the position of
-                  any other model on the radar.
+                  {t("help.radarsAxisA")}
+                  <Text strong>{t("help.radarsAxisAny")}</Text>
+                  {t("help.radarsAxisB")}
                 </Paragraph>
                 <Paragraph>
-                  <Text strong>Model Behavior by Task</Text> averages normalized
-                  criterion scores per task per model. Recharts requires at least
-                  three axes to draw a polygon, so with only one or two tasks the
-                  chart degenerates into a line — use the Per-task Breakdown table
-                  below for exact values.
+                  <Text strong>{t("help.radarsTaskTitle")}</Text>
+                  {t("help.radarsTask")}
                 </Paragraph>
               </Space>
             ),
           },
           {
             key: "token-processing",
-            label: "Token speed calculation",
+            label: t("help.tokenLabel"),
             children: (
               <Space direction="vertical">
+                <Paragraph>{t("help.tokenP1")}</Paragraph>
                 <Paragraph>
-                  LLM inference is split into prefill, where input tokens are processed
-                  to build model state, and decode, where output tokens are generated
-                  sequentially.
+                  {t("help.tokenP2a")}
+                  <Text code>durationMs</Text>
+                  {", "}
+                  <Text code>tokensIn</Text>
+                  {t("help.tokenP2b")}
+                  <Text code>tokensOut</Text>
+                  {t("help.tokenP2c")}
                 </Paragraph>
                 <Paragraph>
-                  Current benchmark data stores <Text code>durationMs</Text>,{" "}
-                  <Text code>tokensIn</Text> and <Text code>tokensOut</Text>, but not
-                  separate TTFT/prefill/decode timings. Until those are captured, the
-                  UI estimates the split from measured run time.
+                  {t("help.tokenP3a")}
+                  <Text code>prefillMs = durationMs * 0.2</Text>
+                  {t("help.tokenP3b")}
+                  <Text code>decodeMs = durationMs * 0.8</Text>
+                  {t("help.tokenP3c")}
+                  <Text code>input tok/s = tokensIn / (prefillMs / 1000)</Text>
+                  {t("help.tokenP3b")}
+                  <Text code>output tok/s = tokensOut / (decodeMs / 1000)</Text>
+                  {t("help.tokenP3d")}
                 </Paragraph>
-                <Paragraph>
-                  When both input and output tokens exist:{" "}
-                  <Text code>prefillMs = durationMs * 0.2</Text> and{" "}
-                  <Text code>decodeMs = durationMs * 0.8</Text>. Then{" "}
-                  <Text code>input tok/s = tokensIn / (prefillMs / 1000)</Text> and{" "}
-                  <Text code>output tok/s = tokensOut / (decodeMs / 1000)</Text>.
-                </Paragraph>
-                <Paragraph>
-                  If only one token side exists, the full measured duration is assigned
-                  to that side. Leaderboard values are averages of these per-attempt
-                  estimates for the model and environment group.
-                </Paragraph>
+                <Paragraph>{t("help.tokenP4")}</Paragraph>
               </Space>
             ),
           },

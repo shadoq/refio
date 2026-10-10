@@ -11,6 +11,7 @@ import {
   Label,
 } from "recharts";
 import { paretoFront } from "@/lib/paretoFront";
+import { useT } from "@/i18n/LanguageProvider";
 
 interface ScatterPoint {
   id: string;
@@ -57,16 +58,17 @@ function CustomTooltip({
   active?: boolean;
   payload?: TooltipPayloadItem[];
 }) {
+  const t = useT();
   if (!active || !payload?.length) return null;
   const p = payload[0].payload;
   return (
     <div className="chart-tooltip">
       <div className="chart-tooltip-title">{p.label}</div>
-      {p.onFront && <div className="chart-tooltip-front">Pareto front</div>}
+      {p.onFront && <div className="chart-tooltip-front">{t("charts.paretoFront")}</div>}
       <div>Y: {p.yFormatted ?? p.y.toFixed(4)}</div>
       <div>X: {p.xFormatted ?? p.x.toFixed(4)}</div>
-      <div>Attempts: {p.attemptCount}</div>
-      <div>Provider: {p.provider}</div>
+      <div>{t("charts.tooltipAttempts", { count: p.attemptCount })}</div>
+      <div>{t("charts.tooltipProvider", { provider: p.provider })}</div>
     </div>
   );
 }
@@ -75,11 +77,14 @@ export function ParetoScatter({
   points,
   height = 450,
   mini = false,
-  xLabel = "Cost / Duration",
-  yLabel = "Avg Score",
+  xLabel: xLabelProp,
+  yLabel: yLabelProp,
   higherYIsBetter = true,
   lowerXIsBetter = true,
 }: ParetoScatterProps) {
+  const t = useT();
+  const xLabel = xLabelProp ?? t("charts.paretoDefaultX");
+  const yLabel = yLabelProp ?? t("charts.paretoDefaultY");
   const paretoInput = useMemo(
     () =>
       points.map((point) => ({
@@ -166,7 +171,7 @@ export function ParetoScatter({
           ))}
 
         <Scatter
-          name="Other"
+          name={t("charts.paretoOther")}
           data={otherPoints}
           fill="#9fb0c5"
           shape={(props: unknown) => {
@@ -181,7 +186,7 @@ export function ParetoScatter({
         />
 
         <Scatter
-          name="Pareto front"
+          name={t("charts.paretoFront")}
           data={frontPoints}
           fill="var(--accent-2)"
           shape={(props: unknown) => {

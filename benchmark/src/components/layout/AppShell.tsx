@@ -3,6 +3,10 @@ import { Layout } from "antd";
 import { Navigate, useLocation } from "react-router-dom";
 import { Nav } from "./Nav";
 import { ThemeSwitcher } from "./ThemeSwitcher";
+import { LanguageSwitcher } from "./LanguageSwitcher";
+import { RefioModeSwitcher } from "./RefioModeSwitcher";
+import { LocalOnlySwitcher } from "./LocalOnlySwitcher";
+import { useT } from "@/i18n/LanguageProvider";
 import { GlobalFilters } from "@/components/filters/GlobalFilters";
 import type { ThemeId } from "@/theme/palettes";
 
@@ -21,6 +25,7 @@ interface AppShellProps {
 
 export function AppShell({ children, themeId, onThemeChange }: AppShellProps) {
   const location = useLocation();
+  const t = useT();
   const isAdmin = location.pathname.startsWith("/admin");
   const shellClass = isAdmin ? "app-shell app-shell--no-ambient" : "app-shell";
   return (
@@ -45,29 +50,34 @@ export function AppShell({ children, themeId, onThemeChange }: AppShellProps) {
           <GlobalFilters />
         </Suspense>
         <ThemeSwitcher value={themeId} onChange={onThemeChange} />
+        <span className="header-switches">
+          <LocalOnlySwitcher />
+          <RefioModeSwitcher />
+          <LanguageSwitcher />
+        </span>
       </Header>
       <Content className="app-content">{children}</Content>
       <Footer className="app-footer">
         <span>
-          Tech notes:
+          {t("layout.footerTechNotes")}
           <a href="https://czub.info/" target="_blank" rel="noreferrer">
-            Blog
+            {t("layout.footerBlog")}
           </a>
         </span>
         <span>
-          InteliJ plugin:
+          {t("layout.footerPlugin")}
           <a
             href="https://plugins.jetbrains.com/plugin/30487-refio/"
             target="_blank"
             rel="noreferrer"
           >
-            Refio plugin
+            {t("layout.footerPluginLink")}
           </a>
         </span>
         <span>
-          GitHub:
+          {t("layout.footerSourceLabel")}
           <a href="https://github.com/shadoq/refio" target="_blank" rel="noreferrer">
-            Refio source
+            {t("layout.footerSource")}
           </a>
         </span>
       </Footer>

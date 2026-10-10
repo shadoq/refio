@@ -1,0 +1,36 @@
+import type { Translation } from "../../core";
+import type { queue as en } from "../en/queue";
+
+export const queue: Translation<typeof en> = {
+  title: "Kolejka do sprawdzenia",
+  intro:
+    "Przebiegi zaimportowane automatycznie, które czekają na ocenę ręczną. Wyniki automatycznych sprawdzeń są już wpisane jako podpowiedź. Dodaj własne oceny (wygląd, kod) i zatwierdź przebieg albo odrzuć go, jeśli się nie udał.",
+  filterTask: "Zadanie",
+  filterModel: "Model",
+  filterEnvironment: "Środowisko",
+  filterHarness: "Narzędzie",
+  filterVerdict: "Werdykt",
+  verdictPass: "ZALICZONE",
+  verdictFail: "NIEZALICZONE",
+  countOf: "{shown} z {total}",
+  empty: "Żaden przebieg nie czeka na sprawdzenie",
+  noMatch: "Żaden przebieg nie pasuje do wybranych filtrów",
+  attempt: "próba {n}",
+  promote: "Zatwierdź",
+  discard: "Odrzuć",
+  discardConfirm: "Odrzucić ten przebieg?",
+  noArtifact: "Brak artefaktu (przebieg w trybie PLAN/CHAT)",
+  duration: "Czas",
+  tokensOut: "Tokeny wyjściowe",
+  cost: "Koszt",
+  runTrace: "Przebieg krok po kroku",
+  deterministicChecks: "Automatyczne sprawdzenia",
+  none: "brak",
+  yourScores: "Twoje oceny",
+  scorePlaceholder: "ocena",
+  scoreFirst: "Zanim zatwierdzisz, oceń co najmniej jedno kryterium.",
+  promoted: "Przeniesiono {id} do wyników.",
+  promoteFailed: "Nie udało się zatwierdzić: {error}",
+  discarded: "Odrzucono {id}.",
+  discardFailed: "Nie udało się odrzucić: {error}",
+};

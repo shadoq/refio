@@ -44,6 +44,7 @@ import { generateId } from "@/lib/ids";
 import { formatDuration, formatCost } from "@/lib/format";
 import type { Criterion } from "@/schema/tasks";
 import { type input as ZodInput } from "zod";
+import { useT } from "@/i18n/LanguageProvider";
 
 const { Title, Text } = Typography;
 
@@ -69,6 +70,7 @@ function ScoreRow({
   control: ReturnType<typeof useForm<FormData>>["control"];
   index: number;
 }) {
+  const t = useT();
   const scaleOptions = criterion.scale.values.map((v) => ({
     label: criterion.scale.labels?.[String(v)] ? `${v} - ${criterion.scale.labels[String(v)]}` : String(v),
     value: v,
@@ -88,7 +90,7 @@ function ScoreRow({
             {...field}
             options={scaleOptions}
             style={{ width: "100%" }}
-            placeholder="Select score"
+            placeholder={t("admin.resultSelectScore")}
           />
         )}
       />
@@ -103,6 +105,7 @@ function ScoreRow({
 }
 
 export default function ResultEditor() {
+  const t = useT();
   const [modalMode, setModalMode] = useState<"new" | "edit" | "duplicate">("new");
   const [open, setOpen] = useState(false);
   const [previewResult, setPreviewResult] = useState<Result | null>(null);
@@ -244,7 +247,7 @@ export default function ResultEditor() {
   async function handleFileUpload(file: File) {
     const resultId = getValues("id");
     if (!resultId) {
-      void message.error("Save the result ID first");
+      void message.error(t("admin.resultSaveIdFirst"));
       return false;
     }
     try {
@@ -272,7 +275,7 @@ export default function ResultEditor() {
                 ? "archive"
                 : "file";
       setValue("attachments", [...current, { type, src: path }]);
-      void message.success(`Uploaded: ${path}`);
+      void message.success(t("admin.resultUploaded", { path }));
     } catch (e) {
       void message.error(String(e));
     } finally {
@@ -306,8 +309,8 @@ export default function ResultEditor() {
   ];
 
   const environmentTypeOptions = [
-    { label: "Local", value: "local" },
-    { label: "Cloud", value: "cloud" },
+    { label: t("admin.envTypeLocal"), value: "local" },
+    { label: t("admin.envTypeCloud"), value: "cloud" },
   ];
 
   const filteredResults = useMemo(() => {
@@ -393,7 +396,7 @@ export default function ResultEditor() {
 
   const columns = [
     {
-      title: "Task",
+      title: t("admin.resultColTask"),
       dataIndex: "taskId",
       key: "task",
       width: 120,
@@ -401,14 +404,14 @@ export default function ResultEditor() {
         tasksData?.tasks.find((t) => t.id === id)?.name ?? id,
     },
     {
-      title: "Model",
+      title: t("admin.resultColModel"),
       dataIndex: "modelId",
       key: "model",
       render: (id: string) =>
         resultsData?.models.find((m) => m.id === id)?.name ?? id,
     },
     {
-      title: "Env",
+      title: t("admin.resultColEnv"),
       dataIndex: "environmentId",
       key: "env",
       width: 120,
@@ -428,33 +431,33 @@ export default function ResultEditor() {
       width: 50,
     },
     {
-      title: "Duration",
+      title: t("admin.resultColDuration"),
       dataIndex: "durationMs",
       key: "duration",
       width: 90,
       render: (ms: number | undefined) => formatDuration(ms),
     },
     {
-      title: "Cost",
+      title: t("admin.resultColCost"),
       dataIndex: "costUsd",
       key: "cost",
       width: 80,
       render: (usd: number | undefined) => formatCost(usd),
     },
     {
-      title: "Attachments",
+      title: t("admin.resultColAttachments"),
       key: "att",
       width: 90,
-      render: (_: unknown, record: Result) => record.attachments.length || "—",
+      render: (_: unknown, record: Result) => record.attachments.length || "-",
     },
     {
-      title: "Actions",
+      title: t("admin.colActions"),
       key: "actions",
       width: 190,
       render: (_: unknown, record: Result) => (
         <Space>
           <Button
-            aria-label="Preview result"
+            aria-label={t("admin.resultPreviewAria")}
             icon={<EyeOutlined />}
             size="small"
             onClick={() => setPreviewResult(record)}
@@ -470,9 +473,9 @@ export default function ResultEditor() {
             onClick={() => openDuplicate(record)}
           />
           <Popconfirm
-            title="Delete this result?"
+            title={t("admin.resultDeleteConfirm")}
             onConfirm={() => handleDelete(record.id)}
-            okText="Delete"
+            okText={t("admin.deleteOk")}
             okButtonProps={{ danger: true }}
           >
             <Button icon={<DeleteOutlined />} size="small" danger />
@@ -488,7 +491,7 @@ export default function ResultEditor() {
   const identityFields = (
     <>
       <Form.Item
-        label="Task"
+        label={t("admin.resultTask")}
         validateStatus={errors.taskId ? "error" : ""}
         help={errors.taskId?.message}
       >
@@ -499,7 +502,7 @@ export default function ResultEditor() {
             <Select
               {...field}
               options={taskOptions}
-              placeholder="Select task"
+              placeholder={t("admin.resultSelectTask")}
               showSearch
             />
           )}
@@ -507,7 +510,7 @@ export default function ResultEditor() {
       </Form.Item>
 
       <Form.Item
-        label="Model"
+        label={t("admin.resultModel")}
         validateStatus={errors.modelId ? "error" : ""}
         help={errors.modelId?.message}
       >
@@ -518,7 +521,7 @@ export default function ResultEditor() {
             <Select
               {...field}
               options={modelOptions}
-              placeholder="Select model"
+              placeholder={t("admin.resultSelectModel")}
               showSearch
             />
           )}
@@ -526,7 +529,7 @@ export default function ResultEditor() {
       </Form.Item>
 
       <Form.Item
-        label="Environment"
+        label={t("admin.resultEnvironment")}
         validateStatus={errors.environmentId ? "error" : ""}
         help={errors.environmentId?.message}
       >
@@ -537,14 +540,14 @@ export default function ResultEditor() {
             <Select
               {...field}
               options={envOptions}
-              placeholder="Select environment"
+              placeholder={t("admin.resultSelectEnvironment")}
             />
           )}
         />
       </Form.Item>
 
       <Form.Item
-        label="Harness"
+        label={t("admin.resultHarness")}
         validateStatus={errors.harnessId ? "error" : ""}
         help={errors.harnessId?.message}
       >
@@ -552,13 +555,13 @@ export default function ResultEditor() {
           name="harnessId"
           control={control}
           render={({ field }) => (
-            <Select {...field} options={harnessOptions} placeholder="Select harness" />
+            <Select {...field} options={harnessOptions} placeholder={t("admin.resultSelectHarness")} />
           )}
         />
       </Form.Item>
 
       <Form.Item
-        label="Attempt #"
+        label={t("admin.resultAttempt")}
         validateStatus={errors.attemptNumber ? "error" : ""}
         help={errors.attemptNumber?.message}
       >
@@ -575,7 +578,7 @@ export default function ResultEditor() {
 
   const scoreFields = activeCriteria.length > 0 && (
     <>
-      <Divider>Scores</Divider>
+      <Divider>{t("admin.resultScores")}</Divider>
       <div
         style={{
           display: "grid",
@@ -592,9 +595,9 @@ export default function ResultEditor() {
 
   const metricsFields = (
     <>
-      <Divider>Metrics (optional)</Divider>
+      <Divider>{t("admin.resultMetrics")}</Divider>
 
-      <Form.Item label="Duration (seconds)">
+      <Form.Item label={t("admin.resultDurationSeconds")}>
         <Controller
           name="durationMs"
           control={control}
@@ -607,13 +610,13 @@ export default function ResultEditor() {
               step={1}
               precision={1}
               style={{ width: 160 }}
-              placeholder="e.g. 45"
+              placeholder={t("admin.example", { value: "45" })}
             />
           )}
         />
       </Form.Item>
 
-      <Form.Item label="Tokens In">
+      <Form.Item label={t("admin.resultTokensIn")}>
         <Controller
           name="tokensIn"
           control={control}
@@ -628,7 +631,7 @@ export default function ResultEditor() {
         />
       </Form.Item>
 
-      <Form.Item label="Tokens Out">
+      <Form.Item label={t("admin.resultTokensOut")}>
         <Controller
           name="tokensOut"
           control={control}
@@ -643,7 +646,7 @@ export default function ResultEditor() {
         />
       </Form.Item>
 
-      <Form.Item label="Cost (USD)">
+      <Form.Item label={t("admin.resultCostUsd")}>
         <Controller
           name="costUsd"
           control={control}
@@ -655,13 +658,13 @@ export default function ResultEditor() {
               step={0.001}
               precision={4}
               style={{ width: 160 }}
-              placeholder="e.g. 0.024"
+              placeholder={t("admin.example", { value: "0.024" })}
             />
           )}
         />
       </Form.Item>
 
-      <Form.Item label="Run At">
+      <Form.Item label={t("admin.resultRunAt")}>
         <Controller
           name="runAt"
           control={control}
@@ -680,7 +683,7 @@ export default function ResultEditor() {
 
   const notesField = (
     <>
-      <Form.Item label="Notes">
+      <Form.Item label={t("admin.fieldNotes")}>
         <Controller
           name="notes"
           control={control}
@@ -689,7 +692,7 @@ export default function ResultEditor() {
               {...field}
               value={field.value ?? ""}
               rows={3}
-              placeholder="Observations about this run"
+              placeholder={t("admin.resultNotesPlaceholder")}
             />
           )}
         />
@@ -699,16 +702,16 @@ export default function ResultEditor() {
 
   const attachmentFields = (
     <>
-      <Divider>Attachments</Divider>
+      <Divider>{t("admin.resultAttachments")}</Divider>
 
-      <Form.Item label="Upload result file (image / html / video / zip)">
+      <Form.Item label={t("admin.resultUploadLabel")}>
         <Upload
           beforeUpload={handleFileUpload}
           showUploadList={false}
           accept="image/*,.html,.htm,.mp4,.webm,.mov,.zip,.7z,.tar,.gz"
         >
           <Button icon={<UploadOutlined />} loading={uploading}>
-            Upload Attachment
+            {t("admin.resultUploadButton")}
           </Button>
         </Upload>
       </Form.Item>
@@ -737,7 +740,7 @@ export default function ResultEditor() {
                     field.onChange(field.value?.filter((_, i) => i !== idx))
                   }
                 >
-                  Remove
+                  {t("admin.resultRemove")}
                 </Button>
               </div>
             ))}
@@ -751,15 +754,15 @@ export default function ResultEditor() {
     <div>
       <Space style={{ marginBottom: 16 }} wrap>
         <Title level={3} style={{ margin: 0 }}>
-          Results
+          {t("admin.resultTitle")}
         </Title>
         <Button type="primary" icon={<PlusOutlined />} onClick={openNew}>
-          New Result
+          {t("admin.resultNew")}
         </Button>
         <Segmented
           options={[
-            { label: "Table", value: "table" },
-            { label: "Cards", value: "cards" },
+            { label: t("admin.resultViewTable"), value: "table" },
+            { label: t("admin.resultViewCards"), value: "cards" },
           ]}
           value={viewMode}
           onChange={(v) => setViewMode(v as "table" | "cards")}
@@ -772,7 +775,7 @@ export default function ResultEditor() {
             mode="multiple"
             allowClear
             showSearch
-            placeholder="Models"
+            placeholder={t("admin.resultFilterModels")}
             options={modelOptions}
             value={modelFilter}
             onChange={setModelFilter}
@@ -784,7 +787,7 @@ export default function ResultEditor() {
             mode="multiple"
             allowClear
             showSearch
-            placeholder="Tasks"
+            placeholder={t("admin.resultFilterTasks")}
             options={taskOptions}
             value={taskFilter}
             onChange={setTaskFilter}
@@ -796,7 +799,7 @@ export default function ResultEditor() {
             mode="multiple"
             allowClear
             showSearch
-            placeholder="Environments"
+            placeholder={t("admin.resultFilterEnvironments")}
             options={envOptions}
             value={environmentFilter}
             onChange={setEnvironmentFilter}
@@ -807,7 +810,7 @@ export default function ResultEditor() {
           <Select
             mode="multiple"
             allowClear
-            placeholder="Env type"
+            placeholder={t("admin.resultFilterEnvType")}
             options={environmentTypeOptions}
             value={environmentTypeFilter}
             onChange={setEnvironmentTypeFilter}
@@ -816,7 +819,7 @@ export default function ResultEditor() {
           />
           <Input.Search
             allowClear
-            placeholder="Search ID, model, notes"
+            placeholder={t("admin.resultSearch")}
             value={searchText}
             onChange={(event) => setSearchText(event.target.value)}
             style={{ width: 240 }}
@@ -826,7 +829,7 @@ export default function ResultEditor() {
           </Text>
           {hasResultFilters && (
             <Button icon={<ClearOutlined />} onClick={clearResultFilters}>
-              Clear
+              {t("admin.clear")}
             </Button>
           )}
         </Space>
@@ -841,7 +844,7 @@ export default function ResultEditor() {
           pagination={{ pageSize: 20 }}
         />
       ) : filteredResults.length === 0 ? (
-        <Empty description="No results match the current filters" />
+        <Empty description={t("admin.resultNoMatch")} />
       ) : (
         <>
           {filteredResults
@@ -875,10 +878,10 @@ export default function ResultEditor() {
       <Modal
         title={
           modalMode === "edit"
-            ? "Edit Result"
+            ? t("admin.resultEditTitle")
             : modalMode === "duplicate"
-              ? "Duplicate as Next Attempt"
-              : "New Result"
+              ? t("admin.resultDuplicateTitle")
+              : t("admin.resultNew")
         }
         open={open}
         onCancel={handleClose}
@@ -893,7 +896,7 @@ export default function ResultEditor() {
             <>
               {scoreFields}
               {notesField}
-              <Divider>Result</Divider>
+              <Divider>{t("admin.resultSection")}</Divider>
               <ResultEvidencePanel result={editingResult} criteria={judgeCriteria} />
               <Collapse
                 ghost
@@ -901,7 +904,7 @@ export default function ResultEditor() {
                 items={[
                   {
                     key: "details",
-                    label: "Run details: task, model, metrics, attachments",
+                    label: t("admin.resultRunDetails"),
                     children: (
                       <>
                         {identityFields}

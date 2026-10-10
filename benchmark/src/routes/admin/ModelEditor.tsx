@@ -19,6 +19,7 @@ import { useResults } from "@/data/queries";
 import { useUpsertModel, useDeleteModel } from "@/data/mutations";
 import { generateId } from "@/lib/ids";
 import { formatModelSpec } from "@/lib/format";
+import { useT } from "@/i18n/LanguageProvider";
 
 const CAPABILITY_OPTIONS = ["tools", "thinking", "vision"].map((c) => ({ label: c, value: c }));
 
@@ -27,6 +28,7 @@ const { Title } = Typography;
 type FormData = Model;
 
 export default function ModelEditor() {
+  const t = useT();
   const [editing, setEditing] = useState<Model | null>(null);
   const [open, setOpen] = useState(false);
   const { data: resultsData } = useResults();
@@ -71,17 +73,17 @@ export default function ModelEditor() {
   }
 
   const columns = [
-    { title: "ID", dataIndex: "id", key: "id", width: 200 },
-    { title: "Name", dataIndex: "name", key: "name" },
-    { title: "Provider", dataIndex: "provider", key: "provider", width: 120 },
-    { title: "Params", dataIndex: "parameterCount", key: "parameterCount", width: 80 },
+    { title: t("admin.colId"), dataIndex: "id", key: "id", width: 200 },
+    { title: t("admin.colName"), dataIndex: "name", key: "name" },
+    { title: t("admin.modelColProvider"), dataIndex: "provider", key: "provider", width: 120 },
+    { title: t("admin.modelColParams"), dataIndex: "parameterCount", key: "parameterCount", width: 80 },
     {
-      title: "Weights",
+      title: t("admin.modelColWeights"),
       key: "spec",
       render: (_: unknown, record: Model) => formatModelSpec(record) || "-",
     },
     {
-      title: "Actions",
+      title: t("admin.colActions"),
       key: "actions",
       width: 120,
       render: (_: unknown, record: Model) => (
@@ -92,9 +94,9 @@ export default function ModelEditor() {
             onClick={() => openEdit(record)}
           />
           <Popconfirm
-            title="Delete this model?"
+            title={t("admin.modelDeleteConfirm")}
             onConfirm={() => handleDelete(record.id)}
-            okText="Delete"
+            okText={t("admin.deleteOk")}
             okButtonProps={{ danger: true }}
           >
             <Button icon={<DeleteOutlined />} size="small" danger />
@@ -108,10 +110,10 @@ export default function ModelEditor() {
     <div>
       <Space style={{ marginBottom: 16 }}>
         <Title level={3} style={{ margin: 0 }}>
-          Models
+          {t("admin.modelTitle")}
         </Title>
         <Button type="primary" icon={<PlusOutlined />} onClick={openNew}>
-          New Model
+          {t("admin.modelNew")}
         </Button>
       </Space>
 
@@ -124,7 +126,7 @@ export default function ModelEditor() {
       />
 
       <Modal
-        title={editing ? "Edit Model" : "New Model"}
+        title={editing ? t("admin.modelEditTitle") : t("admin.modelNew")}
         open={open}
         onCancel={handleClose}
         onOk={handleSubmit(onSubmit)}
@@ -133,7 +135,7 @@ export default function ModelEditor() {
       >
         <Form layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item
-            label="ID"
+            label={t("admin.fieldId")}
             validateStatus={errors.id ? "error" : ""}
             help={errors.id?.message}
           >
@@ -141,25 +143,25 @@ export default function ModelEditor() {
               name="id"
               control={control}
               render={({ field }) => (
-                <Input {...field} disabled={!!editing} placeholder="e.g. qwen3.5:9b" />
+                <Input {...field} disabled={!!editing} placeholder={t("admin.example", { value: "qwen3.5:9b" })} />
               )}
             />
           </Form.Item>
 
           <Form.Item
-            label="Name"
+            label={t("admin.fieldName")}
             validateStatus={errors.name ? "error" : ""}
             help={errors.name?.message}
           >
             <Controller
               name="name"
               control={control}
-              render={({ field }) => <Input {...field} placeholder="Display name" />}
+              render={({ field }) => <Input {...field} placeholder={t("admin.displayNamePlaceholder")} />}
             />
           </Form.Item>
 
           <Form.Item
-            label="Provider"
+            label={t("admin.modelProvider")}
             validateStatus={errors.provider ? "error" : ""}
             help={errors.provider?.message}
           >
@@ -167,12 +169,12 @@ export default function ModelEditor() {
               name="provider"
               control={control}
               render={({ field }) => (
-                <Input {...field} placeholder="e.g. ollama, anthropic, openai" />
+                <Input {...field} placeholder={t("admin.example", { value: "ollama, anthropic, openai" })} />
               )}
             />
           </Form.Item>
 
-          <Form.Item label="Parameter Count">
+          <Form.Item label={t("admin.modelParameterCount")}>
             <Controller
               name="parameterCount"
               control={control}
@@ -180,14 +182,14 @@ export default function ModelEditor() {
                 <Input
                   {...field}
                   value={field.value ?? ""}
-                  placeholder="e.g. 9B, 70B"
+                  placeholder={t("admin.example", { value: "9B, 70B" })}
                 />
               )}
             />
           </Form.Item>
 
           <Space wrap size="middle" align="start">
-            <Form.Item label="Quantization">
+            <Form.Item label={t("admin.modelQuantization")}>
               <Controller
                 name="quantization"
                 control={control}
@@ -196,13 +198,13 @@ export default function ModelEditor() {
                     {...field}
                     value={field.value ?? ""}
                     onChange={(e) => field.onChange(e.target.value || undefined)}
-                    placeholder="e.g. Q4_K_M, MXFP4"
+                    placeholder={t("admin.example", { value: "Q4_K_M, MXFP4" })}
                     style={{ width: 160 }}
                   />
                 )}
               />
             </Form.Item>
-            <Form.Item label="Architecture">
+            <Form.Item label={t("admin.modelArchitecture")}>
               <Controller
                 name="architecture"
                 control={control}
@@ -211,7 +213,7 @@ export default function ModelEditor() {
                     {...field}
                     allowClear
                     options={[
-                      { label: "dense", value: "dense" },
+                      { label: t("admin.modelArchDense"), value: "dense" },
                       { label: "MoE", value: "moe" },
                     ]}
                     onChange={(v) => field.onChange(v ?? undefined)}
@@ -220,7 +222,7 @@ export default function ModelEditor() {
                 )}
               />
             </Form.Item>
-            <Form.Item label="Active params (MoE)">
+            <Form.Item label={t("admin.modelActiveParams")}>
               <Controller
                 name="activeParameterCount"
                 control={control}
@@ -229,7 +231,7 @@ export default function ModelEditor() {
                     {...field}
                     value={field.value ?? ""}
                     onChange={(e) => field.onChange(e.target.value || undefined)}
-                    placeholder="e.g. 3B"
+                    placeholder={t("admin.example", { value: "3B" })}
                     style={{ width: 120 }}
                   />
                 )}
@@ -238,7 +240,7 @@ export default function ModelEditor() {
           </Space>
 
           <Space wrap size="middle" align="start">
-            <Form.Item label="Max context (tokens)">
+            <Form.Item label={t("admin.modelContextWindow")}>
               <Controller
                 name="contextWindow"
                 control={control}
@@ -253,7 +255,7 @@ export default function ModelEditor() {
                 )}
               />
             </Form.Item>
-            <Form.Item label="Size on disk (GB)">
+            <Form.Item label={t("admin.modelSizeOnDisk")}>
               <Controller
                 name="sizeGb"
                 control={control}
@@ -268,7 +270,7 @@ export default function ModelEditor() {
                 )}
               />
             </Form.Item>
-            <Form.Item label="Digest">
+            <Form.Item label={t("admin.modelDigest")}>
               <Controller
                 name="digest"
                 control={control}
@@ -277,7 +279,7 @@ export default function ModelEditor() {
                     {...field}
                     value={field.value ?? ""}
                     onChange={(e) => field.onChange(e.target.value || undefined)}
-                    placeholder="e.g. a50eda8ed977"
+                    placeholder={t("admin.example", { value: "a50eda8ed977" })}
                     style={{ width: 160 }}
                   />
                 )}
@@ -287,7 +289,7 @@ export default function ModelEditor() {
 
           <Space wrap size="middle" align="start">
             {(["releasedAt", "knowledgeCutoff"] as const).map((name) => (
-              <Form.Item key={name} label={name === "releasedAt" ? "Released" : "Knowledge cutoff"}>
+              <Form.Item key={name} label={name === "releasedAt" ? t("admin.modelReleased") : t("admin.modelKnowledgeCutoff")}>
                 <Controller
                   name={name}
                   control={control}
@@ -296,7 +298,7 @@ export default function ModelEditor() {
                       {...field}
                       value={field.value ?? ""}
                       onChange={(e) => field.onChange(e.target.value || undefined)}
-                      placeholder="e.g. 2026-04"
+                      placeholder={t("admin.example", { value: "2026-04" })}
                       style={{ width: 140 }}
                     />
                   )}
@@ -306,7 +308,7 @@ export default function ModelEditor() {
             {(["inputPricePerMTok", "outputPricePerMTok"] as const).map((name) => (
               <Form.Item
                 key={name}
-                label={name === "inputPricePerMTok" ? "Input $ / 1M tok" : "Output $ / 1M tok"}
+                label={name === "inputPricePerMTok" ? t("admin.modelInputPrice") : t("admin.modelOutputPrice")}
               >
                 <Controller
                   name={name}
@@ -325,7 +327,7 @@ export default function ModelEditor() {
             ))}
           </Space>
 
-          <Form.Item label="Capabilities">
+          <Form.Item label={t("admin.modelCapabilities")}>
             <Controller
               name="capabilities"
               control={control}
@@ -341,7 +343,7 @@ export default function ModelEditor() {
             />
           </Form.Item>
 
-          <Form.Item label="License">
+          <Form.Item label={t("admin.modelLicense")}>
             <Controller
               name="license"
               control={control}
@@ -350,13 +352,13 @@ export default function ModelEditor() {
                   {...field}
                   value={field.value ?? ""}
                   onChange={(e) => field.onChange(e.target.value || undefined)}
-                  placeholder="e.g. Apache-2.0, MIT"
+                  placeholder={t("admin.example", { value: "Apache-2.0, MIT" })}
                 />
               )}
             />
           </Form.Item>
 
-          <Form.Item label="Notes">
+          <Form.Item label={t("admin.fieldNotes")}>
             <Controller
               name="notes"
               control={control}
@@ -365,7 +367,7 @@ export default function ModelEditor() {
                   {...field}
                   value={field.value ?? ""}
                   rows={2}
-                  placeholder="Optional notes"
+                  placeholder={t("admin.notesPlaceholder")}
                 />
               )}
             />

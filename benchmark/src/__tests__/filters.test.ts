@@ -53,3 +53,34 @@ describe("harness filtering", () => {
     expect(kept).toEqual([]);
   });
 });
+
+describe("local-only filtering", () => {
+  beforeEach(() => {
+    useFilters.getState().clear();
+    useFilters.getState().setLocalOnly(false);
+    useFilters.getState().setLocalEnvironmentIds(["dgx-local"]);
+  });
+
+  const cloudRow = row("cloud", "refio");
+  const localRow = { ...row("local", "refio"), environmentId: "dgx-local" };
+
+  it("keeps cloud and local runs while the switch is off", () => {
+    const kept = applyFilters([cloudRow, localRow], useFilters.getState());
+    expect(kept.map((r) => r.id)).toEqual(["cloud", "local"]);
+  });
+
+  it("drops cloud runs when only local models are asked for", () => {
+    useFilters.getState().setLocalOnly(true);
+    const kept = applyFilters([cloudRow, localRow], useFilters.getState());
+    expect(kept.map((r) => r.id)).toEqual(["local"]);
+  });
+
+  // The switch lives in the header, apart from the filter pickers; clearing the
+  // pickers must not silently bring cloud runs back.
+  it("survives clearing the other filters", () => {
+    useFilters.getState().setLocalOnly(true);
+    useFilters.getState().clear();
+    const kept = applyFilters([cloudRow, localRow], useFilters.getState());
+    expect(kept.map((r) => r.id)).toEqual(["local"]);
+  });
+});

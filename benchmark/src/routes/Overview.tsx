@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Card, Empty, Segmented, Space, Spin, Table, Tabs, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useResults, useTasks } from "@/data/queries";
+import { useT } from "@/i18n/LanguageProvider";
 import { applyFilters, useFilters } from "@/store/filters";
 import { formatCost, formatDuration } from "@/lib/format";
 import {
@@ -35,6 +36,7 @@ function cellColor(cell: PassCell): string {
 }
 
 export default function Overview() {
+  const t = useT();
   const filters = useFilters();
   const { data: tasksData, isLoading: tasksLoading } = useTasks();
   const { data: resultsData, isLoading: resultsLoading } = useResults();
@@ -62,43 +64,43 @@ export default function Overview() {
   const modelColumns: ColumnsType<ModelSummary> = [
     { title: "#", key: "rank", width: 50, render: (_, __, i) => i + 1 },
     {
-      title: "Model",
+      title: t("overview.colModel"),
       dataIndex: "name",
       sorter: (a, b) => a.name.localeCompare(b.name),
       render: (name: string, row) => (
         <Space size={4}>
           {name}
-          {row.sources.includes("queue") && <Tag>unreviewed</Tag>}
+          {row.sources.includes("queue") && <Tag>{t("overview.unreviewedTag")}</Tag>}
         </Space>
       ),
     },
-    { title: "Reasoning", dataIndex: "reasoning", render: (v: string | null) => v ?? "-" },
+    { title: t("overview.colReasoning"), dataIndex: "reasoning", render: (v: string | null) => v ?? "-" },
     {
-      title: "Passed",
+      title: t("overview.colPassed"),
       key: "passed",
       sorter: (a, b) => a.passed / a.attempts - b.passed / b.attempts,
       render: (_, r) => ratio(r.passed, r.attempts),
     },
     {
-      title: "Works out of the box",
+      title: t("overview.colWorks"),
       key: "works",
       sorter: (a, b) => a.worksFull / a.attempts - b.worksFull / b.attempts,
       render: (_, r) => ratio(r.worksFull, r.attempts),
     },
     {
-      title: "Agent logic = 1",
+      title: t("overview.colAgentLogic"),
       key: "agentLogic",
       sorter: (a, b) => a.agentLogicFull / a.attempts - b.agentLogicFull / b.attempts,
       render: (_, r) => ratio(r.agentLogicFull, r.attempts),
     },
     {
-      title: "Cost",
+      title: t("overview.colCost"),
       dataIndex: "costUsd",
       sorter: (a, b) => (a.costUsd ?? Infinity) - (b.costUsd ?? Infinity),
       render: (v: number | null) => formatCost(v),
     },
     {
-      title: "Avg time",
+      title: t("overview.colAvgTime"),
       dataIndex: "avgDurationMs",
       sorter: (a, b) => (a.avgDurationMs ?? Infinity) - (b.avgDurationMs ?? Infinity),
       render: (v: number | null) => formatDuration(v),
@@ -106,7 +108,7 @@ export default function Overview() {
   ];
 
   const matrixColumns: ColumnsType<MatrixRow> = [
-    { title: "Model", dataIndex: "name", fixed: "left" },
+    { title: t("overview.colModel"), dataIndex: "name", fixed: "left" },
     ...taskIds.map((taskId) => ({
       title: taskName(taskId),
       key: taskId,
@@ -122,32 +124,32 @@ export default function Overview() {
   ];
 
   const taskColumns: ColumnsType<TaskSummary> = [
-    { title: "Task", dataIndex: "taskId", render: (id: string) => taskName(id) },
+    { title: t("overview.colTask"), dataIndex: "taskId", render: (id: string) => taskName(id) },
     {
-      title: "Passed",
+      title: t("overview.colPassed"),
       key: "passed",
       sorter: (a, b) => a.passed / a.attempts - b.passed / b.attempts,
       render: (_, r) => `${ratio(r.passed, r.attempts)} (${Math.round((100 * r.passed) / r.attempts)}%)`,
     },
-    { title: "Models", dataIndex: "models" },
+    { title: t("overview.colModels"), dataIndex: "models" },
     {
-      title: "Passed every attempt",
+      title: t("overview.colPerfect"),
       dataIndex: "perfectModels",
       render: (names: string[]) => (names.length ? names.join(", ") : "-"),
     },
     {
-      title: "Weakest",
+      title: t("overview.colWeakest"),
       dataIndex: "weakestModels",
       render: (names: string[]) => (names.length ? names.join(", ") : "-"),
     },
     {
-      title: "Cost",
+      title: t("overview.colCost"),
       dataIndex: "costUsd",
       sorter: (a, b) => (a.costUsd ?? 0) - (b.costUsd ?? 0),
       render: (v: number | null) => formatCost(v),
     },
     {
-      title: "Avg time",
+      title: t("overview.colAvgTime"),
       dataIndex: "avgDurationMs",
       sorter: (a, b) => (a.avgDurationMs ?? 0) - (b.avgDurationMs ?? 0),
       render: (v: number | null) => formatDuration(v),
@@ -158,17 +160,11 @@ export default function Overview() {
     <div className="page-stack">
       <div className="section-heading">
         <div>
-          <Title level={2}>Overview</Title>
-          <p>
-            The same runs seen from several sides: per model, per model and task, and per
-            task. A run passes when every measured criterion holds.
-          </p>
+          <Title level={2}>{t("overview.title")}</Title>
+          <p>{t("overview.intro")}</p>
           {source !== "reviewed" && (
             <p>
-              <Text type="warning">
-                Unreviewed runs are judged only by the automatic verdict and have not been
-                confirmed by hand.
-              </Text>
+              <Text type="warning">{t("overview.unreviewedWarning")}</Text>
             </p>
           )}
         </div>
@@ -176,28 +172,28 @@ export default function Overview() {
 
       <Card size="small" className="glass-card">
         <Space>
-          <Text>Runs</Text>
+          <Text>{t("overview.runs")}</Text>
           <Segmented<SourceChoice>
             value={source}
             onChange={setSource}
             options={[
-              { value: "all", label: "Reviewed + unreviewed" },
-              { value: "reviewed", label: "Reviewed" },
-              { value: "queue", label: "Unreviewed" },
+              { value: "all", label: t("overview.sourceAll") },
+              { value: "reviewed", label: t("overview.sourceReviewed") },
+              { value: "queue", label: t("overview.sourceQueue") },
             ]}
           />
         </Space>
       </Card>
 
       {runs.length === 0 ? (
-        <Empty description="No runs match the current filters." />
+        <Empty description={t("overview.noRuns")} />
       ) : (
         <Card className="glass-card">
           <Tabs
             items={[
               {
                 key: "models",
-                label: "By model",
+                label: t("overview.tabByModel"),
                 children: (
                   <Table
                     rowKey="modelId"
@@ -211,7 +207,7 @@ export default function Overview() {
               },
               {
                 key: "matrix",
-                label: "Model × task",
+                label: t("overview.tabMatrix"),
                 children: (
                   <Table
                     rowKey="modelId"
@@ -225,7 +221,7 @@ export default function Overview() {
               },
               {
                 key: "tasks",
-                label: "By task",
+                label: t("overview.tabByTask"),
                 children: (
                   <Table
                     rowKey="taskId"

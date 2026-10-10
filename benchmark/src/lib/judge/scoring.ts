@@ -237,3 +237,9 @@ export function scoreVariance(
   if (deviations.length === 0) return 0;
   return deviations.reduce((a, b) => a + b, 0) / deviations.length;
 }
+
+// A broken game loop throws the same error every frame, so the raw capture is
+// hundreds of identical lines. Keep one per run of back-to-back repeats.
+export function collapseRepeatedErrors(errors: string[]): string[] {
+  return errors.filter((e, i) => i === 0 || e !== errors[i - 1]);
+}

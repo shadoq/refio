@@ -5,25 +5,30 @@ import { LeaderboardTable } from "@/components/tables/LeaderboardTable";
 import { ParetoScatter } from "@/components/charts/ParetoScatter";
 import { useTasks } from "@/data/queries";
 import { useResults } from "@/data/queries";
-import { leaderboard, visibleTasks } from "@/lib/stats";
+import { leaderboard, localRowsOnly, visibleTasks, withRefioMode } from "@/lib/stats";
 import { formatDuration } from "@/lib/format";
 import { applyFilters, useFilters } from "@/store/filters";
+import { useRefioMode } from "@/store/refioMode";
+import { useT } from "@/i18n/LanguageProvider";
 
 const { Title, Paragraph } = Typography;
 
 export default function Landing() {
   const navigate = useNavigate();
   const filters = useFilters();
+  const t = useT();
   const { data: tasksData, isLoading: tasksLoading } = useTasks();
   const { data: resultsData, isLoading: resultsLoading } = useResults();
 
   const hasExternalAgents = (resultsData?.harnesses ?? []).some((h) => h.kind === "external");
 
+  const refioMode = useRefioMode((s) => s.mode);
   const rows = useMemo(() => {
     if (!tasksData || !resultsData) return [];
-    const filtered = applyFilters(resultsData.results, filters);
-    return leaderboard(filtered, resultsData, tasksData);
-  }, [tasksData, resultsData, filters]);
+    const filtered = applyFilters(resultsData.results, { ...filters, localOnly: false });
+    const rows = localRowsOnly(leaderboard(filtered, resultsData, tasksData), filters.localOnly);
+    return withRefioMode(rows, refioMode);
+  }, [tasksData, resultsData, filters, refioMode]);
 
   const paretoPoints = useMemo(
     () =>
@@ -44,7 +49,11 @@ export default function Landing() {
     [rows],
   );
 
-  const heroSignals = rows.slice(0, 3);
+  // The hero shows the same order as the leaderboard below: by Refio Score.
+  const heroSignals = rows
+    .filter((r) => r.refioScore != null)
+    .sort((a, b) => b.refioScore! - a.refioScore!)
+    .slice(0, 3);
   const bestScore = rows[0]?.avgScore ?? 0;
   const uniqueModels = new Set(rows.map((r) => r.modelId)).size;
   const evaluatedTasks = Math.max(0, ...rows.map((r) => r.tasksEvaluated));
@@ -64,6 +73,10 @@ export default function Landing() {
     rows
       .filter((r) => r.localViabilityScore != null)
       .sort((a, b) => b.localViabilityScore! - a.localViabilityScore!)[0] ?? null;
+  const bestRefio =
+    rows
+      .filter((r) => r.refioScore != null)
+      .sort((a, b) => b.refioScore! - a.refioScore!)[0] ?? null;
   const judgeRows = rows.filter((r) => r.judgeAvgScore != null);
   const bestJudge =
     judgeRows.slice().sort((a, b) => b.judgeAvgScore! - a.judgeAvgScore!)[0] ?? null;
@@ -81,16 +94,16 @@ export default function Landing() {
       <div className="page-stack">
         <section className="hero">
           <div className="hero-copy">
-            <span className="eyebrow">Refio evaluation</span>
+            <span className="eyebrow">{t("landing.eyebrow")}</span>
             <Title className="hero-title" level={1}>
               benchmark.<span className="gradient-text">refio</span>
             </Title>
             <Paragraph className="hero-subtitle">
-              Local LLMs evaluated head-to-head on real coding tasks.
+              {t("landing.emptySubtitle")}
             </Paragraph>
           </div>
         </section>
-        <Empty description="No benchmark results yet. Add results via Admin > Results." />
+        <Empty description={t("landing.emptyResults")} />
       </div>
     );
   }
@@ -99,33 +112,30 @@ export default function Landing() {
     <div className="page-stack">
       <section className="hero">
         <div className="hero-copy">
-          <span className="eyebrow">Refio evaluation</span>
-          <span className="jclab-line">Passion creates. Knowledge helps.</span>
+          <span className="eyebrow">{t("landing.eyebrow")}</span>
+          <span className="jclab-line">{t("landing.motto")}</span>
           <Title className="hero-title" level={1}>
-            Small tasks, <span className="gradient-text">measured.</span>
+            {t("landing.heroTitleStart")}
+            <span className="gradient-text">{t("landing.heroTitleAccent")}</span>
           </Title>
           <Paragraph className="hero-subtitle">
-            Simple repeatable tasks for comparing local and cloud models:
-            first-shot usability, reliability, speed and local viability in one benchmark cockpit.
+            {t("landing.heroSubtitle")}
           </Paragraph>
           <Paragraph className="hero-note">
-            This is a subjective benchmark of each test result, enriched with
-            statistical data collected by the Refio plugin. It is designed to compare
-            models, especially local ones, on lightweight tasks where smaller models
-            still have a realistic chance to produce a usable result.
+            {t("landing.heroNote")}
           </Paragraph>
           <div className="hero-actions">
             <Button type="primary" size="large" onClick={() => navigate("/compare")}>
-              Compare models
+              {t("landing.compareModels")}
             </Button>
             <Button size="large" onClick={() => navigate("/pareto")}>
-              Explore Pareto front
+              {t("landing.explorePareto")}
             </Button>
           </div>
         </div>
-        <div className="hero-panel" aria-label="Top benchmark signals">
+        <div className="hero-panel" aria-label={t("landing.topSignals")}>
           <div className="panel-topbar">
-            <span>live leaderboard</span>
+            <span>{t("landing.liveLeaderboard")}</span>
             <span className="panel-dots">
               <span />
               <span />
@@ -140,10 +150,10 @@ export default function Landing() {
                     #{index + 1} {row.model.name}
                   </strong>
                   <span>
-                    {row.environment.name} / {row.attemptCount} attempts
+                    {t("landing.signalAttempts", { env: row.environment.name, count: row.attemptCount })}
                   </span>
                 </div>
-                <div className="signal-score">{(row.avgScore * 100).toFixed(1)}%</div>
+                <div className="signal-score">{(row.refioScore! * 100).toFixed(1)}%</div>
               </div>
             ))}
           </div>
@@ -151,74 +161,83 @@ export default function Landing() {
       </section>
 
       <div className="metric-grid">
-        <Card className="metric-card">
-          <Statistic title="Best score" value={bestScore * 100} precision={1} suffix="%" />
+        <Card className="metric-card insight-card">
+          <Statistic
+            title={t("landing.bestRefio")}
+            value={bestRefio?.refioScore == null ? 0 : bestRefio.refioScore * 100}
+            precision={1}
+            suffix="%"
+          />
+          <p>
+            {bestRefio
+              ? t("landing.bestRefioNote", { model: bestRefio.model.name })
+              : t("landing.bestRefioEmpty")}
+          </p>
         </Card>
-        <Card className="metric-card">
-          <Statistic title="Models" value={uniqueModels} />
-        </Card>
-        <Card className="metric-card">
-          <Statistic title="Tasks covered" value={evaluatedTasks} />
-        </Card>
-        <Card className="metric-card">
-          <Statistic title="Attempts" value={totalAttempts} />
+        <Card className="metric-card insight-card">
+          <Statistic title={t("landing.bestScore")} value={bestScore * 100} precision={1} suffix="%" />
+          <p>{t("landing.bestScoreNote")}</p>
         </Card>
         <Card className="metric-card insight-card">
           <Statistic
-            title="Reliability"
+            title={t("landing.reliability")}
             value={avgReliability == null ? 0 : avgReliability * 100}
             precision={1}
             suffix="%"
           />
-          <p>Consistency across repeated attempts.</p>
+          <p>{t("landing.reliabilityNote")}</p>
         </Card>
         <Card className="metric-card insight-card">
           <Statistic
-            title="First-shot success"
+            title={t("landing.firstShot")}
             value={firstShotSuccessRate == null ? 0 : firstShotSuccessRate * 100}
             precision={1}
             suffix="%"
           />
-          <p>How often attempt #1 is already usable.</p>
+          <p>{t("landing.firstShotNote")}</p>
         </Card>
         <Card className="metric-card insight-card">
           <Statistic
-            title="Best judge score"
+            title={t("landing.bestJudge")}
             value={bestJudge?.judgeAvgScore == null ? 0 : bestJudge.judgeAvgScore * 100}
             precision={1}
             suffix="%"
           />
           <p>
             {bestJudge
-              ? `${bestJudge.model.name}, scored by strong-judge agents.`
-              : "Run npm run judge to add strong-judge scores."}
+              ? t("landing.bestJudgeNote", { model: bestJudge.model.name })
+              : t("landing.bestJudgeEmpty")}
           </p>
         </Card>
         <Card className="metric-card insight-card">
           <Statistic
-            title="Best local viability"
+            title={t("landing.bestLocal")}
             value={bestLocalViability?.localViabilityScore == null ? 0 : bestLocalViability.localViabilityScore * 100}
             precision={1}
             suffix="%"
           />
           <p>
             {bestLocalViability
-              ? `${bestLocalViability.model.name} vs cloud baseline, blended with stability.`
-              : "Add local and cloud runs to calculate the local viability gap."}
+              ? t("landing.bestLocalNote", { model: bestLocalViability.model.name })
+              : t("landing.bestLocalEmpty")}
           </p>
         </Card>
       </div>
 
       <div className="section-heading">
         <div>
-          <Title level={2}>Leaderboard</Title>
+          <Title level={2}>{t("landing.leaderboardTitle")}</Title>
           <p>
-            Ranked model and environment combinations with score, pass-rate, cost and
-            runtime context.
+            {t("landing.leaderboardIntro")}{" "}
+            {t("landing.leaderboardCounts", {
+              models: uniqueModels,
+              tasks: evaluatedTasks,
+              attempts: totalAttempts,
+            })}
           </p>
         </div>
         <Button type="link" onClick={() => navigate("/compare")}>
-          Compare models
+          {t("landing.compareModels")}
         </Button>
       </div>
 
@@ -234,13 +253,12 @@ export default function Landing() {
             <Card className="glass-card">
               <Space direction="vertical" size={4}>
                 <Title level={4} style={{ margin: 0 }}>
-                  External coding agents
+                  {t("landing.externalTitle")}
                 </Title>
                 <p style={{ margin: 0 }}>
-                  The same tasks run by Claude Code, Codex and Gemini CLI, with what each
-                  run actually did step by step. Kept off this leaderboard on purpose.
+                  {t("landing.externalBody")}
                 </p>
-                <Link to="/agents">Open the agents page</Link>
+                <Link to="/agents">{t("landing.externalLink")}</Link>
               </Space>
             </Card>
           </Col>
@@ -250,10 +268,10 @@ export default function Landing() {
           <Col span={24}>
             <Card
               className="glass-card chart-card"
-              title="Local Pareto: Viability vs Avg Runtime"
+              title={t("landing.paretoTitle")}
               extra={
                 <Button type="link" onClick={() => navigate("/pareto")}>
-                  Full view
+                  {t("landing.fullView")}
                 </Button>
               }
             >
@@ -261,8 +279,8 @@ export default function Landing() {
                 points={paretoPoints}
                 height={320}
                 mini
-                xLabel="Avg Duration"
-                yLabel="Local Viability"
+                xLabel={t("landing.axisDuration")}
+                yLabel={t("landing.axisViability")}
               />
             </Card>
           </Col>
@@ -270,7 +288,7 @@ export default function Landing() {
       </Row>
 
       {tasksData && visibleTasks(tasksData.tasks).length > 0 && (
-        <Card className="glass-card" title="Tasks">
+        <Card className="glass-card" title={t("landing.tasksTitle")}>
           <div className="task-link-grid">
             {visibleTasks(tasksData.tasks).map((task) => (
               <Link className="task-link-card" key={task.id} to={`/tasks/${task.id}`}>

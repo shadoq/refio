@@ -2,6 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ConfigProvider, theme } from "antd";
+import enUS from "antd/locale/en_US";
+import plPL from "antd/locale/pl_PL";
+import dayjs from "dayjs";
+import "dayjs/locale/pl";
+import { useLang } from "@/i18n/LanguageProvider";
 import { AppShell, DevOnly } from "@/components/layout/AppShell";
 import { ErrorBoundary } from "@/components/layout/ErrorBoundary";
 import { defaultThemeId, isThemeId, palettes, type ThemeId } from "@/theme/palettes";
@@ -31,6 +36,11 @@ export default function App() {
   });
 
   const palette = palettes[themeId];
+  const { lang } = useLang();
+
+  useEffect(() => {
+    dayjs.locale(lang);
+  }, [lang]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = themeId;
@@ -78,7 +88,7 @@ export default function App() {
   );
 
   return (
-    <ConfigProvider theme={antdTheme}>
+    <ConfigProvider theme={antdTheme} locale={lang === "pl" ? plPL : enUS}>
       <QueryClientProvider client={queryClient}>
         <BrowserRouter>
           <ErrorBoundary>

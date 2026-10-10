@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { useEffect } from "react";
 import { useFilters, DEFAULT_HARNESS_IDS } from "@/store/filters";
 import { useTasks, useResults } from "@/data/queries";
+import { useT } from "@/i18n/LanguageProvider";
 
 function parseIds(param: string | null): string[] {
   if (!param) return [];
@@ -16,6 +17,7 @@ function serializeIds(ids: string[]): string {
 export function GlobalFilters() {
   const [searchParams, setSearchParams] = useSearchParams();
   const filters = useFilters();
+  const t = useT();
   const { data: tasksData } = useTasks();
   const { data: resultsData } = useResults();
 
@@ -94,7 +96,7 @@ export function GlobalFilters() {
       <Select
         mode="multiple"
         allowClear
-        placeholder="Models"
+        placeholder={t("layout.filterModels")}
         options={modelOptions}
         value={filters.modelIds}
         onChange={handleModels}
@@ -104,7 +106,7 @@ export function GlobalFilters() {
       <Select
         mode="multiple"
         allowClear
-        placeholder="Environments"
+        placeholder={t("layout.filterEnvironments")}
         options={envOptions}
         value={filters.environmentIds}
         onChange={handleEnvs}
@@ -114,7 +116,7 @@ export function GlobalFilters() {
       <Select
         mode="multiple"
         allowClear
-        placeholder="Tasks"
+        placeholder={t("layout.filterTasks")}
         options={taskOptions}
         value={filters.taskIds}
         onChange={handleTasks}
@@ -124,7 +126,7 @@ export function GlobalFilters() {
       {harnesses.length > 1 && (
         <Select
           mode="multiple"
-          placeholder="Harness"
+          placeholder={t("layout.filterHarness")}
           options={harnessOptions}
           value={filters.harnessIds}
           onChange={handleHarnesses}
@@ -134,7 +136,7 @@ export function GlobalFilters() {
       )}
       {hasFilters && (
         <Button size="small" onClick={handleClear}>
-          Clear
+          {t("layout.filterClear")}
         </Button>
       )}
     </Space>

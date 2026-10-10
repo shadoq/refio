@@ -23,6 +23,7 @@ import { MetricRadarCompare } from "@/components/charts/MetricRadarCompare";
 import { TaskRadarCompare } from "@/components/charts/TaskRadarCompare";
 import { normalizeScore, visibleTasks } from "@/lib/stats";
 import { aggregateJudgeScores, JUDGE_EXCLUDED_CRITERIA } from "@/lib/judge/scoring";
+import { useT } from "@/i18n/LanguageProvider";
 
 const { Title, Text } = Typography;
 
@@ -44,6 +45,7 @@ interface CompareRow {
 }
 
 export default function Compare() {
+  const t = useT();
   const [searchParams, setSearchParams] = useSearchParams();
   const filters = useFilters();
   const compare = useCompareSelection();
@@ -81,11 +83,17 @@ export default function Compare() {
     return applyFilters(resultsData.results, filters);
   }, [resultsData, filters]);
 
+  // Local viability needs the cloud runs as its yardstick; the radar drops them itself.
+  const metricRadarResults = useMemo(() => {
+    if (!resultsData) return [];
+    return applyFilters(resultsData.results, { ...filters, localOnly: false });
+  }, [resultsData, filters]);
+
   // Which track the compared numbers were produced by.
   const harnessLabel = useMemo(() => {
     const byId = new Map((resultsData?.harnesses ?? []).map((h) => [h.id, h.name]));
-    return filters.harnessIds.map((id) => byId.get(id) ?? id).join(", ") || "all";
-  }, [resultsData, filters.harnessIds]);
+    return filters.harnessIds.map((id) => byId.get(id) ?? id).join(", ") || t("compare.harnessAll");
+  }, [resultsData, filters.harnessIds, t]);
 
   const modelOptions = useMemo(
     () =>
@@ -186,7 +194,7 @@ export default function Compare() {
 
   // Comparison table columns
   const comparisonColumns: ColumnsType<CompareRow> = [
-    { title: "Criterion", dataIndex: "criterionName", key: "crit", width: 180 },
+    { title: t("compare.colCriterion"), dataIndex: "criterionName", key: "crit", width: 180 },
     ...compare.modelIds.map((modelId, idx) => ({
       title: <Tag color={COLORS[idx % COLORS.length]}>{modelNames[modelId] ?? modelId}</Tag>,
       key: modelId,
@@ -217,37 +225,37 @@ export default function Compare() {
 
   return (
     <div>
-      <Title level={2}>Compare Models</Title>
+      <Title level={2}>{t("compare.title")}</Title>
       {/* These numbers come from whatever the harness filter is set to. Saying which
           track they are avoids reading a Claude Code run as if Refio had produced it. */}
       <Text type="secondary" style={{ display: "block", marginBottom: 16 }}>
-        Harness: {harnessLabel}
+        {t("compare.harness", { harness: harnessLabel })}
       </Text>
 
       <Card style={{ marginBottom: 24 }}>
         <Space direction="vertical" style={{ width: "100%" }}>
-          <Text>Select up to {MAX_MODELS} models to compare:</Text>
+          <Text>{t("compare.selectPrompt", { max: MAX_MODELS })}</Text>
           <Select
             mode="multiple"
             style={{ width: "100%" }}
             options={modelOptions}
             value={compare.modelIds}
             onChange={(ids: string[]) => compare.setModels(ids.slice(0, MAX_MODELS))}
-            placeholder="Select models..."
+            placeholder={t("compare.selectPlaceholder")}
             showSearch
           />
         </Space>
       </Card>
 
       {compare.modelIds.length === 0 ? (
-        <Empty description="Select at least one model above to start comparing." />
+        <Empty description={t("compare.empty")} />
       ) : (
         <>
           {hasJudgeScores ? (
             // Human and judge radars side by side for easy comparison on wide screens.
             <Row gutter={[24, 24]} style={{ marginBottom: 24 }}>
               <Col xs={24} xl={12}>
-                <Card title="Radar: Average Score per Criterion" style={{ height: "100%" }}>
+                <Card title={t("compare.radarAvgScore")} style={{ height: "100%" }}>
                   <RadarCompare
                     results={filteredResults}
                     selectedModelIds={compare.modelIds}
@@ -258,9 +266,9 @@ export default function Compare() {
               </Col>
               <Col xs={24} xl={12}>
                 <Card
-                  title="Radar: Judge Score per Criterion"
+                  title={t("compare.radarJudgeScore")}
                   style={{ height: "100%" }}
-                  extra={<Text type="secondary">strong-judge aggregate (median)</Text>}
+                  extra={<Text type="secondary">{t("compare.judgeAggregate")}</Text>}
                 >
                   <JudgeRadarCompare
                     results={filteredResults}
@@ -272,7 +280,7 @@ export default function Compare() {
               </Col>
             </Row>
           ) : (
-            <Card title="Radar: Average Score per Criterion" style={{ marginBottom: 24 }}>
+            <Card title={t("compare.radarAvgScore")} style={{ marginBottom: 24 }}>
               <RadarCompare
                 results={filteredResults}
                 selectedModelIds={compare.modelIds}
@@ -284,9 +292,9 @@ export default function Compare() {
 
           <Row gutter={[24, 24]} style={{ marginBottom: 24 }}>
             <Col xs={24} xl={12}>
-              <Card title="Radar: Derived Benchmark Metrics" style={{ height: "100%" }}>
+              <Card title={t("compare.radarMetrics")} style={{ height: "100%" }}>
                 <MetricRadarCompare
-                  results={filteredResults}
+                  results={metricRadarResults}
                   selectedModelIds={compare.modelIds}
                   tasksFile={tasksData!}
                   resultsFile={resultsData!}
@@ -295,7 +303,7 @@ export default function Compare() {
               </Card>
             </Col>
             <Col xs={24} xl={12}>
-              <Card title="Radar: Model Behavior by Task" style={{ height: "100%" }}>
+              <Card title={t("compare.radarTasks")} style={{ height: "100%" }}>
                 <TaskRadarCompare
                   results={filteredResults}
                   selectedModelIds={compare.modelIds}
@@ -306,7 +314,7 @@ export default function Compare() {
             </Col>
           </Row>
 
-          <Card title="Score by Criterion" style={{ marginBottom: 24 }}>
+          <Card title={t("compare.scoreByCriterion")} style={{ marginBottom: 24 }}>
             <Table<CompareRow>
               columns={comparisonColumns}
               dataSource={comparisonRows}
@@ -318,9 +326,9 @@ export default function Compare() {
 
           {hasJudgeScores && (
             <Card
-              title="Judge Score by Criterion"
+              title={t("compare.judgeScoreByCriterion")}
               style={{ marginBottom: 24 }}
-              extra={<Text type="secondary">strong-judge aggregate (median)</Text>}
+              extra={<Text type="secondary">{t("compare.judgeAggregate")}</Text>}
             >
               <Table<CompareRow>
                 columns={comparisonColumns}
@@ -333,10 +341,10 @@ export default function Compare() {
           )}
 
           {taskBreakdown.length > 0 && (
-            <Card title="Per-task Breakdown">
+            <Card title={t("compare.perTask")}>
               <Table
                 columns={[
-                  { title: "Task", dataIndex: "taskName", key: "task", width: 200 },
+                  { title: t("compare.colTask"), dataIndex: "taskName", key: "task", width: 200 },
                   ...compare.modelIds.map((modelId, idx) => ({
                     title: <Tag color={COLORS[idx % COLORS.length]}>{modelNames[modelId] ?? modelId}</Tag>,
                     key: modelId,

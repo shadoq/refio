@@ -3,6 +3,7 @@ import { useParams, Link } from "react-router-dom";
 import { Typography, Card, Collapse, Tag, Empty, Spin, Table, Tooltip } from "antd";
 import { useTasks } from "@/data/queries";
 import { useResults } from "@/data/queries";
+import { useT } from "@/i18n/LanguageProvider";
 import { useFilters, applyFilters } from "@/store/filters";
 import { TaskAttemptsTable } from "@/components/tables/TaskAttemptsTable";
 import { harnessDelta } from "@/lib/stats";
@@ -12,6 +13,7 @@ const { Title, Text, Paragraph } = Typography;
 
 export default function TaskDetail() {
   const { taskId } = useParams<{ taskId: string }>();
+  const t = useT();
   const filters = useFilters();
   const { data: tasksData, isLoading: tasksLoading } = useTasks();
   const { data: resultsData, isLoading: resultsLoading } = useResults();
@@ -76,8 +78,8 @@ export default function TaskDetail() {
   if (!task) {
     return (
       <div>
-        <Link to="/">← Back</Link>
-        <Empty description={`Task "${taskId}" not found`} style={{ marginTop: 40 }} />
+        <Link to="/">{t("taskDetail.back")}</Link>
+        <Empty description={t("taskDetail.notFound", { id: taskId ?? "" })} style={{ marginTop: 40 }} />
       </div>
     );
   }
@@ -85,7 +87,7 @@ export default function TaskDetail() {
   const collapseItems = [
     {
       key: "prompt",
-      label: "System Prompt",
+      label: t("taskDetail.systemPrompt"),
       children: (
         <pre style={{ whiteSpace: "pre-wrap", fontSize: 12, padding: 12, borderRadius: 4 }}>
           {task.systemPrompt}
@@ -96,7 +98,7 @@ export default function TaskDetail() {
 
   return (
     <div>
-      <Link to="/">← Leaderboard</Link>
+      <Link to="/">{t("taskDetail.backToLeaderboard")}</Link>
 
       <Title level={2} style={{ marginTop: 16 }}>
         {task.name}
@@ -105,7 +107,7 @@ export default function TaskDetail() {
 
       <Collapse items={collapseItems} style={{ marginBottom: 24 }} />
 
-      <Card title="Criteria" style={{ marginBottom: 24 }}>
+      <Card title={t("taskDetail.criteria")} style={{ marginBottom: 24 }}>
         {allCriteria.map((c) => (
           <div key={c.id} style={{ marginBottom: 8 }}>
             <Tag color={tasksData?.coreCriteria.some((cc) => cc.id === c.id) ? "blue" : "purple"}>
@@ -113,17 +115,17 @@ export default function TaskDetail() {
             </Tag>
             <Text type="secondary">{c.description}</Text>
             <Text style={{ marginLeft: 8, fontSize: 11, color: "#999" }}>
-              scale: [{c.scale.values.join(", ")}]
+              {t("taskDetail.scale", { values: c.scale.values.join(", ") })}
             </Text>
           </div>
         ))}
       </Card>
 
       {filteredResults.length === 0 ? (
-        <Empty description="No results yet for this task." />
+        <Empty description={t("taskDetail.noResults")} />
       ) : (
         <>
-          <Card title="Attempts" style={{ marginBottom: 24 }}>
+          <Card title={t("taskDetail.attempts")} style={{ marginBottom: 24 }}>
             <TaskAttemptsTable
               results={filteredResults}
               allCriteria={allCriteria}
@@ -133,7 +135,7 @@ export default function TaskDetail() {
             />
           </Card>
 
-          <Card title="Score by Criterion" style={{ marginBottom: 24 }}>
+          <Card title={t("taskDetail.scoreByCriterion")} style={{ marginBottom: 24 }}>
             <BarByCriterion
               results={filteredResults}
               criteria={allCriteria}
@@ -145,10 +147,9 @@ export default function TaskDetail() {
       )}
 
       {deltaRows.length > 0 && (
-        <Card title="Refio vs external agents" style={{ marginBottom: 24 }}>
+        <Card title={t("taskDetail.vsExternal")} style={{ marginBottom: 24 }}>
           <Text type="secondary" style={{ display: "block", marginBottom: 12 }}>
-            The same model on the same task, driven by Refio and by an external coding
-            agent. The difference is the agent's scaffolding, not the model.
+            {t("taskDetail.vsExternalIntro")}
           </Text>
           <Table
             size="small"
@@ -157,7 +158,7 @@ export default function TaskDetail() {
             dataSource={deltaRows}
             columns={[
               {
-                title: "Model",
+                title: t("taskDetail.colModel"),
                 key: "model",
                 render: (_, r) => modelNames[r.modelId] ?? r.modelId,
               },
@@ -167,7 +168,7 @@ export default function TaskDetail() {
                 width: 100,
                 render: (_, r) =>
                   r.baselineScore === null ? (
-                    <Text type="secondary">not run</Text>
+                    <Text type="secondary">{t("taskDetail.notRun")}</Text>
                   ) : (
                     r.baselineScore.toFixed(2)
                   ),
@@ -199,10 +200,9 @@ export default function TaskDetail() {
       )}
 
       {stabilityEntries.length > 0 && (
-        <Card title="Stability across attempts">
+        <Card title={t("taskDetail.stabilityTitle")}>
           <Text type="secondary" style={{ display: "block", marginBottom: 12 }}>
-            Consistency of a model's solutions across repeated attempts. Lower score
-            variance and higher code similarity mean more stable output.
+            {t("taskDetail.stabilityIntro")}
           </Text>
           <Table
             size="small"
@@ -211,35 +211,35 @@ export default function TaskDetail() {
             dataSource={stabilityEntries}
             columns={[
               {
-                title: "Model",
+                title: t("taskDetail.colModel"),
                 key: "model",
                 render: (_, s) => modelNames[s.modelId] ?? s.modelId,
               },
               {
-                title: "Environment",
+                title: t("taskDetail.colEnvironment"),
                 key: "environment",
                 render: (_, s) => environmentNames[s.environmentId] ?? s.environmentId,
               },
               {
-                title: "Attempts",
+                title: t("taskDetail.colAttempts"),
                 key: "attempts",
                 width: 90,
                 render: (_, s) => s.resultIds.length,
               },
               {
-                title: "Score variance",
+                title: t("taskDetail.colVariance"),
                 key: "variance",
                 width: 130,
                 render: (_, s) => s.deterministic.scoreVariance.toFixed(3),
               },
               {
-                title: "Code similarity",
+                title: t("taskDetail.colSimilarity"),
                 key: "similarity",
                 width: 130,
                 render: (_, s) => s.deterministic.codeSimilarity.toFixed(3),
               },
               {
-                title: "Judges",
+                title: t("taskDetail.colJudges"),
                 key: "judges",
                 render: (_, s) =>
                   s.judges.length === 0 ? (

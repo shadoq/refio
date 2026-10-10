@@ -8,6 +8,9 @@ import {
   judgeCriteriaForTask,
   getResultJudgeScore,
   taskHarnessMatrix,
+  refioScore,
+  leaderRelativeScores,
+  withRefioMode,
 } from "@/lib/stats";
 import type { TasksFile } from "@/schema/tasks";
 import type { ResultsFile, Result } from "@/schema/results";
@@ -572,5 +575,156 @@ describe("leaderboard with the self-judge excluded", () => {
     const row = leaderboard(results, resultsFile, tasksFile, { excludeSelfJudge: true })[0];
     expect(row.judgedAttempts).toBe(0);
     expect(row.judgeAvgScore).toBeNull();
+  });
+});
+
+// One number per leaderboard row: quality (human and judge halves) scaled by how
+// repeatable the model is. Stability multiplies instead of adding, so a model that
+// fails the same way every time gains nothing from being consistent.
+describe("refioScore", () => {
+  // The human score is the owner's own verdict; judges are a second opinion, so they
+  // count half as much.
+  it("weighs the human score twice as much as the judges", () => {
+    expect(refioScore(0.8, 0.5, 1)).toBeCloseTo(0.7);
+  });
+
+  it("takes away at most a fifth of the quality from a model with no stability", () => {
+    expect(refioScore(0.8, 0.5, 0)).toBeCloseTo(0.56);
+  });
+
+  it("gives a consistently failing model nothing for its consistency", () => {
+    expect(refioScore(0, 0, 1)).toBe(0);
+  });
+
+  it("falls back to the human score alone when no judge scored the row", () => {
+    expect(refioScore(0.8, null, 1)).toBeCloseTo(0.8);
+  });
+
+  it("stays empty without a stability measurement instead of guessing one", () => {
+    expect(refioScore(0.8, 0.6, null)).toBeNull();
+  });
+});
+
+describe("leaderboard Refio Score", () => {
+  const judged = (judgeId: string, value: number) => ({
+    judgeId,
+    judgeModel: "m",
+    judgedAt: "2026-04-16T09:00:00.000Z",
+    scores: [{ criterionId: "compliance", value }],
+    screenshots: [],
+    consoleErrors: [],
+  });
+
+  const stabilityEntry = (harnessId: string, scoreVariance: number, codeSimilarity: number) => ({
+    taskId: "snake",
+    modelId: "m",
+    environmentId: "e",
+    harnessId,
+    resultIds: ["a", "b"],
+    deterministic: { scoreVariance, codeSimilarity },
+    judges: [],
+    computedAt: "2026-04-16T09:00:00.000Z",
+  });
+
+  const file = (stability: ReturnType<typeof stabilityEntry>[]) => ({
+    models: [{ id: "m", name: "m", provider: "anthropic" as const }],
+    environments: [{ id: "e", name: "e", type: "cloud" as const }],
+    harnesses: [{ id: "claude-code", name: "Claude Code", kind: "external" as const }],
+    stability,
+  });
+
+  // Human compliance 1/1 = 1.0, judge compliance 0.5/1 = 0.5 -> quality 2/3 + 1/6 = 0.833.
+  const results = [
+    makeResult("a", "m", "e", "snake", [{ criterionId: "compliance", value: 1 }], {
+      harnessId: "claude-code",
+      judgeScores: [judged("claude-code", 0.5)],
+    }),
+  ];
+
+  it("scales quality by the row's own stability groups only", () => {
+    // Fully stable group for this harness; the refio group must not leak in.
+    const stability = [stabilityEntry("claude-code", 0, 1), stabilityEntry("refio", 3, 0)];
+    const row = leaderboard(results, file(stability), tasksFile)[0];
+    expect(row.stabilityScore).toBeCloseTo(1);
+    expect(row.refioScore).toBeCloseTo(0.833);
+  });
+
+  it("counts every judge blind, even where a page hides the producer's own judge", () => {
+    const row = leaderboard(results, file([stabilityEntry("claude-code", 0, 1)]), tasksFile, {
+      excludeSelfJudge: true,
+    })[0];
+    expect(row.judgeAvgScore).toBeNull();
+    expect(row.refioScore).toBeCloseTo(0.833);
+  });
+
+  it("leaves the Refio Score empty for a row without stability groups", () => {
+    const row = leaderboard(results, file([]), tasksFile)[0];
+    expect(row.stabilityScore).toBeNull();
+    expect(row.refioScore).toBeNull();
+  });
+});
+
+// The leader-relative view answers "how far behind the best model is this one?". Each
+// task is first scored against the best result on that task, so a model is not
+// punished for having run a harder task than the others, and the leader shows 100%.
+describe("leaderRelativeScores", () => {
+  const row = (
+    modelId: string,
+    taskQuality: Record<string, number>,
+    stabilityScore: number | null,
+  ) => ({ modelId, environmentId: "e", harnessId: "refio", taskQuality, stabilityScore });
+
+  it("puts the leader at 100% and the others as a share of it", () => {
+    const scores = leaderRelativeScores([
+      row("strong", { snake: 0.8 }, 1),
+      row("weak", { snake: 0.4 }, 1),
+    ]);
+    expect(scores.get("strong::e::refio")).toBeCloseTo(1);
+    expect(scores.get("weak::e::refio")).toBeCloseTo(0.5);
+  });
+
+  it("does not punish a model for a hard task where it was the best", () => {
+    // "hard" tops out at 0.3 for everyone; "a" leads it, "b" never ran it.
+    const scores = leaderRelativeScores([
+      row("a", { easy: 0.9, hard: 0.3 }, 1),
+      row("b", { easy: 0.9 }, 1),
+    ]);
+    expect(scores.get("a::e::refio")).toBeCloseTo(1);
+    expect(scores.get("b::e::refio")).toBeCloseTo(1);
+  });
+
+  it("keeps the stability factor of the absolute Refio Score", () => {
+    const scores = leaderRelativeScores([
+      row("stable", { snake: 0.8 }, 1),
+      row("unstable", { snake: 0.8 }, 0),
+    ]);
+    expect(scores.get("unstable::e::refio")).toBeCloseTo(0.8);
+  });
+
+  it("leaves out a row without a stability measurement", () => {
+    const scores = leaderRelativeScores([row("m", { snake: 0.8 }, null)]);
+    expect(scores.has("m::e::refio")).toBe(false);
+  });
+});
+
+describe("withRefioMode", () => {
+  const row = (modelId: string, snake: number, refioScore: number | null) => ({
+    modelId,
+    environmentId: "e",
+    harnessId: "refio",
+    taskQuality: { snake },
+    stabilityScore: 1,
+    refioScore,
+  });
+
+  it("leaves the absolute Refio Score untouched in absolute mode", () => {
+    const rows = [row("a", 0.8, 0.6)];
+    expect(withRefioMode(rows, "absolute")[0].refioScore).toBe(0.6);
+  });
+
+  it("swaps in the vs-leader score so every page shows the same view", () => {
+    const rows = withRefioMode([row("a", 0.8, 0.6), row("b", 0.4, 0.3)], "relative");
+    expect(rows[0].refioScore).toBeCloseTo(1);
+    expect(rows[1].refioScore).toBeCloseTo(0.5);
   });
 });

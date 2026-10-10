@@ -15,6 +15,7 @@ import {
   message,
 } from "antd";
 import { useResults, useTasks } from "@/data/queries";
+import { useT } from "@/i18n/LanguageProvider";
 import { usePromoteInboxEntry, useDiscardInboxEntry } from "@/data/mutations";
 import { ArtifactPreview } from "@/components/attachments/ArtifactPreview";
 import { TraceSummaryTags } from "@/components/results/TraceSummaryTags";
@@ -43,6 +44,7 @@ function QueueCard({
   entry: InboxEntry;
   criteria: Criterion[];
 }) {
+  const t = useT();
   const promote = usePromoteInboxEntry();
   const discard = useDiscardInboxEntry();
   const [picked, setPicked] = useState<Record<string, number>>({});
@@ -57,23 +59,23 @@ function QueueCard({
       .filter((c) => picked[c.id] !== undefined)
       .map((c) => ({ criterionId: c.id, value: picked[c.id] }));
     if (scores.length === 0) {
-      message.warning("Score at least one criterion before promoting.");
+      message.warning(t("queue.scoreFirst"));
       return;
     }
     try {
       await promote.mutateAsync({ entryId: entry.id, scores });
-      message.success(`Promoted ${entry.id} to results.`);
+      message.success(t("queue.promoted", { id: entry.id }));
     } catch (e) {
-      message.error(`Promote failed: ${String(e)}`);
+      message.error(t("queue.promoteFailed", { error: String(e) }));
     }
   }
 
   async function onDiscard() {
     try {
       await discard.mutateAsync({ entryId: entry.id });
-      message.success(`Discarded ${entry.id}.`);
+      message.success(t("queue.discarded", { id: entry.id }));
     } catch (e) {
-      message.error(`Discard failed: ${String(e)}`);
+      message.error(t("queue.discardFailed", { error: String(e) }));
     }
   }
 
@@ -84,18 +86,23 @@ function QueueCard({
         <Space wrap>
           <Text strong>{entry.taskId}</Text>
           <Text type="secondary">{entry.modelId}</Text>
-          <Tag>attempt {entry.attemptNumber}</Tag>
-          {verdict && <Tag color={verdict === "PASS" ? "green" : "red"}>{verdict}</Tag>}
+          <Tag>{t("queue.attempt", { n: entry.attemptNumber })}</Tag>
+          {verdict && <Tag color={verdict === "PASS" ? "green" : "red"}>
+              {verdict === "PASS" ? t("queue.verdictPass") : verdict === "FAIL" ? t("queue.verdictFail") : verdict}
+            </Tag>}
         </Space>
       }
       extra={
         <Space>
           <Button type="primary" loading={promote.isPending} onClick={onPromote}>
-            Promote
+            {t("queue.promote")}
           </Button>
-          <Popconfirm title="Discard this run?" okText="Discard" okButtonProps={{ danger: true }} onConfirm={onDiscard}>
+          <Popconfirm
+            title={t("queue.discardConfirm")}
+            okText={t("queue.discard")}
+            okButtonProps={{ danger: true }} onConfirm={onDiscard}>
             <Button danger loading={discard.isPending}>
-              Discard
+              {t("queue.discard")}
             </Button>
           </Popconfirm>
         </Space>
@@ -106,14 +113,14 @@ function QueueCard({
           {html || screenshots.length > 0 ? (
             <ArtifactPreview htmlSrc={html?.src ?? null} screenshots={screenshots} />
           ) : (
-            <Empty description="No artifact (PLAN/CHAT run)" />
+            <Empty description={t("queue.noArtifact")} />
           )}
         </div>
         <div>
           <Descriptions size="small" column={1} style={{ marginBottom: 12 }}>
-            <Descriptions.Item label="Duration">{fmt(entry.durationMs, " ms")}</Descriptions.Item>
-            <Descriptions.Item label="Tokens out">{fmt(entry.tokensOut)}</Descriptions.Item>
-            <Descriptions.Item label="Cost">{fmt(entry.costUsd, " $")}</Descriptions.Item>
+            <Descriptions.Item label={t("queue.duration")}>{fmt(entry.durationMs, " ms")}</Descriptions.Item>
+            <Descriptions.Item label={t("queue.tokensOut")}>{fmt(entry.tokensOut)}</Descriptions.Item>
+            <Descriptions.Item label={t("queue.cost")}>{fmt(entry.costUsd, " $")}</Descriptions.Item>
           </Descriptions>
 
           {entry.trace && (
@@ -125,7 +132,7 @@ function QueueCard({
                 items={[
                   {
                     key: "trace",
-                    label: "Run trace",
+                    label: t("queue.runTrace"),
                     children: <TraceTimeline trace={entry.trace} />,
                   },
                 ]}
@@ -133,10 +140,10 @@ function QueueCard({
             </div>
           )}
 
-          <Text strong>Deterministic checks (auto)</Text>
+          <Text strong>{t("queue.deterministicChecks")}</Text>
           <div style={{ margin: "6px 0 12px" }}>
             {det.length === 0 ? (
-              <Text type="secondary">none</Text>
+              <Text type="secondary">{t("queue.none")}</Text>
             ) : (
               det.map((s) => (
                 <div key={s.criterionId} style={{ fontSize: 12 }}>
@@ -147,7 +154,7 @@ function QueueCard({
             )}
           </div>
 
-          <Text strong>Your scores</Text>
+          <Text strong>{t("queue.yourScores")}</Text>
           <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 8 }}>
             {criteria.map((c) => (
               <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -155,7 +162,7 @@ function QueueCard({
                 <Select
                   size="small"
                   style={{ width: 160 }}
-                  placeholder="score"
+                  placeholder={t("queue.scorePlaceholder")}
                   value={picked[c.id]}
                   onChange={(v) => setPicked((p) => ({ ...p, [c.id]: v }))}
                   options={c.scale.values.map((v) => ({
@@ -180,6 +187,7 @@ function QueueCard({
 const PAGE_SIZE = 10;
 
 export default function Queue() {
+  const t = useT();
   const { data: results } = useResults();
   const { data: tasks } = useTasks();
   const [filters, setFilters] = useState<QueueFilters>({});
@@ -213,17 +221,14 @@ export default function Queue() {
 
   return (
     <div>
-      <Title level={3}>Review queue</Title>
-      <Paragraph type="secondary">
-        Auto-imported runs awaiting human scoring. Deterministic checks are pre-filled as hints;
-        add your subjective scores (look, code) and promote, or discard a bad run.
-      </Paragraph>
+      <Title level={3}>{t("queue.title")}</Title>
+      <Paragraph type="secondary">{t("queue.intro")}</Paragraph>
 
       {inbox.length > 0 && (
         <Space wrap style={{ marginBottom: 16 }}>
           <Select
             allowClear
-            placeholder="Task"
+            placeholder={t("queue.filterTask")}
             style={{ minWidth: 200 }}
             value={filters.taskId}
             onChange={(v) => updateFilter({ taskId: v })}
@@ -231,7 +236,7 @@ export default function Queue() {
           />
           <Select
             allowClear
-            placeholder="Model"
+            placeholder={t("queue.filterModel")}
             style={{ minWidth: 180 }}
             value={filters.modelId}
             onChange={(v) => updateFilter({ modelId: v })}
@@ -239,7 +244,7 @@ export default function Queue() {
           />
           <Select
             allowClear
-            placeholder="Environment"
+            placeholder={t("queue.filterEnvironment")}
             style={{ minWidth: 150 }}
             value={filters.environmentId}
             onChange={(v) => updateFilter({ environmentId: v })}
@@ -248,7 +253,7 @@ export default function Queue() {
           {facets.harnessIds.length > 1 && (
             <Select
               allowClear
-              placeholder="Harness"
+              placeholder={t("queue.filterHarness")}
               style={{ minWidth: 150 }}
               value={filters.harnessId}
               onChange={(v) => updateFilter({ harnessId: v })}
@@ -257,25 +262,25 @@ export default function Queue() {
           )}
           <Select
             allowClear
-            placeholder="Verdict"
+            placeholder={t("queue.filterVerdict")}
             style={{ minWidth: 120 }}
             value={filters.verdict}
             onChange={(v) => updateFilter({ verdict: v as QueueFilters["verdict"] })}
             options={[
-              { value: "PASS", label: "PASS" },
-              { value: "FAIL", label: "FAIL" },
+              { value: "PASS", label: t("queue.verdictPass") },
+              { value: "FAIL", label: t("queue.verdictFail") },
             ]}
           />
           <Text type="secondary">
-            {filtered.length} of {inbox.length}
+            {t("queue.countOf", { shown: filtered.length, total: inbox.length })}
           </Text>
         </Space>
       )}
 
       {inbox.length === 0 ? (
-        <Empty description="No runs awaiting review" />
+        <Empty description={t("queue.empty")} />
       ) : filtered.length === 0 ? (
-        <Empty description="No runs match the current filters" />
+        <Empty description={t("queue.noMatch")} />
       ) : (
         <>
           {paged.map((entry) => (

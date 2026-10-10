@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Button, Image, Space, Tooltip, Typography } from "antd";
+import { useT } from "@/i18n/LanguageProvider";
 import { HtmlSandbox } from "./HtmlSandbox";
 import { HtmlSource } from "./HtmlSource";
 import { dataUrl, ideaOpenHref, repoPath } from "@/lib/adminArtifacts";
@@ -18,6 +19,7 @@ interface ArtifactPreviewProps {
 // controls to copy the file path or open it in IntelliJ; the reviewer starts the live
 // sandbox only to interact with it, and hiding it unmounts the iframe (stops the loop).
 export function ArtifactPreview({ htmlSrc, screenshots, height = 360 }: ArtifactPreviewProps) {
+  const t = useT();
   const [live, setLive] = useState(false);
   const [source, setSource] = useState(false);
   const dataRoot = import.meta.env.VITE_DATA_ROOT;
@@ -31,7 +33,7 @@ export function ArtifactPreview({ htmlSrc, screenshots, height = 360 }: Artifact
               <Image
                 key={src}
                 src={dataUrl(src)}
-                alt="generated screenshot"
+                alt={t("resultView.generatedScreenshotAlt")}
                 width={220}
                 style={{ border: "1px solid rgba(0,0,0,0.15)", borderRadius: 4 }}
               />
@@ -48,33 +50,33 @@ export function ArtifactPreview({ htmlSrc, screenshots, height = 360 }: Artifact
               type={live ? "default" : "primary"}
               onClick={() => setLive((v) => !v)}
             >
-              {live ? "Hide live preview" : "Run live preview"}
+              {t(live ? "resultView.hideLivePreview" : "resultView.runLivePreview")}
             </Button>
             <Button size="small" onClick={() => setSource((v) => !v)}>
-              {source ? "Hide source" : "Show source"}
+              {t(source ? "resultView.hideSource" : "resultView.showSource")}
             </Button>
             <Button size="small" href={dataUrl(htmlSrc)} target="_blank" rel="noopener noreferrer">
-              Run in new tab
+              {t("resultView.runInNewTab")}
             </Button>
             <Tooltip title={repoPath(htmlSrc)}>
-              <a href={ideaOpenHref(htmlSrc, dataRoot)}>Open in IntelliJ</a>
+              <a href={ideaOpenHref(htmlSrc, dataRoot)}>{t("resultView.openInIntellij")}</a>
             </Tooltip>
             <Text copyable={{ text: repoPath(htmlSrc) }} style={{ fontSize: 12 }}>
-              Copy file path
+              {t("resultView.copyFilePath")}
             </Text>
             <Text
               copyable={{ text: `${window.location.origin}${dataUrl(htmlSrc)}` }}
               style={{ fontSize: 12 }}
             >
-              Copy URL
+              {t("resultView.copyUrl")}
             </Text>
           </Space>
           {live ? (
-            <HtmlSandbox src={htmlSrc} height={height} caption="Produced artifact (live)" />
+            <HtmlSandbox src={htmlSrc} height={height} caption={t("resultView.liveArtifactCaption")} />
           ) : (
             screenshots.length === 0 && (
               <Text type="secondary" style={{ fontSize: 12 }}>
-                Live preview is off (it starts an animation). No screenshot was captured for this run.
+                {t("resultView.livePreviewOff")}
               </Text>
             )
           )}

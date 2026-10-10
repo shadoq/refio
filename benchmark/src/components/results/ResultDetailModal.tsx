@@ -6,6 +6,7 @@ import { HtmlSandbox } from "@/components/attachments/HtmlSandbox";
 import { JudgeBreakdown } from "@/components/results/JudgeBreakdown";
 import { TraceSummaryTags } from "@/components/results/TraceSummaryTags";
 import { TraceTimeline } from "@/components/results/TraceTimeline";
+import { useT } from "@/i18n/LanguageProvider";
 import { formatCost, formatDuration, formatScore, formatTokensPerSecond } from "@/lib/format";
 import { getResultCriterionScore } from "@/lib/stats";
 import { estimateResultTokenProcessing } from "@/lib/tokenSpeed";
@@ -37,6 +38,7 @@ export function ResultDetailModal({
   environmentName,
   onClose,
 }: ResultDetailModalProps) {
+  const t = useT();
   const [previewIdx, setPreviewIdx] = useState<number | null>(null);
 
   const scoreDetails = useMemo(() => {
@@ -73,29 +75,37 @@ export function ResultDetailModal({
 
   const title = modelName
     ? `${modelName} - ${task?.name ?? detailResult?.taskId}`
-    : "Result detail";
+    : t("resultView.resultDetail");
 
   const meta = detailResult && (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
       <Space wrap>
-        <Tag>attempt #{detailResult.attemptNumber}</Tag>
+        <Tag>{t("resultView.attemptNumber", { n: detailResult.attemptNumber })}</Tag>
         {detailResult.harnessId !== "refio" && <Tag color="orange">{detailResult.harnessId}</Tag>}
         <Tag>{environmentName ?? detailResult.environmentId}</Tag>
         <Tag>{formatDuration(detailResult.durationMs)}</Tag>
-        <Tag>LLM est. {formatDuration(estimateResultTokenProcessing(detailResult).totalMs)}</Tag>
+        <Tag>
+          {t("resultView.llmEstimate", {
+            duration: formatDuration(estimateResultTokenProcessing(detailResult).totalMs),
+          })}
+        </Tag>
         <Tag>{formatCost(detailResult.costUsd)}</Tag>
       </Space>
 
       <Space wrap>
         <Tag>
-          Prefill {formatDuration(estimateResultTokenProcessing(detailResult).prefillMs)}
+          {t("resultView.prefill", {
+            duration: formatDuration(estimateResultTokenProcessing(detailResult).prefillMs),
+          })}
           {" / "}
           {formatTokensPerSecond(
             estimateResultTokenProcessing(detailResult).prefillTokensPerSecond,
           )}
         </Tag>
         <Tag>
-          Decode {formatDuration(estimateResultTokenProcessing(detailResult).decodeMs)}
+          {t("resultView.decode", {
+            duration: formatDuration(estimateResultTokenProcessing(detailResult).decodeMs),
+          })}
           {" / "}
           {formatTokensPerSecond(estimateResultTokenProcessing(detailResult).decodeTokensPerSecond)}
         </Tag>
@@ -109,16 +119,16 @@ export function ResultDetailModal({
         rowKey="id"
         dataSource={scoreDetails}
         columns={[
-          { title: "Criterion", dataIndex: "name", key: "name" },
+          { title: t("resultView.colCriterion"), dataIndex: "name", key: "name" },
           {
-            title: "Raw",
+            title: t("resultView.colRaw"),
             dataIndex: "raw",
             key: "raw",
             width: 90,
             render: (value: number | undefined) => value ?? "-",
           },
           {
-            title: "Normalized",
+            title: t("resultView.colNormalized"),
             dataIndex: "normalized",
             key: "normalized",
             width: 130,
@@ -131,7 +141,7 @@ export function ResultDetailModal({
 
       {detailResult.trace && (
         <Space direction="vertical" style={{ width: "100%" }} size="small">
-          <Text strong>Run trace</Text>
+          <Text strong>{t("resultView.runTrace")}</Text>
           <TraceSummaryTags trace={detailResult.trace} />
           <Collapse
             ghost
@@ -139,7 +149,7 @@ export function ResultDetailModal({
             items={[
               {
                 key: "trace",
-                label: "Show steps",
+                label: t("resultView.showSteps"),
                 children: <TraceTimeline trace={detailResult.trace} />,
               },
             ]}
@@ -148,19 +158,19 @@ export function ResultDetailModal({
       )}
 
       {!hasHtml && otherAttachments.length === 0 && (
-        <Empty description="No attachments for this result." />
+        <Empty description={t("resultView.noAttachments")} />
       )}
 
       {hasHtml && (
         <Space direction="vertical" style={{ width: "100%" }} size="small">
-          <Text strong>HTML previews</Text>
+          <Text strong>{t("resultView.htmlPreviews")}</Text>
           {htmlAttachments.map((entry, i) => (
             <div
               key={`${entry.att.src}-${entry.index}`}
               style={{ display: "flex", alignItems: "center", gap: 12 }}
             >
               <Button size="small" icon={<EyeOutlined />} onClick={() => setPreviewIdx(i)}>
-                Show preview
+                {t("resultView.showPreview")}
               </Button>
               <Text type="secondary">{entry.att.caption ?? entry.att.src}</Text>
             </div>
@@ -232,7 +242,7 @@ export function ResultDetailModal({
                 onChange={(key) => setPreviewIdx(Number(key))}
                 items={htmlAttachments.map((entry, i) => ({
                   key: String(i),
-                  label: entry.att.caption ?? `HTML ${i + 1}`,
+                  label: entry.att.caption ?? t("resultView.htmlTab", { n: i + 1 }),
                 }))}
                 style={{ flex: 1, minWidth: 0 }}
               />
@@ -240,7 +250,7 @@ export function ResultDetailModal({
               <Text type="secondary">{activeHtml?.caption ?? activeHtml?.src}</Text>
             )}
             <Button size="small" onClick={() => setPreviewIdx(null)}>
-              Hide preview
+              {t("resultView.hidePreview")}
             </Button>
           </div>
           <div style={{ flex: 1, minHeight: 0, background: "#fff" }}>

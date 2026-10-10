@@ -14,6 +14,7 @@ import {
   mayRecordJudgeError,
 } from "../../../src/lib/judge/scoring";
 import { mergeStabilityJudges, stabilityKey } from "../../../src/lib/judge/stability-merge";
+import { retryWhileLocked } from "../../../src/lib/judge/pool";
 
 export interface RawResult {
   id: string;
@@ -92,9 +93,10 @@ export async function saveResultsAtomic(
   ResultsFileSchema.parse(file);
   const path = join(benchmarkDir, "data/results.json");
   try {
-    await copyFile(path, `${path}.bak`);
+    await retryWhileLocked(() => copyFile(path, `${path}.bak`));
   } catch {
     // No existing file to back up (first write) - ignore.
   }
-  await writeFile(path, `${JSON.stringify(file, null, 2)}\n`);
+  // A reader such as the dev server can hold the file open for a moment on Windows.
+  await retryWhileLocked(() => writeFile(path, `${JSON.stringify(file, null, 2)}\n`));
 }

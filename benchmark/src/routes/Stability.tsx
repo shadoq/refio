@@ -7,6 +7,7 @@ import { useFilters } from "@/store/filters";
 import { COMPARE_SELECT_PARAM, useCompareSelection } from "@/store/compareSelection";
 import { StabilityRadar } from "@/components/charts/StabilityRadar";
 import { filterStabilityEntries, modelStability, type ModelStability } from "@/lib/stabilityView";
+import { useT } from "@/i18n/LanguageProvider";
 
 const { Title, Text } = Typography;
 
@@ -30,6 +31,7 @@ interface DimensionRow {
 const pct = (v: number | null | undefined) => (v == null ? "-" : `${(v * 100).toFixed(1)}%`);
 
 export default function Stability() {
+  const t = useT();
   const [searchParams, setSearchParams] = useSearchParams();
   const filters = useFilters();
   const compare = useCompareSelection();
@@ -63,8 +65,8 @@ export default function Stability() {
 
   const harnessLabel = useMemo(() => {
     const byId = new Map((resultsData?.harnesses ?? []).map((h) => [h.id, h.name]));
-    return filters.harnessIds.map((id) => byId.get(id) ?? id).join(", ") || "all";
-  }, [resultsData, filters.harnessIds]);
+    return filters.harnessIds.map((id) => byId.get(id) ?? id).join(", ") || t("stability.harnessAll");
+  }, [resultsData, filters.harnessIds, t]);
 
   const modelNames = useMemo(
     () => Object.fromEntries((resultsData?.models ?? []).map((m) => [m.id, m.name])),
@@ -117,12 +119,12 @@ export default function Stability() {
       })),
     });
     return [
-      row("overall", "Overall stability", (m) => m.overall),
-      row("consistency", "Score consistency", (m) => m.consistency),
-      row("similarity", "Code similarity", (m) => m.similarity),
-      ...judgeIds.map((j) => row(`judge:${j}`, `Judge: ${j}`, (m) => m.byJudge[j] ?? null)),
+      row("overall", t("stability.overallStability"), (m) => m.overall),
+      row("consistency", t("stability.scoreConsistency"), (m) => m.consistency),
+      row("similarity", t("stability.codeSimilarity"), (m) => m.similarity),
+      ...judgeIds.map((j) => row(`judge:${j}`, t("stability.judge", { judge: j }), (m) => m.byJudge[j] ?? null)),
     ];
-  }, [selected, byModel, judgeIds]);
+  }, [selected, byModel, judgeIds, t]);
 
   const taskRows: DimensionRow[] = useMemo(
     () =>
@@ -177,36 +179,36 @@ export default function Stability() {
 
   const rankingColumns: ColumnsType<ModelStability> = [
     { title: "#", key: "rank", width: 50, render: (_, __, i) => i + 1 },
-    { title: "Model", key: "model", render: (_, m) => modelNames[m.modelId] ?? m.modelId },
+    { title: t("stability.colModel"), key: "model", render: (_, m) => modelNames[m.modelId] ?? m.modelId },
     {
-      title: "Overall",
+      title: t("stability.colOverall"),
       key: "overall",
       width: 110,
       sorter: (a, b) => a.overall - b.overall,
       render: (_, m) => <Text strong>{pct(m.overall)}</Text>,
     },
     {
-      title: "Score consistency",
+      title: t("stability.scoreConsistency"),
       key: "consistency",
       width: 150,
       sorter: (a, b) => a.consistency - b.consistency,
       render: (_, m) => pct(m.consistency),
     },
     {
-      title: "Code similarity",
+      title: t("stability.codeSimilarity"),
       key: "similarity",
       width: 140,
       sorter: (a, b) => a.similarity - b.similarity,
       render: (_, m) => pct(m.similarity),
     },
     ...judgeIds.map((j) => ({
-      title: `Judge: ${j}`,
+      title: t("stability.judge", { judge: j }),
       key: `judge:${j}`,
       width: 140,
       sorter: (a: ModelStability, b: ModelStability) => (a.byJudge[j] ?? -1) - (b.byJudge[j] ?? -1),
       render: (_: unknown, m: ModelStability) => pct(m.byJudge[j]),
     })),
-    { title: "Groups", key: "groups", width: 80, render: (_, m) => m.groups },
+    { title: t("stability.colGroups"), key: "groups", width: 80, render: (_, m) => m.groups },
   ];
 
   if (tasksLoading || resultsLoading) {
@@ -219,24 +221,21 @@ export default function Stability() {
 
   return (
     <div>
-      <Title level={2}>Stability</Title>
+      <Title level={2}>{t("stability.title")}</Title>
       <Text type="secondary" style={{ display: "block", marginBottom: 16 }}>
-        Harness: {harnessLabel}. How consistent a model is across repeated attempts at the same
-        task. Overall stability is the equal-weight mean of score consistency (1 - 2 x mean score
-        deviation between attempts), code similarity between the artifacts and the median judge
-        verdict (0 divergent, 0.5 same approach with variable quality, 1 stable).
+        {t("stability.intro", { harness: harnessLabel })}
       </Text>
 
       <Card style={{ marginBottom: 24 }}>
         <Space direction="vertical" style={{ width: "100%" }}>
-          <Text>Select up to {MAX_MODELS} models to compare:</Text>
+          <Text>{t("stability.selectPrompt", { max: MAX_MODELS })}</Text>
           <Select
             mode="multiple"
             style={{ width: "100%" }}
             options={modelOptions}
             value={selected}
             onChange={(ids: string[]) => compare.setModels(ids.slice(0, MAX_MODELS))}
-            placeholder="Select models..."
+            placeholder={t("stability.selectPlaceholder")}
             showSearch
             optionFilterProp="label"
           />
@@ -245,19 +244,19 @@ export default function Stability() {
 
       {selected.length === 0 ? (
         <Empty
-          description="Select at least one model above, or pick one from the ranking below."
+          description={t("stability.empty")}
           style={{ marginBottom: 24 }}
         />
       ) : (
         <>
           <Row gutter={[24, 24]} style={{ marginBottom: 24 }}>
             <Col xs={24} xl={12}>
-              <Card title="Radar: Stability by Task" style={{ height: "100%" }}>
+              <Card title={t("stability.radarByTask")} style={{ height: "100%" }}>
                 <StabilityRadar data={taskRadar} selectedModelIds={selected} modelNames={modelNames} />
               </Card>
             </Col>
             <Col xs={24} xl={12}>
-              <Card title="Radar: Stability Dimensions" style={{ height: "100%" }}>
+              <Card title={t("stability.radarDimensions")} style={{ height: "100%" }}>
                 <StabilityRadar
                   data={dimensionRadar}
                   selectedModelIds={selected}
@@ -267,7 +266,7 @@ export default function Stability() {
             </Col>
           </Row>
 
-          <Card title="Stability by Dimension" style={{ marginBottom: 24 }}>
+          <Card title={t("stability.byDimension")} style={{ marginBottom: 24 }}>
             <Table<DimensionRow>
               columns={compareColumns}
               dataSource={dimensionRows}
@@ -277,7 +276,7 @@ export default function Stability() {
             />
           </Card>
 
-          <Card title="Per-task Stability" style={{ marginBottom: 24 }}>
+          <Card title={t("stability.perTask")} style={{ marginBottom: 24 }}>
             <Table<DimensionRow>
               columns={compareColumns}
               dataSource={taskRows}
@@ -290,8 +289,8 @@ export default function Stability() {
       )}
 
       <Card
-        title="Stability Ranking"
-        extra={<Text type="secondary">click a row to add or remove it from the comparison</Text>}
+        title={t("stability.ranking")}
+        extra={<Text type="secondary">{t("stability.rankingHint")}</Text>}
       >
         <Table<ModelStability>
           columns={rankingColumns}

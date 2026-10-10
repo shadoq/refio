@@ -17,6 +17,7 @@ import { ClearOutlined, EyeOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import { ResultDetailModal } from "@/components/results/ResultDetailModal";
 import { useResults, useTasks } from "@/data/queries";
+import { useT } from "@/i18n/LanguageProvider";
 import {
   formatCost,
   formatDuration,
@@ -58,6 +59,7 @@ interface ResultRow {
 }
 
 export default function Results() {
+  const t = useT();
   const { data: tasksData, isLoading: tasksLoading } = useTasks();
   const { data: resultsData, isLoading: resultsLoading } = useResults();
   const [modelFilter, setModelFilter] = useState<string[]>([]);
@@ -180,7 +182,7 @@ export default function Results() {
 
   const columns: ColumnsType<ResultRow> = [
     {
-      title: "Task",
+      title: t("results.colTask"),
       key: "task",
       width: 220,
       render: (_, row) =>
@@ -191,7 +193,7 @@ export default function Results() {
         ),
     },
     {
-      title: "Model",
+      title: t("results.colModel"),
       key: "model",
       width: 220,
       render: (_, row) => (
@@ -205,34 +207,38 @@ export default function Results() {
       ),
     },
     {
-      title: "Environment",
+      title: t("results.colEnvironment"),
       key: "environment",
       width: 160,
       render: (_, row) => (
         <Space direction="vertical" size={2}>
           <Text>{row.environment?.name ?? row.result.environmentId}</Text>
           <Tag color={row.environment?.type === "cloud" ? "blue" : "green"}>
-            {row.environment?.type ?? "unknown"}
+            {row.environment?.type === "cloud"
+              ? t("results.envCloud")
+              : row.environment?.type === "local"
+                ? t("results.envLocal")
+                : (row.environment?.type ?? t("results.envUnknown"))}
           </Tag>
         </Space>
       ),
     },
     {
-      title: "Attempt",
+      title: t("results.colAttempt"),
       dataIndex: ["result", "attemptNumber"],
       key: "attempt",
       width: 90,
       sorter: (a, b) => a.result.attemptNumber - b.result.attemptNumber,
     },
     {
-      title: "Score",
+      title: t("results.colScore"),
       key: "score",
       width: 110,
       sorter: (a, b) => a.score - b.score,
       render: (_, row) => <Text strong>{formatScore(row.score)}</Text>,
     },
     {
-      title: "Auto (judges)",
+      title: t("results.colJudges"),
       key: "judgeScore",
       width: 150,
       sorter: (a: ResultRow, b: ResultRow) => (a.judgeScore ?? -1) - (b.judgeScore ?? -1),
@@ -246,9 +252,7 @@ export default function Results() {
               ×{row.judgeCount}
             </Text>
             {row.judgeDivergence >= DIVERGENCE_THRESHOLD && (
-              <Tooltip
-                title={`Human and judges differ by ${row.judgeDivergence} on a shared criterion`}
-              >
+              <Tooltip title={t("results.divergence", { diff: row.judgeDivergence })}>
                 <Tag color="orange" style={{ marginInlineEnd: 0 }}>
                   Δ
                 </Tag>
@@ -258,14 +262,14 @@ export default function Results() {
         ),
     },
     {
-      title: "Duration",
+      title: t("results.colDuration"),
       key: "duration",
       width: 110,
       render: (_, row) => formatDuration(row.result.durationMs),
       sorter: (a, b) => (a.result.durationMs ?? 0) - (b.result.durationMs ?? 0),
     },
     {
-      title: "Tokens",
+      title: t("results.colTokens"),
       key: "tokens",
       width: 120,
       render: (_, row) => {
@@ -274,7 +278,7 @@ export default function Results() {
       },
     },
     {
-      title: "LLM Est.",
+      title: t("results.colLlmEst"),
       key: "estimatedLlm",
       width: 110,
       render: (_, row) =>
@@ -284,29 +288,29 @@ export default function Results() {
         (estimateResultTokenProcessing(b.result).totalMs ?? 0),
     },
     {
-      title: "Token Speed",
+      title: t("results.colTokenSpeed"),
       key: "tokenSpeed",
       width: 150,
       render: (_, row) => {
         const estimate = estimateResultTokenProcessing(row.result);
         return (
           <span>
-            {formatTokensPerSecond(estimate.prefillTokensPerSecond)} in
+            {t("results.speedIn", { value: formatTokensPerSecond(estimate.prefillTokensPerSecond) })}
             <br />
-            {formatTokensPerSecond(estimate.decodeTokensPerSecond)} out
+            {t("results.speedOut", { value: formatTokensPerSecond(estimate.decodeTokensPerSecond) })}
           </span>
         );
       },
     },
     {
-      title: "Cost",
+      title: t("results.colCost"),
       key: "cost",
       width: 100,
       render: (_, row) => formatCost(row.result.costUsd),
       sorter: (a, b) => (a.result.costUsd ?? 0) - (b.result.costUsd ?? 0),
     },
     {
-      title: "Run",
+      title: t("results.colRun"),
       key: "runAt",
       width: 140,
       render: (_, row) => new Date(row.result.runAt).toLocaleDateString(),
@@ -318,7 +322,7 @@ export default function Results() {
       width: 72,
       render: (_, row) => (
         <Button
-          aria-label="View result"
+          aria-label={t("results.viewResult")}
           icon={<EyeOutlined />}
           onClick={(event) => {
             event.stopPropagation();
@@ -338,15 +342,13 @@ export default function Results() {
   }
 
   if (!tasksData || !resultsData || resultsData.results.length === 0) {
-    return <Empty description="No benchmark results yet." />;
+    return <Empty description={t("results.noResults")} />;
   }
 
   return (
     <div>
-      <Title level={2}>Results</Title>
-      <Paragraph type="secondary">
-        Browse individual benchmark runs without opening the admin editor.
-      </Paragraph>
+      <Title level={2}>{t("results.title")}</Title>
+      <Paragraph type="secondary">{t("results.intro")}</Paragraph>
 
       <Card style={{ marginBottom: 16 }}>
         <Space wrap>
@@ -355,7 +357,7 @@ export default function Results() {
             allowClear
             showSearch
             optionFilterProp="label"
-            placeholder="Models"
+            placeholder={t("results.filterModels")}
             value={modelFilter}
             onChange={setModelFilter}
             options={resultsData.models.map((model) => ({
@@ -369,7 +371,7 @@ export default function Results() {
             allowClear
             showSearch
             optionFilterProp="label"
-            placeholder="Tasks"
+            placeholder={t("results.filterTasks")}
             value={taskFilter}
             onChange={setTaskFilter}
             options={visibleTasks(tasksData.tasks).map((task) => ({
@@ -383,7 +385,7 @@ export default function Results() {
             allowClear
             showSearch
             optionFilterProp="label"
-            placeholder="Environments"
+            placeholder={t("results.filterEnvironments")}
             value={environmentFilter}
             onChange={setEnvironmentFilter}
             options={resultsData.environments.map((env) => ({
@@ -395,19 +397,19 @@ export default function Results() {
           <Select
             mode="multiple"
             allowClear
-            placeholder="Env type"
+            placeholder={t("results.filterEnvType")}
             value={environmentTypeFilter}
             onChange={setEnvironmentTypeFilter}
             options={[
-              { value: "local", label: "Local" },
-              { value: "cloud", label: "Cloud" },
+              { value: "local", label: t("results.filterLocal") },
+              { value: "cloud", label: t("results.filterCloud") },
             ]}
             style={{ minWidth: 140 }}
           />
           <Select
             mode="multiple"
             allowClear
-            placeholder="Harness"
+            placeholder={t("results.filterHarness")}
             value={harnessFilter}
             onChange={setHarnessFilter}
             options={(resultsData.harnesses ?? []).map((harness) => ({
@@ -418,7 +420,7 @@ export default function Results() {
           />
           <Input.Search
             allowClear
-            placeholder="Search ID, model, notes"
+            placeholder={t("results.search")}
             value={searchText}
             onChange={(event) => setSearchText(event.target.value)}
             style={{ width: 240 }}
@@ -428,7 +430,7 @@ export default function Results() {
           </Text>
           {hasFilters && (
             <Button icon={<ClearOutlined />} onClick={clearFilters}>
-              Clear
+              {t("results.clear")}
             </Button>
           )}
         </Space>

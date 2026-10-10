@@ -22,6 +22,7 @@ import { TaskSchema, CriterionSchema, type Task, type TasksFile } from "@/schema
 import { useTasks } from "@/data/queries";
 import { useUpsertTask, useDeleteTask, useUpdateCoreCriteria } from "@/data/mutations";
 import { generateId } from "@/lib/ids";
+import { useT } from "@/i18n/LanguageProvider";
 
 const { Title, Text } = Typography;
 
@@ -50,6 +51,7 @@ function CriterionFields({
   append: (value: NonNullable<TaskFormData["extraCriteria"]>[number]) => void;
   remove: (index: number) => void;
 }) {
+  const t = useT();
   return (
     <div>
       {fields.map((field, idx) => (
@@ -63,7 +65,7 @@ function CriterionFields({
           }}
         >
           <Space style={{ marginBottom: 8 }}>
-            <Text strong>Criterion {idx + 1}</Text>
+            <Text strong>{t("admin.taskCriterionN", { n: idx + 1 })}</Text>
             <Button
               size="small"
               danger
@@ -71,7 +73,7 @@ function CriterionFields({
               onClick={() => removeFn(idx)}
             />
           </Space>
-          <Form.Item label="ID" style={{ marginBottom: 8 }}>
+          <Form.Item label={t("admin.fieldId")} style={{ marginBottom: 8 }}>
             <Controller
               name={`${prefix}.${idx}.id` as `extraCriteria.${number}.id`}
               control={control}
@@ -80,27 +82,27 @@ function CriterionFields({
               )}
             />
           </Form.Item>
-          <Form.Item label="Name" style={{ marginBottom: 8 }}>
+          <Form.Item label={t("admin.fieldName")} style={{ marginBottom: 8 }}>
             <Controller
               name={`${prefix}.${idx}.name` as `extraCriteria.${number}.name`}
               control={control}
               render={({ field: f }) => (
-                <Input {...f} placeholder="Display name" />
+                <Input {...f} placeholder={t("admin.displayNamePlaceholder")} />
               )}
             />
           </Form.Item>
-          <Form.Item label="Description" style={{ marginBottom: 8 }}>
+          <Form.Item label={t("admin.fieldDescription")} style={{ marginBottom: 8 }}>
             <Controller
               name={
                 `${prefix}.${idx}.description` as `extraCriteria.${number}.description`
               }
               control={control}
               render={({ field: f }) => (
-                <Input.TextArea {...f} rows={2} placeholder="Criterion description" />
+                <Input.TextArea {...f} rows={2} placeholder={t("admin.taskCriterionDescPlaceholder")} />
               )}
             />
           </Form.Item>
-          <Form.Item label="Scale values (comma-separated)" style={{ marginBottom: 8 }}>
+          <Form.Item label={t("admin.taskScaleValues")} style={{ marginBottom: 8 }}>
             <Controller
               name={
                 `${prefix}.${idx}.scale.values` as `extraCriteria.${number}.scale.values`
@@ -117,12 +119,12 @@ function CriterionFields({
                         .filter((n) => !isNaN(n)),
                     )
                   }
-                  placeholder="e.g. 0, 0.5, 1"
+                  placeholder={t("admin.example", { value: "0, 0.5, 1" })}
                 />
               )}
             />
           </Form.Item>
-          <Form.Item label="Weight" style={{ marginBottom: 0 }}>
+          <Form.Item label={t("admin.fieldWeight")} style={{ marginBottom: 0 }}>
             <Controller
               name={`${prefix}.${idx}.weight` as `extraCriteria.${number}.weight`}
               control={control}
@@ -134,13 +136,14 @@ function CriterionFields({
         </div>
       ))}
       <Button icon={<PlusOutlined />} onClick={() => append(emptyCriterion())}>
-        Add Criterion
+        {t("admin.taskAddCriterion")}
       </Button>
     </div>
   );
 }
 
 function CoreCriteriaTab() {
+  const t = useT();
   const { data: tasksData } = useTasks();
   const updateCore = useUpdateCoreCriteria();
 
@@ -174,7 +177,7 @@ function CoreCriteriaTab() {
           }}
         >
           <Space style={{ marginBottom: 8 }}>
-            <Text strong>Core Criterion {idx + 1}</Text>
+            <Text strong>{t("admin.taskCoreCriterionN", { n: idx + 1 })}</Text>
             <Button
               size="small"
               danger
@@ -182,7 +185,7 @@ function CoreCriteriaTab() {
               onClick={() => remove(idx)}
             />
           </Space>
-          <Form.Item label="ID" style={{ marginBottom: 8 }}>
+          <Form.Item label={t("admin.fieldId")} style={{ marginBottom: 8 }}>
             <Controller
               name={`criteria.${idx}.id` as `criteria.${number}.id`}
               control={control}
@@ -191,14 +194,14 @@ function CoreCriteriaTab() {
               )}
             />
           </Form.Item>
-          <Form.Item label="Name" style={{ marginBottom: 8 }}>
+          <Form.Item label={t("admin.fieldName")} style={{ marginBottom: 8 }}>
             <Controller
               name={`criteria.${idx}.name` as `criteria.${number}.name`}
               control={control}
               render={({ field: f }) => <Input {...f} />}
             />
           </Form.Item>
-          <Form.Item label="Description" style={{ marginBottom: 8 }}>
+          <Form.Item label={t("admin.fieldDescription")} style={{ marginBottom: 8 }}>
             <Controller
               name={
                 `criteria.${idx}.description` as `criteria.${number}.description`
@@ -207,7 +210,7 @@ function CoreCriteriaTab() {
               render={({ field: f }) => <Input.TextArea {...f} rows={2} />}
             />
           </Form.Item>
-          <Form.Item label="Scale values (comma-separated)" style={{ marginBottom: 8 }}>
+          <Form.Item label={t("admin.taskScaleValues")} style={{ marginBottom: 8 }}>
             <Controller
               name={
                 `criteria.${idx}.scale.values` as `criteria.${number}.scale.values`
@@ -224,12 +227,12 @@ function CoreCriteriaTab() {
                         .filter((n) => !isNaN(n)),
                     )
                   }
-                  placeholder="e.g. 0, 0.5, 1"
+                  placeholder={t("admin.example", { value: "0, 0.5, 1" })}
                 />
               )}
             />
           </Form.Item>
-          <Form.Item label="Weight" style={{ marginBottom: 0 }}>
+          <Form.Item label={t("admin.fieldWeight")} style={{ marginBottom: 0 }}>
             <Controller
               name={`criteria.${idx}.weight` as `criteria.${number}.weight`}
               control={control}
@@ -243,10 +246,10 @@ function CoreCriteriaTab() {
 
       <Space style={{ marginTop: 8 }}>
         <Button icon={<PlusOutlined />} onClick={() => append(emptyCriterion())}>
-          Add Core Criterion
+          {t("admin.taskAddCoreCriterion")}
         </Button>
         <Button type="primary" htmlType="submit" loading={updateCore.isPending}>
-          Save Core Criteria
+          {t("admin.taskSaveCoreCriteria")}
         </Button>
       </Space>
     </Form>
@@ -254,6 +257,7 @@ function CoreCriteriaTab() {
 }
 
 export default function TaskEditor() {
+  const t = useT();
   const [editing, setEditing] = useState<Task | null>(null);
   const [open, setOpen] = useState(false);
   const { data: tasksData } = useTasks();
@@ -326,25 +330,25 @@ export default function TaskEditor() {
   }
 
   const columns = [
-    { title: "ID", dataIndex: "id", key: "id", width: 160 },
+    { title: t("admin.colId"), dataIndex: "id", key: "id", width: 160 },
     {
-      title: "Name",
+      title: t("admin.colName"),
       key: "name",
       render: (_: unknown, record: Task) => (
         <Space>
           <span>{record.name}</span>
-          {record.hidden && <Tag>hidden</Tag>}
+          {record.hidden && <Tag>{t("admin.taskHiddenTag")}</Tag>}
         </Space>
       ),
     },
     {
-      title: "Extra Criteria",
+      title: t("admin.taskColExtraCriteria"),
       key: "extra",
       width: 120,
       render: (_: unknown, record: Task) => record.extraCriteria.length,
     },
     {
-      title: "Visible",
+      title: t("admin.taskColVisible"),
       key: "visible",
       width: 90,
       render: (_: unknown, record: Task) => (
@@ -356,7 +360,7 @@ export default function TaskEditor() {
       ),
     },
     {
-      title: "Actions",
+      title: t("admin.colActions"),
       key: "actions",
       width: 120,
       render: (_: unknown, record: Task) => (
@@ -367,9 +371,9 @@ export default function TaskEditor() {
             onClick={() => openEdit(record)}
           />
           <Popconfirm
-            title="Delete this task?"
+            title={t("admin.taskDeleteConfirm")}
             onConfirm={() => handleDelete(record.id)}
-            okText="Delete"
+            okText={t("admin.deleteOk")}
             okButtonProps={{ danger: true }}
           >
             <Button icon={<DeleteOutlined />} size="small" danger />
@@ -382,12 +386,12 @@ export default function TaskEditor() {
   const tabItems = [
     {
       key: "tasks",
-      label: "Tasks",
+      label: t("admin.taskTabTasks"),
       children: (
         <div>
           <Space style={{ marginBottom: 16 }}>
             <Button type="primary" icon={<PlusOutlined />} onClick={openNew}>
-              New Task
+              {t("admin.taskNew")}
             </Button>
           </Space>
           <Table
@@ -402,18 +406,18 @@ export default function TaskEditor() {
     },
     {
       key: "core",
-      label: "Core Criteria",
+      label: t("admin.taskTabCore"),
       children: <CoreCriteriaTab />,
     },
   ];
 
   return (
     <div>
-      <Title level={3}>Tasks & Criteria</Title>
+      <Title level={3}>{t("admin.taskPageTitle")}</Title>
       <Tabs items={tabItems} />
 
       <Modal
-        title={editing ? `Edit Task: ${editing.name}` : "New Task"}
+        title={editing ? t("admin.taskEditTitle", { name: editing.name }) : t("admin.taskNew")}
         open={open}
         onCancel={handleClose}
         onOk={handleSubmit(onSubmit)}
@@ -423,7 +427,7 @@ export default function TaskEditor() {
       >
         <Form layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item
-            label="ID"
+            label={t("admin.fieldId")}
             validateStatus={errors.id ? "error" : ""}
             help={errors.id?.message}
           >
@@ -431,13 +435,13 @@ export default function TaskEditor() {
               name="id"
               control={control}
               render={({ field }) => (
-                <Input {...field} disabled={!!editing} placeholder="e.g. snake" />
+                <Input {...field} disabled={!!editing} placeholder={t("admin.example", { value: "snake" })} />
               )}
             />
           </Form.Item>
 
           <Form.Item
-            label="Name"
+            label={t("admin.fieldName")}
             validateStatus={errors.name ? "error" : ""}
             help={errors.name?.message}
           >
@@ -445,12 +449,12 @@ export default function TaskEditor() {
               name="name"
               control={control}
               render={({ field }) => (
-                <Input {...field} placeholder="Task display name" />
+                <Input {...field} placeholder={t("admin.taskNamePlaceholder")} />
               )}
             />
           </Form.Item>
 
-          <Form.Item label="Description">
+          <Form.Item label={t("admin.fieldDescription")}>
             <Controller
               name="description"
               control={control}
@@ -458,13 +462,13 @@ export default function TaskEditor() {
                 <Input.TextArea
                   {...field}
                   rows={3}
-                  placeholder="What the model must do"
+                  placeholder={t("admin.taskDescPlaceholder")}
                 />
               )}
             />
           </Form.Item>
 
-          <Form.Item label="Hidden (excluded from results and measurements)">
+          <Form.Item label={t("admin.taskHidden")}>
             <Controller
               name="hidden"
               control={control}
@@ -474,7 +478,7 @@ export default function TaskEditor() {
             />
           </Form.Item>
 
-          <Form.Item label="System Prompt">
+          <Form.Item label={t("admin.taskSystemPrompt")}>
             <Controller
               name="systemPrompt"
               control={control}
@@ -482,7 +486,7 @@ export default function TaskEditor() {
                 <Input.TextArea
                   {...field}
                   rows={5}
-                  placeholder="Exact prompt given to the model"
+                  placeholder={t("admin.taskSystemPromptPlaceholder")}
                   style={{ fontFamily: "monospace" }}
                 />
               )}
@@ -490,8 +494,8 @@ export default function TaskEditor() {
           </Form.Item>
 
           <Form.Item
-            label="Judge instructions"
-            extra="How the LLM judge should score this task: what to check, what matters most, what caps a score. Sent to the judge only; the model under test never sees it."
+            label={t("admin.taskJudgeInstructions")}
+            extra={t("admin.taskJudgeInstructionsExtra")}
           >
             <Controller
               name="judgeInstructions"
@@ -501,13 +505,13 @@ export default function TaskEditor() {
                   {...field}
                   value={field.value ?? ""}
                   rows={6}
-                  placeholder="e.g. A CPU snake that ignores the food caps compliance at 2."
+                  placeholder={t("admin.taskJudgeInstructionsPlaceholder")}
                 />
               )}
             />
           </Form.Item>
 
-          <Divider>Extra Criteria (task-specific)</Divider>
+          <Divider>{t("admin.taskExtraCriteriaDivider")}</Divider>
 
           <CriterionFields
             control={control}

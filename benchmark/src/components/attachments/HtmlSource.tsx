@@ -1,8 +1,16 @@
 import { useEffect, useState } from "react";
 import { Spin, Typography } from "antd";
+import { useT } from "@/i18n/LanguageProvider";
 import { dataUrl } from "@/lib/adminArtifacts";
 
 const { Text } = Typography;
+
+// Carries a failed response's status out of the fetch chain.
+export class HttpStatusError extends Error {
+  constructor(readonly status: number) {
+    super(`HTTP ${status}`);
+  }
+}
 
 interface HtmlSourceProps {
   src: string;
@@ -12,21 +20,30 @@ interface HtmlSourceProps {
 // Read-only view of an artifact's raw HTML, for reviewing what the model actually wrote
 // without executing it.
 export function HtmlSource({ src, height = 360 }: HtmlSourceProps) {
+  const t = useT();
   const [code, setCode] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ status: number } | { detail: string } | null>(null);
 
   useEffect(() => {
     fetch(dataUrl(src))
       .then((r) => {
-        if (!r.ok) throw new Error(`Failed to load: ${r.status}`);
+        if (!r.ok) throw new HttpStatusError(r.status);
         return r.text();
       })
       .then(setCode)
-      .catch((e: unknown) => setError(String(e)));
+      .catch((e: unknown) =>
+        setError(e instanceof HttpStatusError ? { status: e.status } : { detail: String(e) }),
+      );
   }, [src]);
 
   if (error) {
-    return <div style={{ color: "red", padding: 16 }}>Error: {error}</div>;
+    const detail =
+      "status" in error
+        ? t("resultView.loadFailedStatus", { status: error.status })
+        : error.detail;
+    return (
+      <div style={{ color: "red", padding: 16 }}>{t("resultView.loadError", { detail })}</div>
+    );
   }
 
   if (code === null) {
@@ -73,7 +90,11 @@ export function HtmlSource({ src, height = 360 }: HtmlSourceProps) {
         ))}
       </pre>
       <Text type="secondary" copyable={{ text: code }} style={{ fontSize: 12 }}>
-        {lines.length} lines, {code.length.toLocaleString()} chars - copy source
+        {t("resultView.sourceStats", {
+          lines: lines.length,
+          chars: code.length.toLocaleString(),
+          charCount: code.length,
+        })}
       </Text>
     </div>
   );

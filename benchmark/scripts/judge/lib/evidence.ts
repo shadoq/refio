@@ -11,6 +11,7 @@ import {
   describeInteractions,
   INTERACTION_STEPS,
 } from "../../../src/lib/judge/interactions";
+import { collapseRepeatedErrors } from "../../../src/lib/judge/scoring";
 import type { Result } from "../../../src/schema/results";
 import type { Task, Criterion } from "../../../src/schema/tasks";
 
@@ -79,7 +80,9 @@ export async function buildEvidence(opts: {
   if (!html) throw new Error(`result ${result.id} has no HTML artifact`);
   const htmlSrcPath = join(benchmarkDir, "data", html.src);
 
-  const evidenceDir = await mkdtemp(join(tmpdir(), `judge-${result.id}-`));
+  // Neutral name: the judge CLI runs inside this directory and sees its path, and a
+  // result id names the model that produced the artifact. Judging stays blind.
+  const evidenceDir = await mkdtemp(join(tmpdir(), "judge-"));
   await copyFile(htmlSrcPath, join(evidenceDir, "artifact.html"));
   const at = (name: string) => join(evidenceDir, name);
 
@@ -93,7 +96,10 @@ export async function buildEvidence(opts: {
     INTERACT_SHOTS.map(at),
   );
 
-  const consoleErrors = [...render.consoleErrors, ...interaction.consoleErrors];
+  const consoleErrors = collapseRepeatedErrors([
+    ...render.consoleErrors,
+    ...interaction.consoleErrors,
+  ]);
   await writeFile(
     join(evidenceDir, "console-errors.json"),
     JSON.stringify(consoleErrors, null, 2),

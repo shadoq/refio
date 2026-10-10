@@ -1,0 +1,115 @@
+import { pluralPl, type Translation } from "../../core";
+import type { resultView as en } from "../en/resultView";
+
+export const resultView: Translation<typeof en> = {
+  // Judge breakdown
+  judgeScoresTitle: "Oceny sędziów",
+  judgeError: "błąd",
+  judgeAvg: "średnia {value}",
+  notAvailable: "brak",
+  colCriterion: "Kryterium",
+  colValue: "Ocena",
+  colRationale: "Uzasadnienie",
+  judgeScreenshotAlt: "zrzut ekranu wykonany przez sędziego",
+  aggregateMedian: "Mediana ocen:",
+
+  // Result card
+  attempt: "próba {n}",
+  previewResult: "Podgląd wyniku",
+  editResult: "Edytuj wynik",
+  duplicateResult: "Powiel wynik",
+  deleteResult: "Usuń wynik",
+  deleteConfirm: "Usunąć ten wynik?",
+  deleteOk: "Usuń",
+  noArtifact: "Brak artefaktu",
+  duration: "Czas",
+  tokensOut: "Tokeny na wyjściu",
+  cost: "Koszt",
+  scores: "Oceny",
+  noScores: "brak",
+
+  // Result detail modal
+  resultDetail: "Szczegóły wyniku",
+  attemptNumber: "próba nr {n}",
+  llmEstimate: "Szac. czas LLM {duration}",
+  prefill: "Wczytanie promptu {duration}",
+  decode: "Generowanie {duration}",
+  colRaw: "Przed normalizacją",
+  colNormalized: "Po normalizacji",
+  runTrace: "Przebieg agenta",
+  showSteps: "Pokaż kroki",
+  noAttachments: "Ten wynik nie ma załączników.",
+  htmlPreviews: "Podgląd HTML",
+  showPreview: "Pokaż podgląd",
+  hidePreview: "Ukryj podgląd",
+  htmlTab: "HTML {n}",
+
+  // Trace summary tags
+  endCompleted: "ukończony",
+  endFailed: "nieudany",
+  endIncomplete: "niedokończony",
+  endCancelled: "przerwany",
+  endLimit: "limit",
+  endUnknown: "nieznany",
+  turns: ({ count }) => `${count} ${pluralPl(Number(count), "tura", "tury", "tur")}`,
+  tools: ({ count }) =>
+    `${count} ${pluralPl(Number(count), "wywołanie narzędzia", "wywołania narzędzi", "wywołań narzędzi")}`,
+  callSplitTooltip: "odczyty / zapisy / polecenia w terminalu",
+  callSplit: "{reads} odcz. / {writes} zap. / {shell} pol.",
+  selfCheckTooltip: "model sam zbudował projekt albo uruchomił testy",
+  selfCheckYes: "sprawdził się: tak",
+  selfCheckNo: "sprawdził się: nie",
+  firstWrite: "pierwszy zapis: {n}. wywołanie",
+  repeatedTooltip: "wywołania, które agent już wcześniej wykonał",
+  repeated: "{count} powtórzonych ({percent}%)",
+  stuckTooltip: "najdłuższa seria takich samych wywołań, z których każde kończyło się błędem",
+  stuck: "zapętlił się x{count}",
+  toolErrorsTooltip: "narzędzie odrzuciło wywołanie albo zwróciło błąd",
+  toolErrors: ({ count }) =>
+    `${count} ${pluralPl(Number(count), "błąd narzędzia", "błędy narzędzi", "błędów narzędzi")}`,
+  nonZeroTooltip:
+    "polecenia w terminalu, które zwróciły kod wyjścia inny niż 0 - samo wywołanie mogło się udać",
+  nonZeroExits: ({ count }) =>
+    `${count} ${pluralPl(Number(count), "niezerowy kod wyjścia", "niezerowe kody wyjścia", "niezerowych kodów wyjścia")}`,
+  recoveredTooltip: "czy po ostatnim nieudanym wywołaniu agent zrobił jeszcze coś przydatnego",
+  recovered: "poradził sobie z błędem",
+  gaveUp: "poddał się po błędzie",
+  contextOverflowTooltip: "prompt nie zmieścił się w oknie kontekstu modelu",
+  contextOverflow: "przepełniony kontekst",
+  failureMarkerTooltip: "jak sama pętla agenta nazwała to, co poszło nie tak",
+
+  // Trace timeline
+  traceNotFound: "Przy tym wyniku nie ma logu przebiegu",
+  traceEmpty: "Log przebiegu jest pusty",
+  colTime: "t",
+  colTurn: "tura",
+  colKind: "typ",
+  colTool: "narzędzie",
+  colDetail: "szczegóły",
+  colOk: "ok",
+  stepOk: "ok",
+  stepErr: "błąd",
+
+  // Attachments
+  generatedScreenshotAlt: "zrzut ekranu wyniku",
+  hideLivePreview: "Ukryj podgląd na żywo",
+  runLivePreview: "Uruchom podgląd na żywo",
+  hideSource: "Ukryj kod",
+  showSource: "Pokaż kod",
+  runInNewTab: "Otwórz w nowej karcie",
+  openInIntellij: "Otwórz w IntelliJ",
+  copyFilePath: "Kopiuj ścieżkę",
+  copyUrl: "Kopiuj URL",
+  liveArtifactCaption: "Wygenerowany artefakt (na żywo)",
+  livePreviewOff:
+    "Podgląd na żywo jest wyłączony, bo uruchamia animację. Z tego przebiegu nie ma zrzutu ekranu.",
+  downloadArchive: "Pobierz archiwum",
+  downloadFile: "Pobierz plik",
+  loadError: "Błąd: {detail}",
+  loadFailedStatus: "Nie udało się wczytać: {status}",
+  htmlAttachmentTitle: "Załącznik HTML",
+  sourceStats: ({ lines, chars, charCount }) =>
+    `${lines} ${pluralPl(Number(lines), "wiersz", "wiersze", "wierszy")}, ${chars} ${pluralPl(Number(charCount), "znak", "znaki", "znaków")} - kopiuj kod`,
+  attachmentAlt: "Załącznik",
+  videoTitle: "Wideo",
+};

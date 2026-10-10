@@ -18,12 +18,14 @@ import { EnvironmentSchema, type Environment } from "@/schema/results";
 import { useResults } from "@/data/queries";
 import { useUpsertEnvironment, useDeleteEnvironment } from "@/data/mutations";
 import { generateId } from "@/lib/ids";
+import { useT } from "@/i18n/LanguageProvider";
 
 const { Title } = Typography;
 
 type FormData = Environment;
 
 export default function EnvironmentEditor() {
+  const t = useT();
   const [editing, setEditing] = useState<Environment | null>(null);
   const [open, setOpen] = useState(false);
   const { data: resultsData } = useResults();
@@ -68,20 +70,20 @@ export default function EnvironmentEditor() {
   }
 
   const columns = [
-    { title: "ID", dataIndex: "id", key: "id", width: 180 },
-    { title: "Name", dataIndex: "name", key: "name" },
+    { title: t("admin.colId"), dataIndex: "id", key: "id", width: 180 },
+    { title: t("admin.colName"), dataIndex: "name", key: "name" },
     {
-      title: "Type",
+      title: t("admin.envType"),
       dataIndex: "type",
       key: "type",
       width: 90,
       render: (type: string) => (
-        <Tag color={type === "cloud" ? "blue" : "green"}>{type}</Tag>
+        <Tag color={type === "cloud" ? "blue" : "green"}>{type === "cloud" ? t("admin.envTypeCloud") : type === "local" ? t("admin.envTypeLocal") : type}</Tag>
       ),
     },
-    { title: "Hardware", dataIndex: "hardware", key: "hardware" },
+    { title: t("admin.envHardware"), dataIndex: "hardware", key: "hardware" },
     {
-      title: "Actions",
+      title: t("admin.colActions"),
       key: "actions",
       width: 120,
       render: (_: unknown, record: Environment) => (
@@ -92,9 +94,9 @@ export default function EnvironmentEditor() {
             onClick={() => openEdit(record)}
           />
           <Popconfirm
-            title="Delete this environment?"
+            title={t("admin.envDeleteConfirm")}
             onConfirm={() => handleDelete(record.id)}
-            okText="Delete"
+            okText={t("admin.deleteOk")}
             okButtonProps={{ danger: true }}
           >
             <Button icon={<DeleteOutlined />} size="small" danger />
@@ -108,10 +110,10 @@ export default function EnvironmentEditor() {
     <div>
       <Space style={{ marginBottom: 16 }}>
         <Title level={3} style={{ margin: 0 }}>
-          Environments
+          {t("admin.envTitle")}
         </Title>
         <Button type="primary" icon={<PlusOutlined />} onClick={openNew}>
-          New Environment
+          {t("admin.envNew")}
         </Button>
       </Space>
 
@@ -124,7 +126,7 @@ export default function EnvironmentEditor() {
       />
 
       <Modal
-        title={editing ? "Edit Environment" : "New Environment"}
+        title={editing ? t("admin.envEditTitle") : t("admin.envNew")}
         open={open}
         onCancel={handleClose}
         onOk={handleSubmit(onSubmit)}
@@ -133,7 +135,7 @@ export default function EnvironmentEditor() {
       >
         <Form layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item
-            label="ID"
+            label={t("admin.fieldId")}
             validateStatus={errors.id ? "error" : ""}
             help={errors.id?.message}
           >
@@ -144,26 +146,26 @@ export default function EnvironmentEditor() {
                 <Input
                   {...field}
                   disabled={!!editing}
-                  placeholder="e.g. dgx-local"
+                  placeholder={t("admin.example", { value: "dgx-local" })}
                 />
               )}
             />
           </Form.Item>
 
           <Form.Item
-            label="Name"
+            label={t("admin.fieldName")}
             validateStatus={errors.name ? "error" : ""}
             help={errors.name?.message}
           >
             <Controller
               name="name"
               control={control}
-              render={({ field }) => <Input {...field} placeholder="Display name" />}
+              render={({ field }) => <Input {...field} placeholder={t("admin.displayNamePlaceholder")} />}
             />
           </Form.Item>
 
           <Form.Item
-            label="Type"
+            label={t("admin.envType")}
             validateStatus={errors.type ? "error" : ""}
             help={errors.type?.message}
           >
@@ -174,15 +176,15 @@ export default function EnvironmentEditor() {
                 <Select
                   {...field}
                   options={[
-                    { label: "Local", value: "local" },
-                    { label: "Cloud", value: "cloud" },
+                    { label: t("admin.envTypeLocal"), value: "local" },
+                    { label: t("admin.envTypeCloud"), value: "cloud" },
                   ]}
                 />
               )}
             />
           </Form.Item>
 
-          <Form.Item label="Hardware">
+          <Form.Item label={t("admin.envHardware")}>
             <Controller
               name="hardware"
               control={control}
@@ -190,13 +192,13 @@ export default function EnvironmentEditor() {
                 <Input
                   {...field}
                   value={field.value ?? ""}
-                  placeholder="e.g. DGX Spark, RTX 4090"
+                  placeholder={t("admin.example", { value: "DGX Spark, RTX 4090" })}
                 />
               )}
             />
           </Form.Item>
 
-          <Form.Item label="Notes">
+          <Form.Item label={t("admin.fieldNotes")}>
             <Controller
               name="notes"
               control={control}
@@ -205,7 +207,7 @@ export default function EnvironmentEditor() {
                   {...field}
                   value={field.value ?? ""}
                   rows={2}
-                  placeholder="Optional notes"
+                  placeholder={t("admin.notesPlaceholder")}
                 />
               )}
             />

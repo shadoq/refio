@@ -7,6 +7,7 @@ import { JudgeBreakdown } from "@/components/results/JudgeBreakdown";
 import { TraceSummaryTags } from "@/components/results/TraceSummaryTags";
 import type { Result } from "@/schema/results";
 import type { Criterion } from "@/schema/tasks";
+import { useT } from "@/i18n/LanguageProvider";
 
 const { Text } = Typography;
 
@@ -22,6 +23,7 @@ interface ResultEvidencePanelProps {
 // The artifact is model-written code that may loop forever, so it only runs once the
 // reviewer asks for it; opening the editor must never be able to hang the browser.
 export function ResultEvidencePanel({ result, criteria }: ResultEvidencePanelProps) {
+  const t = useT();
   const htmls = result.attachments.filter((att) => att.type === "html");
   const others = result.attachments.filter((att) => att.type !== "html");
   const [htmlIdx, setHtmlIdx] = useState(0);
@@ -37,24 +39,24 @@ export function ResultEvidencePanel({ result, criteria }: ResultEvidencePanelPro
             size="small"
             activeKey={String(htmlIdx)}
             onChange={(key) => setHtmlIdx(Number(key))}
-            items={htmls.map((att, i) => ({ key: String(i), label: att.caption ?? `HTML ${i + 1}` }))}
+            items={htmls.map((att, i) => ({ key: String(i), label: att.caption ?? t("admin.evidenceHtmlTab", { n: i + 1 }) }))}
           />
         )}
         <div style={{ flex: 1, minHeight: 0, background: "#fff", borderRadius: 8, overflow: "hidden" }}>
           {activeHtml && runningSrc !== activeHtml.src ? (
-            <Empty description="The artifact is not running." style={{ paddingTop: 80 }}>
+            <Empty description={t("admin.evidenceNotRunning")} style={{ paddingTop: 80 }}>
               <Button
                 type="primary"
                 icon={<PlayCircleOutlined />}
                 onClick={() => setRunningSrc(activeHtml.src)}
               >
-                Run artifact
+                {t("admin.evidenceRun")}
               </Button>
             </Empty>
           ) : activeHtml ? (
             <HtmlSandbox key={activeHtml.src} src={activeHtml.src} caption={activeHtml.caption} fill />
           ) : (
-            <Empty description="No HTML artifact for this result." style={{ paddingTop: 80 }} />
+            <Empty description={t("admin.evidenceNoHtml")} style={{ paddingTop: 80 }} />
           )}
         </div>
       </div>
@@ -65,7 +67,7 @@ export function ResultEvidencePanel({ result, criteria }: ResultEvidencePanelPro
           {result.trace && (
             <div>
               <Text strong style={{ display: "block", marginBottom: 6 }}>
-                Run trace
+                {t("admin.evidenceRunTrace")}
               </Text>
               <TraceSummaryTags trace={result.trace} />
             </div>
