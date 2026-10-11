@@ -5,7 +5,7 @@
 ## Current state (honest)
 
 RefIo is an early-stage open-source AI coding plugin for IntelliJ IDEA, built in
-Kotlin. v0.0.1.x, small commit history, small community. Used daily by the author -
+Kotlin. v0.0.2.x, small commit history, small community. Used daily by the author -
 that's the bar it meets today.
 
 ### What's in place
@@ -67,14 +67,14 @@ that's the bar it meets today.
 
 Open acknowledgement of what's pragmatic-MVP today. No sugarcoating:
 
-- **Orchestration is a light router + executors**, not a deep agent engine. `IntentRouter` maps modes and dispatches to executors; `WorkflowOrchestrator` coordinates (~200 LOC).
+- **Orchestration is a light mode switch**, not a deep agent engine. CHAT goes straight to `ChatService`, PLAN/AGENT run the turn loop via `agentRouter.runTurn`; the earlier `IntentRouter` / `WorkflowOrchestrator` layer was removed.
 - **Multi-agent runtime - early seed only.** `MultiAgentRunner` with DFS cycle detection, `supervisorScope` parallel execution, `AgentEventBus`, and a YAML spec parser (`MultiAgentTaskParser`) exist in `core/agents/`, plus `MultiAgentRouter` persisting `agent_sessions` / `agent_instances`. Wired to runtime through **only one entry point**: CLI flag `--headless --multi-agent <file.yaml>`. No IntelliJ UI, no interactive TUI launcher, no decomposer/dispatcher (removed), no resume. Subagents invoked from a turn (`invoke_subagent` tool) are a **separate** nested-invocation path and do not use `MultiAgentRunner`.
 - **Agent-to-agent messaging - wired via per-agent inboxes, still maturing.** The live round-trip: `send_message` enqueues a `DataRequest` into the peer's `AgentMessageInbox` (`AgentInboxRegistry` keys inboxes by session + agent), `TurnPromptBuilder` injects pending requests into that peer's next prompt, and `answer_message` emits the matching `DataResponse` that un-suspends the waiting turn in `AgentTurnLoop`. Events persist via `AgentEventSqlRepository`. Integration-tested (`MultiAgentA2ATest`) but not production-hardened - typed routing and resume are still missing. A parallel never-wired event-handler plus the unused `ArtifactProduced`/`SpawnAgentRequest` event types were removed once confirmed dead.
 - **No git worktree isolation per task.** Agents edit files directly (with snapshot rollback), not in an isolated branch.
-- **Planning loop is basic.** A plan executor works, but there's no plan refinement iteration (plan -> execute -> evaluate -> refine -> continue).
-- **No agent dashboard / command center.** Tool calls are visible in the chat stream, but there's no dedicated visualization of agent state across a long task.
+- **Planning loop is basic.** A plan executor works, but there's no plan refinement iteration (plan -> execute -> evaluate -> refine -> continue). Partially closed: after a file-writing AGENT turn `TurnVerifier` runs the project build/test and sends failures back for a bounded repair (on by default).
+- **No agent dashboard / command center.** Tool calls are visible in the chat stream, but there's no dedicated visualization of agent state across a long task. Partially: an Agents screen (Advanced View) shows a per-session Trace tree, an event timeline and a graph for multi-agent runs (`AgentExecutionPanel`); no multi-task command center.
 - **Security layers are pragmatic v1.** `PathSandbox`, `CommandRule`, `RegexSafetyValidator` work as designed - but this is defense-at-depth-MVP, not mature multi-layered security.
-- **Small community, small commit history.** v0.0.1.x. Changes happen fast. Breaking changes possible pre-1.0. Not yet battle-tested at scale.
+- **Small community, small commit history.** v0.0.2.x. Changes happen fast. Breaking changes possible pre-1.0. Not yet battle-tested at scale.
 
 See each phase below for the direction on these items.
 
@@ -153,7 +153,7 @@ persistence with execution history. The gap is everything that makes a plan adap
 
 - `Plan` with explicit step dependencies (DAG, not just a sequence)
 - Fully typed steps: `READ` / `ANALYZE` / `WRITE` / `TEST` / `VERIFY`
-- Refinement loop: plan -> execute -> evaluate -> fix -> continue
+- Refinement loop: plan -> execute -> evaluate -> fix -> continue - partially: the evaluate -> fix step exists at turn level (`TurnVerifier` build/test + bounded repair), not per plan step
 - Cost-aware planning (token / time budget per plan)
 
 ### Phase 4 - CLI beyond the TUI
@@ -174,7 +174,7 @@ Goal: context that adapts to the task, not just the token budget.
 
 - Layered context (static / project / dynamic / history)
 - Smart context selection with ranking
-- Context snapshot per execution step
+- Context snapshot per execution step - partially: the latest prompt's section / token / drop trace (`PromptSnapshot`) is shown live on the Context screen, but not stored per step
 - Per-step retrieval tuning (different sources for different step types)
 
 ### Phase 6 - Security hardening
@@ -186,7 +186,7 @@ Goal: defense-in-depth, not just a sandbox.
   `CommandRule` downgrade) - **done 2026-07**, see "Project health review" below
 - Multi-layer filesystem validation (current `PathSandbox` is a single layer)
 - Broader secret detection (multiple patterns, optional ML classifier)
-- Network policy sandbox - not just filesystem (per-tool egress rules)
+- Network policy sandbox - not just filesystem (per-tool egress rules) - partially: one global no-egress gate (`NetworkPolicy`) covers cloud LLM providers, embeddings and the web tools; no per-tool rules yet
 - Audit logs for all agent actions
 - Deeper secure-logging enforcement (beyond `detectSensitiveLogging`)
 
@@ -226,21 +226,21 @@ is evidence the workflow needs it.
    in the editor with accept / reject per hunk, instead of tool output in the chat
    stream. The single biggest UX gap versus Cursor / Junie; already flagged as
    high-priority-unbuilt in the UI plan. Nothing else lands its full effect
-   without this.
+   without this. **Status (2026-10): not built.** Each write already shows an IDE diff against its pre-write snapshot inside the chat tool row (`ToolCallRow`, `ChangesDialog`); there is no in-editor hunk accept / reject.
 2. **Checkpoint timeline with one-click rollback (new).** `SnapshotService`
    already captures every write; expose it as a visible session timeline where one
    click restores the project state before any agent step. Trust in an agent grows
-   with how easy it is to undo its work.
+   with how easy it is to undo its work. **Status (2026-10): partial.** `ChangesDialog` restores one file from its snapshot (with a preview and a backup snapshot of the current state, via `SnapshotRouter.planRestore` / `restoreSnapshot`); there is no session-wide timeline.
 3. **Verification as a default agent step.** Close the plan -> execute ->
    **verify** loop: after edits, the agent runs the affected build / tests and
    repairs regressions before ending the turn. This is the refinement loop from
    Phase 3, pulled forward - the industry consensus is that verification, not
    generation, is the new bottleneck, and the e2e gate already measures the
-   payoff. Especially valuable for weaker local models.
+   payoff. Especially valuable for weaker local models. **Status (2026-10): done.** `TurnVerifier` runs `verify.command` (or an autodetected Gradle / npm / Cargo build) after a file-writing AGENT turn, on by default (`verify.enabled`), and feeds failures back for up to `verify.max_repair_rounds` (default 2) repair rounds; a failure that existed before the turn is reported, not repaired.
 4. **Context Inspector as a flagship feature (new UX, planned groundwork).** A
    panel showing exactly what entered the prompt and its token cost per section.
    No competitor exposes this; for the target user ("control, not magic") it is
-   the clearest differentiator the project has.
+   the clearest differentiator the project has. **Status (2026-10): partial.** The Context screen (`ContextPanel`) shows per-section token use and what was dropped from the last prompt (`PromptSnapshot`), but it is hidden behind Advanced View; a separate `ContextInspectorPanel` class exists but is not wired into any screen.
 
 ### Mid term - daily-use satisfaction
 
@@ -248,7 +248,7 @@ is evidence the workflow needs it.
    but nothing carries over between sessions. Keep the agreed simple-DB model
    (fully inspectable): the agent persists durable facts after a turn ("build via
    `gradlew.bat -p`") and gets them back as context in the next one, so the user
-   stops repeating the same instructions.
+   stops repeating the same instructions. **Status (2026-10): not built** - working memory is still task-scoped (`WorkingMemoryService`).
 6. **Security hardening as positioning, not just backlog.** Pull the known
    sandbox / command-policy gaps to the front of Phase 6, then market the result:
    no-egress mode, auditable sandbox, zero telemetry. Data privacy is the top
@@ -258,7 +258,7 @@ is evidence the workflow needs it.
    a concrete trigger: routine steps on a cheap local model, planning and
    post-verification repair escalated to the strong slot
    (`delegate_to_strong_model` already exists). The benchmark's per-model
-   pass-rate data becomes a product mechanism instead of just a report.
+   pass-rate data becomes a product mechanism instead of just a report. **Status (2026-10): not built** - only the explicit `delegate_to_strong_model` tool exists.
 
 ### Two-year horizon - where the market is going
 
@@ -266,7 +266,7 @@ is evidence the workflow needs it.
    agents (this is how Codex and Cursor plug in). Exposing `:core` as an ACP
    server puts RefIo in every JetBrains IDE without per-IDE UI work, and composes
    naturally with the Phase 4 headless / `refio run` direction. The cheapest path
-   to distribution on a two-year horizon.
+   to distribution on a two-year horizon. **Status (2026-10): not started** - no ACP code in the repo.
 9. **Background agents on isolated worktrees + command center.** The parked
    multi-agent and dashboard items (see Later / uncertain) become the 2027-2028
    bet: worktree isolation per agent, resumability, a live per-agent view. Local
@@ -277,7 +277,7 @@ is evidence the workflow needs it.
     in priority: an agent runs the e2e scenarios, an LLM judge classifies
     failures, fixes are proposed in an isolated worktree and always wait for
     human review - never auto-merged. A measurable self-improving product is an
-    advantage competitors cannot copy without an equivalent eval harness.
+    advantage competitors cannot copy without an equivalent eval harness. **Status (2026-10): not built** - the gate, failure classification and benchmark judges exist; the loop that diagnoses and proposes fixes does not.
 
 ## Project health review (2026-07)
 
@@ -299,15 +299,15 @@ the flagship deliverable - has only 8 test files for 118 source files.
    lines with deeply nested local suspend functions and a ~20-dependency
    constructor. Its collaborators in `services/turn/` were decomposed cleanly;
    the executor itself was not. Highest maintainability risk - all the
-   reliability work the e2e gate measures lives here.
+   reliability work the e2e gate measures lives here. **Status (2026-10): still open.** Turn persistence moved into an inner `TurnPersistence` class and the loop body into `executeLoop()`, but the class has grown to ~3,500 LOC and `executeLoop()` alone spans ~1,900 lines.
 2. **`AgentTurnLoop.kt`** looks like a legacy loop coexisting with the newer
-   `turn/` package - verify and remove.
+   `turn/` package - verify and remove. **Verified (2026-10): not legacy.** `AgentTurnLoop` (~380 LOC) is the thin public facade that builds `TurnExecutor` and exposes its state flows; keep it.
 3. **DB migrations** (`MigrationRunner.kt`) have no checksums and no rollback;
-   risky for the shared `~/.refio` database across plugin versions.
-4. **`SettingsView` scope leak** - its `coroutineScope` is never cancelled on
-   dispose.
+   risky for the shared `~/.refio` database across plugin versions. **Status (2026-10): still open** - migrations V2-V6 are recorded by version only.
+4. ~~**`SettingsView` scope leak** - its `coroutineScope` is never cancelled on
+   dispose.~~ **Fixed:** `SettingsView.dispose()` cancels the scope and the child panels, and is called from `removeNotify()` and by the owner.
 5. Secondary size hotspots: `ProjectAnalyzerService` (~2,000 LOC),
-   `ContextService` (~1,600), `TurnToolExecutor` (~1,400).
+   `ContextService` (~1,600), `TurnToolExecutor` (~1,400). **Status (2026-10):** `ProjectAnalyzerService` cut to ~810 and `ContextService` to ~1,230; `TurnToolExecutor` grew to ~1,870.
 
 What is *not* a problem (verified): no `GlobalScope` anywhere, retry/timeout
 centralized in `LLMRetryHandler` / `LLMKtorClientFactory`, `ChatView` has mature
@@ -338,19 +338,19 @@ TODO/FIXME density is near zero.
   machine; only the offline self-test runs nightly.
 - **Stale planning docs** - `docs/planning/*` (prd, mvp, ui-plan) are frozen at
   Dec 2025 and contradict this roadmap; mark them as historical or refresh them.
-  They actively mislead new contributors and AI agents.
+  They actively mislead new contributors and AI agents. Still open (2026-10): `prd.md` and `mvp.md` carry no historical marker.
 - **Advanced UI tabs (Context, Debug, RAG) hidden behind `advanced_view`** - the
-  transparency features that differentiate the project are invisible by default.
+  transparency features that differentiate the project are invisible by default. Still open (2026-10): Context, Agents, RAG, Debug, Logs and API screens are `advancedOnly` in `RefioScreen`.
 
 ### Near-term execution order (next quarter)
 
 1. Process quick wins: CI runs `check`, add plugin-verifier, nightly e2e gate
-   job, tag-triggered release workflow.
-2. Close the three security gaps above, with regression tests.
+   job, tag-triggered release workflow. **Done** (`test.yml`, `nightly.yml`, `release.yml`).
+2. Close the three security gaps above, with regression tests. **Done.**
 3. Inline diff review + visible snapshot timeline (trend review items 1-2) -
    the building blocks (`SnapshotService`, native diff viewer, approval panel)
-   already exist; what is missing is one coherent workflow.
-4. Refactor `TurnExecutor.execute()` before it grows further.
+   already exist; what is missing is one coherent workflow. **Partial:** per-file diff and per-file restore exist, the coherent workflow does not.
+4. Refactor `TurnExecutor.execute()` before it grows further. **Still open** (see Engineering debt item 1).
 5. Mark or refresh stale planning docs; surface Context/Debug panels as
    features, not a hidden mode.
 6. Then continue per the phases and the trend review above (memory, routing,

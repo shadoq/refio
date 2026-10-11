@@ -5,21 +5,21 @@
 > **Recent notable changes** (see [CHANGELOG.md](../CHANGELOG.md) `[Unreleased]`):
 > - **Chat render pipeline rewritten (IntelliJ UI)** - the message `StateFlow` is collected directly and throttled with a trailing `delay`, replacing a lossy `MutableSharedFlow(extraBufferCapacity = 1)` + `sample` hop; collectors run on `Dispatchers.IO`; the whole scroll chain is revalidated instead of just `messagesPanel`; `kotlinx-coroutines` is excluded from the plugin's runtime classpath. Together these fixed "bubbles only appear after a resize" and the frozen `advance_code_editing` char counter. See [Chat Render Pipeline](#chat-render-pipeline-intellij).
 > - **Live tool-bubble lifecycle** - a tool bubble is live from the moment its call starts (not from its first delta), and `MessageDispatcher.reconcileMessages` deduplicates a call's streaming transient against its persisted twin by `toolCallId`.
-> - **`/goal` autonomous workflow** — `/goal <condition>` sets an explicit completion condition on the active task. `NextSpeakerJudgeGuardian` switches from generic "is the turn finished?" to strict goal-aware evaluation that verifies the transcript shows demonstrable evidence the condition is met. AGENT-only. Available in TUI and IntelliJ. Condition persisted on the `tasks` table, survives session restart.
-> - **LLM judge `checkNextSpeaker` (Gemini CLI pattern)** — at the terminal of every AGENT turn, `NextSpeakerJudgeGuardian` runs a cheap `ModelOperation.WEAK` call to decide whether the agent really finished or just paused mid-task. "model" verdict → `GuardianDecision.Reenter` with a SYSTEM nudge; "user" / "uncertain" / parse-fail → `Pass`. Capped at 3 re-entries per turn (`MAX_JUDGE_REENTRIES`). Pre-filter skips the LLM call for clarifying questions (`?`) and — in generic mode only — short / explicitly-finished replies.
-> - **Content-chanting loop detection** — `TurnGuardrails.ContentChantingDetector` hard-aborts the turn when the assistant message contains the same word phrase repeated 10+ times consecutively. Catches the runaway-generation pathology common with weak local models.
-> - **Anthropic prompt-prefix caching** — `TurnPromptBuilder.StructuredPromptBuilder.render()` reports a `stablePrefixLength`; `AnthropicAdapter` splits the system prompt into two blocks and marks the stable prefix with `cache_control: ephemeral`. Subsequent turns billed at the cache-hit rate (~10% of normal input cost, 5-min TTL).
-> - **Iter cap PLAN 50 → 100** — `TurnLoopConfig.plan()` matches AGENT and aligns with Gemini CLI (100) / Hermes (90). PLAN is read-only so iterations are cheap.
-> - **`TurnGuardrails` simplification** — removed `looksLikeIntentAnnouncement`, `looksLikeToolMarkerOnly`, and the count-based `TurnRepetitionTracker` abort. Format-retry only fires on objectively-broken outputs (empty envelope, native-text-embedded tool call, malformed JSON). Aligns with Codex / Claude Code "trust the model" philosophy.
-> - **Universal `<tool_use_enforcement>`** — system-agent.md and system-plan.md now embed an explicit "do not narrate intent without a tool call" block. Replaces the previous `ModelFamilyClassifier`-based dynamic injection.
-> - **Multi-agent A2A messaging** — `AgentInboxRegistry` + `AgentMessageInbox` give each agent a queue; `send_message` enqueues, `answer_message` replies; the next turn's prompt builder injects pending inbound messages. Production wiring for the previously-incomplete A2A loop.
-> - **Centralized LLM metric tracking** — `LLMClient` accepts `taskRepository` + `subtaskRepository` and auto-increments `tokens_in` / `tokens_out` / `cost_usd` on the matching task and subtask rows after every successful call. The `task` row is the single source of truth; UI reads it directly instead of summing per-message tokens.
-> - **`DiffCompressor`** — content-aware diff body elision (small / pure-create / mixed paths). Saves ~8-14K input tokens on the agent iteration that follows a write tool.
-> - **Native function calling on OpenAI-compatible adapters** (OpenRouter, Z.AI, Generic OpenAI, LM Studio) plus persistent fallback list (`models.native_tools_fallbacks`) — fallback survives process restart. New test suites (`AnthropicAdapterToolsTest`, `OllamaAdapterToolsTest`, `OpenAIAdapterToolsTest`, `NativeToolsResolverTest`) lock the per-provider wire format.
-> - **`maxContextWindow` cached as a `StateFlow`** in `SessionManager` — Status bar / Context panel / Settings no longer hit SQLite from the EDT.
+> - **`/goal` autonomous workflow** - `/goal <condition>` sets an explicit completion condition on the active task. `NextSpeakerJudgeGuardian` switches from generic "is the turn finished?" to strict goal-aware evaluation that verifies the transcript shows demonstrable evidence the condition is met. AGENT-only. Available in TUI and IntelliJ. Condition persisted on the `tasks` table, survives session restart.
+> - **LLM judge `checkNextSpeaker` (Gemini CLI pattern)** - at the terminal of every AGENT turn, `NextSpeakerJudgeGuardian` runs a cheap `ModelOperation.WEAK` call to decide whether the agent really finished or just paused mid-task. "model" verdict → `GuardianDecision.Reenter` with a SYSTEM nudge; "user" / "uncertain" / parse-fail → `Pass`. Capped at 3 re-entries per turn (`MAX_JUDGE_REENTRIES`). Pre-filter skips the LLM call for clarifying questions (`?`) and - in generic mode only - short / explicitly-finished replies.
+> - **Content-chanting loop detection** - `TurnGuardrails.ContentChantingDetector` hard-aborts the turn when the assistant message contains the same word phrase repeated 10+ times consecutively. Catches the runaway-generation pathology common with weak local models.
+> - **Anthropic prompt-prefix caching** - `TurnPromptBuilder.StructuredPromptBuilder.render()` reports a `stablePrefixLength`; `AnthropicAdapter` splits the system prompt into two blocks and marks the stable prefix with `cache_control: ephemeral`. Subsequent turns billed at the cache-hit rate (~10% of normal input cost, 5-min TTL).
+> - **Iter cap PLAN 50 → 100** - `TurnLoopConfig.plan()` matches AGENT and aligns with Gemini CLI (100) / Hermes (90). PLAN is read-only so iterations are cheap. (Both caps have since been raised to 200.)
+> - **`TurnGuardrails` simplification** - removed `looksLikeIntentAnnouncement`, `looksLikeToolMarkerOnly`, and the count-based `TurnRepetitionTracker` abort. Format-retry only fires on objectively-broken outputs (empty envelope, native-text-embedded tool call, malformed JSON). Aligns with Codex / Claude Code "trust the model" philosophy.
+> - **Universal `<tool_use_enforcement>`** - system-agent.md and system-plan.md now embed an explicit "do not narrate intent without a tool call" block. Replaces the previous `ModelFamilyClassifier`-based dynamic injection.
+> - **Multi-agent A2A messaging** - `AgentInboxRegistry` + `AgentMessageInbox` give each agent a queue; `send_message` enqueues, `answer_message` replies; the next turn's prompt builder injects pending inbound messages. Production wiring for the previously-incomplete A2A loop.
+> - **Centralized LLM metric tracking** - `LLMClient` accepts `taskRepository` + `subtaskRepository` and auto-increments `tokens_in` / `tokens_out` / `cost_usd` on the matching task and subtask rows after every successful call. The `task` row is the single source of truth; UI reads it directly instead of summing per-message tokens.
+> - **`DiffCompressor`** - content-aware diff body elision (small / pure-create / mixed paths). Saves ~8-14K input tokens on the agent iteration that follows a write tool.
+> - **Native function calling on OpenAI-compatible adapters** (OpenRouter, Z.AI, Generic OpenAI, LM Studio) plus persistent fallback list (`models.native_tools_fallbacks`) - fallback survives process restart. New test suites (`AnthropicAdapterToolsTest`, `OllamaAdapterToolsTest`, `OpenAIAdapterToolsTest`, `NativeToolsResolverTest`) lock the per-provider wire format.
+> - **`maxContextWindow` cached as a `StateFlow`** in `SessionManager` - Status bar / Context panel / Settings no longer hit SQLite from the EDT.
 > - "Slash commands" were renamed to "Prompts" (code: `SlashCommand` → `SlashPrompt`, DB enum `SLASH_COMMAND` → `SLASH_PROMPT` with V3 migration). The `/name` invocation syntax is unchanged; UI tab is now **Settings → Prompts**.
 > - Terminal command security uses a single `CommandRule` regex engine (`ALLOW` / `BLOCK` / `ASK`); the legacy `CommandWhitelist` / `CommandDenylist` classes have been removed.
-> - Models settings tab no longer triggers remote provider fetches on open — only the **Refresh** button does. Local providers (Ollama, LM Studio) use a 3 s `listModels` timeout.
+> - Models settings tab no longer triggers remote provider fetches on open - only the **Refresh** button does. Local providers (Ollama, LM Studio) use a 3 s `listModels` timeout.
 
 ---
 
@@ -46,7 +46,7 @@ Unlike tools that send entire codebases to LLMs, Refio uses **selective context 
 | **Enhanced AgentTurnLoop** | AgentTurnLoop execution + subagent profile support, caching, parallel tools |
 | **14 Context Providers** | @file, @folder, @codebase, @grep, @url, @docs, @commit, and more                     |
 | **RAG Indexing** | Automatic project indexing with language-specific analyzers                          |
-| **~30 Registered Tools** | 6 functional groups; PLAN exposes the read-only subset, AGENT the full set     |
+| **32 Registered Tools** | 6 functional groups; PLAN exposes the read-only subset, AGENT the full set     |
 | **8 LLM Adapters** | Ollama, OpenAI, Anthropic, Gemini, OpenRouter, LM Studio, Custom OpenAI, Z.AI        |
 | **Native Function Calling** | Provider-native tool API (Ollama, OpenAI, Anthropic, Gemini, OpenRouter, Z.AI, LM Studio, Generic OpenAI) with JSON-in-text fallback |
 | **`/goal` Autonomous Workflow** | Explicit completion condition + LLM judge (Gemini CLI `checkNextSpeaker` pattern) verifies goal is *demonstrably* met before turn closes |
@@ -71,25 +71,26 @@ Unlike tools that send entire codebases to LLMs, Refio uses **selective context 
 |  RefioToolWindowFactory -> ChatView -> PromptInputPanel                 |
 +-------------------------------------------------------------------------+
 |  Service Layer (Project-Scoped)                                         |
-|  SessionManager (facade)                                                |
-|  +-- SessionStateManager (11 StateFlows for reactive UI)                |
+|  SessionManager (plugin facade) -> CoreSessionService (core/session/)   |
+|  +-- SessionStateManager (16 StateFlows for reactive UI)                |
 |  +-- SessionLifecycleService (session create/switch/load)               |
-|  +-- MessageDispatcher (CHAT vs PLAN/AGENT routing)                     |
+|  +-- MessageDispatcher (message reload + transient/DB reconcile)        |
 |  +-- SubtaskTracker (subtask lifecycle management)                      |
 +-------------------------------------------------------------------------+
 |  Execution Layer                                                        |
-|  +-- CHAT mode -> WorkflowOrchestrator -> ChatExecutor                  |
-|  +-- PLAN/AGENT mode -> AgentTurnLoop (self-directing tool loop)        |
+|  +-- CHAT mode -> ChatRouter -> ChatService                             |
+|  +-- PLAN/AGENT mode -> AgentTurnLoop -> TurnExecutor (tool loop)       |
 +-------------------------------------------------------------------------+
 |  Core Layer (In-Process API)                                            |
-|  CoreApiRouter (composition root, ~305 LOC — zero business logic)       |
-|  +-- 12 Domain Routers (Chat, Task, Subtask, Agent, Config,             |
-|  +--   Prompts, Tool, RAG, ApiLogs, MultiAgent, ProjectContext, Subagent)|
-|  +-- ContextService (~2140 LOC) + 6 extracted sub-services              |
+|  CoreApiRouter (composition root, ~320 LOC - zero business logic)       |
+|  +-- 13 Domain Routers (Chat, Task, Subtask, Agent, Config, Prompts,    |
+|  +--   Tool, RAG, ApiLogs, MultiAgent, ProjectContext, Subagent,        |
+|  +--   Snapshot); wiring split into core/api/modules/                   |
+|  +-- ContextService (~1230 LOC) + helpers in services/context/          |
 +-------------------------------------------------------------------------+
 |  Infrastructure Layer                                                   |
 |  +-- LLMClient (unified) -> 8 provider adapters                        |
-|  +-- ToolRegistry -> ~30 registered tools with security layers           |
+|  +-- ToolRegistry -> 32 registered tools (+ MCP tools) with security     |
 |  +-- MCPManager -> MCP server lifecycle (STDIO/HTTP)                    |
 |  +-- EmbeddingsService -> Ollama/OpenAI embeddings                      |
 |  +-- DatabaseFactory -> SQLite (WAL) + Exposed ORM                      |
@@ -103,20 +104,24 @@ User Input
     |
 SessionManager.sendMessage()
     |
+CoreSessionService.sendMessage()
+    |
 +-------------------------------------------------------------------------+
 | CHAT mode                         | PLAN/AGENT mode                     |
 |                                   |                                     |
-| WorkflowOrchestrator              | AgentTurnLoop.runTurn()             |
+| ChatRouter.chat()                 | AgentRouter.runTurn()               |
 |     |                             |     |                               |
-| IntentRouter                      | 1. Save user message                |
-|     |                             | 2. Build prompt + tool descriptions |
-| ChatExecutor                      | 3. Call LLM                         |
-|     |                             | 4. If tool calls:                   |
-| ChatService.chat()                |    - Create subtasks                |
-|     |                             |    - Execute tools                  |
-| LLMClient.complete()              |    - Summarize results              |
-|     |                             |    - Continue loop                  |
-| Response                          | 5. Save final response              |
+| ChatService.chat()                | AgentTurnLoop -> TurnExecutor       |
+|     |                             | 1. Save user message                |
+| LLMClient.complete()              | 2. Build prompt + tool descriptions |
+|     |                             | 3. Call LLM                         |
+| Response                          | 4. If tool calls:                   |
+|                                   |    - Create subtasks                |
+|                                   |    - Execute tools                  |
+|                                   |    - Summarize results              |
+|                                   |    - Continue loop                  |
+|                                   | 5. Completion guardians, then save  |
+|                                   |    final response                   |
 +-------------------------------------------------------------------------+
     |
 MessageDispatcher.loadMessages()
@@ -192,7 +197,7 @@ Rules that make this work, each covered by a regression test:
 
 Direct LLM conversation with full project context. No tool execution.
 
-- Uses ChatExecutor -> ChatService
+- Uses ChatRouter -> ChatService (the former WorkflowOrchestrator / intent dispatch was removed)
 - Streaming responses
 - Context includes: project analysis, conversation history, RAG fragments, @mentions
 
@@ -242,17 +247,19 @@ AgentTurnLoop includes production-grade enhancements:
 | **Centralized stats** | `LLMClient` writes `tokens_in` / `tokens_out` / `cost_usd` directly to `task` and `subtask` rows on every successful call; UI reads the row instead of summing per-message tokens |
 | **Cached context window** | `SessionManager.maxContextWindow` `StateFlow` keeps the limit on hand; Status bar and Settings repaint without an EDT-blocking SQLite read |
 
-**Configuration:** Mode/profile settings (PLAN: 100 iterations, AGENT: 100 iterations, SUBAGENT depth limit: 3)
+**Configuration:** Mode/profile settings in `TurnLoopConfig` (PLAN: 200 iterations, AGENT: 200 iterations, a subagent profile may override via `maxIterationsOverride`; SUBAGENT depth limit: 3). The iteration cap is a backstop; the real ceilings are the abort guards below plus `CostLimitGuard` (per-session `agent.max_cost_usd` / `--max-cost`) and `TurnBudgetGuard` (per-turn wall clock, `agent.max_turn_minutes`).
+
+**Post-turn verification:** after a file-writing AGENT turn, `TurnVerifier` runs the project's build/test command (`verify.command` or autodetected) and feeds failures back to the model as a bounded repair loop. Abandoned turns end with `TaskStatus.INCOMPLETE` rather than `SUCCESS`.
 
 ### Turn Completion Guardian System
 
-After the LLM produces a tool-call-free reply (i.e. the turn is *about* to finish), a `GuardianRegistry` runs all registered `TurnCompletionGuardian`s sequentially. The first `GuardianDecision.Reenter` short-circuits the rest and pushes the loop back with a SYSTEM nudge. Registry has a hard `maxReentries` cap (default 3) so a misbehaving guardian cannot create an infinite loop.
+After the LLM produces a tool-call-free reply (i.e. the turn is *about* to finish), a `GuardianRegistry` runs all registered `TurnCompletionGuardian`s sequentially. The first `GuardianDecision.Reenter` short-circuits the rest and pushes the loop back with a SYSTEM nudge. Registry has a hard `maxReentries` cap (class default 2; `AgentTurnLoopFactory` wires it to `MAX_JUDGE_REENTRIES` = 3) so a misbehaving guardian cannot create an infinite loop. A guardian can also return `GuardianDecision.Incomplete`, which ends the turn as `INCOMPLETE`.
 
 | Guardian | What it checks | When it fires |
 |---|---|---|
-| `NextSpeakerJudgeGuardian` | "Is the agent really done?" — LLM judge using `ModelOperation.WEAK`. Two modes: generic ("is this a finished answer?") and goal-aware ("has the user's `/goal` condition been demonstrably met?"). | AGENT mode only; PLAN / CHAT self-skip |
+| `NextSpeakerJudgeGuardian` | "Is the agent really done?" - LLM judge using `ModelOperation.WEAK`. Two modes: generic ("is this a finished answer?") and goal-aware ("has the user's `/goal` condition been demonstrably met?"). | PLAN and AGENT; CHAT self-skips. Goal-aware mode is AGENT only |
 
-Per-guardian pre-filter (`looksClearlyDone`) skips the LLM call for unambiguous cases: trailing `?` always; in generic mode also short text and explicit completion markers. Defensive: any parse failure or exception returns `Pass` — a broken guardian never blocks a turn.
+Per-guardian pre-filter (`looksClearlyDone`) skips the LLM call for unambiguous cases: trailing `?` always; in generic mode also short text and explicit completion markers. Defensive: any parse failure or exception returns `Pass` - a broken guardian never blocks a turn.
 
 Cap mechanics (3 layers):
 - `looksClearlyDone()` pre-filter → 0 LLM calls for hot paths
@@ -261,18 +268,20 @@ Cap mechanics (3 layers):
 
 ### Loop-Detection Guards (`TurnGuardrails`)
 
-Four independent abort signals operating BELOW the guardian layer (inside the iteration, not at turn-end):
+Independent abort signals operating BELOW the guardian layer (inside the iteration, not at turn-end):
 
 | Guard | Pathology | Trigger |
 |---|---|---|
-| `ToolErrorTracker` | Tool calls failing repeatedly | ≥70% error rate over last 10 calls |
-| `TurnRepetitionTracker` | Same tool produces byte-identical output | Identical output hash 4× in a row on same `(tool, target)` key |
+| `ToolErrorTracker` | Tool calls failing repeatedly | Error rate > 70% over the last 10 calls (at least 5 recorded) AND the most recent call failed, so a recovered agent is not killed |
+| `TurnRepetitionTracker` | Same tool produces byte-identical output, or a write that changes nothing | Identical output hash 4× in a row on same `(tool, target)` key; 3 consecutive no-op writes on the same target abort as `INCOMPLETE` |
+| `ConsecutiveBlockedToolTracker` | Model keeps calling tools outside its profile (e.g. a subagent whitelist) | 2 blocked calls in a row, regardless of arguments |
+| `ConsecutiveDeniedToolTracker` | Model keeps asking for commands the approval policy refused | 3 denied calls in a row (kept out of the error rate on purpose) |
 | `ContentChantingDetector` | Model echoes itself in a runaway loop | Same word phrase (length 1-10) repeated ≥10× consecutively. Pure-symbol runs (box-drawing, table borders, separators) are exempt - an ASCII diagram is structure, not a loop |
 | `ConsecutiveTextRepetitionTracker` | Model re-emits near-identical prose across iterations without acting | Near-identical text (exact, or ≥0.85 Dice similarity for ≥4 tokens) 2× in a row with no tool call |
 
 Earlier prose-pattern detectors (`looksLikeIntentAnnouncement`, `looksLikeToolMarkerOnly`) were removed: the system prompt already enforces "don't narrate without a tool call", and regex detection on top produced false positives on legitimate trailing prose. Format-retry now fires only on objectively-broken outputs (empty envelope, native-text-embedded tool call, malformed JSON).
 
-### `/goal` — Completion Condition Flow
+### `/goal` - Completion Condition Flow
 
 ```
 User: /goal all tests in src/test pass
@@ -310,7 +319,7 @@ Verdict:
 ```
 
 API surface:
-- `TaskRouter.setGoal(taskId, condition: String?)` — `null` clears; throws `IllegalArgumentException` if condition > 4000 chars (Claude Code parity)
+- `TaskRouter.setGoal(taskId, condition: String?)` - `null` clears; throws `IllegalArgumentException` if condition > 4000 chars (Claude Code parity)
 - `TaskRouter.getGoal(taskId): String?`
 - `TaskRouter.clearGoal(taskId): Boolean`
 
@@ -361,7 +370,7 @@ ContextService.buildProjectContext()
     +-- 6. Resolve @mentions via ContextProviderRegistry
     +-- 7. Combine into ProjectContextDTO
     |
-Token budgeting (section limits, ~28K tokens default)
+Token budgeting (ContextBudget.forContextSize: 85% of the model window minus the static system prompt, split into per-section limits)
     |
 Final prompt sent to LLM
 ```
@@ -409,16 +418,16 @@ Query: "authentication logic"
     |
 EmbeddingProvider.generateEmbedding(query)
     |
-RagRepository.getEmbeddings(projectRoot)
+RagRepository.getEmbeddingsBatch(projectRoot, ...)   [pages of 500, never load-all]
     |
 Cosine Similarity Calculation
     cos(q, e) = (q . e) / (||q|| x ||e||)
     |
-Filter: similarity >= threshold (default 0.5)
+Filter: similarity >= threshold (default 0.65, RagSearchConfig)
     |
-Sort by similarity, take topK (default 5)
+Sort by similarity, bounded candidate pool, dedup, take topK (default 5)
     |
-Optional: Hybrid search (70% semantic + 30% keyword)
+Optional: Hybrid search (70% semantic + 30% BM25, keyword boost fallback)
     |
 RagSearchResult[]
 ```
@@ -432,12 +441,13 @@ RagSearchResult[]
 | Python | PythonLanguageAnalyzer | Classes, functions, decorators, type hints |
 | TypeScript | TypeScriptLanguageAnalyzer | Classes, interfaces, functions, React components |
 | HTML | HtmlLanguageAnalyzer | Structure, scripts, styles |
+| Go, Rust, C++, CSS | GoLanguageAnalyzer, RustLanguageAnalyzer, CppLanguageAnalyzer, CssLanguageAnalyzer | Language-specific declarations (in `core/services/analysis/`) |
 
 ---
 
 ## Tools
 
-### READ_ONLY Tools (14)
+### READ_ONLY Tools (15)
 
 | Tool | Parameters | Description |
 |------|------------|-------------|
@@ -451,18 +461,20 @@ RagSearchResult[]
 | `web_search` | query, max_results? | Search the web (Brave/SerpAPI/DuckDuckGo) |
 | `fetch_webpage` | url, prompt, max_content_chars? | Fetch URL, convert to Markdown, process with LLM |
 | `code_intelligence` | action, symbol?, path?, language? | Find usages/definitions, list symbols, get diagnostics |
+| `find_usages` | symbol_name, max_results? | List every usage of a symbol via `StructuralRefactorer` (PSI in the IDE, word-boundary text search in CLI/headless) |
 | `monitor_process` | process_id, max_lines? | Read output from background process |
 | `ask_user` | question, options? | Ask the user a question and wait for response |
 | `sleep` | duration_ms | Pause execution (max 30s) |
 | `think` | thought | Explicit reasoning slot |
 
-### WRITE Tools (10)
+### WRITE Tools (11)
 
 | Tool | Parameters | Description | Cost |
 |------|------------|-------------|------|
 | `create_new_file` | path, content | Create file with parent dirs | Free |
 | `code_editing` | path, old_string, new_string, replace_all | Search-and-replace | Free |
 | `multi_edit` | edits[] | Atomic multi-file edit | Free |
+| `rename_symbol` | file, line?, old_name, new_name | Project-wide symbol rename in one call (`PsiStructuralRefactorer` in the IDE, `TextStructuralRefactorer` elsewhere) | Free |
 | `multi_line_editor` | path, edit_description | LLM identifies line ranges | ~$0.02 |
 | `advance_code_editing` | path, edit_description | Full file regeneration | ~$0.06 |
 | `run_terminal_command` | command | Shell execution (ASK in AGENT, CommandRule-protected) | Free |
@@ -473,18 +485,16 @@ RagSearchResult[]
 
 ### SYSTEM & DELEGATION Tools (6)
 
-These are registered on top of the read-only / write sets above (the two tables list 24; these
-six bring the registry to ~30). They do not write project files, so most are available in both
-PLAN and AGENT.
+These are registered on top of the read-only / write sets above (the two tables list 26, built by `ToolFactory`; these six bring the registry to 32). `rag_search` is registered in `CoreApiRouterBootstrap`, the rest (plus `invoke_subagent` and `delegate_to_strong_model`) in `SystemToolsRegistrar`. They do not write project files, so most are available in both PLAN and AGENT. MCP servers with tool exposure add further `mcp_<server>_*` tools via `MCPToolWrapper`.
 
 | Tool | Parameters | Description |
 |------|------------|-------------|
-| `rag_search` | query, top_k? | Semantic search over the indexed project (vector RAG) |
-| `tasks` | action, … | Read / update the agent's plan steps |
-| `memory` | action, key?, value? | Working-memory / subtask-output store and recall |
-| `manage_subagent` | action, name? | List / enable / disable available subagents |
-| `send_message` | target_agent, content | Enqueue a message to a peer agent's inbox (A2A) |
-| `answer_message` | message_id, content | Reply to a specific inbound agent message (A2A) |
+| `rag_search` | query, top_k?, threshold?, content_type? | Semantic search over the indexed project (vector RAG) |
+| `tasks` | action (plan / update / list), … | Read / update the agent's plan steps |
+| `memory` | action (write / read / list / get_subtask_output), key?, value?, … | Working-memory / subtask-output store and recall |
+| `manage_subagent` | action (create / update / delete / list), name?, scope?, … | Create, update, delete or list subagent definitions |
+| `send_message` | message, type (question / info / blocker), to? (default `parent`) | Send a message to the parent or a peer agent (A2A) |
+| `answer_message` | requestId, response | Reply to a specific pending inbound request (A2A) |
 
 ### Tool Availability by Mode
 
@@ -500,11 +510,11 @@ PLAN and AGENT.
 
 ### Code Editing
 
-`multi_line_editor` and `advance_code_editing` don't edit files inline — they make a **separate LLM call to generate the new file content**, then Refio computes the diff and writes the file.
+`multi_line_editor` and `advance_code_editing` don't edit files inline - they make a **separate LLM call to generate the new file content**, then Refio computes the diff and writes the file.
 
-- **Model slot.** Both edit tools resolve their generation model from the `coding` slot (`ModelOperation.CODING` → `default_model.agent`) — the same slot the AGENT turn loop uses. When unset it inherits the default (`chat`) model.
+- **Model slot.** Both edit tools resolve their generation model from the `coding` slot (`ModelOperation.CODING` → `default_model.agent`) - the same slot the AGENT turn loop uses. When unset it inherits the default (`chat`) model.
 - **Whole-file, not diff.** The model returns the *complete* file inside a fenced code block; Refio derives the unified diff from before/after purely for display. There is no diff to "apply", so there is no diff-application failure mode.
-- **Extraction-repair loop.** A weak model sometimes replies with prose or an unterminated block (no usable code block). Instead of failing the turn, `advance_code_editing` re-prompts with a corrective hint, bounded to 2 attempts, then fails loud — never a silent or partial write (the file is written only after a clean extraction).
+- **Extraction-repair loop.** A weak model sometimes replies with prose or an unterminated block (no usable code block). Instead of failing the turn, `advance_code_editing` re-prompts with a corrective hint, bounded to 2 attempts, then fails loud - never a silent or partial write (the file is written only after a clean extraction).
 
 ## Subagents
 
@@ -526,7 +536,11 @@ Its description is generated dynamically from currently enabled subagents (name,
 | **Orchestration** | `multi-agent-coordinator`, `workflow-orchestrator` |
 | **Research** | `research-analyst` |
 
-Legacy invocations `!security-reviewer` and `!security-auditor` are aliased to `!security-engineer` for backward compatibility.
+Use `!security-engineer` for security reviews; there is no alias in code for the older names `!security-reviewer` / `!security-auditor`.
+
+### Multi-Agent Orchestration
+
+`MultiAgentRunner` (`core/agents/`) runs several agents in parallel, each as an isolated `AgentTurnLoop` with its own task row, and respects declared dependencies (agent B waits for agent A). The agent set comes from a YAML task file parsed by `MultiAgentTaskParser` (CLI: `--multi-agent <file>`; router: `MultiAgentRouter`). Progress is published as `AgentEvent`s on `AgentEventBus` and persisted by `AgentEventSqlRepository` for the agents graph view.
 
 ### Multi-Agent A2A Messaging
 
@@ -534,10 +548,10 @@ When multiple agents run on the same task (e.g. `multi-agent-coordinator` orches
 
 | Component | Role |
 |---|---|
-| `AgentInboxRegistry` | Keeps an `AgentMessageInbox` per `(taskId, agentInstanceId)` pair; supports lookup and iteration |
-| `AgentMessageInbox` | Per-agent FIFO queue of inbound `AgentMessage`s with sender / message-id / payload |
-| `SendMessageTool` | Agent calls `send_message(target_agent, content)` → enqueues to the target's inbox |
-| `AnswerMessageTool` | Agent calls `answer_message(message_id, content)` → replies to a specific inbound message (more deterministic than broadcasting) |
+| `AgentInboxRegistry` | Session-scoped lookup of an `AgentMessageInbox` per `(sessionId, agentName)` pair |
+| `AgentMessageInbox` | Per-agent queue of pending `AgentEvent.DataRequest`s captured from `AgentEventBus`; a request leaves the queue once a matching `DataResponse` appears on the bus |
+| `SendMessageTool` | Agent calls `send_message(message, type, to)` - publishes a request to the parent (default) or a named agent |
+| `AnswerMessageTool` | Agent calls `answer_message(requestId, response)` - replies to a specific pending request (more deterministic than broadcasting) |
 | Prompt builder | On each turn, injects pending inbound messages into the agent's context so the LLM sees them |
 
 Integration tests: `MultiAgentA2ATest`, `AgentMessageInboxTest`, `ChatMessageRepositoryIsolationTest` (verifies per-agent message scoping when multiple agents share a task).
@@ -572,7 +586,7 @@ You are a specialized assistant for...
 | `coding` | ConfigService CODING model |
 | `weak` | ConfigService WEAK model |
 
-Any other value is treated as a literal model string; the provider is inferred from the prefix (`gpt-`/`o1`/`o3` -> openai, `claude-` -> anthropic, `gemini-` -> gemini, otherwise ollama).
+Any other value is treated as a literal model string (`provider/model`, or a bare model name); for a bare name the provider is inferred from the prefix (`gpt-`/`o1`/`o3` -> openai, `claude-` -> anthropic, `gemini-` -> gemini, otherwise ollama).
 
 ---
 
@@ -643,7 +657,7 @@ mcp:
 
 - **Language/Platform**: Kotlin 2.3.20 compiler (apiVersion/languageVersion pinned to 1.9), JVM target 17 for `:core` / `:cli`, plugin compiled against JDK 21; IntelliJ Platform 2026.1 (IC), builds 241-261.*
 - **UI**: Native IntelliJ Swing components (no webview)
-- **Core/Transport**: CoreApiRouter (composition root) + 12 domain routers; Ktor server for HTTP transport
+- **Core/Transport**: CoreApiRouter (composition root) + 13 domain routers; Ktor server for HTTP transport
 - **LLM/HTTP**: Ktor Client 2.3.7 with 8 provider adapters
 - **Database**: SQLite (WAL) via Exposed 0.46.0 + sqlite-jdbc 3.44.1.0
 - **Serialization**: Gson 2.10.1, kotlinx-serialization-json 1.6.2, KAML 0.55.0
@@ -657,7 +671,7 @@ mcp:
 
 ### Prerequisites
 
-1. **JDK 17** and **IntelliJ IDEA 2024.x**
+1. **JDK 21** (the plugin compiles against it; `:core` / `:cli` target 17) and **IntelliJ IDEA** (the sandbox runs 2026.1 IC; supported builds 241-261.*)
 2. **Ollama** from [https://ollama.com/](https://ollama.com/)
 3. Required models:
    ```bash
@@ -676,7 +690,7 @@ git clone https://github.com/shadoq/refio.git && cd refio
 .\gradlew.bat runIde      # Windows
 
 # Or build plugin ZIP
-./gradlew buildPlugin     # Output: build/distributions/refio-<version>.zip
+./gradlew buildPlugin     # Output: intellij-plugin/build/distributions/refio-<version>.zip
 ```
 
 ### Prompt TPL Variables
@@ -708,6 +722,10 @@ Available placeholders:
 | Project config | `<project>/.refio/config.yaml` | Project-specific prompts, MCP servers |
 | Database | `~/.refio/data/database.sqlite` | Session data, messages, RAG index (shared across projects) |
 | Ignore patterns | `<project>/.aiignore` | RAG indexing exclusions |
+
+### Database
+
+`DatabaseFactory` opens the shared SQLite file in WAL mode via Exposed. Tables live in `core/db/`: `tasks` (incl. `completion_condition` for `/goal`), subtasks, chat messages, config, prompts, MCP servers, API logs, project analysis reports, snapshots + snapshot groups, multi-agent tables (`agent_sessions`, `agent_instances`, `agent_events`), and the RAG tables (`index_files`, `index_chunks`, `embeddings`, `indexing_progress`, `documentation_sources`). Schema changes go through `MigrationRunner` with versioned migrations in `core/db/migrations/` (currently V2-V6) recorded in `schema_migrations`.
 
 ### Quick Start Config
 
@@ -745,18 +763,20 @@ See [`docs/config.md`](config.md) for full configuration reference.
 
 | Layer | Protection |
 |-------|------------|
-| **PathSandbox** | All file ops restricted to project root |
-| **FileLimits** | Size limits (2MB), excluded directories (24), extensions (34) |
+| **PathSandbox** | All file ops restricted to project root (`core/tools/PathSandbox.kt`); symlinks rejected by default, real path re-checked, `revalidateBeforeIO` closes the check-then-use window |
+| **FileLimits** | Size limits (2MB), excluded directories (28), extensions (47) |
 | **CommandRule System** | Regex-based rules with `ALLOW` / `BLOCK` / `ASK` actions; unified replacement for the removed `CommandWhitelist` / `CommandDenylist`. Defaults in `CommandRuleDefaults`, limits in `CommandLimits`. |
 | **ToolPermissions** | 3-level access control: ON/ASK/OFF per mode (PLAN=read-only, AGENT=read-write) |
-| **No-Egress Mode** | Blocks cloud providers, allows only Ollama/LM Studio |
-| **Secret Redaction** | API keys masked in all logs |
+| **No-Egress Mode** | Blocks cloud providers, allows only Ollama/LM Studio. `NetworkPolicy` is the single egress gate also consulted by `web_search`, `fetch_webpage` and `http_request`; a config read error fails closed |
+| **UrlPolicy** | SSRF guard for outbound tool URLs: rejects loopback / private / link-local targets and validates every resolved DNS record |
+| **ExecutionSandbox** | Policy for spawned processes (`run_terminal_command`, `run_code`); `HostExecutionSandbox` is the current backend and limits blast radius, it is not a hard security boundary |
+| **Secret Redaction** | API keys masked in all logs (`SecureLogger`) |
 
 ### Known Issues (P0)
 
 | Issue | Description | Mitigation |
 |-------|-------------|------------|
-| Symlink Escape | PathSandbox can be bypassed via symlinks | Detection + logging in place |
+| Symlink Escape | Child processes started by terminal / code tools are not confined by PathSandbox | PathSandbox itself rejects symlinks by default and re-validates the real path before I/O |
 | Command Rule Coverage | Some workflows may require adding project-specific safe commands | Configure in Tools Settings → Terminal Command Rules (regex-based `ALLOW` / `BLOCK` / `ASK`) |
 
 ---
@@ -766,22 +786,29 @@ See [`docs/config.md`](config.md) for full configuration reference.
 ```
 core/src/main/kotlin/pl/jclab/refio/
 +-- core/                     # IDE-independent core logic
-|   +-- api/                  # CoreApiRouter (composition root) + 12 domain routers
-|   +-- api/routers/          # Domain routers (Chat, Task, Agent, Config, RAG, etc.)
-|   +-- context/              # Context providers + MCP
-|   +-- db/                   # Database layer (Exposed ORM)
+|   +-- api/                  # CoreApiRouter (composition root) + 13 domain routers
+|   +-- api/routers/          # Domain routers (Chat, Task, Agent, Config, RAG, Snapshot, etc.; SubagentRouter lives in subagents/)
+|   +-- api/modules/          # Wiring split out of CoreApiRouter (bootstrap, AgentTurnLoopFactory, SystemToolsRegistrar, ...)
+|   +-- agents/               # Multi-agent runner, AgentEventBus, A2A inboxes
+|   +-- context/              # Standalone context providers + MCP
+|   +-- db/                   # Database layer (Exposed ORM) + migrations/
 |   +-- llm/                  # LLM integration (8 adapters)
-|   +-- services/             # Core services (~35 services)
-|   +-- services/context/     # ContextService sub-components (6 extracted classes)
-|   +-- services/turn/        # AgentTurnLoop sub-components (~27 files)
+|   +-- security/             # NetworkPolicy, UrlPolicy, ExecutionSandbox, SecureLogger
+|   +-- session/              # CoreSessionService, SessionStateManager, MessageDispatcher, SubtaskTracker, ...
+|   +-- services/             # Core services (~50 top-level files)
+|   +-- services/analysis/    # File analysis, language analyzers, EmbeddingsService
+|   +-- services/context/     # ContextService helpers (budget, compression, working memory, ...)
+|   +-- services/turn/        # AgentTurnLoop sub-components (~34 files + prompt section providers)
 |   +-- subagents/            # Subagent system
-|   +-- tools/                # Tool system (~30 registered implementations)
+|   +-- tools/                # Tool system (32 registered implementations), PathSandbox, tools/security/ (CommandRule, FileLimits)
 |   +-- prompts/              # Prompt templates
 +-- api/                      # Shared API models (DTOs)
 
 intellij-plugin/src/main/kotlin/pl/jclab/refio/
++-- core/context/providers/   # IntelliJ-dependent context providers (@current, @problems, @terminal, ...)
 +-- services/                 # Plugin services (project-scoped)
-|   +-- session/              # SessionManager (6 components)
+|   +-- session/              # SessionManager (facade over core/session), status bar, UI adapter
+|   +-- core/                 # CoreConnectionManager, PsiStructuralRefactorer
 |   +-- rag/                  # Background indexing
 +-- ui/                       # IntelliJ UI components
 |   +-- components/           # Chat, toolbar, autocomplete
@@ -808,13 +835,15 @@ cli/src/main/kotlin/pl/jclab/refio/cli/
 ./gradlew runIde              # Run in sandbox IDE
 ./gradlew buildPlugin         # Build ZIP distribution
 
-# Quality
-./gradlew detekt              # Static analysis
-./gradlew ktlintCheck         # Lint check
-./gradlew ktlintFormat        # Auto-format
+# Quality (no detekt / ktlint is configured)
+./gradlew :intellij-plugin:check                   # Includes detectSensitiveLogging
+./gradlew :core:jacocoTestCoverageVerification     # Coverage gate, part of :core:check
 
 # Testing
 ./gradlew test                # Run all tests
+
+# CLI
+./gradlew :cli:installDist    # Build CLI -> cli/build/install/cli/bin/cli
 ```
 
 ---

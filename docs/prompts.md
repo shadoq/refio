@@ -61,7 +61,7 @@ Starfield Simulation (Parallax Stars) using javascript, css, html in one file. S
 
 ---
 
-Plasma Effect (Color Cycling Grid) using javascript, css, html in one file. Create a wavy, psychedelic background using sine wave blending and color cycling. The screen should display a constantly moving, organic color pattern with flowing gradients. Use a grid where each cell's color is determined by combining multiple sine functions of time and position (e.g., sin(x), sin(y), sin(x+y), etc.). Colors should transition smoothly in a repeating palette, ideally 256-color lookup table. The motion should resemble liquid or fire-like movement, without sharp edges. Add a subtle vertical or horizontal drift for realism. Include an option to modify amplitude or frequency over time. No fixed shapes or symmetry — the effect should be continuous and abstract. Add the GUI to control all parameters, use a "dat.gui" library. All production code in one file name "demo_plasma_simple_{{MODEL_ID}}_01.html".
+Plasma Effect (Color Cycling Grid) using javascript, css, html in one file. Create a wavy, psychedelic background using sine wave blending and color cycling. The screen should display a constantly moving, organic color pattern with flowing gradients. Use a grid where each cell's color is determined by combining multiple sine functions of time and position (e.g., sin(x), sin(y), sin(x+y), etc.). Colors should transition smoothly in a repeating palette, ideally 256-color lookup table. The motion should resemble liquid or fire-like movement, without sharp edges. Add a subtle vertical or horizontal drift for realism. Include an option to modify amplitude or frequency over time. No fixed shapes or symmetry - the effect should be continuous and abstract. Add the GUI to control all parameters, use a "dat.gui" library. All production code in one file name "demo_plasma_simple_{{MODEL_ID}}_01.html".
 
 ---
 
@@ -69,7 +69,7 @@ Scrolling Text with Sinus Curve using javascript, css, html in one file with par
 
 ---
 
-Checkerboard Zoomer (Zooming Grid). Create a full-screen checkerboard pattern that appears to zoom in or out. The checkerboard should consist of alternating black and white squares (or colored tiles). The illusion of zoom is created by scaling the pattern — either with matrix transformation or by redrawing the grid with changing size and spacing. Optionally add rotation as the zoom occurs, either clockwise or counter-clockwise. The effect should loop smoothly. Use interpolation or pixel-snapping to keep tiles crisp. You can simulate a vanishing point by keeping the center stable while zooming the outer tiles. Include timing control for zoom speed. Add the GUI to control all parameters, use a "dat.gui" library. All production code in one file name "demo_checkerboard_zoomer_{{MODEL_ID}}_01.html".
+Checkerboard Zoomer (Zooming Grid). Create a full-screen checkerboard pattern that appears to zoom in or out. The checkerboard should consist of alternating black and white squares (or colored tiles). The illusion of zoom is created by scaling the pattern - either with matrix transformation or by redrawing the grid with changing size and spacing. Optionally add rotation as the zoom occurs, either clockwise or counter-clockwise. The effect should loop smoothly. Use interpolation or pixel-snapping to keep tiles crisp. You can simulate a vanishing point by keeping the center stable while zooming the outer tiles. Include timing control for zoom speed. Add the GUI to control all parameters, use a "dat.gui" library. All production code in one file name "demo_checkerboard_zoomer_{{MODEL_ID}}_01.html".
 
 ---
 
@@ -77,7 +77,7 @@ Wobbly Logo Distortion. Display a bitmap logo or text that distorts in a sine or
 
 ---
 
-Copper Bars with Dynamic Palette. Simulate "copper bars" by drawing multiple horizontal bars whose colors change according to a predefined palette gradient. The bars should move smoothly up and down (or stay static) while their color segments shift in brightness and hue. Use multiple overlapping bars with semi-transparent blending or hard edges. Animate palette transitions — e.g., red to orange to yellow. Create a glowing look with soft transitions between color stops. Sync movement to a loop or soundtrack. Keep bar edges sharp but flicker-free. This effect is reminiscent of Amiga copper lists but achievable via CPU or GPU. Add the GUI to control all parameters, use a "dat.gui" library. All production code in one file name "demo_copper_bars_{{MODEL_ID}}_01.html".
+Copper Bars with Dynamic Palette. Simulate "copper bars" by drawing multiple horizontal bars whose colors change according to a predefined palette gradient. The bars should move smoothly up and down (or stay static) while their color segments shift in brightness and hue. Use multiple overlapping bars with semi-transparent blending or hard edges. Animate palette transitions - e.g., red to orange to yellow. Create a glowing look with soft transitions between color stops. Sync movement to a loop or soundtrack. Keep bar edges sharp but flicker-free. This effect is reminiscent of Amiga copper lists but achievable via CPU or GPU. Add the GUI to control all parameters, use a "dat.gui" library. All production code in one file name "demo_copper_bars_{{MODEL_ID}}_01.html".
 
 ---
 
@@ -94,7 +94,7 @@ Sine wave color. Render an animated plasma tunnel where the colors transition sm
 
 ---
 
-Starfield Parallax. Create a classic starfield effect—hundreds of white dots ("stars") move towards the viewer at varying speeds, simulating depth via parallax. Use multiple star layers for depth illusion. As stars approach the center, increase their size and brightness, and reset their position when they move off-screen. Allow control over star count, speed, and color. Add the GUI to control all parameters, use a "dat.gui" library. All producion code in one file using javascript, css, html file name "demo_starfield_parallax_{{MODEL_ID}}_01.html"
+Starfield Parallax. Create a classic starfield effect-hundreds of white dots ("stars") move towards the viewer at varying speeds, simulating depth via parallax. Use multiple star layers for depth illusion. As stars approach the center, increase their size and brightness, and reset their position when they move off-screen. Allow control over star count, speed, and color. Add the GUI to control all parameters, use a "dat.gui" library. All producion code in one file using javascript, css, html file name "demo_starfield_parallax_{{MODEL_ID}}_01.html"
 
 ---
 
@@ -110,7 +110,7 @@ Scrolling Checkerboard. Display a classic checkerboard pattern that scrolls smoo
 
 ---
 
-Twister Bar. Animate a vertical "twister"—a bar made from thin color segments that bends side to side in a sine wave. The whole bar rotates around its vertical axis, with segment colors smoothly shifting over time. Add the GUI to control all parameters, use a "dat.gui" library. All producion code in one file using javascript, css, html. File name "demo_twister_bar_{{MODEL_ID}}_01.html".
+Twister Bar. Animate a vertical "twister"-a bar made from thin color segments that bends side to side in a sine wave. The whole bar rotates around its vertical axis, with segment colors smoothly shifting over time. Add the GUI to control all parameters, use a "dat.gui" library. All producion code in one file using javascript, css, html. File name "demo_twister_bar_{{MODEL_ID}}_01.html".
 
 ---
 
@@ -204,7 +204,7 @@ Procedural 3D Shape Morphing. Write a procedural 3D shape morphing demo in javas
 ---
 
 The application enables interactive creation and editing of simple 3D scenes directly in the web browser. The user can add various types of 3D objects, such as cubes, spheres, and tori, which appear in the scene and can be individually configured. Each object can be translated, rotated, and scaled, and assigned a material with a selected texture or color from predefined options.
-The application also allows dynamic addition of different types of lights—such as point and directional lights—with adjustable parameters including position, intensity, and color. There is an option to enable or disable shadows cast by objects onto a simple ground plane, as well as to adjust shadow quality.
+The application also allows dynamic addition of different types of lights-such as point and directional lights-with adjustable parameters including position, intensity, and color. There is an option to enable or disable shadows cast by objects onto a simple ground plane, as well as to adjust shadow quality.
 A control panel (GUI) lets the user manage the list of objects and lights, select items for editing, and modify their properties in real time. All changes are immediately reflected in the 3D view. The application supports scene reset and displays basic statistics such as the number of objects and lights. Everything runs within a single web page, requires no installation or backend, and is operated entirely from the browser. Add GUI to setup all efect parameters and. All producion code in one file using javascript, css, html. Use file name "3d-editor_{{MODEL_ID}}_01.html".
 
 
@@ -283,7 +283,7 @@ Create a “blitter feedback” effect in one HTML file. Use an offscreen buffer
 
 **File:** `effect_copper_rgb_plasma_{{MODEL_ID}}_01.html`
 **Prompt (EN):**
-Create an RGB plasma in one HTML file. Compute plasma values from multiple sine fields (x/y/time) and map to RGB with smooth palette cycling. Add a “copper” flavor by optionally rendering per-scanline palettes (slightly different RGB mapping per y). Include 2–3 palette presets and a smooth crossfade between them. Controls: P cycles palettes, C toggles per-scanline palette mode. Use file name "effect_copper_rgb_plasma_{{MODEL_ID}}_01.html".
+Create an RGB plasma in one HTML file. Compute plasma values from multiple sine fields (x/y/time) and map to RGB with smooth palette cycling. Add a “copper” flavor by optionally rendering per-scanline palettes (slightly different RGB mapping per y). Include 2-3 palette presets and a smooth crossfade between them. Controls: P cycles palettes, C toggles per-scanline palette mode. Use file name "effect_copper_rgb_plasma_{{MODEL_ID}}_01.html".
 
 ---
 
@@ -379,7 +379,7 @@ In one HTML file, create a “102 x-axis texture mapped credits” effect: multi
 
 **File:** `effect_rgb_plasma_master_{{MODEL_ID}}_01.html`
 **Prompt (EN):**
-Create a high-quality RGB plasma in one HTML file with multiple layered sine fields, smooth gradients, and optional metaball-like warping. Add a “copper master” mode: per-scanline color modulation and subtle banding like hardware color registers. Include FPS and a quality slider (pixel size 1–4). Controls: Q cycles quality, C toggles copper master mode. Use file name "effect_rgb_plasma_master_{{MODEL_ID}}_01.html".
+Create a high-quality RGB plasma in one HTML file with multiple layered sine fields, smooth gradients, and optional metaball-like warping. Add a “copper master” mode: per-scanline color modulation and subtle banding like hardware color registers. Include FPS and a quality slider (pixel size 1-4). Controls: Q cycles quality, C toggles copper master mode. Use file name "effect_rgb_plasma_master_{{MODEL_ID}}_01.html".
 
 ---
 
@@ -463,11 +463,11 @@ Create copper-style zooming tiles in one HTML file. Render a tiled pattern (proc
 
 ---
 
-Jeśli chcesz, mogę też dopisać do każdego promptu **wspólny „kontrakt testowy”** pod Twoje agenty (np. wymagane FPS, struktura kodu, sekcja “Performance Notes”, klawisze diagnostyczne, deterministyczny seed) — tak, żeby wyniki były porównywalne między modelami.
+Jeśli chcesz, mogę też dopisać do każdego promptu **wspólny „kontrakt testowy”** pod Twoje agenty (np. wymagane FPS, struktura kodu, sekcja “Performance Notes”, klawisze diagnostyczne, deterministyczny seed) - tak, żeby wyniki były porównywalne między modelami.
 
 [1]: https://www.youtube.com/watch?v=G3HUp7LH5ig&utm_source=chatgpt.com "Commodore Amiga 500 Best Demo Effects"
 
-OK — poniżej masz **kolejną paczkę efektów demoscenowych**, ale tym razem nie z konkretnego filmu tylko z klasycznego kanonu demosceny (Amiga / PC / oldschool + modern shader demo).
+OK - poniżej masz **kolejną paczkę efektów demoscenowych**, ale tym razem nie z konkretnego filmu tylko z klasycznego kanonu demosceny (Amiga / PC / oldschool + modern shader demo).
 
 Zachowałem:
 
@@ -480,7 +480,7 @@ Wybrałem efekty, które dobrze testują agentów kodujących (matematyka, rende
 
 ---
 
-# 🔥 Prompty – dodatkowe efekty demoscenowe
+# 🔥 Prompty - dodatkowe efekty demoscenowe
 
 ---
 
@@ -617,10 +617,10 @@ Mogę dorzucić jeszcze 3 mocne zestawy efektów, które są **idealne do benchm
 3️⃣ "Impossible for weak models" pack
 (software rasterizer, affine vs perspective mapping, triangle filler)
 
-Powiedz tylko — i przygotuję 👍.
+Powiedz tylko - i przygotuję 👍.
 
 
-OK 🙂 — zrobiłem pełny **mega-pack efektów demoscenowych** pod testy agentów (idealne pod Twój workflow Refio + porównywanie modeli lokalnych vs mocnych).
+OK 🙂 - zrobiłem pełny **mega-pack efektów demoscenowych** pod testy agentów (idealne pod Twój workflow Refio + porównywanie modeli lokalnych vs mocnych).
 
 Każdy:
 
@@ -636,7 +636,7 @@ Podzielone na 3 grupy jak chciałeś.
 
 # 🔥 1️⃣ HARDCORE OLDSCHOOL DEMOSCENE PACK
 
-(stare techniki — testują algorytmiczne myślenie i optymalizacje CPU)
+(stare techniki - testują algorytmiczne myślenie i optymalizacje CPU)
 
 ---
 
@@ -752,7 +752,7 @@ Create a Gray-Scott reaction diffusion simulation in one HTML file. Use pixel-ba
 
 # 🔥 3️⃣ IMPOSSIBLE FOR WEAK MODELS PACK
 
-(to są killer testy 🙂 — modele często się tu wykładają)
+(to są killer testy 🙂 - modele często się tu wykładają)
 
 ---
 
@@ -806,7 +806,7 @@ Create a software 3D renderer with z-buffer in one HTML file. Render multiple ov
 
 ---
 
-# 😈 BONUS — dlaczego to jest idealne pod Refio / testy agentów
+# 😈 BONUS - dlaczego to jest idealne pod Refio / testy agentów
 
 Ponieważ każdy pack sprawdza inną kategorię:
 
@@ -818,7 +818,7 @@ Ponieważ każdy pack sprawdza inną kategorię:
 
 Jeśli chcesz, mogę zrobić jeszcze coś mocniejszego (i serio polecam):
 
-🔥 **MEGA DEMOSCENE BENCHMARK SUITE** — gotowy zestaw do porównywania modeli:
+🔥 **MEGA DEMOSCENE BENCHMARK SUITE** - gotowy zestaw do porównywania modeli:
 
 * difficulty tiers
 * scoring rubric
@@ -891,12 +891,12 @@ Twoim zadaniem jest wygenerowanie nowej wersji minimalistycznej strony typu land
 Przyciągnąć uwagę właścicieli małych firm i przekonać ich do skorzystania z systemu do obserwacji danych. Strona powinna być nowoczesna, prosta, czytelna i bazować na czerni, bieli oraz czerwonych akcentach.
 
 **Układ strony:**
-1. **Header** – logo z czerwonym akcentem, uproszczona nawigacja (Funkcje, Opinie, Demo). CTA w formie przycisku „Zobacz demo”.
-2. **Hero (pierwszy ekran)** – duży nagłówek podkreślający korzyści („Masz dane. My nadajemy im sens.”). Krótkie hasło opisowe, mocne CTA (np. „Rozpocznij darmowy test”). Obok wizualizacja prostego panelu z danymi i alertami.
-3. **Sekcja funkcji** – trzy kluczowe benefity opisane językiem bezpośrednim, np. „Jedna tablica zamiast tysiąca plików”, „Powiadomienia w sekundę”, „Wykresy, które rozumiesz”. Każdy benefit z numerem i ikoną.
-4. **Sekcja opinii (social proof)** – krótkie cytaty klientów (imię, rodzaj biznesu). Czarne tło, białe teksty i czerwone akcenty.
-5. **Sekcja CTA (powtórzenie)** – nagłówek („Zacznij już teraz”), krótki opis korzyści („14 dni za darmo. Bez karty. Zero ryzyka.”), dwa przyciski: czerwony CTA („Załóż darmowe konto”) i czarny outline („Umów prezentację”).
-6. **Stopka** – prawa autorskie, linki do polityki prywatności i regulaminu.
+1. **Header** - logo z czerwonym akcentem, uproszczona nawigacja (Funkcje, Opinie, Demo). CTA w formie przycisku „Zobacz demo”.
+2. **Hero (pierwszy ekran)** - duży nagłówek podkreślający korzyści („Masz dane. My nadajemy im sens.”). Krótkie hasło opisowe, mocne CTA (np. „Rozpocznij darmowy test”). Obok wizualizacja prostego panelu z danymi i alertami.
+3. **Sekcja funkcji** - trzy kluczowe benefity opisane językiem bezpośrednim, np. „Jedna tablica zamiast tysiąca plików”, „Powiadomienia w sekundę”, „Wykresy, które rozumiesz”. Każdy benefit z numerem i ikoną.
+4. **Sekcja opinii (social proof)** - krótkie cytaty klientów (imię, rodzaj biznesu). Czarne tło, białe teksty i czerwone akcenty.
+5. **Sekcja CTA (powtórzenie)** - nagłówek („Zacznij już teraz”), krótki opis korzyści („14 dni za darmo. Bez karty. Zero ryzyka.”), dwa przyciski: czerwony CTA („Załóż darmowe konto”) i czarny outline („Umów prezentację”).
+6. **Stopka** - prawa autorskie, linki do polityki prywatności i regulaminu.
 
 **Styl graficzny:**
 - Minimalistyczny, dużo pustej przestrzeni.
@@ -935,7 +935,7 @@ Create a production-ready, visually stunning website with a **cyberpunk product 
 
 GOAL
 Build a single-page (optional /work/[slug]) website for a fictional studio:
-**“NEON FORGE”** — design + engineering for ambitious startups.
+**“NEON FORGE”** - design + engineering for ambitious startups.
 
 TECH STACK (use exactly this unless something breaks)
 - Next.js (latest stable) + TypeScript
@@ -1038,14 +1038,14 @@ Now implement it end-to-end.
 # Single file
 #########################################################
 
-### 1) AURORA LUXE TRAVEL — futurystyczny luxury travel
+### 1) AURORA LUXE TRAVEL - futurystyczny luxury travel
 
 ```
 Create a production-ready, visually stunning **single-file** website in ONE `web_aurora_{{MODEL_ID}}.html` using only **HTML + CSS + Vanilla JS**.
 
 GOAL
 Build a single-page website for fictional brand:
-**“AURORA LUXE TRAVEL”** — ultra-premium concierge trips.
+**“AURORA LUXE TRAVEL”** - ultra-premium concierge trips.
 
 TECH (STRICT)
 - One file: web_aurora_{{MODEL_ID}}.html only
@@ -1073,7 +1073,7 @@ SECTIONS
    - name, region, vibe, “from €X,XXX”
    - hover shimmer + slight tilt + quick facts
    - click opens accessible modal with details (focus trap, ESC close)
-4) SIGNATURE EXPERIENCES (3–5)
+4) SIGNATURE EXPERIENCES (3-5)
 5) MEMBERSHIP TIERS (3)
 6) TESTIMONIALS (carousel built in vanilla JS; keyboard accessible)
 7) CONCIERGE FORM:
@@ -1109,13 +1109,13 @@ Must look like a high-end luxury brand landing page. No template feel. No lorem 
 
 ---
 
-### 2) NEON FORGE — cyberpunk studio
+### 2) NEON FORGE - cyberpunk studio
 
 ```
 Create a production-ready **single-file** website in ONE `web_neon__{{MODEL_ID}}.html` using only HTML + CSS + Vanilla JS.
 
 GOAL
-Single-page site for **“NEON FORGE”** — design + engineering studio.
+Single-page site for **“NEON FORGE”** - design + engineering studio.
 
 TECH (STRICT)
 One web_neon__{{MODEL_ID}}.html; inline CSS/JS; no libs; remote Unsplash images; open-in-browser.
@@ -1159,12 +1159,12 @@ Single web_neon__{{MODEL_ID}}.html only.
 
 ---
 
-### 3) EMBER & OAK — palarnia kawy (editorial + “steam”)
+### 3) EMBER & OAK - palarnia kawy (editorial + “steam”)
 
 Create a production-ready single-file website in one `web_ember_oak_{{MODEL_ID}}.html` (HTML+CSS+Vanilla JS only).
 
 GOAL
-Single-page for **“EMBER & OAK”** — specialty coffee + subscription.
+Single-page for **“EMBER & OAK”** - specialty coffee + subscription.
 
 TECH (STRICT)
 One file; inline CSS/JS; no libs; remote images; works offline except images.
@@ -1198,7 +1198,7 @@ FEATURE POLISH
 Active nav highlight, scroll reveals, modal for product details, a11y forms, SEO+OG+favicon.
 
 
-### 4) LUMINA ARCHITECTS — portfolio gallery + filtry + modal
+### 4) LUMINA ARCHITECTS - portfolio gallery + filtry + modal
 
 ```
 Create a production-ready single-file website in one `web_luma_architect_{{MODEL_ID}}.html` (HTML/CSS/Vanilla JS).
@@ -1247,13 +1247,13 @@ Scroll reveal, active nav, reduced motion support, SEO+OG+favicon.
 
 ---
 
-### 5) STELLAR SOUND — hi-fi product page + “frequency wave”
+### 5) STELLAR SOUND - hi-fi product page + “frequency wave”
 
 ```
 Create a production-ready single-file website in one `index.html` using HTML+CSS+Vanilla JS only.
 
 GOAL
-Landing for **“STELLAR SOUND”** — audiophile headphones & speakers.
+Landing for **“STELLAR SOUND”** - audiophile headphones & speakers.
 
 TECH (STRICT)
 One file; no external libs; remote images; inline CSS/JS.
@@ -1287,13 +1287,13 @@ DELIVERABLE: one index.html only.
 
 ---
 
-### 6) POLARIS HEALTH — klinika trust-first + świetne formularze
+### 6) POLARIS HEALTH - klinika trust-first + świetne formularze
 
 ```
 Create a production-ready single-file website in one `index.html` (HTML/CSS/Vanilla JS).
 
 GOAL
-Site for **“POLARIS HEALTH”** — concierge clinic.
+Site for **“POLARIS HEALTH”** - concierge clinic.
 
 TECH
 One file; no libs; remote images; inline CSS/JS.
@@ -1331,13 +1331,13 @@ DELIVERABLE: single index.html.
 
 ---
 
-### 7) NOVA FINANCE — fintech landing + animowany phone mock
+### 7) NOVA FINANCE - fintech landing + animowany phone mock
 
 ```
 Create a production-ready single-file website in one `index.html` using HTML/CSS/Vanilla JS only.
 
 GOAL
-Landing for **“NOVA FINANCE”** — personal finance autopilot.
+Landing for **“NOVA FINANCE”** - personal finance autopilot.
 
 TECH (STRICT)
 One file; no libs; remote images; inline CSS/JS.
@@ -1370,13 +1370,13 @@ DELIVERABLE: index.html only.
 
 ---
 
-### 8) GREENHIVE — zero-waste + impact calculator
+### 8) GREENHIVE - zero-waste + impact calculator
 
 ```
 Create a production-ready single-file website in one `index.html` (HTML/CSS/Vanilla JS only).
 
 GOAL
-Brand site for **“GREENHIVE”** — plastic-free essentials.
+Brand site for **“GREENHIVE”** - plastic-free essentials.
 
 TECH
 One file; no libs; remote images; inline CSS/JS.
@@ -1413,13 +1413,13 @@ DELIVERABLE: index.html only.
 
 ---
 
-### 9) SKYLINE FITNESS — schedule grid + filtry + trial booking
+### 9) SKYLINE FITNESS - schedule grid + filtry + trial booking
 
 ```
 Create a production-ready single-file website in one `index.html` (HTML/CSS/Vanilla JS only).
 
 GOAL
-Landing for **“SKYLINE FITNESS”** — boutique gym.
+Landing for **“SKYLINE FITNESS”** - boutique gym.
 
 TECH
 One file; no libs; remote images; inline CSS/JS.
@@ -1456,13 +1456,13 @@ DELIVERABLE: index.html only.
 
 ---
 
-### 10) ARTIFACT: MUSEUM NIGHT — event + .ics generator
+### 10) ARTIFACT: MUSEUM NIGHT - event + .ics generator
 
 ```
 Create a production-ready single-file website in one `index.html` (HTML/CSS/Vanilla JS only).
 
 GOAL
-Event landing for **“ARTIFACT: Museum Night”** — ticketed (no payment).
+Event landing for **“ARTIFACT: Museum Night”** - ticketed (no payment).
 
 TECH
 One file; no libs; remote images; inline CSS/JS.
@@ -1500,17 +1500,17 @@ DELIVERABLE: index.html only.
 
 ---
 
-# 10 promptów: aplikacje webowe (produktowe UI) — single file
+# 10 promptów: aplikacje webowe (produktowe UI) - single file
 
 > Te “aplikacje” też są **jednoplikowe**: jedna strona HTML, ale z **wewnętrznym routerem** (hash routing) i stanem w JS (opcjonalnie localStorage). Wszystko w `index.html`.
 
-### 11) TASK ATLAS — kanban+calendar+reports (hash router)
+### 11) TASK ATLAS - kanban+calendar+reports (hash router)
 
 ```
 Create a production-ready **single-file web app** in ONE `index.html` using only HTML + CSS + Vanilla JS.
 
 GOAL
-Build **“TASK ATLAS”** — tasks, kanban, calendar, reports — as a single-page app with hash routes:
+Build **“TASK ATLAS”** - tasks, kanban, calendar, reports - as a single-page app with hash routes:
 #/dashboard, #/board, #/calendar, #/reports, #/settings (and #/login optional).
 
 TECH (STRICT)
@@ -1559,13 +1559,13 @@ Feels like a real SaaS product UI, coherent flows, no broken states.
 
 ---
 
-### 12) INVOICE PILOT — faktury + klienci + print CSS
+### 12) INVOICE PILOT - faktury + klienci + print CSS
 
 ```
 Create a production-ready single-file web app in ONE `index.html` (HTML/CSS/Vanilla JS only).
 
 GOAL
-Build **“INVOICE PILOT”** — clients + invoices — as SPA with hash routes:
+Build **“INVOICE PILOT”** - clients + invoices - as SPA with hash routes:
 #/dashboard, #/clients, #/client/:id, #/invoices, #/invoice/new, #/invoice/:id, #/settings
 
 TECH (STRICT)
@@ -1595,13 +1595,13 @@ Single index.html only. Must be fully usable.
 
 ---
 
-### 13) BUG SENTRY — issue tracker + bulk actions + timeline
+### 13) BUG SENTRY - issue tracker + bulk actions + timeline
 
 ```
 Create a production-ready single-file web app in ONE `index.html` (HTML/CSS/Vanilla JS only).
 
 GOAL
-Build **“BUG SENTRY”** — issue tracker — SPA with routes:
+Build **“BUG SENTRY”** - issue tracker - SPA with routes:
 #/issues, #/board, #/issue/:id, #/settings
 
 TECH
@@ -1624,13 +1624,13 @@ Single index.html.
 
 ---
 
-### 14) MEALCRAFT — planner + shopping list + print mode
+### 14) MEALCRAFT - planner + shopping list + print mode
 
 ```
 Create a production-ready single-file web app in ONE `index.html`.
 
 GOAL
-Build **“MEALCRAFT”** — recipes + weekly plan + shopping list — SPA routes:
+Build **“MEALCRAFT”** - recipes + weekly plan + shopping list - SPA routes:
 #/plan, #/recipes, #/recipe/:id, #/shopping, #/settings
 
 TECH
@@ -1656,13 +1656,13 @@ Single index.html.
 
 ---
 
-### 15) FOCUS ROOM — pomodoro + tasks + stats (keyboard)
+### 15) FOCUS ROOM - pomodoro + tasks + stats (keyboard)
 
 ```
 Create a production-ready single-file web app in ONE `index.html`.
 
 GOAL
-Build **“FOCUS ROOM”** — Pomodoro timer + tasks + stats — SPA routes:
+Build **“FOCUS ROOM”** - Pomodoro timer + tasks + stats - SPA routes:
 #/timer, #/tasks, #/stats, #/settings
 
 TECH
@@ -1685,13 +1685,13 @@ Single index.html.
 
 ---
 
-### 16) STOCKBOARD — watchlist + deterministic series + alerts
+### 16) STOCKBOARD - watchlist + deterministic series + alerts
 
 ```
 Create a production-ready single-file web app in ONE `index.html`.
 
 GOAL
-Build **“STOCKBOARD”** — watchlist, asset view, alerts — SPA routes:
+Build **“STOCKBOARD”** - watchlist, asset view, alerts - SPA routes:
 #/watchlist, #/asset/:symbol, #/alerts, #/settings
 
 TECH
@@ -1713,13 +1713,13 @@ Single index.html.
 
 ---
 
-### 17) LEARNHUB — kursy + lesson player mock + progress
+### 17) LEARNHUB - kursy + lesson player mock + progress
 
 ```
 Create a production-ready single-file web app in ONE `index.html`.
 
 GOAL
-Build **“LEARNHUB”** — course catalog + course + lesson — SPA routes:
+Build **“LEARNHUB”** - course catalog + course + lesson - SPA routes:
 #/courses, #/course/:id, #/lesson/:id, #/profile, #/settings
 
 TECH
@@ -1744,13 +1744,13 @@ Single index.html.
 
 ---
 
-### 18) EVENTOPS — check-in + schedule + CSV export
+### 18) EVENTOPS - check-in + schedule + CSV export
 
 ```
 Create a production-ready single-file web app in ONE `index.html`.
 
 GOAL
-Build **“EVENTOPS”** — attendee ops dashboard — SPA routes:
+Build **“EVENTOPS”** - attendee ops dashboard - SPA routes:
 #/attendees, #/schedule, #/announcements, #/settings
 
 TECH
@@ -1773,13 +1773,13 @@ Single index.html.
 
 ---
 
-### 19) ASSET VAULT — file manager mock + inspector + activity log
+### 19) ASSET VAULT - file manager mock + inspector + activity log
 
 ```
 Create a production-ready single-file web app in ONE `index.html`.
 
 GOAL
-Build **“ASSET VAULT”** — folder tree, file list/grid, tags, preview, activity log — SPA routes:
+Build **“ASSET VAULT”** - folder tree, file list/grid, tags, preview, activity log - SPA routes:
 #/files, #/tags, #/activity, #/settings
 
 TECH
@@ -1804,13 +1804,13 @@ Single index.html.
 
 ---
 
-### 20) SUPPORT DESK LITE — inbox + ticket view + macros + analytics
+### 20) SUPPORT DESK LITE - inbox + ticket view + macros + analytics
 
 ```
 Create a production-ready single-file web app in ONE `index.html`.
 
 GOAL
-Build **“SUPPORT DESK LITE”** — support inbox UI — SPA routes:
+Build **“SUPPORT DESK LITE”** - support inbox UI - SPA routes:
 #/inbox, #/ticket/:id, #/macros, #/analytics, #/settings
 
 TECH
@@ -1846,7 +1846,7 @@ All producion code in one file using javascript, css, html. Use filename "anim_m
 
 
 
-## 1. Prosty perceptron 2D — podstawy działania
+## 1. Prosty perceptron 2D - podstawy działania
 
 ```text
 Write an interactive neural network visualization in javascript, css, html in one file. Build a visual demo of a single-layer perceptron that classifies 2D points on a coordinate plane. Show input points from two classes with different colors. Display the perceptron as a neuron with weighted inputs, bias, and output. Visualize the decision boundary line updating during training. Add controls to start, pause, reset, and step through training one iteration at a time. Show current weights, bias, learning rate, epoch number, and classification accuracy. Allow the user to generate random datasets and switch between linearly separable and non-linearly separable data. Animate how the weights change after each mistake. Include short explanations in the UI describing what the perceptron is doing. Add a small panel that explains why a single-layer perceptron cannot solve XOR. 
@@ -1863,7 +1863,7 @@ Use file name "network_perceptron_{{MODEL_ID}}_01.html"
 
 ---
 
-## 2. MLP — sieć wielowarstwowa z propagacją w przód
+## 2. MLP - sieć wielowarstwowa z propagacją w przód
 
 ```text
 Write an interactive neural network visualization in javascript, css, html in one file. Build a visual demo of a multilayer perceptron with an input layer, one hidden layer, and an output layer. Show neurons as circles and weighted connections as lines whose thickness and opacity depend on weight magnitude. Animate forward propagation step by step, showing how input values travel through the network and how activations are computed in each neuron. Allow the user to edit the number of input neurons, hidden neurons, and output neurons. Display values for weights, biases, weighted sums, and activation outputs. Add controls for play, pause, next step, reset, and randomize parameters. Let the user switch between sigmoid, tanh, and ReLU activation functions and explain how each changes the behavior. Show a side panel with equations for each layer and highlight currently active calculations during animation. Include a clean start screen and an information panel for beginners. 
@@ -1880,7 +1880,7 @@ Use file name "network_mlp_forward_pass_{{MODEL_ID}}_01.html"
 
 ---
 
-## 3. Backpropagation — jak sieć się uczy krok po kroku
+## 3. Backpropagation - jak sieć się uczy krok po kroku
 
 ```text
 Write an interactive neural network visualization in javascript, css, html in one file. Build a visual educational demo of a small neural network that learns using backpropagation. Show a network with two input neurons, one hidden layer, and one output neuron. Animate the full training cycle: forward pass, loss calculation, backward pass, gradient calculation, and weight update. Highlight the active neurons and connections during each phase. Display the current input sample, predicted output, expected output, error value, gradients, and updated weights. Add controls for play, pause, single-step, next sample, next epoch, and reset. Include sliders for learning rate and dataset size. Provide preset datasets such as AND, OR, XOR, and simple regression. Show the loss curve updating live during training. Add short beginner-friendly explanations for forward propagation, loss, gradient descent, and backpropagation. 
@@ -1950,7 +1950,7 @@ Use file name "network_overfitting_demo_{{MODEL_ID}}_01.html"
 
 ---
 
-## 7. Wizualizacja CNN — jak działa sieć konwolucyjna
+## 7. Wizualizacja CNN - jak działa sieć konwolucyjna
 
 ```text
 Write an interactive neural network visualization in javascript, css, html in one file. Build an educational demo that explains how a convolutional neural network processes an image. Show a small input image as a grid of pixels. Animate a convolution filter sliding across the image and producing a feature map. Include multiple filters and show how each detects different patterns such as edges or simple shapes. Then visualize a pooling layer and a final dense classification layer. Add controls to play, pause, reset, and step through each operation. Let the user switch between different kernels and see how the output changes. Display intermediate feature maps and highlight the currently active receptive field. Include short explanations for convolution, kernel, feature map, pooling, and classification. Keep the math simple but visible. 
@@ -1967,7 +1967,7 @@ Use file name "network_cnn_visualizer_{{MODEL_ID}}_01.html"
 
 ---
 
-## 8. Wizualizacja RNN / sekwencji — uczenie na danych kolejnych w czasie
+## 8. Wizualizacja RNN / sekwencji - uczenie na danych kolejnych w czasie
 
 ```text
 Write an interactive neural network visualization in javascript, css, html in one file. Build an educational demo that explains how a recurrent neural network processes sequences over time. Show a sequence of input tokens entering the network step by step. Visualize the hidden state being passed from one time step to the next. Animate how each new input updates the internal state and contributes to the final prediction. Include examples such as predicting the next character, classifying a short sequence, or processing a simple time series. Add controls for play, pause, next step, reset, and random example generation. Show the hidden state values, current input, output probabilities, and final prediction. Add a comparison note explaining how sequence processing differs from a standard feedforward neural network. Include concise beginner-friendly explanations. 
@@ -2001,7 +2001,7 @@ Use file name "network_neural_network_course_{{MODEL_ID}}_01.html"
 
 ---
 
-## 10. Wersja najbardziej „showcase” — efektowna wizualizacja dla prezentacji
+## 10. Wersja najbardziej „showcase” - efektowna wizualizacja dla prezentacji
 
 ```text
 Write an interactive neural network visualization in javascript, css, html in one file. Build a polished presentation-style demo that visually explains how neural networks are constructed and trained. Show animated layers of neurons, weighted connections, data flowing forward, loss being calculated, and gradients flowing backward. Include sections for single neuron, multilayer perceptron, backpropagation, supervised learning, unsupervised learning, reinforcement learning, and optimization methods. Use smooth transitions, modern UI panels, live charts, and animated diagrams. Add controls for switching scenarios, pausing animations, stepping through stages, and resetting. Include concise educational text directly in the interface. Make it visually impressive but still technically correct and easy to understand for beginners. 
@@ -2018,7 +2018,7 @@ Use file name "network_showcase_{{MODEL_ID}}_01.html"
 
 ---
 
-## 11. Wspólny dopalacz — wersja bardziej dopracowana pod agenta kodującego
+## 11. Wspólny dopalacz - wersja bardziej dopracowana pod agenta kodującego
 
 ```text
 The app must be fully self-contained in a single HTML file with embedded CSS and JavaScript. Do not use external frameworks or CDNs. Make the UI responsive and readable on desktop screens. Use clear labels, legends, and tooltips. Include short explanations for non-technical users, but keep the implementation technically correct. Focus on visualization and interactivity rather than production-grade machine learning accuracy.
@@ -2026,7 +2026,7 @@ The app must be fully self-contained in a single HTML file with embedded CSS and
 
 ---
 
-## 12. Wspólny dopalacz — wariant bardziej techniczny
+## 12. Wspólny dopalacz - wariant bardziej techniczny
 
 ```text
 Use only vanilla JavaScript, HTML, and CSS in one file. Implement the math and animations directly in code without external libraries. Keep the code structured and readable, with clear sections and comments. The primary goal is educational visualization, not high-performance training.
@@ -2036,7 +2036,7 @@ Use only vanilla JavaScript, HTML, and CSS in one file. Implement the math and a
 
 # Rozbudowane warianty z dokładniejszym opisem interfejsu
 
-## 13. Transformer — pełna wizualizacja działania
+## 13. Transformer - pełna wizualizacja działania
 
 ```text
 Write an interactive educational visualization in javascript, css, html in one file. Build a complete beginner-friendly visual demo that explains how a Transformer neural network works. The application should focus on showing the flow of data through the main Transformer components step by step, including tokenization, embeddings, positional encoding, self-attention, multi-head attention, feed-forward layers, residual connections, layer normalization, and final token prediction.
@@ -2109,7 +2109,7 @@ Use file name "network_transformer_visualizer_{{MODEL_ID}}_01.html"
 
 ---
 
-## 14. Transformer — skupienie na self-attention
+## 14. Transformer - skupienie na self-attention
 
 ```text
 Write an interactive educational visualization in javascript, css, html in one file. Build a detailed visual demo focused specifically on self-attention in Transformer networks. The purpose of the app is to help beginners understand how tokens attend to one another and how contextual meaning is created.
@@ -2173,7 +2173,7 @@ Use file name "network_self_attention_demo_{{MODEL_ID}}_01.html"
 
 ---
 
-## 15. Reinforcement learning — grid world z nauką na żywo
+## 15. Reinforcement learning - grid world z nauką na żywo
 
 ```text
 Write an interactive educational visualization in javascript, css, html in one file. Build a complete visual demo of reinforcement learning in a 2D grid world. The app should show an agent learning through trial and error while moving on a grid to reach a goal and avoid penalties.
@@ -2250,7 +2250,7 @@ Use file name "network_reinforcement_gridworld_{{MODEL_ID}}_01.html"
 
 ---
 
-## 16. Reinforcement learning — gra ucząca się w trakcie grania, agent zbierający nagrody
+## 16. Reinforcement learning - gra ucząca się w trakcie grania, agent zbierający nagrody
 
 ```text
 Write an interactive educational game in javascript, css, html in one file. Build a simple 2D game in which an AI agent learns during gameplay using reinforcement learning. The game should clearly show that the agent starts with little or no knowledge and gradually improves by collecting rewards and avoiding mistakes.

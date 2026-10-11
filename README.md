@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![IntelliJ](https://img.shields.io/badge/IntelliJ-2024.2+-orange.svg)](https://www.jetbrains.com/idea/)
-[![Version](https://img.shields.io/badge/version-0.0.1.17-green.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.0.2.1-green.svg)](CHANGELOG.md)
 [![Stage](https://img.shields.io/badge/stage-early--active-yellow.svg)](docs/ROADMAP.md)
 [![Website](https://img.shields.io/badge/web-refio.dev-blue.svg)](https://refio.dev/)
 
@@ -22,7 +22,7 @@ Concretely:
 - **Visible everything.** Each tool call, each token, each cost, each file write - surfaced in the chat stream, not summarized away.
 - **MIT licensed.** Inspect it, fork it, audit it. The repo *is* the spec.
 
-**Stage:** v0.0.1.17, early and actively developed. JetBrains-only by design - no VS Code plans. Not a drop-in replacement for inline completion (different category) and not competing head-on with mature agents like Claude Code (RefIo is earlier on the curve). If you want a polished, mass-market AI coding tool *today*, pick something else. If you want the leverage of AI without giving up observability - read on.
+**Stage:** v0.0.2.1, early and actively developed. JetBrains-only by design - no VS Code plans. Not a drop-in replacement for inline completion (different category) and not competing head-on with mature agents like Claude Code (RefIo is earlier on the curve). If you want a polished, mass-market AI coding tool *today*, pick something else. If you want the leverage of AI without giving up observability - read on.
 
 See the [**Roadmap**](docs/ROADMAP.md) for where it's heading and where you can help.
 
@@ -48,11 +48,13 @@ The CLI runs the exact same loop as the IDE, but scriptable:
   --prompt-file task.md --output json --output-file run.json
 ```
 
-`run.json` carries the full record - status, tokens, cost, every tool call, errors, warnings. That turns an agent run into something you can **test**, not just watch. The e2e harness (`tools/e2e/e2e-run.*` + `test_data/e2e/`) is exactly this: scenarios that drop an agent into a throwaway project and assert on the **final state** (right file changed, build green, files it must not touch left intact) rather than on the path it took. The benchmark harness, which runs the same prompt across many models to compare how they behave, lives on the `benchmark` branch: it extends this one with the result data and the review viewer.
+Useful headless flags: `--prompt` / `--prompt-file` (the instruction), `--model <provider/model>`, `--output json` + `--output-file` (write `run.json`), `--debug-level minimal|standard|full|judge`, `--config key=value` / `--config-file` (run-scope config overrides, also in the TUI), `--print-config` (print the resolved config and exit, no LLM call), `--max-cost <usd>` (hard cost ceiling per session), `--auto-approve "<regex>"` (approve only matching tool calls, reject the rest), `--no-egress` (block all cloud traffic), `--refio-home <dir>` (use a separate database and user config instead of `~/.refio`), `--mcp-server <json>` / `--mcp-probe` (declare MCP servers for one run / list what they expose), `--context-ref @file:...` (attach context like the chat input), `--multi-agent <yaml>` and `-v` (stream live tokens to stderr). Progress goes to stderr, the full trace to `~/.refio/refio-cli.log`, and the exit code is 0 only when the run status is `SUCCESS`.
+
+`run.json` carries the full record - status, tokens, cost, every tool call, errors, warnings. That turns an agent run into something you can **test**, not just watch. The e2e harness (`tools/e2e/e2e-run.*` + `test_data/e2e/`) is exactly this: scenarios that drop an agent into a throwaway project and assert on the **final state** (right file changed, build green, files it must not touch left intact) rather than on the path it took. `e2e-run.sh --list` shows the scenarios, `--self-test` checks the assertion engine without any LLM call, `--model <provider/model>` compares models on the same task (all at a 64k Ollama context window by default), and `E2E_OUT_DIR=<dir>` keeps every `run.json` plus a `results.jsonl` verdict record. The benchmark harness, which runs the same prompt across many models to compare how they behave, lives on the `benchmark` branch: it extends this one with the result data and the review viewer.
 
 **Build agents with agents.**
 
-Because an agent run is *measurable*, a coding agent can drive the loop on RefIo itself: run the e2e gate, read `run.json`, judge regressions (LLM-as-judge), and propose fixes in an isolated worktree - turning "is the agent getting better?" from a hunch into a delta against a baseline. This eval-driven, self-improving loop is the near-term direction (see [`docs/0069-e2e-stabilization-gate.md`](docs/0069-e2e-stabilization-gate.md)), built on the headless runner and harness that already exist.
+Because an agent run is *measurable*, a coding agent can drive the loop on RefIo itself: run the e2e gate, read `run.json`, judge regressions (LLM-as-judge), and propose fixes in an isolated worktree - turning "is the agent getting better?" from a hunch into a delta against a baseline. This eval-driven, self-improving loop is the near-term direction (the CLI already aggregates repeated e2e runs into a pass-rate verdict with `--gate <out-dir>`, optionally against a per-scenario baseline), built on the headless runner and harness that already exist.
 
 > **Honest scope.** The subagents, multi-agent inboxes, MCP tools, headless runner and the e2e / benchmark harnesses are here today - you can build and test a non-coding agent workflow now. The *closed* self-improvement loop (an agent that hardens RefIo from its own eval results) is specced and partly built, not finished - see the [Roadmap](docs/ROADMAP.md) Phase 1.
 
@@ -66,7 +68,7 @@ Because an agent run is *measurable*, a coding agent can drive the loop on RefIo
 
 **Agent** - Full read/write with automatic file snapshots. Per-tool, per-mode permissions (`ON` / `ASK` / `OFF`). Rollback via `SnapshotService`. Visible tool calls.
 
-Plus built-in **subagents** for specialized tasks (`!code-reviewer`, `!security-reviewer`, …) and custom ones as Markdown + YAML in `.refio/agents/`.
+Plus built-in **subagents** for specialized tasks (`!code-reviewer`, `!security-engineer`, …) and custom ones as Markdown + YAML in `.refio/agents/`.
 
 ---
 
@@ -109,13 +111,13 @@ Same core engine, full-screen terminal interface.
 
 ## What's under the hood
 
-**Execution modes** are dispatched by `WorkflowOrchestrator` → mode-specific executors (`ChatExecutor`, `PlanExecutor`, `StepExecutor`) and the `AgentTurnLoop` (Plan / Agent) with iteration limits, output-hash repetition tracking, error-rate circuit breaker, and **content-chanting detection** (Gemini CLI's loop-detection pattern - aborts when the model repeats the same word phrase 10+ times consecutively).
+**Execution modes** - Chat goes straight to `ChatService`; Plan and Agent run through the `AgentTurnLoop` with iteration limits, output-hash repetition tracking, error-rate circuit breaker, and **content-chanting detection** (Gemini CLI's loop-detection pattern - aborts when the model repeats the same word phrase 10+ times consecutively).
 
 **`/goal`** - set an explicit completion condition for the active task (`/goal all tests in src/test pass`). A `NextSpeakerJudgeGuardian` (Gemini CLI's `checkNextSpeaker` pattern) runs after each terminal-of-turn moment in AGENT mode: a cheap weak-model call confirms whether the goal is *demonstrably* met against transcript evidence, or pushes the loop back into another iteration with a nudge re-injecting the goal text. Closes the failure mode where weak models stop mid-task ("Done.") after a single step. Works in both TUI and IntelliJ; condition persisted on the task row across restarts.
 
 **Tool system** - file ops, grep, terminal, HTTP, code runner, subagent invocation, snapshots. Per-mode permissions via `ToolPermissionsService`. Session-scoped approval via `ToolApprovalService`.
 
-**Context system** - `@mention` providers for directing context, RAG with semantic chunking (5 language analyzers: Kotlin, Java, Python, TypeScript, HTML), token budget scaled to the active model's context window, tool-result compression with graceful step-down (FULL → DETAILED → SUMMARY) when context fills up. Conversation compaction at ~85% usage. **Content-aware diff compression** elides the body of large pure-create diffs (a 700-line `+`-only generated file collapses to head + tail + a `memory(get_subtask_output)` recovery hint) - the wrap-up turn no longer pays for the file the agent just wrote.
+**Context system** - `@mention` providers for directing context, RAG with semantic chunking (9 language analyzers: Kotlin, Java, Python, TypeScript, Go, Rust, C++, HTML, CSS), token budget scaled to the active model's context window, tool-result compression with graceful step-down (FULL → DETAILED → SUMMARY) when context fills up. Conversation compaction at ~80% of the conversation budget. **Content-aware diff compression** elides the body of large pure-create diffs (a 700-line `+`-only generated file collapses to head + tail + a `memory(get_subtask_output)` recovery hint) - the wrap-up turn no longer pays for the file the agent just wrote.
 
 **Security layers** - `PathSandbox` with symlink resolution + parent-chain check + TOCTOU revalidation. `CommandRule` (regex `ALLOW` / `BLOCK` / `ASK`). Secret redaction in logs. `detectSensitiveLogging` Gradle task fails the build if an API-key pattern appears in a log statement.
 
@@ -131,13 +133,13 @@ Same core engine, full-screen terminal interface.
 
 Honest assessment - developers deserve to know what they're looking at:
 
-- **Orchestration is a light router + executors**, not a deep agent engine. `IntentRouter` maps modes and dispatches; `WorkflowOrchestrator` coordinates executors (~200 LOC).
+- **Orchestration is a light mode dispatch**, not a deep agent engine. Chat calls `ChatService` directly; Plan and Agent share the `AgentTurnLoop`.
 - **Multi-agent A2A messaging is now wired** via per-agent inboxes (`AgentInboxRegistry` + `AgentMessageInbox`). `send_message` enqueues to a peer's inbox; the peer reads it on the next turn via the prompt builder; `answer_message` replies to a specific inbound message. Integration-tested but still maturing - production-grade orchestration coverage is incomplete.
 - **No git worktree isolation per task.** Agents edit files directly (with snapshot rollback), not in an isolated branch.
-- **Planning loop is basic.** Plan executor works, but no plan-refinement iterations (plan → execute → evaluate → refine → continue) yet.
+- **Planning loop is basic.** Plan mode works, but no plan-refinement iterations (plan → execute → evaluate → refine → continue) yet.
 - **Security layers are pragmatic v1.** Working, but this is defense-at-depth-MVP, not hardened multi-layered security.
-- **No agent dashboard.** Tool calls are visible in the chat stream, but no dedicated command center UI for long-running tasks.
-- **Small community, fast changes** - v0.0.1.x. Breaking changes possible pre-1.0. Not yet battle-tested at scale.
+- **No agent dashboard.** Tool calls are visible in the chat stream and multi-agent runs get an agents graph panel in the IDE, but there is no dedicated command center UI for long-running tasks.
+- **Small community, fast changes** - v0.0.x. Breaking changes possible pre-1.0. Not yet battle-tested at scale.
 
 See [**docs/ROADMAP.md**](docs/ROADMAP.md) for where each of these is heading.
 
@@ -145,8 +147,8 @@ See [**docs/ROADMAP.md**](docs/ROADMAP.md) for where each of these is heading.
 
 ## Features
 
-- **@mentions** - `@file`, `@folder`, `@codebase` (RAG), `@grep`, `@diff`, `@commit`, `@problems`, `@terminal`, `@docs`, `@url`, `@clipboard`, `@current`, `@recent`, `@open`
-- **RAG-powered semantic search** - automatic project indexing with 5 language analyzers; stored in SQLite; circuit breaker for graceful degradation
+- **@mentions** - `@file`, `@folder`, `@codebase` (RAG), `@grep`, `@diff`, `@commit`, `@problems`, `@terminal`, `@docs`, `@url`, `@clipboard`, `@current`, `@recent`, `@open`, `@rules`
+- **RAG-powered semantic search** - automatic project indexing with 9 language analyzers; stored in SQLite; circuit breaker for graceful degradation
 - **Tool library** - ~30 tools across reading/search, web/HTTP, system, editing, execution and delegation groups (`http_request`, `run_code`, `invoke_subagent`, `delegate_to_strong_model`, and more), with per-mode permissions (PLAN gets the read-only subset, AGENT the full set)
 - **LLM providers** - Ollama, OpenAI, Anthropic, Gemini, OpenRouter, LM Studio, Custom OpenAI, Z.AI
 - **MCP protocol support** - STDIO + HTTP/SSE, with built-in presets (GitHub, PostgreSQL, Brave Search, …)
@@ -248,7 +250,7 @@ See [docs/config.md](docs/config.md) for full configuration reference.
 
 | |                                          |
 |---|------------------------------------------|
-| **Version** | 0.0.1.17                                 |
+| **Version** | 0.0.2.1                                  |
 | **Stage** | Early-stage - active development         |
 | **License** | MIT                                      |
 | **Community** | Small, growing - PRs and issues welcome  |
@@ -285,7 +287,7 @@ Early-stage projects benefit enormously from contributions. Good entry points:
 ./gradlew :intellij-plugin:check        # Includes detectSensitiveLogging
 ```
 
-**Prerequisites:** JDK 17, IntelliJ IDEA 2024.2+, Ollama with `nomic-embed-text` model for RAG.
+**Prerequisites:** JDK 17 (core, CLI) and JDK 21 (plugin), both auto-provisioned by the Gradle toolchain; IntelliJ IDEA 2024.2+; Ollama with `nomic-embed-text` model for RAG.
 
 ---
 
