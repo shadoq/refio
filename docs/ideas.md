@@ -33,11 +33,13 @@ stream-idle...) is whack-a-mole - each fix repairs one case and risks breaking t
 measure.
 
 ### E2E as a stabilization gate + autonomous self-improvement loop
-Specced in **[docs/0069-e2e-stabilization-gate.md](0069-e2e-stabilization-gate.md)** (PROPOSAL).
+Status: gate implemented, self-improvement loop open.
 In short: N-runs to a pass-rate, baseline + delta, failure-mode classification from `run.json`,
 persistent trend, large long-context scenarios, plus a coding agent that runs e2e + LLM-as-judge +
 code correction in a worktree (staged autonomy, never auto-merge to `main`). Stabilization and this
 idea are one task: the gate is the measuring instrument for stabilization.
+
+**Status (2026-10): gate done, loop not built.** N runs to a pass-rate with baseline, delta tolerance and failure-mode classification exist (`core/debug/StabilizationGate.kt`, `tools/e2e/gate.sh`, `cli --gate*` options incl. `--gate-baseline-file`, `--gate-tolerance`, `--gate-history`, `--gate-trend`; `classify_failure_mode` in `e2e-run.sh`), plus long-context scenarios. The coding agent that runs e2e + judge + fixes in a worktree does not exist yet.
 
 ---
 
@@ -51,13 +53,17 @@ must-have**. Verdict: do not build as a separate feature - it is **the same e2e 
 model instead of one commit**, so it falls out of the stabilization gate almost for free when needed.
 Stabilization first.
 
+**Status (2026-10): not built as a command.** Pieces exist: for a local Ollama model missing from the built-in registry the turn loop asks the server once whether it supports native tools and caches the answer (`ProviderToolSupport.probe`), and the e2e harness with `--model` already benchmarks one model end to end.
+
 ### Worktree Mode
 Each longer task in an isolated worktree (`.refio/worktrees/task-id`, branch `refio/task-id`,
-separate diff + rollback). Reasonable as an enabler (incl. for the autonomous loop in 0069), but the
+separate diff + rollback). Reasonable as an enabler (incl. for the autonomous self-improvement loop), but the
 justification "otherwise it looks dated next to cloud/PR-first" is aesthetic, not need-driven.
 **First verify whether the real user actually runs parallel tasks** - on local models
 `OllamaRequestGate` serializes them anyway (1 concurrent/endpoint), so parallelism buys nothing.
 Value = isolation, not parallelism.
+
+**Status (2026-10): not implemented** - no worktree code in `:core`, `:cli` or the plugin.
 
 ### Internal multi-agency = subagent as a context firewall
 RefIo already has subagents (nested, max depth 3, own prompt, tool filter). On local models subagents
@@ -73,6 +79,8 @@ no-egress mode, usage audit. Without a policy layer MCP becomes a source of inci
 "secure MCP" differentiator, scoped to local security (the audit angle belongs to the enterprise
 vector, which is off the critical path).
 
+**Status (2026-10): partial.** Built-in presets (`MCPServerPresets`), a per-server tools-vs-context exposure mode (`MCPToolExposure`), and MCP tools inherit the per-mode ON/ASK/OFF defaults from `ToolPermissionsService`. Missing: risk scan, usage audit, and no-egress coverage - the MCP transports do not consult `NetworkPolicy`.
+
 ### Settings screens should show values that come from config.yaml
 `ConfigRouter.getConfig(section)` reads only the config database, so any value set exclusively in
 `~/.refio/config.yaml` or `<project>/.refio/config.yaml` is invisible in Settings even though the
@@ -82,12 +90,16 @@ misrepresents the effective configuration and invites the user to overwrite thei
 Fix direction: have the section read go through the resolver instead of the repository, and mark
 YAML-sourced values as read-only in the UI so a save cannot silently move them into the database.
 
+**Status (2026-10): still open** - `ConfigRouter.getConfig` still reads `configRepository.findByScope` only.
+
 ### Embedding provider resolution has silent egress paths
 `EmbeddingProviderFactory.resolve` maps a bare model name with no known Ollama match to `openai`,
 so a typo in `models.embedding_model` can send project content to `api.openai.com`. Separate from
 the unknown *provider id* path: this one is the bare-name heuristic, which guesses rather than
 failing. Worth narrowing to an explicit provider prefix once the config surface can carry a
 deprecation.
+
+**Status (2026-10): still open.** An unknown provider id now fails (`forProvider` throws `ProviderNotConfigured` instead of falling back to OpenAI), but a bare name that is neither `text-embedding*` nor a known Ollama model still resolves to `openai` in `EmbeddingProviderFactory.resolve`.
 
 ---
 
@@ -113,7 +125,7 @@ A stable single loop + measurability first. A multi-agent pipeline possibly much
 base.
 
 ### SDK as the main product direction
-Competes with larger forces and requires platform stability (see `docs/0064-positioning.md`). RefIo
+Competes with larger forces and requires platform stability. RefIo
 has a better shot as a concrete tool/lab than as a library "for everyone".
 
 ---
@@ -123,4 +135,4 @@ has a better shot as a concrete tool/lab than as a library "for everyone".
 - [x] **Audience:** RESOLVED - solo-dev local-first. (drops evidence pack and command center off the
       critical path; MCP-policy only as local security)
 - [ ] **Worktree:** does the real user run parallel tasks? (verify before building)
-- [ ] **0069:** accept the delta rule (variance tolerance) and the P5 loop acceptance criteria.
+- [ ] **E2E gate:** accept the delta rule (variance tolerance) and the P5 loop acceptance criteria.

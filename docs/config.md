@@ -132,9 +132,10 @@ general:
   reasoningEffort: "OFF"      # Reasoning strength: OFF/LOW/MEDIUM/HIGH (replaces the old thinkingEnabled boolean)
   noEgressEnabled: false      # Block outbound network calls (local-only mode)
   executionMode: "AUTO"       # AUTO (runs steps automatically) or INTERACTIVE (waits for confirmation)
+  nativeToolsMode: "auto"     # Native function calling: auto / always / never (stored as tools.native_tools)
 ```
 
-All six fields are edited from the **General** tab in Settings (plugin and TUI). `reasoningEffort`, `noEgressEnabled`, and `executionMode` used to live under `ui:`; they moved to `general:` so the storage layout mirrors the UI tab 1:1. `reasoningEffort` replaces the former `thinkingEnabled` boolean (old config files are still read: `true` maps to `MEDIUM`, `false` to `OFF`).
+All seven fields are edited from the **General** tab in Settings (plugin and TUI). `reasoningEffort`, `noEgressEnabled`, and `executionMode` used to live under `ui:`; they moved to `general:` so the storage layout mirrors the UI tab 1:1. `reasoningEffort` replaces the former `thinkingEnabled` boolean (old config files are still read: `true` maps to `MEDIUM`, `false` to `OFF`).
 
 ### Provider Configuration
 
@@ -145,6 +146,7 @@ providers:
   ollama:
     endpoint: "http://localhost:11434"
     contextSize: 32768          # Context window in tokens
+    keepAlive: 1800             # Seconds Ollama keeps the model loaded after a request
 
   anthropic:
     apiKey: "sk-ant-..."        # Anthropic API key
@@ -160,7 +162,12 @@ providers:
 
   lmstudio:
     baseUrl: "http://localhost:1234/v1"
+    apiKey: ""                   # Optional
     contextSize: 32768
+
+  zai:                           # Z.AI (GLM)
+    apiKey: "..."
+    baseUrl: "https://api.z.ai/api/coding/paas/v4"
 
   generic_openai:                # Any OpenAI-compatible server (llama.cpp, vLLM, ...)
     baseUrl: "http://localhost:8080/v1"
@@ -171,6 +178,8 @@ providers:
 ```
 
 The Ollama endpoint is shared by chat/completions and embeddings and can be configured in Settings -> Providers.
+
+Two concurrency limits have no YAML mapping and are set as store keys (for example `--config providers.max_concurrent=2`): `providers.max_concurrent` (default `4`) caps simultaneous requests to one cloud provider, and `providers.ollama_max_concurrent` (default `1`) caps simultaneous requests per Ollama endpoint.
 
 #### Embeddings on your own server
 
@@ -286,10 +295,10 @@ Configure timeouts and size limits.
 
 ```yaml
 limits:
-  apiCallTimeout: 240            # API call timeout (seconds)
-  toolExecutionTimeout: 240      # Tool execution timeout (seconds)
-  streamingReadTimeout: 240      # Time between streaming chunks (seconds)
-  streamingRequestTimeout: 1800  # Total streaming duration (seconds)
+  apiCallTimeout: 360            # API call timeout (seconds); also bounds the idle gap between streamed chunks
+  toolExecutionTimeout: 360      # Tool execution timeout (seconds)
+  streamingReadTimeout: 360      # Stored and exported, but currently not read by any code path
+  streamingRequestTimeout: 1800  # Total streaming duration (seconds); the stream wall clock is 90% of it
   maxContextSize: 128000         # Ceiling on context tokens, see below
   maxOutputSize: 16384           # Maximum output tokens
   maxFileSize: 10                # Maximum file size (MB)
@@ -310,12 +319,11 @@ Security and optimization settings.
 advanced:
   readOnlyMode: false            # Prevent all file write operations
   autoOptimizePercentage: 85     # Auto-optimize context at this % of limit
-
-security:
-  allowSymlinks: false           # Unsafe opt-in: allow symbolic links in PathSandbox
 ```
 
-> **Note:** `noEgressDefault` was removed. Use `general.noEgressEnabled` instead — it is now the single source of truth for blocking outbound network calls (edited from the **General** tab / same key in YAML).
+There is no `security:` section in the YAML model, so `security.allowSymlinks` / `security.allowLoopback` in a config file are silently ignored. Set the store keys instead, for example `--config security.allow_symlinks=true` in the CLI. `security.allow_symlinks` (default `false`) is an unsafe opt-in that lets PathSandbox follow symbolic links; `security.allow_loopback` (default `false`) lets `http_request` / `fetch_webpage` reach loopback and private addresses.
+
+> **Note:** `noEgressDefault` was removed. Use `general.noEgressEnabled` instead - it is now the single source of truth for blocking outbound network calls (edited from the **General** tab / same key in YAML).
 
 ### Tool Permissions
 
@@ -346,27 +354,51 @@ Tools you do not list keep whatever they already have (their smart default deriv
 read/write mode, or a level you set in Settings). So a file with two entries adjusts those two
 tools and leaves the rest alone, both on startup and via **Settings → Reload from YAML**.
 
+### Post-turn Verification
+
+After an AGENT turn that wrote files, the loop runs the project's build/test command and feeds failures back to the model. Usually set in the project config, since the command is project-specific.
+
+```yaml
+verify:
+  enabled: true                  # Run the verification step
+  command: ""                    # Empty = autodetect (build.gradle*, package.json, Cargo.toml); no marker = skipped
+  maxRepairRounds: 2             # Repair rounds before the turn ends as VERIFICATION_FAILED
+```
+
+### Agent Turn Limits
+
+These keys have no YAML mapping. Set them as store keys, for example `--config agent.max_turn_minutes=20` in the CLI.
+
+- `agent.max_turn_minutes` (default `45`, `0` disables) - wall-clock ceiling per turn
+- `agent.max_cost_usd` (default `0.0` = off) - per-session cost ceiling; the CLI `--max-cost` flag sets it
+- `agent.max_format_nudges` (default `2`) - how many times the loop asks for a well-formed answer before giving up
+- `agent.decision_temperature` (default `0.7`, range `0.0`-`2.0`) - sampling temperature of the PLAN/AGENT decision turn
+- `agent.max_consecutive_tool_errors` (default `5`) - identical failing tool calls (same tool and arguments) before the turn aborts
+- `general.next_speaker_judge_enabled` (default `true`) - AGENT-only check that a tool-free answer really means the task is done
+- `general.judge_extended_reentry_enabled` (default `true`) - allows more than one judge re-entry early in a turn that delivered nothing
+- `general.execution_isolation` (default `auto`; `auto` / `required` / `off`) - how much isolation a spawned process must have
+
 ### RAG Configuration
 
 Configure the Retrieval-Augmented Generation system.
 
-> **Navigation default (docs/0060):** agentic `grep_search` / `file_search` is the primary
+> **Navigation default:** agentic `grep_search` / `file_search` is the primary
 > code-navigation path; vector RAG is an **opt-in aid** (best for prose/docs). Auto-indexing is
-> therefore **OFF by default** — a cold start pays no CPU/embedding cost. The `rag_search` tool
+> therefore **OFF by default** - a cold start pays no CPU/embedding cost. The `rag_search` tool
 > stays available; set `indexOnStartup` / `autoIndexOnContextBuild` to `true` to index your project.
 
 ```yaml
 rag:
   enabled: true                  # Enable RAG features (rag_search tool stays available)
-  indexOnStartup: false          # OFF by default — opt in to index project at IDE startup
-  autoIndexOnContextBuild: false # OFF by default — opt in to auto-index when building context
+  indexOnStartup: false          # OFF by default - opt in to index project at IDE startup
+  autoIndexOnContextBuild: false # OFF by default - opt in to auto-index when building context
   maxFileSizeMB: 2              # Max file size for indexing
   maxChunksPerFile: 100         # Max chunks per file
   indexBatchSize: 10            # Files per indexing batch
   embeddingsBatchSize: 50       # Embeddings per batch
   cacheTtlMs: 300000            # Cache TTL (5 minutes)
   maxConcurrentJobs: 4          # Max concurrent indexing jobs
-  searchSimilarityThreshold: 0.5 # Minimum similarity (0.0-1.0)
+  searchSimilarityThreshold: 0.75 # Minimum similarity (0.0-1.0)
   searchTopK: 5                 # Default results count
   searchHybridEnabled: false    # Enable hybrid search
   searchSemanticWeight: 0.7     # Semantic vs keyword weight
@@ -524,14 +556,24 @@ mcp:
 | `general.reasoningEffort` | `general.reasoning_effort` | `OFF` |
 | `general.noEgressEnabled` | `general.no_egress_enabled` | `false` |
 | `general.executionMode` | `general.execution_mode` | `AUTO` |
-| `providers.ollama.endpoint` | `ollama_endpoint` | `http://localhost:11434` |
+| `general.nativeToolsMode` | `tools.native_tools` | `auto` (`auto` / `always` / `never`) |
+| - | `general.execution_isolation` | `auto` (`auto` / `required` / `off`) |
+| - | `general.next_speaker_judge_enabled` | `true` |
+| - | `general.judge_extended_reentry_enabled` | `true` |
+| `providers.ollama.endpoint` | `providers.ollama.ollama_endpoint` | `http://localhost:11434` |
 | `providers.ollama.contextSize` | `providers.ollama.ollama_context_size` | `32768` |
-| `providers.anthropic.apiKey` | `anthropic_api_key` | - |
-| `providers.openai.apiKey` | `openai_api_key` | - |
-| `providers.openrouter.apiKey` | `openrouter_api_key` | - |
-| `providers.gemini.apiKey` | `gemini_api_key` | - |
-| `providers.lmstudio.baseUrl` | `lmstudio_base_url` | `http://localhost:1234/v1` |
+| `providers.ollama.keepAlive` | `providers.ollama.ollama_keep_alive` | `1800` |
+| - | `providers.ollama_max_concurrent` | `1` |
+| - | `providers.max_concurrent` | `4` |
+| `providers.anthropic.apiKey` | `providers.anthropic.anthropic_api_key` | - |
+| `providers.openai.apiKey` | `providers.openai.openai_api_key` | - |
+| `providers.openrouter.apiKey` | `providers.openrouter.openrouter_api_key` | - |
+| `providers.gemini.apiKey` | `providers.gemini.gemini_api_key` | - |
+| `providers.lmstudio.apiKey` | `providers.lmstudio.lmstudio_api_key` | - |
+| `providers.lmstudio.baseUrl` | `providers.lmstudio.lmstudio_base_url` | `http://localhost:1234/v1` |
 | `providers.lmstudio.contextSize` | `providers.lmstudio.lmstudio_context_size` | `32768` |
+| `providers.zai.apiKey` | `providers.zai.zai_api_key` | - |
+| `providers.zai.baseUrl` | `providers.zai.zai_base_url` | `https://api.z.ai/api/coding/paas/v4` |
 | `providers.generic_openai.baseUrl` | `providers.generic_openai.generic_openai_base_url` | - |
 | `providers.generic_openai.apiKey` | `providers.generic_openai.generic_openai_api_key` | - |
 | `providers.generic_openai.model` | `providers.generic_openai.generic_openai_model` | - |
@@ -543,26 +585,39 @@ mcp:
 | `models.defaults.plan` | `default_model.plan` | `qwen3.5:9b` |
 | `models.defaults.coding` | `default_model.agent` | `qwen3.5:9b` |
 | `models.defaults.weak` | `default_model.weak` | `qwen3.5:9b` |
-| `models.defaults.embedding` | `models.embedding_model` | `nomic-embed-text` |
+| `models.defaults.embedding` | `models.embedding_model` | `ollama/nomic-embed-text` |
 | `models.defaults.strong` | `default_model.strong` | - (optional, no fallback) |
-| `limits.apiCallTimeout` | `limits.api_call_timeout` | `240` |
-| `limits.toolExecutionTimeout` | `limits.tool_execution_timeout` | `240` |
+| `limits.apiCallTimeout` | `limits.api_call_timeout` | `360` |
+| `limits.toolExecutionTimeout` | `limits.tool_execution_timeout` | `360` |
+| `limits.streamingReadTimeout` | `limits.streaming_read_timeout_sec` | `360` (not read by any code path) |
+| `limits.streamingRequestTimeout` | `limits.streaming_request_timeout_sec` | `1800` |
+| - | `limits.max_retries` | `3` |
+| - | `limits.retry_delay_ms` | `1000` |
+| - | `limits.rate_limit_rpm` | `60` |
 | `limits.maxContextSize` | `limits.max_context_size` | `128000` |
 | `limits.maxOutputSize` | `limits.max_output_size` | `16384` |
 | - | `limits.max_output_chars` | `0` (derive from the model's context window) |
 | `limits.maxFileSize` | `limits.max_file_size` | `10` |
 | `advanced.readOnlyMode` | `advanced.read_only_mode` | `false` |
-| `security.allowSymlinks` | `security.allow_symlinks` | `false` |
-| `security.allowLoopback` | `security.allow_loopback` | `false` |
+| `advanced.autoOptimizePercentage` | `advanced.auto_optimize_percentage` | `85` |
+| - | `security.allow_symlinks` | `false` |
+| - | `security.allow_loopback` | `false` |
 | `rag.enabled` | `rag.enabled` | `true` |
 | `rag.indexOnStartup` | `rag.index_on_startup` | `false` |
 | `rag.autoIndexOnContextBuild` | `rag.auto_index_on_context_build` | `false` |
-| `rag.searchSimilarityThreshold` | `rag.search_similarity_threshold` | `0.5` |
+| `rag.maxFileSizeMB` | `rag.max_file_size_mb` | `2` |
+| `rag.maxChunksPerFile` | `rag.max_chunks_per_file` | `100` |
+| `rag.indexBatchSize` | `rag.index_batch_size` | `10` |
+| `rag.embeddingsBatchSize` | `rag.embeddings_batch_size` | `50` |
+| `rag.cacheTtlMs` | `rag.cache_ttl_ms` | `300000` |
+| `rag.maxConcurrentJobs` | `rag.max_concurrent_jobs` | `4` |
+| `rag.ignoredDirectories` | `rag.ignored_directories` (comma-separated) | built-in list |
+| `rag.searchSimilarityThreshold` | `rag.search_similarity_threshold` | `0.75` |
 | `rag.searchTopK` | `rag.search_top_k` | `5` |
 | `rag.searchHybridEnabled` | `rag.search_hybrid_enabled` | `false` |
 | `rag.searchSemanticWeight` | `rag.search_semantic_weight` | `0.7` |
 | `rag.searchIncludeContextChunks` | `rag.search_include_context_chunks` | `false` |
-| `ui.intentClassificationEnabled` | `ui.intent_classification_enabled` | `false` |
+| - | `ui.intent_classification_enabled` | `false` |
 | `ui.selectedMode` | `ui.selected_mode` | `CHAT` |
 | `ui.selectedModel` | `ui.selected_model` | - |
 | `context.recentWorkFullDataLimit` | `context.recent_work.full_data_limit` | `5` |
@@ -572,6 +627,15 @@ mcp:
 | `context.workingMemoryMaxFacts` | `working_memory.max_facts` | `20` |
 | `context.budgetSections.<name>` | `context.budget.section.<name>` | - |
 | `tools.permissions.<tool>` | `tools.permissions` (one JSON document) | per-tool smart default |
+| `verify.enabled` | `verify.enabled` | `true` |
+| `verify.command` | `verify.command` | empty (autodetect) |
+| `verify.maxRepairRounds` | `verify.max_repair_rounds` | `2` |
+| - | `agent.max_turn_minutes` | `45` (`0` disables) |
+| - | `agent.max_cost_usd` | `0.0` (disabled) |
+| - | `agent.max_format_nudges` | `2` |
+| - | `agent.decision_temperature` | `0.7` |
+| - | `agent.max_consecutive_tool_errors` | `5` |
+| - | `agent.task_verification_enabled` | `false` |
 
 ---
 
@@ -631,9 +695,6 @@ models:
 limits:
   apiCallTimeout: 300
   maxContextSize: 200000
-
-advanced:
-  orchestrationEnabled: true
 ```
 
 ### Project Config for a Kotlin Project

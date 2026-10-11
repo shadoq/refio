@@ -3,7 +3,7 @@
 **Status**: Reference document
 **Audience**: Engineers working on `AgentTurnLoop`, `TurnPromptBuilder`, `TurnGuardrails`, or any extension that changes loop semantics.
 
-This document captures a comparative analysis of how Refio's agent turn loop is structured relative to other production AI coding agents. It exists because the architectural choices are not obvious from reading the code alone — many decisions look unusual until you see what the alternatives are.
+This document captures a comparative analysis of how Refio's agent turn loop is structured relative to other production AI coding agents. It exists because the architectural choices are not obvious from reading the code alone - many decisions look unusual until you see what the alternatives are.
 
 ---
 
@@ -11,11 +11,11 @@ This document captures a comparative analysis of how Refio's agent turn loop is 
 
 Consult this document when you are:
 
-- Adding a new guardrail or heuristic to `AgentTurnLoop` — check if other systems already addressed the same failure mode and how.
+- Adding a new guardrail or heuristic to `AgentTurnLoop` - check if other systems already addressed the same failure mode and how.
 - Refactoring loop iteration boundaries, termination conditions, or tool dispatch.
-- Designing a new feature (e.g. subagent variant, working memory expansion) — check what's standard practice elsewhere.
-- Reviewing whether existing scaffolding is still load-bearing — knowing what minimal-scaffolding agents (Codex, Claude Code) do without that scaffolding is the calibration point.
-- Onboarding to the loop subsystem — read this alongside `core/services/AgentTurnLoop.kt` and `docs/ARCHITECTURE.md`.
+- Designing a new feature (e.g. subagent variant, working memory expansion) - check what's standard practice elsewhere.
+- Reviewing whether existing scaffolding is still load-bearing - knowing what minimal-scaffolding agents (Codex, Claude Code) do without that scaffolding is the calibration point.
+- Onboarding to the loop subsystem - read this alongside `core/services/AgentTurnLoop.kt` (thin facade), `core/services/turn/TurnExecutor.kt` (the loop itself) and `docs/ARCHITECTURE.md`.
 
 **Do not** treat this as a roadmap. Patterns from other agents are not all good fits for Refio; the comparison is descriptive, the adoption decisions live in `docs/ROADMAP.md`.
 
@@ -32,7 +32,7 @@ Consult this document when you are:
 | **Hermes Agent** | [`NousResearch/hermes-agent`](https://github.com/NousResearch/hermes-agent) | Python | `agent/conversation_loop.py` | Closest philosophy to Refio's multi-layer scaffolding |
 | **Gemini CLI** | [`google-gemini/gemini-cli`](https://github.com/google-gemini/gemini-cli) | TypeScript | `packages/core/src/core/client.ts::sendMessageStream` | Most sophisticated loop detection |
 | **Firecrawl FIRE-1** | [`firecrawl/firecrawl`](https://github.com/firecrawl/firecrawl) | TypeScript | `apps/api/src/lib/scrape-interact/browser-agent.ts` | Web-browsing agent only, not coding |
-| **oh-my-openagent** | [`code-yeongyu/oh-my-openagent`](https://github.com/code-yeongyu/oh-my-openagent) | TypeScript | (plugin — host owns loop) | Plugin/harness for OpenCode, no own loop |
+| **oh-my-openagent** | [`code-yeongyu/oh-my-openagent`](https://github.com/code-yeongyu/oh-my-openagent) | TypeScript | (plugin - host owns loop) | Plugin/harness for OpenCode, no own loop |
 
 All findings below were verified against actual source code or first-party documentation as of 2026-05.
 
@@ -52,7 +52,7 @@ while (iter < max):             loop {                   recursive:
   guards (format-retry)           dispatch_tools          unless max_turns set)
   execute_tools (parallel RO)     send_result_back
   guards (repetition/errors)    }
-  continue or finalize
+  continue or judge/verify/finalize
 
 HERMES                          GEMINI CLI               AIDER
 ──────                          ──────────               ─────
@@ -79,33 +79,37 @@ streamNormalInput()             generateText({          (host owns loop)
 
 | Dimension | Refio | Codex | Claude Code | Hermes | Gemini CLI | Aider | Continue | Firecrawl |
 |---|---|---|---|---|---|---|---|---|
-| **Iter cap** | 100 PLAN / 100 AGENT | none | `max_turns` (opt) | 90 (50 sub) | 100 | 3 reflections | none | 25 |
+| **Iter cap** | 200 PLAN / 200 AGENT (backstop; cost + wall-clock ceilings also apply) | none | `max_turns` (opt) | 90 (50 sub) | 100 | 3 reflections | none | 25 |
 | **Loop control flow** | `while` bounded | `loop` open | recursive | `while` bounded | recursive + generator | `while reflected` | recursive | SDK-managed |
 | **Tool call format** | native + JSON-in-text | native only | native only | native + XML (trajectory only) | native only | edit-blocks | native + codeblocks | native (1 tool) |
-| **Parallel tool dispatch** | yes (READ_ONLY) | sequential | yes | sequential | yes (explicit in prompt) | N/A | yes (read-only built-in) | N/A |
+| **Parallel tool dispatch** | yes (READ_ONLY, max 6 concurrent) | sequential | yes | sequential | yes (explicit in prompt) | N/A | yes (read-only built-in) | N/A |
 | **Approval flow** | `ToolApprovalService` 3-level | sandbox per command | tool-level | none | per-tool policy | `--yes-always` flag | per-tool 3-state | none |
 | **Subagents** | yes (max depth 3) | no | yes (`Task` tool) | yes (delegation, own iter budget 50) | yes (as context compression) | no | no | no |
 | **Working memory** | `memory(action="write")` tool | no | filesystem | trajectory + state.md | no | no | no | no |
 | **Snapshots / undo** | `SnapshotService` SHA-256 | no (git) | no (git) | no | no | git-based | no | no |
 | **Context compaction** | `ConversationSummaryService` | token-limit auto | `/compact` + auto | preemptive, 3-tier prompt | auto + LLM judge | `ContextWindowExceededError` | `setIsPruned` message dropping | none |
-| **Streaming UI** | `StateFlow` × 11 + `AgentEventBus` | TUI | TUI | TUI | TUI / SDK | TUI | Redux store | none |
+| **Streaming UI** | `StateFlow` × ~19 + `AgentEventBus` | TUI | TUI | TUI | TUI / SDK | TUI | Redux store | none |
 | **Modes** | CHAT / PLAN / AGENT | one | one (configurable) | one | Default / Plan / YOLO / Auto-Edit | edit-format selection | Agent / Chat / Plan | one |
-| **Hooks** | `HookService` | none | yes (`SessionStart`, `PreToolUse`, etc.) | none | none | none | none | none |
+| **Hooks** | `HookService` (6 lifecycle events) | none | yes (`SessionStart`, `PreToolUse`, etc.) | none | none | none | none | none |
 | **Multi-agent A2A** | `AgentInboxRegistry` (peer-to-peer) | no | no | parent→child only | no | no | no | no |
-| **Format retry on bad output** | nudge × 2 + hard fail | error → model self-repairs | `is_error:true` → model | 3 retries + fuzzy repair | none (next-speaker check) | reflection × 3 with diagnostic | 1-msg context item | none |
-| **Repetition detection** | output-hash × 4 | none | none (known gap) | multi-threshold | tool-hash × 5 + content-chanting + LLM judge | none | none | none |
+| **Format retry on bad output** | nudge × 2 (configurable, doubled until a deliverable exists) + hard fail | error → model self-repairs | `is_error:true` → model | 3 retries + fuzzy repair | none (next-speaker check) | reflection × 3 with diagnostic | 1-msg context item | none |
+| **Repetition detection** | output-hash × 4 + noop-write × 3 + content-chanting + cross-iteration text repeat + streaming detector | none | none (known gap) | multi-threshold | tool-hash × 5 + content-chanting + LLM judge | none | none | none |
 | **Tool error threshold** | 70% in window of 10 | none | none | warnings only | none | none | none | none |
 
 ---
 
-## 5. Refio's 7-Stage Per-Iteration Pipeline
+## 5. Refio's 8-Stage Per-Iteration Pipeline
 
-Inside `while (iteration < maxIterations)` of `AgentTurnLoop.executeTurnLoop`:
+Inside `while (iteration < maxIterations)` of `TurnExecutor.executeLoop` (`AgentTurnLoop` is now a thin facade that builds the `TurnExecutor` and exposes its state flows):
 
 ```
 ┌──────────────────────────────────────────────────────────┐
 │ ITERATION i                                              │
 ├──────────────────────────────────────────────────────────┤
+│                                                          │
+│ 0. CEILINGS (pre-call)  ← CostLimitGuard, TurnBudgetGuard│
+│    - session cost >= agent.max_cost_usd → stop           │
+│    - wall clock >= agent.max_turn_minutes → stop         │
 │                                                          │
 │ 1. BUILDING_PROMPT          ← TurnPromptBuilder          │
 │    - stable: identity + tools + tool_use_enforcement     │
@@ -115,7 +119,8 @@ Inside `while (iteration < maxIterations)` of `AgentTurnLoop.executeTurnLoop`:
 │ 2. CALLING_MODEL            ← TurnLLMCaller              │
 │    - retry handler (LLMRetryHandler)                     │
 │    - streaming → AgentEventBus.StreamChunk               │
-│    - thinking mode pass-through                          │
+│    - streaming RepetitionDetector + stream-idle ceiling  │
+│    - native tools, one-shot JSON fallback on failure     │
 │                                                          │
 │ 3. PROCESSING_RESPONSE      ← TurnResponseProcessor      │
 │    - finishReason check                                  │
@@ -128,10 +133,13 @@ Inside `while (iteration < maxIterations)` of `AgentTurnLoop.executeTurnLoop`:
 │                                                          │
 │ 5. GUARDS (pre-execution)   ← TurnGuardrails             │
 │    - format retry (nativeTextEmbeddedToolCall)           │
-│    - hard fail (plainTextNudge >= 2)                     │
+│    - hard fail after agent.max_format_nudges (def. 2,    │
+│      doubled until a deliverable exists)                 │
+│    - ContentChantingDetector (phrase x 10 in a row)      │
+│    - ConsecutiveTextRepetitionTracker (same text x 2)    │
 │                                                          │
 │ 6. EXECUTING_TOOLS          ← TurnToolExecutor           │
-│    - READ_ONLY: parallel via coroutineScope + awaitAll   │
+│    - READ_ONLY: parallel, chunks of maxParallelReadTools │
 │    - WRITE / EXEC: sequential                            │
 │    - APPROVAL: sync wait on ToolApprovalService          │
 │    - SnapshotService snapshot before write               │
@@ -140,25 +148,31 @@ Inside `while (iteration < maxIterations)` of `AgentTurnLoop.executeTurnLoop`:
 │                                                          │
 │ 7. GUARDS (post-execution)  ← TurnGuardrails             │
 │    - ToolErrorTracker (70% over last 10 calls)           │
-│    - TurnRepetitionTracker (output-hash × 4)             │
+│    - TurnRepetitionTracker (output-hash x 4,             │
+│      noop-write x 3 → INCOMPLETE)                        │
+│    - Consecutive blocked / denied tool trackers          │
 │    - consecutiveIdenticalFailures (same tool + args)     │
+│    - soft nudges (read spree, repeated regeneration)     │
 │                                                          │
-│ → continue (next iter) or finalize (TurnFinalizer)       │
+│ → continue (next iter), or at the natural end:           │
+│    NextSpeakerJudgeGuardian (1 re-entry, 2 if early)     │
+│    → TurnVerifier (build/test + bounded repair)          │
+│    → finalize (TurnFinalizer)                            │
 └──────────────────────────────────────────────────────────┘
 ```
 
-**Closest architectural analog**: Gemini CLI has a similar decomposition (`Turn.run` → `handlePendingFunctionCall` → `loopDetectionService` → recurse). **Codex** keeps all of this inline in a single `run_turn` (~300 LOC vs Refio's ~2000 LOC).
+**Closest architectural analog**: Gemini CLI has a similar decomposition (`Turn.run` → `handlePendingFunctionCall` → `loopDetectionService` → recurse). **Codex** keeps all of this inline in a single `run_turn` (~300 LOC vs Refio's ~3,500 LOC `TurnExecutor`, whose `executeLoop` alone spans ~1,900 lines).
 
 ---
 
 ## 6. Deep Dive: Per-Dimension Analysis
 
-### 6.1. Three modes (CHAT / PLAN / AGENT) — unusual
+### 6.1. Three modes (CHAT / PLAN / AGENT) - unusual
 
-Refio is the only surveyed agent with three distinct full-loop modes carrying separate system prompts, tool lists, and iteration caps.
+Refio is the only surveyed agent with three distinct modes carrying separate system prompts and tool lists (CHAT goes straight to `ChatService` without a tool loop; PLAN and AGENT share the turn loop with the same 200-iteration cap).
 
 - **Codex / Claude Code / Continue**: one mode, tools are all-or-nothing.
-- **Gemini CLI**: has approval modes (Default / Plan / YOLO / Auto-Edit) but they **filter** tools in a single base prompt — they do not change loop logic.
+- **Gemini CLI**: has approval modes (Default / Plan / YOLO / Auto-Edit) but they **filter** tools in a single base prompt - they do not change loop logic.
 - **Aider**: has chat-mode vs code-mode but on a different axis (interactive vs non).
 
 **Where this helps Refio**: Explicit separation of read-only PLAN from full AGENT gives users a "investigate first, commit second" workflow that's hard to replicate by tool filtering alone.
@@ -167,7 +181,7 @@ Refio is the only surveyed agent with three distinct full-loop modes carrying se
 
 ### 6.2. Tool execution semantics
 
-- **Refio**: `coroutineScope { tools.map { async { exec(it) } }.awaitAll() }` for `ToolCategory.READ_ONLY`, sequential for WRITE / EXEC.
+- **Refio**: `coroutineScope { tools.map { async { exec(it) } }.awaitAll() }` for `ToolCategory.READ_ONLY`, in chunks of `maxParallelReadTools` (6 in PLAN and AGENT), sequential for WRITE / EXEC.
 - **Codex**: always sequential.
 - **Continue**: parallel for built-in read-only tools.
 - **Gemini CLI**: parallel by default, explicit in prompt: *"set `wait_for_previous=true` if a tool depends on previous output"*.
@@ -175,38 +189,38 @@ Refio is the only surveyed agent with three distinct full-loop modes carrying se
 
 **Observation**: Refio's auto-parallel by `ToolCategory.READ_ONLY` is cleaner than Gemini's model-deciding-via-parameter. But Gemini's pattern is more flexible (the model can serialize when needed).
 
-### 6.3. Subagents — Refio is one of three with deep support
+### 6.3. Subagents - Refio is one of three with deep support
 
-- **Refio**: `TurnRunProfile.SUBAGENT` + `profileOverrides.depth` ≤ 3, custom system prompt per subagent + filtered tools, history isolated via `agentInstanceId`.
+- **Refio**: `TurnRunProfile.SUBAGENT` + `profileOverrides.depth` ≤ 3 (enforced by `TurnSubagentValidator`), optional `maxIterationsOverride` (25 for `delegate_to_strong_model`), custom system prompt per subagent + filtered tools, history isolated via `agentInstanceId`.
 - **Hermes**: `delegation.max_iterations = 50` (vs parent 90), thread-safe `IterationBudget`, similar concept.
 - **Claude Code**: `Task` tool spawns isolated subagent invocations, not nested in same loop.
-- **Gemini CLI**: subagent = "context compression" — execute, collapse output to summary, inject into parent history.
+- **Gemini CLI**: subagent = "context compression" - execute, collapse output to summary, inject into parent history.
 - **Codex / Continue / Aider / Firecrawl**: none.
 
 Refio's pattern (3-deep nesting + per-instance isolation + profile-based tool/context filtering, persisted to SQLite via `agentInstanceId`) is the most fully-realized of the surveyed systems.
 
-### 6.4. Working memory — Refio + Hermes + omo only
+### 6.4. Working memory - Refio + Hermes + omo only
 
-- **Refio**: dedicated `memory(action="write|read|get_subtask_output")` tool, persisted in SQLite, survives compaction.
+- **Refio**: dedicated `memory(action="write|read|list|get_subtask_output")` tool, task-scoped and rebuilt from subtask history persisted in SQLite, survives compaction (not carried across sessions).
 - **Hermes**: trajectory + `state.md`, session-scoped.
 - **omo**: external markdown file via `mktemp -t ulw-*.md`, survives compaction.
 - **Codex / Claude Code / Continue / Aider / Gemini CLI**: filesystem only (the model writes a file).
 
 Refio's approach is cleanest from a UX perspective (one tool to remember). Filesystem-based approaches (Claude Code writes to `CLAUDE.md`, `.refio/memory/`) are simpler but less explicit.
 
-### 6.5. Streaming UI — most reactive architecture
+### 6.5. Streaming UI - most reactive architecture
 
-- **Refio**: **11 `StateFlow`s** in `SessionManager`, `AgentEventBus` with `SharedFlow`, per-token streaming chunks with agent metadata (`runId`, `depth`, `agentName`).
+- **Refio**: **~19 `StateFlow`s** in `SessionManager`, `AgentEventBus` with `SharedFlow`, per-token streaming chunks with agent metadata (`runId`, `depth`, `agentName`).
 - **Continue**: Redux store (event-driven, not reactive flow).
 - **Claude Code**: TUI with immediate prints.
 - **Codex**: TUI with streaming printer.
 - **Aider / Hermes / Gemini CLI**: TUI or SDK consumer.
 
-Refio is the only agent designed for a rich IDE UI as primary target. The cost: any loop change must consider 11 flows, which slows development.
+Refio is the only agent designed for a rich IDE UI as primary target. The cost: any loop change must consider ~19 flows, which slows development.
 
 ### 6.6. Context compaction
 
-- **Refio**: `ConversationSummaryService` + `WorkingMemoryService` + auto-compact gate in `executeTurnLoop`.
+- **Refio**: `ConversationSummaryService` (run by `ContextService` while building the prompt: triggers at 80% of the conversation budget, compacts down to 45%, keeps the last 4 messages) + `ToolResultCompression` (FULL / DETAILED / SUMMARY) + `WorkingMemoryService`.
 - **Gemini CLI**: `tryCompressChat` automatic + `ContextWindowWillOverflow` event.
 - **Codex**: token-limit compaction built into `run_turn`.
 - **Claude Code**: `/compact` manual + automatic at approach to cap.
@@ -217,25 +231,25 @@ Refio is the only agent designed for a rich IDE UI as primary target. The cost: 
 
 Refio has the most elaborated compaction (3 distinct services). Gemini's single `tryCompressChat` with an LLM judge is simpler. Trade-off: Refio has more control, more code to maintain.
 
-### 6.7. Hooks — Refio + Claude Code + omo only
+### 6.7. Hooks - Refio + Claude Code + omo only
 
-- **Refio**: `HookService.trigger("before_turn_loop", mapOf(...))`, lifecycle events.
+- **Refio**: `HookService.trigger("before_turn_loop", mapOf(...))`, lifecycle events: `before_turn_loop`, `after_turn_loop`, `before_tool`, `after_tool`, `on_agent_complete`, `on_agent_error`.
 - **Claude Code**: `SessionStart`, `PreToolUse`, `PostToolUse`, etc. via `settings.json`.
 - **omo**: entire architecture on hooks (`ralph-loop`, `todo-continuation-enforcer`, `model-fallback`, …).
 - **Codex / Continue / Gemini CLI / Aider / Hermes**: none.
 
-Refio sits middle ground — the mechanism exists, but the hook taxonomy is less elaborated than Claude Code's.
+Refio sits middle ground - the mechanism exists, but the hook taxonomy is less elaborated than Claude Code's.
 
-### 6.8. Snapshots / undo — Refio + Aider only
+### 6.8. Snapshots / undo - Refio + Aider only
 
-- **Refio**: `SnapshotService` before each write tool — SHA-256 hashing + compression, rollback available.
+- **Refio**: `SnapshotService` before each write tool - SHA-256 hashing + compression, rollback available.
 - **Aider**: git commit per round, rollback via `/undo`.
 - **Codex / Claude Code**: rely on user's own git.
 - **Continue / Hermes / Gemini / Firecrawl / omo**: none.
 
 Aider's approach (git) is simpler but requires the project be under git. Refio's approach (`SnapshotService`) works everywhere but duplicates git functionality.
 
-### 6.9. Multi-agent A2A — unique to Refio
+### 6.9. Multi-agent A2A - unique to Refio
 
 - **Refio**: `AgentInboxRegistry` → `AgentMessageInbox` per agent, pending peer messages injected into prompt → `answer_message` tool.
 - **All other systems**: none (Hermes has parent→child delegation but not peer-to-peer).
@@ -246,7 +260,7 @@ This is the most unique feature of Refio. No surveyed competitor supports peer-t
 
 | System | Trigger | Bound | Diagnostic content |
 |---|---|---|---|
-| **Refio** | empty envelope, native-text-embedded tool, malformed JSON-in-text | 2 nudges + hard fail | concrete (regenerated) |
+| **Refio** | empty envelope, native-text-embedded tool, malformed JSON-in-text | 2 nudges (`agent.max_format_nudges`, doubled until a deliverable exists) + hard fail | concrete (regenerated); "Did you mean" for unknown tool / subagent names |
 | **Codex** | parse error | none (model retries) | error string verbatim |
 | **Claude Code** | `is_error: true` from tool | none | tool message back to model |
 | **Hermes** | unknown tool / invalid JSON / truncated args | 3 retries | fuzzy-repair attempt + tool-not-found message |
@@ -254,30 +268,31 @@ This is the most unique feature of Refio. No surveyed competitor supports peer-t
 | **Aider** | malformed edit block | 3 reflections | "Did you mean..." with similar lines |
 | **Continue** | parser error | none (throws → dialog) | per-tool `preprocessArgs` feedback |
 
-Refio's bound-and-emphatic approach is closest to Aider's reflection pattern, but Aider's diagnostic content is much more concrete ("similar lines from file"). A future improvement direction.
+Refio's bound-and-emphatic approach is closest to Aider's reflection pattern, but Aider's diagnostic content is much more concrete ("similar lines from file"). A future improvement direction. Partially addressed: an unknown tool or subagent name now gets a Levenshtein-based "Did you mean '...'?" hint (`NameSuggestion`, used by `ToolCallParser`, `TurnToolExecutor`, `ToolExecutor`, `InvokeSubagentTool`); edit tools still give no "similar lines" hint.
 
 ---
 
 ## 7. What Refio Does Uniquely Well
 
-1. **PLAN mode** — explicit "read-only investigate first" delivers clear UX.
-2. **Multi-agent A2A** — no surveyed competitor has this.
-3. **`SnapshotService`** — undo without requiring git.
-4. **3-deep subagents** — the deepest hierarchy.
-5. **Reactive UI architecture** — richest `StateFlow` stack.
-6. **`HookService`** — middle ground between "none" and "everything is a hook" (omo).
-7. **`AgentEventBus` with metadata** — per-agent stream tracking with `runId` / `depth` / `agentName`.
+1. **PLAN mode** - explicit "read-only investigate first" delivers clear UX.
+2. **Multi-agent A2A** - no surveyed competitor has this.
+3. **`SnapshotService`** - undo without requiring git.
+4. **3-deep subagents** - the deepest hierarchy.
+5. **Reactive UI architecture** - richest `StateFlow` stack.
+6. **`HookService`** - middle ground between "none" and "everything is a hook" (omo).
+7. **`AgentEventBus` with metadata** - per-agent stream tracking with `runId` / `depth` / `agentName`.
+8. **Deterministic post-turn verification** - `TurnVerifier` runs the project build/test (`verify.command` or autodetected Gradle / npm / Cargo, on by default) after a file-writing AGENT turn and feeds failures back as a bounded repair loop (`verify.max_repair_rounds`, default 2); a failure that already existed before the turn is reported, not sent for repair.
 
 ---
 
 ## 8. Architectural Debt
 
-1. **`AgentTurnLoop.kt` size: ~2000 LOC** vs Codex `run_turn` ~300 LOC. Further decomposition is worth considering — extract `executeTurnLoop` into a `TurnExecutor` component with `AgentTurnLoop` as a thin facade.
-2. ~~Conservative iteration caps: 25 / 50 vs 90–100 elsewhere.~~ **Resolved 2026-05-26**: bumped PLAN 50→100, AGENT was already at 100. Both now match Gemini CLI's baseline.
-3. **3 modes ≠ 3 prompts in maintenance terms** — could be 1 prompt with conditional sections (Claude Code's modular approach).
-4. **No LLM judge** — Gemini's `checkNextSpeaker` is an elegant way to answer "is the model done?". Refio relies on heuristics.
-5. **JSON-in-text fallback persists** — Hermes abandoned it (except for trajectory export). Refio still supports it, doubling complexity in `ToolCallParser`, `AgentTurnLoop` format-retry branches, and `TurnPromptBuilder` (`response-contract-json` fragment).
-6. **No prompt-cache markers per provider** — Anthropic `cache_control` markers aren't used. Phase C in 2026-05 restructured the prompt for stable / volatile separation, but didn't wire provider-specific markers.
+1. **`AgentTurnLoop.kt` size: ~2000 LOC** vs Codex `run_turn` ~300 LOC. Further decomposition is worth considering - extract `executeTurnLoop` into a `TurnExecutor` component with `AgentTurnLoop` as a thin facade. **Partially done**: the extraction happened (`AgentTurnLoop` ~380 LOC facade), but the debt moved with it - `TurnExecutor.kt` is ~3,500 LOC and `executeLoop` alone ~1,900 lines.
+2. ~~Conservative iteration caps: 25 / 50 vs 90-100 elsewhere.~~ **Resolved 2026-05-26**: bumped PLAN 50→100, AGENT was already at 100. Both now match Gemini CLI's baseline. Later raised to 200 for both: the abort guardrails and the cost / wall-clock ceilings bound the cost, the cap is only a backstop.
+3. **3 modes ≠ 3 prompts in maintenance terms** - could be 1 prompt with conditional sections (Claude Code's modular approach).
+4. ~~**No LLM judge** - Gemini's `checkNextSpeaker` is an elegant way to answer "is the model done?". Refio relies on heuristics.~~ **Resolved**: `NextSpeakerJudgeGuardian` (registered in `GuardianRegistry` by `AgentTurnLoopFactory`) asks a model at the natural end of every PLAN/AGENT turn whether the work is delivered, with a goal-aware variant, and re-enters the loop with a fixed nudge - once by default, twice only while the turn is early and nothing is delivered yet (`general.judge_extended_reentry_enabled`), never more than 3; a turn the judge still sees as abandoned ends as `INCOMPLETE`. A judge failure counts as "done".
+5. **JSON-in-text fallback persists** - Hermes abandoned it (except for trajectory export). Refio still supports it, doubling complexity in `ToolCallParser`, `AgentTurnLoop` format-retry branches, and `TurnPromptBuilder` (`response-contract-json` fragment).
+6. ~~**No prompt-cache markers per provider** - Anthropic `cache_control` markers aren't used. Phase C in 2026-05 restructured the prompt for stable / volatile separation, but didn't wire provider-specific markers.~~ **Resolved for Anthropic**: `TurnPrompt.cacheableSystemLength` marks the end of the stable prefix and `AnthropicAdapter` splits the system prompt there with `cache_control: ephemeral`; other providers rely on their own automatic caching.
 
 ---
 
@@ -285,14 +300,14 @@ Refio's bound-and-emphatic approach is closest to Aider's reflection pattern, bu
 
 | # | Pattern | Source | Cost | Benefit |
 |---|---|---|---|---|
-| 1 | **LLM judge for "is the agent done?"** | Gemini CLI's `checkNextSpeaker` | 1 weak-model call per turn-end | Replaces remaining heuristics for terminal detection |
-| 2 | **Content-chanting loop detection** | Gemini's `CONTENT_LOOP_THRESHOLD` (50-char hash windows, ≥10 hits with avg distance ≤250 chars) | Low — incremental hash on stream | Catches "model echoes itself" pathology |
-| 3 | **Anthropic `cache_control` markers** | Hermes 3-tier; OpenAI auto + Anthropic explicit | Medium — API-level wiring per adapter | Real cost savings (~30–50% input tokens on long-running tasks) |
-| ~~4~~ | ~~**Iter cap → 100**~~ | Gemini / Hermes | None | **Done 2026-05-26** — PLAN 50→100, AGENT already there |
-| ~~5~~ | ~~**`TodoWrite`-style explicit task tracking**~~ | Claude Code | — | **Already implemented**: `tasks` tool (TasksTool) + `AgentPlanService` + `AgentPlansSectionProvider`. 2026-05-26 added prompt-level emphasis in `system-agent.md` `<task_planning>` to encourage usage. |
-| 6 | **Per-tool fuzzy repair on bad args** | Hermes `_repair_tool_call` | Low | Auto-correct small typos in arg names without nudge round-trip |
-| 7 | **Concrete diagnostics in retry message** | Aider's "Did you mean ..." with similar lines | Low | Better recovery than generic "regenerate envelope" |
-| 8 | **Per-iteration token-budget tracking** | Hermes `IterationBudget` thread-safe consume/refund | Low | Cleaner accounting for subagents and `execute_code` |
+| ~~1~~ | ~~**LLM judge for "is the agent done?"**~~ | Gemini CLI's `checkNextSpeaker` | 1 weak-model call per turn-end | **Done** - `NextSpeakerJudgeGuardian` at the natural end of PLAN/AGENT turns (see Section 8, item 4) |
+| ~~2~~ | ~~**Content-chanting loop detection**~~ | Gemini's `CONTENT_LOOP_THRESHOLD` (50-char hash windows, ≥10 hits with avg distance ≤250 chars) | Low - incremental hash on stream | **Done** - `TurnGuardrails.ContentChantingDetector` (word phrase of 1-10 words repeated 10× in a row, checked on the assembled response) + streaming `RepetitionDetector` (period repeated 32×) + cross-iteration `ConsecutiveTextRepetitionTracker` |
+| ~~3~~ | ~~**Anthropic `cache_control` markers**~~ | Hermes 3-tier; OpenAI auto + Anthropic explicit | Medium - API-level wiring per adapter | **Done for Anthropic** - stable system prefix marked `cache_control: ephemeral` in `AnthropicAdapter` |
+| ~~4~~ | ~~**Iter cap → 100**~~ | Gemini / Hermes | None | **Done 2026-05-26** - PLAN 50→100, AGENT already there |
+| ~~5~~ | ~~**`TodoWrite`-style explicit task tracking**~~ | Claude Code | - | **Already implemented**: `tasks` tool (TasksTool) + `AgentPlanService` + `AgentPlansSectionProvider`. 2026-05-26 added prompt-level emphasis in `system-agent.md` `<task_planning>` to encourage usage. |
+| 6 | **Per-tool fuzzy repair on bad args** | Hermes `_repair_tool_call` | Low | Auto-correct small typos in arg names without nudge round-trip. Partially: misspelled tool / subagent names get a "Did you mean" hint (`NameSuggestion`); argument names are not repaired |
+| 7 | **Concrete diagnostics in retry message** | Aider's "Did you mean ..." with similar lines | Low | Better recovery than generic "regenerate envelope". Partially: name-level "Did you mean" only, no similar-lines hint for failed edits |
+| 8 | **Per-iteration token-budget tracking** | Hermes `IterationBudget` thread-safe consume/refund | Low | Cleaner accounting for subagents and `execute_code`. Partially: per-turn cost ceiling (`CostLimitGuard`, `agent.max_cost_usd`) and wall-clock ceiling (`TurnBudgetGuard`, `agent.max_turn_minutes`); no per-iteration token budget |
 
 ---
 
@@ -300,9 +315,9 @@ Refio's bound-and-emphatic approach is closest to Aider's reflection pattern, bu
 
 Refio is **closest to Hermes** in philosophy (multi-layer scaffolding, own iter cap, own memory tool, similar subagents) but **closest to Continue** in infrastructure (Redux-like reactive store, IDE integration as primary target).
 
-Codex and Claude Code represent **"trust the model"** — minimal scaffolding, `max_turns` as the only safeguard. This works for them because they target frontier models exclusively.
+Codex and Claude Code represent **"trust the model"** - minimal scaffolding, `max_turns` as the only safeguard. This works for them because they target frontier models exclusively.
 
-Refio's position is **defensive in the good sense** — it supports weaker local models (Ollama qwen / glm) with scaffolding, while for strong models (Claude via API) the scaffolding is minimally taxing (~250 tokens added to system prompt for tool-use enforcement, ignored by frontier models that already follow the rule). This is a genuine unique value proposition for the local-first positioning stated in `CLAUDE.md`.
+Refio's position is **defensive in the good sense** - it supports weaker local models (Ollama qwen / glm) with scaffolding, while for strong models (Claude via API) the scaffolding is minimally taxing (~250 tokens added to system prompt for tool-use enforcement, ignored by frontier models that already follow the rule). This is a genuine unique value proposition for the local-first positioning stated in `CLAUDE.md`.
 
 ---
 
@@ -310,60 +325,64 @@ Refio's position is **defensive in the good sense** — it supports weaker local
 
 ### Code references (Refio)
 
-- `core/src/main/kotlin/pl/jclab/refio/core/services/AgentTurnLoop.kt` — main loop, `executeTurnLoop`
-- `core/src/main/kotlin/pl/jclab/refio/core/services/turn/TurnPromptBuilder.kt` — prompt assembly (stable/volatile split)
-- `core/src/main/kotlin/pl/jclab/refio/core/services/turn/TurnGuardrails.kt` — `ToolErrorTracker`, `TurnRepetitionTracker`
-- `core/src/main/kotlin/pl/jclab/refio/core/services/turn/TurnToolExecutor.kt` — parallel READ_ONLY dispatch, snapshots
-- `core/src/main/kotlin/pl/jclab/refio/core/services/turn/TurnLLMCaller.kt` — streaming, retry handler, native tools routing
-- `core/src/main/kotlin/pl/jclab/refio/core/agents/events/AgentInboxRegistry.kt` — multi-agent A2A
-- `core/src/main/resources/prompts/system-agent.md` — AGENT system prompt (with `<tool_use_enforcement>` block)
-- `core/src/main/resources/prompts/system-plan.md` — PLAN system prompt
+- `core/src/main/kotlin/pl/jclab/refio/core/services/AgentTurnLoop.kt` - thin facade over `TurnExecutor`
+- `core/src/main/kotlin/pl/jclab/refio/core/services/turn/TurnExecutor.kt` - the loop itself, `executeLoop`, native-tools fallback
+- `core/src/main/kotlin/pl/jclab/refio/core/services/TurnLoopConfig.kt` - iteration cap, parallel read cap, error-rate window per mode
+- `core/src/main/kotlin/pl/jclab/refio/core/services/turn/TurnPromptBuilder.kt` - prompt assembly (stable/volatile split)
+- `core/src/main/kotlin/pl/jclab/refio/core/services/turn/TurnGuardrails.kt` - `ToolErrorTracker`, `TurnRepetitionTracker`, `ContentChantingDetector`, `ConsecutiveTextRepetitionTracker`, blocked / denied tool trackers
+- `core/src/main/kotlin/pl/jclab/refio/core/services/turn/NextSpeakerJudgeGuardian.kt` - "is the agent done?" judge
+- `core/src/main/kotlin/pl/jclab/refio/core/services/turn/TurnVerifier.kt` - post-turn build/test verification and repair loop
+- `core/src/main/kotlin/pl/jclab/refio/core/services/ConversationSummaryService.kt` - conversation compaction
+- `core/src/main/kotlin/pl/jclab/refio/core/services/turn/TurnToolExecutor.kt` - parallel READ_ONLY dispatch, snapshots
+- `core/src/main/kotlin/pl/jclab/refio/core/services/turn/TurnLLMCaller.kt` - streaming, retry handler, native tools routing
+- `core/src/main/kotlin/pl/jclab/refio/core/agents/events/AgentInboxRegistry.kt` - multi-agent A2A
+- `core/src/main/resources/prompts/system-agent.md` - AGENT system prompt (with `<tool_use_enforcement>` block)
+- `core/src/main/resources/prompts/system-plan.md` - PLAN system prompt
 
 ### External reference points
 
 - **Codex CLI**:
-  - `codex-rs/core/src/session/turn.rs::run_turn` (lines 133–402)
-  - `codex-rs/core/src/tools/handlers/mod.rs::parse_arguments` (lines 77–83)
-  - `codex-rs/tools/src/function_call_error.rs` — `RespondToModel` vs `Fatal`
-  - `codex-rs/core/gpt_5_codex_prompt.md` — system prompt
+  - `codex-rs/core/src/session/turn.rs::run_turn` (lines 133-402)
+  - `codex-rs/core/src/tools/handlers/mod.rs::parse_arguments` (lines 77-83)
+  - `codex-rs/tools/src/function_call_error.rs` - `RespondToModel` vs `Fatal`
+  - `codex-rs/core/gpt_5_codex_prompt.md` - system prompt
 - **Claude Code**:
   - [How the agent loop works](https://code.claude.com/docs/en/agent-sdk/agent-loop)
   - [How Claude Code works](https://code.claude.com/docs/en/how-claude-code-works.md)
-  - GitHub Issue [#19699](https://github.com/anthropics/claude-code/issues/19699) — repetition loops (known gap)
+  - GitHub Issue [#19699](https://github.com/anthropics/claude-code/issues/19699) - repetition loops (known gap)
 - **Aider**:
-  - `aider/coders/base_coder.py::run_one` (lines 1089–1110), `apply_updates` (lines 1947–1972)
+  - `aider/coders/base_coder.py::run_one` (lines 1089-1110), `apply_updates` (lines 1947-1972)
   - `aider/coders/editblock_coder.py::find_original_update_blocks`, `replace_most_similar_chunk`
-  - `aider/coders/editblock_prompts.py` — system prompt
+  - `aider/coders/editblock_prompts.py` - system prompt
 - **Continue.dev**:
   - `core/llm/toolSupport.ts::modelSupportsNativeTools` (line 534)
-  - `gui/src/redux/thunks/streamNormalInput.ts` (line 113 — native tool switch)
-  - `core/tools/systemMessageTools/toolCodeblocks/index.ts` — fallback framework
+  - `gui/src/redux/thunks/streamNormalInput.ts` (line 113 - native tool switch)
+  - `core/tools/systemMessageTools/toolCodeblocks/index.ts` - fallback framework
 - **Hermes Agent**:
-  - `agent/conversation_loop.py` (line 675 — `while` loop, lines 3295–3406 — retry logic)
-  - `agent/system_prompt.py::build_system_prompt_parts` (line 60 — 3-tier prompt)
-  - `agent/prompt_builder.py` (line 246 — `TOOL_USE_ENFORCEMENT_GUIDANCE`)
-  - `agent/tool_guardrails.py` — `ToolCallGuardrailController`
+  - `agent/conversation_loop.py` (line 675 - `while` loop, lines 3295-3406 - retry logic)
+  - `agent/system_prompt.py::build_system_prompt_parts` (line 60 - 3-tier prompt)
+  - `agent/prompt_builder.py` (line 246 - `TOOL_USE_ENFORCEMENT_GUIDANCE`)
+  - `agent/tool_guardrails.py` - `ToolCallGuardrailController`
 - **Gemini CLI**:
-  - `packages/core/src/core/client.ts::sendMessageStream` (line 79 — `MAX_TURNS = 100`)
-  - `packages/core/src/core/turn.ts::Turn.run` (line 368 — function calls iteration)
-  - `packages/core/src/services/loopDetectionService.ts` — tool / content / LLM-judge loop detection
-  - `packages/core/src/utils/nextSpeakerChecker.ts` — `checkNextSpeaker`
-  - `packages/core/src/prompts/snippets.ts` — modular system prompt
+  - `packages/core/src/core/client.ts::sendMessageStream` (line 79 - `MAX_TURNS = 100`)
+  - `packages/core/src/core/turn.ts::Turn.run` (line 368 - function calls iteration)
+  - `packages/core/src/services/loopDetectionService.ts` - tool / content / LLM-judge loop detection
+  - `packages/core/src/utils/nextSpeakerChecker.ts` - `checkNextSpeaker`
+  - `packages/core/src/prompts/snippets.ts` - modular system prompt
 - **Firecrawl**:
   - `apps/api/src/lib/scrape-interact/browser-agent.ts::executePromptViaBrowserAgent` (line 202)
   - Note: FIRE-1 itself is a closed hosted service. The browser agent is the OSS equivalent.
 - **oh-my-openagent**:
-  - `src/index.ts` (entry — exports plugin module)
-  - `packages/prompts-core/prompts/ultrawork/default.md` — orchestrator prompt
-  - `src/hooks/` — lifecycle hook implementations
+  - `src/index.ts` (entry - exports plugin module)
+  - `packages/prompts-core/prompts/ultrawork/default.md` - orchestrator prompt
+  - `src/hooks/` - lifecycle hook implementations
 
 ### Internal documents
 
-- [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) — overall Refio architecture
-- [`docs/overview.md`](overview.md) — technical overview
-- [`docs/files.md`](files.md) — per-package file reference
-- [`docs/ROADMAP.md`](ROADMAP.md) — agreed development plan
-- [`docs/0054-multiagent.md`](0054-multiagent.md) — multi-agent design notes
+- [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) - overall Refio architecture
+- [`docs/overview.md`](overview.md) - technical overview
+- [`docs/files.md`](files.md) - per-package file reference
+- [`docs/ROADMAP.md`](ROADMAP.md) - agreed development plan
 
 ---
 
@@ -373,19 +392,19 @@ This comparison was assembled in 2026-05 by:
 
 1. Reading Refio's own loop implementation directly (`AgentTurnLoop.kt`, `TurnPromptBuilder.kt`, `TurnGuardrails.kt`, `TurnToolExecutor.kt`).
 2. Cloning or browsing each external repository and reading the actual loop entry point, the tool dispatch path, the format-retry logic, and the published system prompt.
-3. Cross-referencing official documentation where source code was unavailable (Claude Code — documented behavior; Firecrawl FIRE-1 — partial OSS coverage).
+3. Cross-referencing official documentation where source code was unavailable (Claude Code - documented behavior; Firecrawl FIRE-1 - partial OSS coverage).
 4. For each system, extracting the same dimensions: iteration model, tool format, format error handling, repetition detection, termination conditions, system prompt directives.
 
 Where a feature was reported absent (e.g. "no repetition detection in Codex"), the absence was verified by grepping the actual source for related terms (`repetition`, `duplicate`, `dedup`, `hash`, `repeated`, `last_call`) and confirming zero matches in the loop path.
 
-This is descriptive, not prescriptive — what each system does, not what each should do.
+This is descriptive, not prescriptive - what each system does, not what each should do.
 
 ### Maintenance
 
-This document captures a point-in-time snapshot. Other agents evolve quickly. Consider re-validating before adopting any pattern from Section 9 — verify that the source system still does what's described, and that Refio's constraints haven't changed.
+This document captures a point-in-time snapshot. Other agents evolve quickly. Consider re-validating before adopting any pattern from Section 9 - verify that the source system still does what's described, and that Refio's constraints haven't changed.
 
 ---
 
-**Last verified**: 2026-05-26 against repos as of that date.
+**Last verified**: 2026-05-26 against repos as of that date. Refio-side claims re-checked against the code on 2026-10-11 (external systems not re-checked).
 **Owner**: Engineers actively working on `AgentTurnLoop`.
 **Review cadence**: Re-validate before any major refactor of the loop or before adopting patterns from Section 9.

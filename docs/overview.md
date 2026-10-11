@@ -1,7 +1,7 @@
 # Refio - Technical Architecture Overview
 
-> **Last Updated:** 2026-06-28
-> **Version:** 0.0.1.12
+> **Last Updated:** 2026-10-11
+> **Version:** 0.0.2.1
 > **Status:** Active Development
 
 This document provides a comprehensive technical overview of Refio - a local-first AI coding assistant for IntelliJ IDEA and the terminal.
@@ -75,8 +75,8 @@ Refio runs in two environments sharing the same `:core` module:
 │  └── Settings Panels (12+)                                              │
 ├─────────────────────────────────────────────────────────────────────────┤
 │  Service Layer (Project-Scoped)                                         │
-│  ├── SessionManager (facade with 6 components)                          │
-│  │   ├── SessionStateManager (11 StateFlows for reactive UI)            │
+│  ├── SessionManager (facade; session components live in :core)          │
+│  │   ├── SessionStateManager (16 StateFlows for reactive UI)            │
 │  │   ├── SessionLifecycleService (create/switch/load)                   │
 │  │   ├── MessageDispatcher (mode-specific routing)                      │
 │  │   └── SubtaskTracker (subtask CRUD)                                  │
@@ -92,7 +92,7 @@ Refio runs in two environments sharing the same `:core` module:
 │  │   └── 7 view renderers + Settings screen (11 sub-tabs)              │
 │  ├── TuiInputHandler (raw TTY / line mode dual input)                   │
 │  │   └── TuiKeybindings (F1-F8, Ctrl+combinations)                     │
-│  ├── TuiViewModel (coordinator ~1289 LOC, delegates to 3 sub-VMs)      │
+│  ├── TuiViewModel (coordinator ~1588 LOC, delegates to 3 sub-VMs)      │
 │  │   ├── TuiChatViewModel, TuiSessionViewModel, TuiObservabilityVM    │
 │  │   └── TuiWorkflowListener (streaming bridge)                        │
 │  └── TuiColors (ANSI palette: 8 agent colors, roles, status)           │
@@ -101,21 +101,23 @@ Refio runs in two environments sharing the same `:core` module:
                                │ shared
 ┌──────────────────────────────┴──────────────────────────────────────────┐
 │  Execution Layer                                                        │
-│  ├── CHAT mode → WorkflowOrchestrator → ChatExecutor                    │
-│  │   ├── IntentRouter (fast paths: subagent, answer question)           │
-│  │   └── WorkflowEventListener (streaming/progress callbacks)           │
-│  └── PLAN/AGENT/SUBAGENT profile → AgentTurnLoop (Codex CLI-style)      │
+│  ├── CoreSessionService (:core) routes by mode                          │
+│  ├── CHAT mode → ChatRouter → ChatService (no tools)                    │
+│  │   └── DefaultWorkflowStreamingListener (streaming callbacks)         │
+│  └── PLAN/AGENT/SUBAGENT profile → AgentRouter.runTurn → AgentTurnLoop  │
 │      ├── TurnEventListener (progress callbacks)                         │
 │      └── ToolResultSummarizer (context optimization)                    │
 ├─────────────────────────────────────────────────────────────────────────┤
-│  Core Layer (In-Process API) — :core module                             │
-│  ├── CoreApiRouter (thin composition root ~305 LOC, 12 domain routers)   │
+│  Core Layer (In-Process API) - :core module                             │
+│  ├── CoreApiRouter (thin composition root ~320 LOC, 13 domain routers)   │
 │  │   ├── ChatRouter → ChatService                                       │
-│  │   ├── TaskRouter, SubtaskRouter                                      │
+│  │   ├── AgentRouter → AgentTurnLoop                                    │
+│  │   ├── TaskRouter, SubtaskRouter, ConfigRouter, SnapshotRouter        │
 │  │   ├── RagRouter → RagSearchService                                   │
 │  │   ├── ToolRouter, PromptsRouter, ApiLogsRouter                       │
-│  │   └── ContextService (delegates to 6 sub-services:                   │
-│  │       RagContextLoader, McpContextLoader, ContextReferenceResolver,  │
+│  │   ├── SubagentRouter, MultiAgentRouter, ProjectContextRouter         │
+│  │   └── ContextService (delegates to 5 sub-services:                   │
+│  │       McpContextLoader, ContextReferenceResolver,                    │
 │  │       ProjectContextSummarizer, ConversationContextBuilder,          │
 │  │       TaskContextExtractor)                                          │
 │  └── ContextProviderRegistry (14 providers + MCP dynamic)               │
@@ -133,7 +135,7 @@ Refio runs in two environments sharing the same `:core` module:
 
 ```
 Gradle modules (three separate source trees):
-├── :core                     # Pure Kotlin/JVM — no IntelliJ SDK dependency
+├── :core                     # Pure Kotlin/JVM - no IntelliJ SDK dependency
 │   └── core/src/main/kotlin/pl/jclab/refio/
 ├── :intellij-plugin          # IntelliJ IDEA plugin (depends on :core)
 │   └── intellij-plugin/src/main/kotlin/pl/jclab/refio/
@@ -142,7 +144,7 @@ Gradle modules (three separate source trees):
 
 core/src/main/kotlin/pl/jclab/refio/
 ├── core/                     # Embedded core (:core module)
-│   ├── api/                  # Router layer (12 domain routers)
+│   ├── api/                  # Router layer (13 domain routers)
 │   ├── context/              # Context providers + MCP
 │   │   ├── providers/        # 14 built-in providers
 │   │   │   └── standalone/   # 7 CLI-compatible providers (no IDE)
@@ -154,7 +156,9 @@ core/src/main/kotlin/pl/jclab/refio/
 │   ├── agents/               # Multi-agent system
 │   │   └── events/           # AgentEventBus, AgentEvent sealed interface
 │   ├── subagents/            # Subagent system (21 built-in)
-│   ├── tools/                # Tool system (15 registered implementations)
+│   ├── session/              # CoreSessionService, SessionStateManager, MessageDispatcher, ...
+│   ├── security/             # NetworkPolicy, UrlPolicy, SecureLogger, ExecutionSandbox
+│   ├── tools/                # Tool system (~30 registered tools)
 │   │   ├── implementations/
 │   │   └── security/
 │   └── prompts/              # Prompt templates
@@ -162,7 +166,7 @@ core/src/main/kotlin/pl/jclab/refio/
 
 intellij-plugin/src/main/kotlin/pl/jclab/refio/
 ├── services/                 # Plugin services (project-scoped)
-│   └── session/              # SessionManager (6 components)
+│   └── session/              # SessionManager (facade over :core session components)
 └── ui/                       # IntelliJ UI components
     ├── toolwindow/           # Tool window factory
     ├── components/           # Chat, toolbar, autocomplete
@@ -212,12 +216,12 @@ Unknown placeholders remain unchanged.
 
 | Mode | Executor | Tools Available | Subtasks | Use Case |
 |------|----------|-----------------|----------|----------|
-| **CHAT** | ChatExecutor | None | No | Conversation, explanations |
-| **PLAN** | AgentTurnLoop | READ_ONLY (14) | Yes | Code review, analysis |
-| **AGENT** | AgentTurnLoop | ALL (24) | Yes | Code generation, refactoring |
+| **CHAT** | ChatService | None | No | Conversation, explanations |
+| **PLAN** | AgentTurnLoop | READ_ONLY subset (~20) | Yes | Code review, analysis |
+| **AGENT** | AgentTurnLoop | ALL (~30) | Yes | Code generation, refactoring |
 | **SUBAGENT** | AgentTurnLoop (`runProfile=SUBAGENT`) | Profile-filtered | Yes | Specialized delegated tasks |
 
-`ToolRegistry` has ~30 registered tools across 6 functional groups (reading & search, web & HTTP, system, editing, execution, delegation); PLAN exposes the read-only subset, AGENT the full set. `run_terminal_command` is `ASK` by default in AGENT mode and validated by `CommandRule` (regex `ALLOW` / `BLOCK` / `ASK`).
+`ToolRegistry` has ~30 registered tools across 6 functional groups (reading & search, web & HTTP, system, editing, execution, delegation); PLAN exposes the read-only subset, AGENT the full set. `run_terminal_command` and `run_process_background` are `ASK` by default in AGENT mode and validated by `CommandRule` (regex `ALLOW` / `BLOCK` / `ASK`).
 `invoke_subagent` is enabled by default in PLAN and AGENT, and is displayed as `subagent` in Tools Settings.
 `delegate_to_strong_model` is registered only when `models.defaults.strong` is configured; it delegates complex tasks to a more capable model (single-shot or tool-enabled sub-agent mode).
 
@@ -228,16 +232,13 @@ User Input
     ↓
 SessionManager.sendMessage()
     ↓
-WorkflowOrchestrator.execute()
-    ├→ IntentRouter.determineIntent()
-    │   ├─ Fast Path 1: Subagent (!name pattern)
-    │   └─ Fallback: Chat intent
-    ├→ ChatExecutor.execute()
-    │   ├→ ChatService.chat()
+CoreSessionService.sendMessage()  (mode == CHAT)
+    ├→ ChatRouter.chat()
+    │   ├→ ChatService.chat()  (ContextService.buildProjectContext + history)
     │   └→ LLMClient.complete()
-    └→ StreamChunk callbacks to UI
+    └→ StreamChunk callbacks to UI (DefaultWorkflowStreamingListener)
     ↓
-MessageDispatcher.loadMessages()
+MessageDispatcher.loadMessagesAndWait()
     ↓
 UI Update via StateFlow
 ```
@@ -249,9 +250,11 @@ User Input
     ↓
 SessionManager.sendMessage()
     ↓
-AgentTurnLoop.runTurn()
+CoreSessionService.sendMessage()  (mode == PLAN/AGENT; `!name` input → SubagentRouter)
+    ↓
+AgentRouter.runTurn() → AgentTurnLoop.runTurn()
     ├─ Save user message to history
-    ├─ LOOP (max 100 iterations):
+    ├─ LOOP (max 200 iterations, plus guardrails below):
     │   ├→ Build prompt (history + context + tool descriptions)
     │   ├→ Call LLM
     │   ├→ If tool calls in response:
@@ -287,16 +290,16 @@ The primary execution engine for PLAN, AGENT, and SUBAGENT run profiles, impleme
 | **Tool Filtering** | PLAN = READ_ONLY, AGENT = all tools |
 | **Subtask Tracking** | Each tool call creates database entry with status lifecycle |
 | **Result Summarization** | Tool results summarized to reduce context size |
-| **Safety Limits** | Max 100 iterations, loop detection, error rate monitoring |
-| **Auto-Compaction** | Automatic conversation compression at 80-85% context window |
+| **Safety Limits** | Max 200 iterations (a backstop), loop/repetition trackers, error rate monitoring, cost and wall-clock budgets, completion guardian |
+| **Auto-Compaction** | Automatic conversation compression when the conversation tail exceeds 80% of its budget |
 | **Prompt Caching** | Static prompt components cached for faster execution |
 | **Parallel Tools** | READ_ONLY tools execute concurrently for better performance |
 | **Retry Logic** | Exponential backoff for transient API errors |
 | **Token Estimation** | Pre-flight token counting prevents context overflow |
 | **Run Profiles** | `DEFAULT` and `SUBAGENT` with per-run overrides |
 | **Nested Metadata** | `runId`, `parentRunId`, `depth` attached to turn lifecycle |
-| **Centralized Metric Tracking** | `LLMClient` accepts `taskRepository` + `subtaskRepository` and auto-increments `tokens_in` / `tokens_out` / `cost_usd` on the `task` and `subtask` rows after every successful call. The `task` row is the single source of truth for live stats — UI reads it directly instead of summing per-message tokens. |
-| **Task Status Transitions** | AGENT turns flip `task.status` `RUNNING` on entry, `SUCCESS` / `FAILED` / `INCOMPLETE` on completion (was previously stuck at `NEW`). `INCOMPLETE` marks a turn that stopped without delivering the request (a completion guardian gave up, or a no-op-write / read-spree abort fired) — distinct from `FAILED` (an error) and `SUCCESS` (delivered). Followed by a `pushSessionRefresh()` that re-reads the row and re-publishes via the `activeSession` `StateFlow`. |
+| **Centralized Metric Tracking** | `LLMClient` accepts `taskRepository` + `subtaskRepository` and auto-increments `tokens_in` / `tokens_out` / `cost_usd` on the `task` and `subtask` rows after every successful call. The `task` row is the single source of truth for live stats - UI reads it directly instead of summing per-message tokens. |
+| **Task Status Transitions** | AGENT turns flip `task.status` `RUNNING` on entry, `SUCCESS` / `FAILED` / `INCOMPLETE` on completion (was previously stuck at `NEW`). `INCOMPLETE` marks a turn that stopped without delivering the request (a completion guardian gave up, or a no-op-write / read-spree abort fired) - distinct from `FAILED` (an error) and `SUCCESS` (delivered). Followed by a `pushSessionRefresh()` that re-reads the row and re-publishes via the `activeSession` `StateFlow`. |
 | **Skip Redundant Config Writes** | `SessionLifecycleService.updateSession(persistSettings = false)` skips the 5 `ConfigRepository` writes that `saveCurrentSessionState()` would otherwise emit on every token-only refresh (~10 fewer DB writes per turn). |
 
 ### Subtask Status Lifecycle
@@ -321,16 +324,14 @@ Context Window Filling → Token Estimation → Compaction Trigger
     ↓
 ConversationSummaryService
     ├── Only messages after the last summary are considered (never summarize a summary)
-    ├── Keep at least the last 2 messages raw (continuity)
+    ├── Keep at least the last 4 messages raw (continuity)
     ├── Summarize older messages using the WEAK model
     └── Replace with a single <conversation_summary> message
     ↓
-Conversation tail brought back to ~50% of the budget, conversation continues
+Conversation tail brought back to ~45% of the budget, conversation continues
 ```
 
-**Configuration:** triggers when the uncompressed tail exceeds 85% of the conversation budget,
-in every mode (`ConversationSummaryService.SUMMARY_THRESHOLD_RATIO`). The `TurnLoopConfig`
-compaction fields are leftovers and are not read by the turn loop.
+**Configuration:** triggers when the uncompressed tail exceeds 80% of the conversation budget, in every mode (`ConversationSummaryService.SUMMARY_THRESHOLD_RATIO = 0.80`, target `SUMMARY_TARGET_RATIO = 0.45`, `MIN_KEEP_RECENT_MESSAGES = 4`). `TurnLoopConfig` has no compaction fields. Building a context preview never compacts (`allowSummarization = false`), and a failed compaction falls back to the uncompacted history instead of dropping the project context (`ContextService`).
 
 #### 2. Prompt Caching
 
@@ -373,13 +374,15 @@ Automatic retry for transient API errors:
 ```
 Retryable Errors:
 ├── Rate limits (429)
-├── Timeouts
-├── Server errors (502/503)
+├── Timeouts, refused/reset connections, streams cut off mid-flight
+├── Server errors (502/503, plus bare 500/520/529 via TransientErrorClassifier)
 └── Overloaded messages
     ↓
 Retry Strategy: 1s → 2s → 4s (exponential backoff)
-Max retries: 3 (configurable)
+Max attempts: 3 in total (`limits.max_retries`, configurable)
 ```
+
+Concurrent cloud calls are additionally capped per provider by `ProviderRequestGate` (a semaphore around the adapter call in `LLMClient`, `providers.max_concurrent`, default 4); Ollama is excluded because `OllamaRequestGate` already serializes it per endpoint. A streamed response's idle (socket) timeout is clamped to `LLMKtorClientFactory.STREAM_IDLE_CEILING_MS` (600 s), so a dead stream cannot hang for the whole total timeout.
 
 #### 5. Token Estimation
 
@@ -388,12 +391,14 @@ Pre-flight token counting prevents unexpected context overflow:
 ```
 Before LLM Call:
     ↓
-TokenEstimator.checkFits(prompt, maxTokens)
-    ├── Estimate: ~3.5 chars/token (provider-adjusted)
-    └── Reserve: 4K tokens for output
+ModelWindow.resolve(provider, model)  → effective context window
     ↓
-If doesn't fit → Trigger compaction
+ContextBudget.forContextSize(window, staticPrefixTokens)  → per-section budgets
+    ├── Estimate: ~3.5 chars/token base (provider-adjusted)
+    └── Conversation tail over 80% of its budget → ConversationSummaryService compaction
 ```
+
+`ModelWindow.resolve` is the single resolver for "how many tokens can this model accept": provider-specific override (`providers.ollama.ollama_context_size`, ...) → `ModelDefinitions.maxContext` → window discovered from the provider's model listing → `MAX_CONTEXT_SIZE` fallback (an explicitly set `MAX_CONTEXT_SIZE` also acts as a ceiling). `TokenEstimator.checkFits` (4096-token output reserve) still exists but has no callers.
 
 **Provider Multipliers:**
 - Anthropic: 1.1x (Claude uses more tokens)
@@ -416,26 +421,32 @@ Next Prompt → Build Working Memory Section → Inject as Reminder
 
 | Parameter | PLAN | AGENT | Description |
 |-----------|------|-------|-------------|
-| maxIterations | 100 | 100 | Max LLM calls per turn |
-| compactionThreshold | 0.85 | 0.80 | Trigger at % of context |
+| maxIterations | 200 | 200 | Max LLM calls per turn (backstop; guardrails bound the real cost) |
 | parallelReadTools | true | true | Concurrent READ_ONLY |
+| maxParallelReadTools | 6 | 6 | Fan-out cap per READ_ONLY batch |
 | enableSnapshots | false | true | File backups before write |
-| toolTimeout | 30s | 2min | Per-tool execution limit |
-| maxRetries | 3 | 3 | LLM retry attempts |
-| errorRateThreshold | 0.7 | 0.7 | Abort at 70% failure rate |
-| enableWorkingMemory | true | true | Knowledge extraction |
+| toolTimeout | 2min | 5min | Per-tool limit for in-process tools |
+| networkToolTimeout | 3min | 3min | Per-tool limit for network / local-model tools (rag_search, web, HTTP, MCP) |
+| maxRetries | 3 | 3 | LLM attempts in total |
+| retryBackoffMs | 1000 | 1000 | Base backoff delay |
+| errorRateThreshold | 0.7 | 0.7 | Abort above 70% failure rate |
+| errorWindowSize | 10 | 10 | Sliding window for the error rate |
 
 ### TurnEventListener Interface
 
 ```kotlin
-interface TurnEventListener {
+interface TurnEventListener : TurnCompletionListener {  // adds onTurnCompleted(taskId, result, runId, parentRunId, depth)
     fun onTurnStarted(taskId: String, mode: TaskMode, runId: String, parentRunId: String?, depth: Int)
     fun onToolExecutionStarted(taskId: String, toolCall: ToolCallData)
+    fun onToolStreamChunk(taskId: String, toolCallId: String, delta: String, accumulated: String)
     fun onToolExecutionCompleted(taskId: String, toolCall: ToolCallData, result: String, success: Boolean)
     fun onStreamChunk(taskId: String, delta: String, accumulated: String)
-    fun onTurnCompleted(taskId: String, result: TurnResult, runId: String, parentRunId: String?, depth: Int)
+    fun onLlmToolCallProgress(taskId: String, index: Int, toolName: String?, accumulatedArguments: String)
+    fun onToolBatchCompleted(taskId: String, summary: ToolBatchSummary.BatchSummary)
 }
 ```
+
+All methods have empty default bodies.
 
 ### ToolResultSummarizer
 
@@ -450,10 +461,19 @@ Summarizes tool execution results to reduce context size:
 
 | Mechanism | Description |
 |-----------|-------------|
-| **Loop Detection** | Aborts when a tool returns byte-identical output 4x in a row on the same target (hash-based); content-chanting detector for runaway text |
-| **Error Rate Monitoring** | Aborts if >= 70% failure rate over the last 10 tool calls |
-| **Max Iterations** | Hard limit per turn (PLAN: 100, AGENT: 100) |
-| **Timeout** | Configurable per-tool execution timeout |
+| **Loop Detection** | `TurnRepetitionTracker`: aborts when a tool returns byte-identical output 4x in a row on the same target (hash-based; subagents abort write/exec loops at 2) |
+| **No-op Write Streak** | Same tracker: 3 consecutive no-op writes ("identical content") on the same tool and path abort the turn as `INCOMPLETE`; a no-op write never counts as progress |
+| **Text Repetition** | `ContentChantingDetector` (a phrase repeated 10x in a row inside one response) and `ConsecutiveTextRepetitionTracker` (the same or near-identical answer text on 2 consecutive iterations without tool calls) |
+| **Error Rate Monitoring** | `ToolErrorTracker`: aborts when the failure rate is above 70% over the last 10 tool calls (needs at least 5 results, and the latest call must have failed) |
+| **Blocked / Denied Tools** | `ConsecutiveBlockedToolTracker` (2 calls in a row to a tool outside the profile) and `ConsecutiveDeniedToolTracker` (3 calls in a row refused by the approval policy); denials do not feed the error rate |
+| **Read Spree Nudge** | After 14 consecutive gathering calls without a write or delivery (top-level AGENT), a non-blocking SYSTEM nudge asks the model to consolidate or deliver |
+| **Cost Budget** | `CostLimitGuard`: stops before the next LLM call once session cost reaches `agent.max_cost_usd` (CLI `--max-cost`; `0` = off, default) |
+| **Wall-clock Budget** | `TurnBudgetGuard`: stops a turn after `agent.max_turn_minutes` (default 45; `0` = off) |
+| **Completion Guardian** | `NextSpeakerJudgeGuardian`: at the terminal point a cheap judge checks whether the request was delivered and allows one bounded re-entry; if not delivered, the task ends as `INCOMPLETE` |
+| **Max Iterations** | Hard limit per turn (PLAN: 200, AGENT: 200) |
+| **Timeout** | Per-tool execution timeout (`toolTimeout` / `networkToolTimeout`) |
+
+Trackers live in `core/services/turn/TurnGuardrails.kt`; the budget guards and the guardian sit next to it in `core/services/turn/`.
 
 ---
 
@@ -463,15 +483,16 @@ Summarizes tool execution results to reduce context size:
 
 ```
 ContextService.buildProjectContext()
-    Delegates to 6 sub-services:
-    ├── ProjectContextSummarizer — cached project analysis (architecture, dependencies)
-    ├── ContextReferenceResolver — deduplicate + resolve @mentions via ContextProviderRegistry
-    ├── ConversationContextBuilder — extract conversation history (with summarization)
-    ├── TaskContextExtractor — build subtask summaries (completed steps)
-    ├── RagContextLoader — load RAG fragments (code + docs)
-    ├── McpContextLoader — load MCP resources
+    Delegates to 5 sub-services (+ ProjectInstructionsLoader, ContextPruner, ContextFormatter):
+    ├── ProjectContextSummarizer - cached project analysis (architecture, dependencies)
+    ├── ContextReferenceResolver - deduplicate + resolve @mentions via ContextProviderRegistry
+    ├── ConversationContextBuilder - extract conversation history (with summarization)
+    ├── TaskContextExtractor - build subtask summaries (completed steps)
+    ├── McpContextLoader - load MCP resources
     └── Combine into ProjectContextDTO with token budgets
 ```
+
+RAG fragments are not injected automatically: the model reaches the index through the `rag_search` tool, and the user through `@codebase` / `@docs` references.
 
 ### Provider Types
 
@@ -502,20 +523,17 @@ ContextService.buildProjectContext()
 
 ### Context Budget (Token Limits)
 
-| Section | Default | Small Model |
-|---------|---------|-------------|
-| SYSTEM_PROMPT | 3,000 | 2,500 |
-| TOOL_DESCRIPTIONS | 2,000 | 1,500 |
-| WORKING_MEMORY | 3,000 | 4,000 |
-| PROJECT_CONTEXT | 1,500 | 1,000 |
-| PROJECT_INSTRUCTIONS | 2,000 | 1,500 |
-| RECENT_WORK | 4,000 | 5,000 |
-| USER_CONTEXT | 5,000 | 4,000 |
-| RAG_FRAGMENTS | 3,000 | 2,000 |
-| CONVERSATION | 4,000 | 3,500 |
-| **Total** | ~28,500 | ~23,000 |
+| Section | Baseline budget |
+|---------|-----------------|
+| WORKING_MEMORY | 3,000 |
+| PROJECT_CONTEXT | 1,500 |
+| RECENT_WORK | 8,000 |
+| USER_CONTEXT | 5,000 |
+| CONVERSATION | 14,000 |
+| REFERENCE | 2,500 |
+| **Total** | 34,000 |
 
-Small models: ≤32KB context window
+`ContextBudget.forContextSize` takes 85% of the resolved context window as input budget and subtracts the tokens already committed to the system prompt (`staticPrefixTokens`). If what is left exceeds the 34,000 baseline, every section is scaled up proportionally; if it is smaller, every section is scaled down to fit. Unused budget is redistributed in the order RECENT_WORK, WORKING_MEMORY, CONVERSATION, USER_CONTEXT. SYSTEM_PROMPT and TOOL_DESCRIPTIONS are built by `TurnPromptBuilder` and get no section budget here; `AGENT_PLANS` and `PROJECT_INSTRUCTIONS` are sections without a baseline entry.
 
 #### Tool Result Compression Pipeline
 
@@ -536,9 +554,9 @@ ToolResultCompression.compress(rawOutput, summary, level, config, subtaskId?)
 | **Pure-create** | No `-` lines, `+` lines > threshold | Keep file path + hunk headers + 15-line head + 8-line tail; insert `<!-- N added line(s) elided. Full content: memory(action="get_subtask_output", subtask_id="…") -->`. |
 | **Large mixed** | Has both `+` and `-` lines | Keep every `+` and `-` line verbatim (semantic changes never dropped); collapse runs of context lines to 1 representative line per hunk run. |
 
-The marker embeds the literal `subtaskId` so the agent can copy-paste it straight into `memory(get_subtask_output)` without scanning attributes on the surrounding tag. Compression is idempotent — a second pass over an already-compressed marker is a no-op (the marker line doesn't begin with `+` / `-`, so the next-iteration check sees only the head + tail and falls below the small-diff threshold).
+The marker embeds the literal `subtaskId` so the agent can copy-paste it straight into `memory(get_subtask_output)` without scanning attributes on the surrounding tag. Compression is idempotent - a second pass over an already-compressed marker is a no-op (the marker line doesn't begin with `+` / `-`, so the next-iteration check sees only the head + tail and falls below the small-diff threshold).
 
-DiffCompressor is also applied in `TurnPromptBuilder` and `ContextService.resolveToolConversationContent` before TOOL messages are mapped to the LLM payload — so summarized tool results in CONVERSATION are compressed too, not just RECENT_WORK entries.
+DiffCompressor is also applied in `TurnPromptBuilder` and `ContextService.resolveToolConversationContent` before TOOL messages are mapped to the LLM payload - so summarized tool results in CONVERSATION are compressed too, not just RECENT_WORK entries.
 
 ### Project Instructions
 
@@ -550,7 +568,7 @@ Refio automatically loads project-level instruction files into the LLM context (
 |------|----------|-------------|
 | `.refio/agent.md` | 1 | Refio-specific project instructions |
 | `AGENTS.md` | 2 | Universal standard (supported by Codex, Copilot, Cursor, Windsurf) |
-| Subdirectory `AGENTS.md` | 3 | Cascading — loaded when agent works in a subdirectory |
+| Subdirectory `AGENTS.md` | 3 | Cascading - loaded when agent works in a subdirectory |
 
 **Conditional rules (`.refio/rules/*.md`):**
 
@@ -618,13 +636,14 @@ Query: "authentication logic"
     ↓
 EmbeddingProvider.generateEmbedding(query)
     ↓
-RagRepository.getEmbeddings(projectRoot, model)
+RagRepository.getEmbeddingsBatch(projectRoot, model, contentType, afterId, limit=500)
+    (paged scan, never loads the whole index into memory)
     ↓
 Cosine Similarity: cos(q, e) = (q · e) / (||q|| × ||e||)
     ↓
-Filter: similarity >= threshold (default 0.5)
+Filter: similarity >= threshold (default 0.65)
     ↓
-Sort by similarity, take topK (default 5)
+Bounded candidate heap, sort by similarity, take topK (default 5)
     ↓
 Optional: Hybrid search (70% semantic + 30% keyword)
     ↓
@@ -650,6 +669,7 @@ RagSearchResult[]
 | Code Search | 0.65 | 10 | No | Context chunks included |
 | Documentation | 0.45 | 15 | Yes | Keyword boosting |
 | Exploration | 0.35 | 20 | Yes | Low threshold, broad results |
+| Examples | 0.50 | 12 | Yes | Optional keyword list |
 | Debugging | 0.70 | 8 | No | High precision |
 
 ---
@@ -670,12 +690,14 @@ interface Tool {
 }
 ```
 
-### READ_ONLY Tools (14)
+### READ_ONLY Tools (~21)
+
+13 come from `ToolFactory.createReadOnlyTools()`; the rest are registered at bootstrap: `invoke_subagent`, `delegate_to_strong_model` (only with a strong model configured) and the system tools `tasks`, `memory`, `manage_subagent`, `send_message`, `answer_message` (`SystemToolsRegistrar`), plus `rag_search` (`CoreApiRouterBootstrap`).
 
 | Tool | Parameters | Description | Limits |
 |------|------------|-------------|--------|
 | `read_file` | path | Read file content | 2MB max |
-| `read_directory` | path, recursive, max_depth | List directory tree | Depth 10 |
+| `read_directory` | path, recursive, max_depth | List directory tree | Default depth 3 |
 | `file_search` | pattern, path, offset, limit | Glob pattern search | 100 results |
 | `grep_search` | pattern, path, case_sensitive | Regex content search | 500 results |
 | `view_diff` | file1, file2/content2 | Line-by-line diff | - |
@@ -684,12 +706,16 @@ interface Tool {
 | `web_search` | query, max_results? | Search the web (Brave/SerpAPI/DuckDuckGo) | 20 results max |
 | `fetch_webpage` | url, prompt, max_content_chars? | Fetch URL → Markdown → LLM processing | 50K chars max |
 | `code_intelligence` | action, symbol?, path?, language? | Find usages, definitions, list symbols, compiler diagnostics | ctags optional |
+| `find_usages` | symbol_name, ... | Project-wide symbol usages via the refactoring engine | - |
+| `rag_search` | query, content_type? | Semantic search over the RAG index (`PROJECT_CODE` / `DOCUMENTATION`) | - |
+| `tasks` | action (plan/update/list) | Manage the turn's execution plan | - |
+| `memory` | action (write/read/list/get_subtask_output) | Shared working memory; recovers full raw output of a past tool call | - |
 | `monitor_process` | process_id, max_lines? | Read output from background process | 1000 lines max |
 | `ask_user` | question, options? | Ask user a question and wait for response | 10 min timeout |
 | `sleep` | duration_ms | Pause execution | 30s max |
 | `think` | thought | Explicit reasoning slot | - |
 
-### WRITE Tools (10)
+### WRITE Tools (11)
 
 | Tool | Parameters | Description | Cost |
 |------|------------|-------------|------|
@@ -701,8 +727,9 @@ interface Tool {
 | `run_terminal_command` | command | Shell execution (CommandRule-protected) | **AGENT: ASK (default)** |
 | `http_request` | url, method, headers, body, save_to_file | HTTP requests (GET/POST/PUT/DELETE), 5 MB limit, 60s timeout | Free |
 | `run_code` | language, code | Execute Python/JavaScript/Kotlin Script snippets, 120s timeout | **OFF by default** |
-| `run_process_background` | command | Start command in background, return process_id | Free |
+| `run_process_background` | command | Start command in background, return process_id (CommandRule-protected) | **AGENT: ASK (default)** |
 | `llm_call` | prompt, data?, file_path?, model? | Raw single-turn LLM call | ~$0.01 |
+| `rename_symbol` | file, line, old_name, new_name | Project-wide rename in one call | Free |
 
 ### Security Layers
 
@@ -716,9 +743,9 @@ Layer 1: PathSandbox
 Layer 2: FileLimits
 ├── Max file size: 2 MB
 ├── Max files in directory: 1,000
-├── Max search depth: 10
-├── Excluded directories: 24 (.git, node_modules, build, etc.)
-└── Excluded extensions: 34 (.class, .jar, .exe, .dll, etc.)
+├── Max search depth: 15
+├── Excluded directories: 28 (.git, node_modules, build, etc.)
+└── Excluded extensions: 47 (.class, .jar, .exe, .dll, etc.)
 
 Layer 3: Terminal CommandRule engine
 ├── Regex rules with ALLOW / BLOCK / ASK actions (CommandRuleDefaults)
@@ -728,7 +755,10 @@ Layer 3: Terminal CommandRule engine
 Layer 4: ToolPermissions
 ├── Per-mode permissions (PLAN=read-only, AGENT=read-write)
 ├── Per-task overrides
-└── Smart defaults (terminal ON in AGENT, subagent ON in PLAN/AGENT)
+└── Smart defaults (terminal and background process ASK in AGENT, run_code OFF, subagent ON in PLAN/AGENT)
+
+Layer 5: NetworkPolicy
+└── Single egress gate for web_search, fetch_webpage, http_request (honours no-egress)
 ```
 
 ---
@@ -747,7 +777,9 @@ suspend fun LLMClient.complete(
     temperature: Double = 0.7,
     stream: Boolean = false,
     onChunk: StreamCallback?,
-    noEgressEnabled: Boolean = false
+    noEgressEnabled: Boolean = false,
+    // ... plus responseFormat, thinking, reasoningEffort, taskId, subtaskId, source,
+    //     contextContent, systemMessages, kwargs
 ): LLMResponse
 ```
 
@@ -774,6 +806,8 @@ suspend fun LLMClient.complete(
 | claude-opus-4-1 | $15.00 | $75.00 |
 | o1-preview | $15.00 | $60.00 |
 | Ollama/LM Studio | $0.00 | $0.00 |
+
+Illustrative only. The current list of models and their prices lives in `ModelDefinitions` (resolved by `getModelPricing` in `Pricing.kt`; for OpenRouter the live per-model price from the model listing wins). When a provider reports the actual cost of a call in its response (for example OpenRouter `usage.cost`), that reported cost is what gets billed, not the local estimate.
 
 ### Streaming Formats
 
@@ -808,19 +842,21 @@ AgentTurnLoop
 ```
 
 `ToolSchemaSanitizer` normalizes each tool's JSON Schema per provider before the request:
-- **OpenAI** — strips `$schema`/`default`; strict-mode compatibility check; Responses API uses flat `name/description/parameters/strict` shape.
-- **Anthropic** — strips composition keywords (`oneOf`, `allOf`, `anyOf`).
-- **Gemini** — strips `additionalProperties`; converts array `type` values to a single uppercase string; adds `nullable: true` for optional fields.
+- **OpenAI** - strips `$schema`/`default`; strict-mode compatibility check; Responses API uses flat `name/description/parameters/strict` shape.
+- **Anthropic** - strips composition keywords (`oneOf`, `allOf`, `anyOf`).
+- **Gemini** - strips `additionalProperties`; converts array `type` values to a single uppercase string; adds `nullable: true` for optional fields.
 
 `NativeToolsFallbackTracker` is a process-wide set with **persistent backing**: when
 `bind(configService)` is called at startup, the tracker hydrates from the
 `models.native_tools_fallbacks` config key (comma-separated model ids) and every
 subsequent `markFallback()` mirrors back to disk. If a provider returns HTTP 400
 "tools not supported", the model is recorded once and skipped on every future
-process — users no longer pay the 2-nudge probe cost on every fresh session.
+process - users no longer pay the 2-nudge probe cost on every fresh session.
 Single-entry removal is exposed via `unmark(modelId)`; `clear()` clears both
 in-memory and persisted state (intended for the user-facing "retry native tools
 for all models" action).
+
+A provider-side HTTP 500 on a malformed tool-call template (seen with Ollama) is treated differently: the turn retries that one call once on the JSON-in-text path and records nothing, because the failure is per-prompt, not per-model.
 
 The OpenAI-compatible adapters (OpenRouter, Z.AI, Generic OpenAI, LM Studio)
 share a single native-tools wiring through `OpenAICompatibleHelpers`:
@@ -833,7 +869,9 @@ share a single native-tools wiring through `OpenAICompatibleHelpers`:
 
 When enabled, blocks all cloud providers:
 - **Allowed:** Ollama, LM Studio (local)
-- **Blocked:** OpenAI, Anthropic, Gemini, OpenRouter
+- **Blocked:** every other provider (OpenAI, Anthropic, Gemini, OpenRouter, Custom OpenAI, Z.AI)
+
+The same flag (`general.no_egress_enabled`) also blocks outbound traffic from tools: `NetworkPolicy` is the single gate consulted by `web_search`, `fetch_webpage` and `http_request`. It fails closed: if the config cannot be read it falls back to the last known value, and with no history it blocks.
 
 ---
 
@@ -871,7 +909,7 @@ MCPManager (singleton)
 | Category | Servers |
 |----------|---------|
 | **VCS** | GitHub, GitLab |
-| **Databases** | PostgreSQL, SQLite |
+| **Databases** | PostgreSQL, SQLite, Database (generic) |
 | **Search** | Brave Search, Exa |
 | **Docs** | Context7 |
 | **DevOps** | Sentry, AWS |
@@ -892,8 +930,8 @@ MCPManager (singleton)
 
 | Mode | Behavior |
 |------|----------|
-| `TOOLS` | MCP tools registered in ToolRegistry (Agent mode) |
-| `CONTEXT` | MCP tools executed as context providers |
+| `TOOLS` | MCP tools registered in ToolRegistry as `mcp_<server>_<tool>` (Agent mode) |
+| `CONTEXT` | MCP tools executed as context providers; never visible to the model as tools |
 
 ---
 
@@ -972,28 +1010,28 @@ Any other value is treated as a literal model string (provider inferred from the
 | Name | Model | Priority | Purpose |
 |------|-------|----------|---------|
 | `code-reviewer` | default | 5 | Code quality, patterns, bugs, maintainability |
-| `security-engineer` | default | 8 | DevSecOps, vulnerability management, zero-trust |
+| `security-engineer` | default | 10 | DevSecOps, vulnerability management, zero-trust |
 | `architect-reviewer` | default | 8 | System design evaluation, tech stack decisions |
 
-> Legacy aliases: `!security-reviewer` and `!security-auditor` map to `security-engineer`.
+> All 21 built-ins ship with `model: default`. There are no legacy name aliases: `!security-reviewer` or `!security-auditor` returns "Subagent not found" with the list of available ones.
 
 #### Core Development
 
 | Name | Model | Priority | Purpose |
 |------|-------|----------|---------|
 | `api-designer` | default | 5 | REST/GraphQL API design, OpenAPI specs |
-| `frontend-developer` | coding | 5 | UI components, state management, frontend architecture |
-| `fullstack-developer` | coding | 5 | End-to-end features (DB → API → UI) |
+| `frontend-developer` | default | 5 | UI components, state management, frontend architecture |
+| `fullstack-developer` | default | 5 | End-to-end features (DB → API → UI) |
 | `ui-designer` | default | 5 | Design systems, component libraries, visual consistency |
-| `refactoring-specialist` | coding | 5 | Code smell elimination, incremental refactoring |
+| `refactoring-specialist` | default | 5 | Code smell elimination, incremental refactoring |
 
 #### Documentation
 
 | Name | Model | Priority | Purpose |
 |------|-------|----------|---------|
-| `documentation-engineer` | weak | 3 | Documentation systems, API docs, tutorials |
-| `api-documenter` | weak | 3 | OpenAPI specs, interactive API docs, code examples |
-| `technical-writer` | weak | 3 | User guides, API references, tutorials |
+| `documentation-engineer` | default | 3 | Documentation systems, API docs, tutorials |
+| `api-documenter` | default | 3 | OpenAPI specs, interactive API docs, code examples |
+| `technical-writer` | default | 3 | User guides, API references, tutorials |
 
 #### Infrastructure
 
@@ -1006,8 +1044,8 @@ Any other value is treated as a literal model string (provider inferred from the
 | Name | Model | Priority | Purpose |
 |------|-------|----------|---------|
 | `business-analyst` | default | 3 | Requirements, process modeling, gap analysis |
-| `product-manager` | weak | 3 | Feature prioritization, roadmap, product strategy |
-| `project-manager` | weak | 3 | Project planning, task breakdown, risk tracking |
+| `product-manager` | default | 3 | Feature prioritization, roadmap, product strategy |
+| `project-manager` | default | 3 | Project planning, task breakdown, risk tracking |
 | `legal-advisor` | default | 3 | Licensing, privacy compliance, IP protection |
 | `ux-researcher` | default | 3 | Usability analysis, persona development, UX insights |
 | `risk-manager` | default | 5 | Risk identification, scoring, mitigation planning |
@@ -1023,30 +1061,33 @@ Any other value is treated as a literal model string (provider inferred from the
 ### Invocation
 
 ```
-User: !security-reviewer Review this authentication code
+User (PLAN/AGENT mode): !security-engineer Review this authentication code
     ↓
-SubagentRouter.parseSubagentInvocation()
-    → ("security-reviewer", "Review this authentication code")
+CoreSessionService → SubagentRouter.parseSubagentInvocation()
+    → ("security-engineer", "Review this authentication code")
     ↓
 SubagentRouter.invoke()
-    ├── SubagentRegistry.getSubagent("security-reviewer")
+    ├── SubagentRegistry.getSubagent("security-engineer")
     ├── map definition → TurnProfileOverrides
-    └── CoreApiRouter.runTurn(runProfile=SUBAGENT)
+    └── runTurnCallback → AgentRouter.runTurn(runProfile=SUBAGENT)
         └── AgentTurnLoop.runTurn() [shared loop]
+
+The model itself spawns subagents through the `invoke_subagent` tool; nesting is capped at depth 3 (`MAX_SUBAGENT_DEPTH` in `InvokeSubagentTool`).
 ```
 
 ---
 
 ## 11. Session Management
 
-**Location:** `services/session/`
+**Location:** `SessionManager` is in the plugin (`intellij-plugin/.../services/session/`); the components it composes live in `:core` (`core/src/main/kotlin/pl/jclab/refio/core/session/`), so the TUI and the plugin share them.
 
-### SessionManager Components (6)
+### SessionManager Components
 
 | Component | Purpose |
 |-----------|---------|
-| `SessionManager` | Facade, exposes public API |
-| `SessionStateManager` | 11 StateFlows for reactive UI binding |
+| `SessionManager` | Plugin facade, exposes public API |
+| `CoreSessionService` | Mode routing and turn execution (CHAT → ChatRouter, PLAN/AGENT → AgentRouter.runTurn), task status updates |
+| `SessionStateManager` | 16 StateFlows for reactive UI binding |
 | `SessionLifecycleService` | Create/switch/load sessions |
 | `MessageDispatcher` | Mode-specific routing (CHAT vs PLAN/AGENT) |
 | `SubtaskTracker` | Subtask CRUD operations |
@@ -1055,25 +1096,25 @@ SubagentRouter.invoke()
 ### Message Routing
 
 ```kotlin
-// SessionManager.sendMessage()
+// CoreSessionService.sendMessage() (called by SessionManager.sendMessage())
 when (session.mode) {
     TaskMode.CHAT -> sendMessageUsingChatWorkflow()
-        → WorkflowOrchestrator → ChatExecutor
+        → ChatRouter.chat() → ChatService
     TaskMode.PLAN, TaskMode.AGENT -> sendMessageUsingTurnLoop()
-        → AgentTurnLoop.runTurn()
+        → AgentRouter.runTurn() → AgentTurnLoop.runTurn()
 }
 ```
 
-### StateFlows (11)
+### StateFlows (16)
 
-- `currentSession`: Current session data
-- `messages`: List of messages
-- `subtasks`: List of subtasks
-- `isGenerating`: Boolean loading state
-- `error`: Error state
-- `activePlan`: Current plan (if any)
-- `totalEstimatedTokens`: Token count
-- And more...
+- `activeSession`, `sessions`: Current session and session list
+- `messages`, `subtasks`: Conversation and tool-call steps
+- `activePlan`, `planSteps`: Current plan (if any)
+- `selectedModel`, `thinkingEnabled`, `noEgressEnabled`: Toolbar state
+- `isPaused`, `isGenerating`: Execution state
+- `pendingContextRefs`, `pendingUserInput`: Prompt state
+- `contextSectionTokens`, `totalEstimatedTokens`: Token usage
+- `toolCallProgress`: Live tool-call progress
 
 ### Message Reconciliation
 
@@ -1127,30 +1168,41 @@ with the plugin).
 ### Core Tables
 
 ```sql
--- Sessions (Chat/Plan/Agent) — also the canonical row for live token/cost stats
-TasksTable (id, project_id, name, mode, description, status, ui_state_json,
-            tokens_in, tokens_out, cost_usd, created_at, updated_at)
-    -- status: NEW, RUNNING, SUCCESS, FAILED, INCOMPLETE, CANCELED
+-- Sessions (Chat/Plan/Agent) - also the canonical row for live token/cost stats
+TasksTable "tasks" (id, name, mode, status, read_only, pinned, execution_mode,
+            requires_plan_approval, plan_approved, rate, tokens_in, tokens_out,
+            cached_tokens, cost_usd, ui_state, core_api_version, project_id,
+            project_path, source_plan_id, plan_version, completion_condition,
+            created_at, updated_at)
+    -- status (TaskStatus): NEW, PENDING, PLANNED, RUNNING, SUCCESS, FAILED, INCOMPLETE, CANCELED
     --         (AGENT turns flip RUNNING on entry; CANCELED when the user presses Stop)
 
--- Execution steps — also carry per-subtask LLM cost (sub-LLM tools like
+-- Execution steps - also carry per-subtask LLM cost (sub-LLM tools like
 -- advance_code_editing, multi_line_editor, fetch_webpage)
-SubtasksTable (id, task_id, order_index, kind, status, description,
-               params_json, result, summary, error_message, metrics_json,
-               llm_model, llm_provider, tokens_in, tokens_out, cost_usd, latency_ms)
-    -- status: PENDING, RUNNING, SUCCESS, FAILED
+SubtasksTable "subtasks" (id, task_id, order_index, kind, status, description,
+               params_json, step_plan_json, summary, requires_approval,
+               approval_status, approved_at, result, error_message, error_stacktrace,
+               llm_model, llm_provider, input_tokens, output_tokens, cost_usd,
+               latency_ms, snapshot_id_before_write, created_at, updated_at,
+               started_at, completed_at)
+    -- status uses the same TaskStatus enum (tool steps: PENDING, RUNNING, SUCCESS, FAILED)
 
 -- Conversation
-ChatMessagesTable (id, task_id, role, content, metadata_json, metrics_json,
-                   tool_calls_json, tool_call_id, is_summarized, raw_output, created_at)
+ChatMessagesTable "chat_messages" (id, task_id, agent_instance_id, agent_name,
+                   agent_depth, role, content, thinking, metadata, tool_calls_json,
+                   tool_call_id, subtask_id, is_summarized, raw_output, tokens_in,
+                   tokens_out, cost, created_at, seq)
 
--- File snapshots (for rollback)
-SnapshotsTable (id, task_id, subtask_id, file_path, content, checksum, created_at)
+-- File snapshots (for rollback): one group per tool execution, one row per file
+SnapshotGroupsTable "snapshot_groups" (id, task_id, subtask_id, created_at)
+SnapshotsTable "snapshots" (id, task_id, group_id, file_path, content_hash,
+               content_compressed BLOB, original_size, compression_ratio, created_at)
 
--- API call logs (audit trail; NOT a stats source)
-ApiLogsTable (id, task_id, subtask_id, provider, model, source, request_json,
-              response_json, status_code, tokens_in, tokens_out, cost_usd,
-              latency_ms, created_at)
+-- API call logs (audit trail; NOT a stats source; secrets redacted)
+ApiLogsTable "api_logs" (id, task_id, subtask_id, provider, model, endpoint,
+              request_source, request_payload, response_payload, http_status,
+              input_tokens, output_tokens, cost_usd, latency_ms, error_message,
+              error_type, created_at)
 ```
 
 **Stats source-of-truth:** `LLMClient` writes directly to `task.tokens_in/out/cost_usd`
@@ -1164,28 +1216,48 @@ UI surfaces (`SessionStatsBar`, History panel) read the `task` row directly.
 ```sql
 -- Indexed files
 IndexFilesTable (id, project_root, file_path, file_hash, checksum, file_size,
-                 content_type, metadata_json, indexed_at, last_modified)
+                 mime_type, metadata, content_type, source_url, indexed_at, last_modified)
 
 -- Code chunks
-IndexChunksTable (id, file_id, chunk_index, content, content_hash, metadata_json,
-                  start_line, end_line, start_char, end_char)
+IndexChunksTable (id, file_id, chunk_index, content, content_hash, metadata,
+                  start_line, end_line, start_char, end_char, created_at)
+    -- UNIQUE(file_id, chunk_index)
 
 -- Vector embeddings
-EmbeddingsTable (id, chunk_id, model, vector BLOB, dimensions)
+EmbeddingsTable (id, chunk_id, model, vector BLOB, dimensions, created_at)
     -- UNIQUE(chunk_id, model)
+
+-- Also: IndexingProgressTable (indexing status per project root),
+--       DocumentationSourcesTable (@docs sources: url, crawl_depth, pages_indexed, status)
 ```
 
 ### Configuration Tables
 
 ```sql
 -- Key-value config
-ConfigTable (key, value, scope, created_at, updated_at)
+ConfigTable (key, value, scope, project_id, task_id, description, created_at, updated_at)
+    -- scope: APP, PROJECT, TASK
 
 -- System prompts
-PromptsTable (id, type, name, content, is_active, created_at, updated_at)
+PromptsTable (id, name, type, content, description, is_custom, is_enabled,
+              order_index, created_at, updated_at)
 
 -- MCP servers
 MCPServersTable (id, project_id, config_json, enabled, created_at, updated_at)
+
+-- Cached project analysis
+ProjectAnalysisReportsTable (id, project_root, analyzed_at, checksum, report_json, ...)
+```
+
+### Multi-Agent Tables
+
+```sql
+AgentSessionsTable (id, project_id, name, status, definition_yaml, created_at, completed_at)
+AgentInstancesTable (id, session_id, task_id, name, profile, status, model,
+                     task_description, depends_on, result, tokens_in, tokens_out,
+                     cost_usd, started_at, completed_at, created_at)
+AgentEventsTable (id, session_id, source_agent_id, event_type, correlation_id,
+                  payload_json, timestamp)   -- event log replayed by AgentEventSqlRepository
 ```
 
 ---
@@ -1202,19 +1274,20 @@ Layer 1: PathSandbox
 
 Layer 2: FileLimits
 ├── Size limits (2 MB files)
-├── Excluded directories (24)
-└── Excluded extensions (34)
+├── Excluded directories (28)
+└── Excluded extensions (47)
 
-Layer 3: CommandRule System (regex-based)
-├── 22 BLOCK rules (destructive: rm -r, mkfs, dd, git reset --hard, npm publish, fork bombs)
-├── ALLOW rules (auto-generated from legacy whitelist, 154 safe commands)
-├── ASK rules (docker, kubectl, ssh, sudo, unknown commands)
+Layer 3: CommandRule System (regex-based, CommandRuleDefaults)
+├── 25 BLOCK rules (destructive: rm -r/-f, Windows del/rmdir and PowerShell Remove-Item
+│   with recurse/force, mkfs, dd, git reset --hard, git clean -f, force push, npm publish, fork bombs)
+├── 26 ALLOW rules (20 read-only / VCS programs such as git, ls, cat, grep, rg + echo, printf, bare env)
+├── ASK rules (docker, kubectl, ssh, scp, rsync, wget, sudo, systemctl, catch-all for unknown commands)
 └── Priority: BLOCK > ALLOW > ASK > default ASK
 
 Layer 4: ToolPermissions (3-level)
 ├── Per-mode permissions: ON / ASK / OFF
 ├── Per-task overrides via ConfigRouter
-├── Smart defaults (run_terminal_command = ASK in AGENT, run_code = OFF by default)
+├── Smart defaults (run_terminal_command / run_process_background = ASK in AGENT, run_code = OFF by default)
 └── ToolApprovalService: user approval flow with session trust rules and 5-min timeout
 
 Layer 5: Mid-Execution Control
@@ -1224,7 +1297,8 @@ Layer 5: Mid-Execution Control
 
 Layer 6: No-Egress Mode
 ├── Blocks cloud providers
-└── Allows only local (Ollama, LM Studio)
+├── Allows only local (Ollama, LM Studio)
+└── NetworkPolicy blocks web_search / fetch_webpage / http_request too (fails closed)
 
 Layer 7: Secret Redaction
 ├── API keys masked in logs
@@ -1247,16 +1321,15 @@ Layer 7: Secret Redaction
 ```
 User: "How does authentication work?"
     ↓
-SessionManager.sendMessage()
+SessionManager.sendMessage() → CoreSessionService
     ↓
-WorkflowOrchestrator.execute()
+ChatRouter.chat()
     ↓
-ChatExecutor.execute()
+ChatService.chat()
     ├── ContextService.buildProjectContext()
     │   ├── Project analysis (cached)
     │   ├── Conversation history
-    │   ├── RAG fragments
-    │   └── @mention resolution
+    │   └── @mention resolution (incl. @codebase RAG search)
     ├── Build system prompt + context
     ├── LLMClient.complete()
     └── Save assistant response
@@ -1271,7 +1344,7 @@ User: "Add authentication to the API"
     ↓
 AgentTurnLoop.runTurn()
     ↓
-Loop (max 100):
+Loop (max 200, guardrails may stop it earlier):
 ├── Build prompt with tools
 ├── LLM response with tool calls
 ├── Create subtasks (PENDING)
@@ -1281,9 +1354,9 @@ Loop (max 100):
 ├── Add to conversation history
 └── Continue if more tool calls
     ↓
-Final text response
+Final text response → completion guardian (deliverable check, at most one re-entry)
     ↓
-TurnResult to UI
+TurnResult to UI → task.status SUCCESS / FAILED / INCOMPLETE
 ```
 
 ### RAG Indexing Flow
@@ -1291,7 +1364,9 @@ TurnResult to UI
 ```
 IDE Startup
     ↓
-ProjectStartupActivity.runActivity()
+RagIndexingStartup (or the manual ReindexRagAction)
+    ↓
+BackgroundIndexingTask → RagRouter.indexProjectForRag()
     ↓
 RagIndexingService.indexProject() [background]
     ↓
@@ -1310,7 +1385,11 @@ IndexingProgress via Flow
 
 ## 15. Terminal User Interface (TUI)
 
-Refio includes a standalone CLI with a full-screen TUI that mirrors the IntelliJ plugin GUI. The CLI uses the same `:core` module as the IntelliJ plugin — all execution modes, tools, context providers, and RAG capabilities are available.
+Refio includes a standalone CLI with a full-screen TUI that mirrors the IntelliJ plugin GUI. The CLI uses the same `:core` module as the IntelliJ plugin - all execution modes, tools, context providers, and RAG capabilities are available.
+
+### Headless Mode
+
+`--headless` runs a single turn without the TUI, on the same `AgentTurnLoop` path as the plugin (`agentRouter.runTurn` for PLAN/AGENT), so it can reproduce runtime behavior from a script. It needs one of `--prompt`, `--prompt-file` or `--multi-agent <file>`. Useful flags: `--output json --output-file <f>` (writes `run.json` with status, tokens, cost, iterations), `--debug-level`, `--config k=v` / `--config-file` (run-scope config overrides), `--print-config` (prints the resolved config, no LLM call), `--max-cost <usd>`, `--auto-approve "<regex>"` (approve only matching tool calls, reject the rest), `--no-egress`, `-v/--verbose`. Progress goes to stderr (`HeadlessTurnListener`); the process exit code is 0 only for `SUCCESS` (`HeadlessExit.forStatus`). In headless mode `--model` applies to every model slot, including the editing tools.
 
 ### TUI Layout Design
 
@@ -1334,9 +1413,9 @@ Refio includes a standalone CLI with a full-screen TUI that mirrors the IntelliJ
 ```
 
 **Key design decisions:**
-- **No separate status bar** — mode, cost, streaming indicator, and token count are displayed in the tab bar (right-aligned). The cursor always blinks at the input prompt, never at the bottom of the screen.
+- **No separate status bar** - mode, cost, streaming indicator, and token count are displayed in the tab bar (right-aligned). The cursor always blinks at the input prompt, never at the bottom of the screen.
 - **Split-pane** when any tab is active (55% left / 45% right). **Full-width** chat when no tab is selected.
-- **Responsive** — layout adapts to terminal resize in real time (300ms polling).
+- **Responsive** - layout adapts to terminal resize in real time (300ms polling).
 
 ### TUI Technology Stack
 
@@ -1344,24 +1423,24 @@ Refio includes a standalone CLI with a full-screen TUI that mirrors the IntelliJ
 |-----------|---------|---------|
 | Terminal rendering | Mordant 3.0.1 | ANSI colors, styled text, terminal size detection |
 | Raw input | JLine3 3.26.3 | F-keys, Ctrl+combinations, escape sequence parsing |
-| CLI arguments | Clikt 5.0.2 | `--project`, `--mode`, `--model`, `--no-egress` |
+| CLI arguments | Clikt 5.0.2 | `--project`, `--mode`, `--model`, `--no-egress`, `--headless`, ... |
 | State management | Kotlin Coroutines Flow | 20 StateFlows → merge → reactive TuiState |
 
 ### TUI Architecture
 
 ```
-TuiApp (entry point — launchTuiApp())
+TuiApp (entry point - launchTuiApp())
 │
 ├── Detects interactive mode: System.console() != null
 │   ├── Interactive: alternate screen buffer, raw JLine3 input, F-key navigation
 │   └── Non-interactive: inline rendering, line-based input (`/prompt`, `:shortcuts`)
 │
 ├── Three concurrent coroutines:
-│   ├── Render loop — stateFlow.collect { renderer.render(state) }
-│   ├── Resize watcher — polls terminal.size every 300ms, forceRender on change
-│   └── Input loop — TuiInputHandler.startInputLoop(viewModel)
+│   ├── Render loop - stateFlow.collect { renderer.render(state) }
+│   ├── Resize watcher - polls terminal.size every 300ms, forceRender on change
+│   └── Input loop - TuiInputHandler.startInputLoop(viewModel)
 │
-├── TuiViewModel (coordinator ~1289 LOC, MVVM pattern)
+├── TuiViewModel (coordinator ~1588 LOC, MVVM pattern)
 │   ├── Delegates to 3 sub-ViewModels:
 │   │   ├── TuiChatViewModel (messages, streaming, autocomplete)
 │   │   ├── TuiSessionViewModel (session lifecycle, history, settings)
@@ -1369,24 +1448,24 @@ TuiApp (entry point — launchTuiApp())
 │   ├── 20 MutableStateFlows (merged from coordinator + sub-ViewModels)
 │   ├── All flows merged via merge().map { buildCurrentState() }
 │   ├── Any flow change triggers stateFlow emission → re-render
-│   ├── sendMessage() → WorkflowOrchestrator.execute(request, workflowListener)
+│   ├── sendMessage() → TuiChatViewModel: CHAT → chatRouter.chat(), PLAN/AGENT → agentRouter.runTurn()
 │   ├── Settings: getConfigSection(), updateConfig() via ConfigRouter
 │   └── Autocomplete: triggerAutocomplete(), updateAutocompleteFilter()
 │
 ├── TuiRenderer (full-screen compositor)
 │   ├── Hash-based skip: only re-renders when state.hashCode() changes or terminal resizes
 │   ├── Cursor hidden during redraw (\u001b[?25l), shown at input after (\u001b[?25h)
-│   ├── In-place overwrite (\u001b[H) — no flicker. Full clear (\u001b[2J) only on resize.
-│   ├── renderTabBar() — tabs + right-aligned status info (mode, cost, streaming)
-│   ├── renderFullWidthChat() — chat messages buffer + prompt buffer (no split)
-│   ├── renderSplitPane() — left (chat+prompt) + right (tab view), merged side-by-side
-│   ├── renderAutocompletePopup() — ANSI cursor-positioned overlay above prompt
-│   └── positionCursorAtInput() — places cursor at "> {input}_" position
+│   ├── In-place overwrite (\u001b[H) - no flicker. Full clear (\u001b[2J) only on resize.
+│   ├── renderTabBar() - tabs + right-aligned status info (mode, cost, streaming)
+│   ├── renderFullWidthChat() - chat messages buffer + prompt buffer (no split)
+│   ├── renderSplitPane() - left (chat+prompt) + right (tab view), merged side-by-side
+│   ├── renderAutocompletePopup() - ANSI cursor-positioned overlay above prompt
+│   └── positionCursorAtInput() - places cursor at "> {input}_" position
 │
 ├── TuiRenderBuffer (ANSI-aware line composition)
-│   ├── visibleLength() — measures string width ignoring ANSI escape codes
-│   ├── fitToWidth() — pads or truncates preserving ANSI state
-│   ├── mergeSideBySide() — combines left + right buffers with separator column
+│   ├── visibleLength() - measures string width ignoring ANSI escape codes
+│   ├── fitToWidth() - pads or truncates preserving ANSI state
+│   ├── mergeSideBySide() - combines left + right buffers with separator column
 │   └── Each view renders into a TuiRenderBuffer → compositor merges them
 │
 ├── TuiInputHandler (dual-mode input)
@@ -1396,9 +1475,9 @@ TuiApp (entry point — launchTuiApp())
 │   └── Slash commands: /quit, /clear, /help, /mode, /history, /settings, /set section.key value
 │
 ├── TuiWorkflowListener (streaming bridge)
-│   ├── synchronized(accumulatedContent) on all methods — no race conditions
-│   ├── @Volatile completed flag — prevents late chunks after onStreamComplete
-│   ├── reset() called before each new request — clears accumulated content
+│   ├── synchronized(accumulatedContent) on all methods - no race conditions
+│   ├── @Volatile completed flag - prevents late chunks after onStreamComplete
+│   ├── reset() called before each new request - clears accumulated content
 │   └── Stream message identified by streamId, replaced in-place, gets UUID on completion
 │
 └── TuiColors (ANSI color palette)
@@ -1436,10 +1515,10 @@ The Settings screen provides full configuration access via `ConfigRouter`, match
 | Context | `index` | RAG search tuning (similarity threshold, top-k, hybrid search) and indexing settings |
 | MCP | `mcp` | MCP server list with enable/disable and type |
 | Docs | `docs` | Documentation sources for @docs context provider |
-| Tools | `tools` | 15 tools × Plan/Agent mode permission matrix (ON/ASK/OFF) |
+| Tools | `tools` | All registered tools × Plan/Agent mode permission matrix (ON/ASK/OFF) |
 | Subagents | `subagents` | Enable/disable individual subagent profiles |
 | Advanced | `advanced`+`limits` | Security (no-egress, read-only), timeouts, limits, performance |
-| Theme | — | ANSI color preview (roles, status, agents, log levels) |
+| Theme | - | ANSI color preview (roles, status, agents, log levels) |
 
 ---
 
@@ -1471,13 +1550,13 @@ The Settings screen provides full configuration access via `ConfigRouter`, match
 | Ctrl+D | **Summarize** | Compact long conversation history to save context window space. Uses LLM to generate a summary of older messages. |
 
 You can also use system commands (note: these are TUI session commands, distinct from user-defined slash prompts managed in Settings → Prompts):
-- `/history` — Open session history
-- `/export <path>` — Export conversation to Markdown file
-- `/resend` — Resend last user message
-- `/rewind [N]` — Rewind to message N and resend
-- `/edit [N]` — Edit user message N (loads into input for re-editing)
-- `/copyall` — Copy entire conversation to clipboard
-- `/rate +/-` — Rate conversation quality
+- `/history` - Open session history
+- `/export <path>` - Export conversation to Markdown file
+- `/resend` - Resend last user message
+- `/rewind [N]` - Rewind to message N and resend
+- `/edit [N]` - Edit user message N (loads into input for re-editing)
+- `/copyall` - Copy entire conversation to clipboard
+- `/rate +/-` - Rate conversation quality
 
 #### Mode, Model & Toggles
 
@@ -1487,7 +1566,7 @@ You can also use system commands (note: these are TUI session commands, distinct
 | Ctrl+O | Select model | Opens popup with available models. Arrow keys to select, Enter to confirm. |
 | Ctrl+T | Toggle thinking | Enable/disable reasoning mode (extended thinking for supported models). |
 | Ctrl+E | Toggle execution | AUTO (agent runs autonomously) / INTERACTIVE (step-by-step approval). |
-| Ctrl+N | Toggle no-egress | Local-only mode — blocks all cloud provider API calls. |
+| Ctrl+N | Toggle no-egress | Local-only mode - blocks all cloud provider API calls. |
 
 #### Chat & Input
 
@@ -1509,7 +1588,7 @@ You can also use system commands (note: these are TUI session commands, distinct
 | Ctrl+P | Select previous message (move selection up) |
 | Ctrl+B | Select next message (move selection down) |
 | Ctrl+Y | Copy selected (or last) message to clipboard |
-| Ctrl+F | Cycle agent filter (multi-agent mode — filter chat by agent) |
+| Ctrl+F | Cycle agent filter (multi-agent mode - filter chat by agent) |
 
 #### Autocomplete
 
@@ -1520,11 +1599,11 @@ You can also use system commands (note: these are TUI session commands, distinct
 | `/` | Slash prompt autocomplete | /explain, /refactor, /test, /fix, /implement, /optimize, /security-review, etc. |
 
 When the autocomplete popup is visible:
-- **Arrow Down / Tab** — Next candidate
-- **Arrow Up** — Previous candidate
-- **Enter** — Accept selection
-- **Escape** — Dismiss
-- **Keep typing** — Filters candidates in real-time
+- **Arrow Down / Tab** - Next candidate
+- **Arrow Up** - Previous candidate
+- **Enter** - Accept selection
+- **Escape** - Dismiss
+- **Keep typing** - Filters candidates in real-time
 
 #### Slash Prompts Reference
 
@@ -1580,12 +1659,12 @@ When the autocomplete popup is visible:
 ### Build Commands
 
 ```bash
-./gradlew runIde              # Run in sandbox IDE
-./gradlew buildPlugin         # Build ZIP distribution
-./gradlew :cli:installDist    # Build standalone CLI
-./gradlew test                # Run tests
-./gradlew detekt              # Static analysis
-./gradlew ktlintCheck         # Lint check
+./gradlew :intellij-plugin:runIde       # Run in sandbox IDE
+./gradlew :intellij-plugin:buildPlugin  # Build ZIP distribution
+./gradlew :cli:installDist              # Build standalone CLI
+./gradlew test                          # Run tests
+./gradlew :intellij-plugin:check        # Includes detectSensitiveLogging
+./gradlew :core:jacocoTestCoverageVerification  # Coverage gate (part of :core:check)
 ```
 
 ### Configuration Paths
@@ -1611,10 +1690,17 @@ When the autocomplete popup is visible:
 | DiffCompressor | core/services/context/ | Content-aware diff body elision (small / pure-create / mixed paths) for tool results |
 | NativeToolsFallbackTracker | core/llm/ | Persistent set of model ids that failed native function-calling; hydrated from `models.native_tools_fallbacks` on startup |
 | ToolRegistry | core/tools/base/ | Tool catalog |
+| CoreSessionService | core/session/ | Mode routing (CHAT vs PLAN/AGENT), turn execution, task status |
+| TurnGuardrails | core/services/turn/ | Loop, repetition, error-rate, blocked/denied-tool and no-op-write trackers |
+| NextSpeakerJudgeGuardian | core/services/turn/ | Terminal-point deliverable check; one bounded re-entry, else `INCOMPLETE` |
+| ConversationSummaryService | core/services/ | Conversation auto-compaction (80% trigger, 45% target, keep last 4) |
+| ModelWindow | core/llm/ | Single resolver of a model's context window |
+| ProviderRequestGate | core/services/ | Per-provider cap on concurrent LLM requests (Ollama excluded) |
+| NetworkPolicy | core/security/ | Single egress gate for web tools under no-egress |
 | MCPManager | core/context/mcp/ | MCP server lifecycle |
 | SubagentRouter | core/subagents/ | Subagent operations |
 | TuiApp | cli/tui/ | TUI entry point (launchTuiApp) |
-| TuiViewModel | cli/tui/state/ | TUI coordinator (~1289 LOC, delegates to TuiChatViewModel, TuiSessionViewModel, TuiObservabilityViewModel) |
+| TuiViewModel | cli/tui/state/ | TUI coordinator (~1588 LOC, delegates to TuiChatViewModel, TuiSessionViewModel, TuiObservabilityViewModel) |
 | TuiRenderer | cli/tui/rendering/ | Full-screen split-pane compositor |
 | TuiRenderBuffer | cli/tui/rendering/ | ANSI-aware line buffer composition |
 | TuiInputHandler | cli/tui/input/ | Dual-mode input (raw TTY / line) |
@@ -1628,5 +1714,7 @@ ANTHROPIC_API_KEY    # Anthropic provider
 GEMINI_API_KEY       # Google Gemini
 OPENROUTER_API_KEY   # OpenRouter
 OLLAMA_BASE_URL      # Custom Ollama endpoint
-LMSTUDIO_BASE_URL    # Custom LM Studio endpoint
+LM_STUDIO_BASE_URL   # Custom LM Studio endpoint (+ LM_STUDIO_API_KEY)
+ZAI_API_KEY          # Z.AI
+CUSTOM_OPENAI_BASE_URL / CUSTOM_OPENAI_API_KEY  # Custom OpenAI-compatible provider
 ```
