@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Snake Game</title>
+<style>
+canvas {
+  border: 1px solid black;
+  background-color: #000;
+}
+.start-menu, .game-over {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(0,0,0,0.8);
+  color: white;
+  padding: 20px;
+  border-radius: 10px;
+  text-align: center;
+  display: none;
+}
+.start-menu button, .game-over button {
+  margin: 10px;
+  padding: 10px 20px;
+}
+.score {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  color: white;
+  font-size: 20px;
+}
+</style>
+</head>
+<body>
+<div class="start-menu">
+  <h1>Snake Game</h1>
+  <button onclick="startGame('human_vs_human')">Human vs Human</button>
+  <button onclick="startGame('cpu_vs_human')">CPU vs Human</button>
+  <button onclick="startGame('cpu_vs_cpu')">CPU vs CPU</button>
+</div>
+<canvas id="gameCanvas" width="600" height="600"></canvas>
+<div class="game-over">
+  <h2>Game Over</h2>
+  <p id="finalScore">Score: 0</p>
+  <button onclick="restartGame()">Restart</button>
+</div>
+<div class="score" id="scoreDisplay">Score: 0</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const gridSize = 30;
+const cellSize = canvas.width / gridSize;
+let snakes = [];
+let food = { x: 0, y: 0 };
+let score = 0;
+let gameMode = '';
+let gameRunning = false;
+let gameLoop;
+
+function startGame(mode) {
+  gameMode = mode;
+  snakes = [];
+  if (mode === 'human_vs_human') {
+    snakes.push({ body: [{x: 5, y: 15}], direction: 'right', isHuman: true, controls: { up: 'w', down: 's', left: 'a', right: 'd' } });
+    snakes.push({ body: [{x: 24, y: 15}], direction: 'left', isHuman: true, controls: { up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight' } });
+  } else if (mode === 'cpu_vs_human') {
+    snakes.push({ body: [{x: 5, y: 15}], direction: 'right', isHuman: true, controls: { up: 'w', down: 's', left: 'a', right: 'd' } });
+    snakes.push({ body: [{x: 24, y: 15}], direction: 'left', isHuman: false });
+  } else if (mode === 'cpu_vs_cpu') {
+    snakes.push({ body: [{x: 5, y: 15}], direction: 'right', isHuman: false });
+    snakes.push({ body: [{x: 24, y: 15}], direction: 'left', isHuman: false });
+  }
+  spawnFood();
+  score = 0;
+  updateScore();
+  document.querySelector('.start-menu').style.display = 'none';
+  document.querySelector('.game-over').style.display = 'none';
+  gameRunning = true;
+  gameLoop = setInterval(update, 100);
+}
+
+function restartGame() {
+  clearInterval(gameLoop);
+  gameRunning = false;
+  startGame(gameMode);
+}
+
+function update() {
+  if (!gameRunning) return;
+  for (let snake of snakes) {
+    if (snake.isHuman) {
+      // Direction updated via keyboard events
+    }
+  }
+  for (let snake of snakes) {
+    if (!snake.isHuman) {
+      let nextDirection = findPath(snake, food);
+      if (nextDirection) {
+        snake.direction = nextDirection;
+      }
+    }
+  }
+  for (let snake of snakes) {
+    let head = { ...snake.body[0] };
+    switch (snake.direction) {
+      case 'up': head.y--; break;
+      case 'down': head.y++; break;
+      case 'left': head.x--; break;
+      case 'right': head.x++; break;
+    }
+    if (checkCollision(head, snake)) {
+      gameOver();
+      return;
+    }
+    snake.body.unshift(head);
+    if (head.x === food.x && head.y === food.y) {
+      score++;
+      updateScore();
+      spawnFood();
+    } else {
+      snake.body.pop();
+    }
+  }
+  draw();
+}
+
+function checkCollision(head, snake) {
+  if (head.x < 0 || head.x >= gridSize || head.y < 0 || head.y >= gridSize) return true;
+  for (let i = 1; i < snake.body.length; i++) {
+    if (head.x === snake.body[i].x && head.y === snake.body[i].y) return true;
+  }
+  for (let otherSnake of snakes) {
+    if (otherSnake === snake) continue;
+    for (let segment of otherSnake.body) {
+      if (head.x === segment.x && head.y === segment.y) return true;
+    }
+  }
+  return false;
+}
+
+function spawnFood() {
+  let valid = false;
+  while (!valid) {
+    food.x = Math.floor(Math.random() * gridSize);
+    food.y = Math.floor(Math.random() * gridSize);
+    valid = true;
+    for (let snake of snakes) {
+      for (let segment of snake.body) {
+        if (segment.x === food.x && segment.y === food.y) {
+          valid = false;
+          break;
+        }
+      }
+      if (!valid) break;
+    }
+  }
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = '#333';
+  for (let i = 0; i < gridSize; i++) {
+    ctx.beginPath();
+    ctx.moveTo(i * cellSize, 0);
+    ctx.lineTo(i * cellSize, canvas.height);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0, i * cellSize);
+    ctx.lineTo(canvas.width, i * cellSize);
+    ctx.stroke();
+  }
+  ctx.fillStyle = 'red';
+  ctx.fillRect(food.x * cellSize, food.y * cellSize, cellSize, cellSize);
+  for (let snake of snakes) {
+    ctx.fillStyle = snake.isHuman ? 'green' : 'blue';
+    for (let segment of snake.body) {
+      ctx.fillRect(segment.x * cellSize, segment.y * cellSize, cellSize, cellSize);
+    }
+  }
+}
+
+function updateScore() {
+  document.getElementById('scoreDisplay').textContent = `Score: ${score}`;
+}
+
+function gameOver() {
+  gameRunning = false;
+  clearInterval(gameLoop);
+  document.querySelector('.game-over').style.display = 'block';
+  document.getElementById('finalScore').textContent = `Score: ${score}`;
+}
+
+function findPath(snake, food) {
+  const queue = [];
+  const visited = Array(gridSize).fill().map(() => Array(gridSize).fill(false));
+  visited[snake.body[0].x][snake.body[0].y] = true;
+  queue.push({ x: snake.body[0].x, y: snake.body[0].y, path: [] });
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (current.x === food.x && current.y === food.y) {
+      if (current.path.length > 0) return current.path[0];
+      return null;
+    }
+    const directions = [
+      { dx: 0, dy: -1, dir: 'up' },
+      { dx: 0, dy: 1, dir: 'down' },
+      { dx: -1, dy: 0, dir: 'left' },
+      { dx: 1, dy: 0, dir: 'right' }
+    ];
+    for (let dir of directions) {
+      const nx = current.x + dir.dx;
+      const ny = current.y + dir.dy;
+      if (nx < 0 || nx >= gridSize || ny < 0 || ny >= gridSize) continue;
+      if (visited[nx][ny]) continue;
+      let isObstacle = false;
+      for (let otherSnake of snakes) {
+        for (let i = 0; i < otherSnake.body.length; i++) {
+          const segment = otherSnake.body[i];
+          if (nx === segment.x && ny === segment.y) {
+            if (otherSnake === snake && i === otherSnake.body.length - 1) continue;
+            isObstacle = true;
+            break;
+          }
+        }
+        if (isObstacle) break;
+      }
+      if (isObstacle) continue;
+      visited[nx][ny] = true;
+      queue.push({ x: nx, y: ny, path: [...current.path, dir.dir] });
+    }
+  }
+  return null;
+}
+
+document.addEventListener('keydown', (e) => {
+  if (!gameRunning) return;
+  for (let snake of snakes) {
+    if (snake.isHuman) {
+      let newDirection = null;
+      switch (e.key) {
+        case snake.controls.up: newDirection = 'up'; break;
+        case snake.controls.down: newDirection = 'down'; break;
+        case snake.controls.left: newDirection = 'left'; break;
+        case snake.controls.right: newDirection = 'right'; break;
+      }
+      if (newDirection) {
+        const opposite = { up: 'down', down: 'up', left: 'right', right: 'left' };
+        if (snake.direction !== opposite[newDirection]) {
+          snake.direction = newDirection;
+        }
+      }
+    }
+  }
+});
+
+document.querySelector('.start-menu').style.display = 'block';
+</script>
+</body>
+</html>

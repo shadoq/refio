@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gouraud-shaded rotating cube (Canvas 2D)</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #0d0f14;
+    color: #d8dee9;
+    font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    overflow: hidden;
+  }
+  #wrap {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  canvas {
+    display: block;
+    background: radial-gradient(circle at 50% 45%, #1b2130 0%, #0d0f14 70%);
+    box-shadow: 0 0 60px rgba(0,0,0,.6);
+  }
+  #hud {
+    position: absolute;
+    top: 12px;
+    left: 14px;
+    font-size: 13px;
+    line-height: 1.6;
+    background: rgba(10, 12, 18, .62);
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 8px;
+    padding: 8px 12px;
+    pointer-events: none;
+    white-space: pre;
+    letter-spacing: .3px;
+  }
+  #hud b { color: #7fd1ff; font-weight: 600; }
+  #hud .on { color: #7ee787; }
+  #hud .off { color: #ffa198; }
+  #help {
+    position: absolute;
+    bottom: 12px;
+    left: 14px;
+    font-size: 12px;
+    color: #8b93a7;
+    background: rgba(10, 12, 18, .55);
+    border: 1px solid rgba(255,255,255,.07);
+    border-radius: 8px;
+    padding: 6px 10px;
+    pointer-events: none;
+  }
+  kbd {
+    background: #232936;
+    border: 1px solid #3a4256;
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    padding: 0 5px;
+    font-family: inherit;
+    font-size: 11px;
+    color: #e6edf3;
+  }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c"></canvas>
+  <div id="hud"></div>
+  <div id="help"><kbd>W</kbd> wireframe &nbsp; <kbd>P</kbd> pause/resume &nbsp; <kbd>R</kbd> reset rotation</div>
+</div>
+
+<script>
+"use strict";
+
+/* ============================================================
+   Minimal 3D pipeline on Canvas 2D (no WebGL, no libraries)
+   vertices -> model rotation -> backface culling ->
+   face split into triangles -> per-vertex Lambert lighting ->
+   perspective projection -> scanline rasterization with
+   Gouraud (per-scanline color interpolation) shading.
+   ============================================================ */
+
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d", { alpha: false });
+const hud = document.getElementById("hud");
+
+let W = 0, H = 0, DPR = 1;
+
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = Math.max(320, window.innerWidth);
+  H = Math.max(240, window.innerHeight);
+  canvas.style.width = W + "px";
+  canvas.style.height = H + "px";
+  canvas.width = Math.floor(W * DPR);
+  canvas.height = Math.floor(H * DPR);
+}
+window.addEventListener("resize", resize);
+resize();
+
+/* ---------------- Geometry: cube ---------------- */
+
+// 8 vertices of a unit cube centered at origin (half-extent 1)
+const V = [
+  [-1, -1, -1], [ 1, -1, -1], [ 1,  1, -1], [-1,  1, -1],
+  [-1, -1,  1], [ 1, -1,  1], [ 1,  1,  1], [-1,  1,  1]
+];
+
+// 6 quad faces, wound counter-clockwise when viewed from outside (CCW = front)
+const FACES = [
+  { idx: [4, 5, 6, 7], color: [231,  76,  60] }, // +Z (front, red)
+  { idx: [1, 0, 3, 2], color: [ 46, 204, 113] }, // -Z (back, green)
+  { idx: [5, 1, 2, 6], color: [ 52, 152, 219] }, // +X (right, blue)
+  { idx: [0, 4, 7, 3], color: [241, 196,  15] }, // -X (left, yellow)
+  { idx: [7, 6, 2, 3], color: [155,  89, 182] }, // +Y (top, purple)
+  { idx: [0, 1, 5, 4], color: [ 26, 188, 156] }  // -Y (bottom, teal)
+];
+
+// Split each quad into two triangles (0,1,2) and (0,2,3)
+const TRIANGLES = [];
+for (const f of FACES) {
+  const [a, b, c, d] = f.idx;
+  TRIANGLES.push({ v: [a, b, c], color: f.color });
+  TRIANGLES.push({ v: [a, c, d], color: f.color });
+}
+
+/* ---------------- Camera / projection ---------------- */
+
+const FOV = 60 * Math.PI / 180;   // vertical field of view
+const CAM_Z = 5.0;                // camera distance from origin
+const NEAR = 0.1;
+
+function project(p, out) {
+  // p already in view space (camera at origin looking down +z... here we
+  // place the object at z = CAM_Z in view space, so depth = p[2]).
+  const depth = p[2];
+  const f = (H * 0.5) / Math.tan(FOV * 0.5); // focal length in pixels
+  out[0] = W * 0.5 + p[0] * f / depth;
+  out[1] = H * 0.5 - p[1] * f / depth;
+  out[2] = depth;
+}
+
+/* ---------------- Lighting ---------------- */
+
+// Moving point light orbiting the cube
+const light = { pos: [3, 3, 3] };
+let lightAngle = 0;
+
+const AMBIENT = 0.16;   // ambient term
+const SPEC_MIX = 0.0;    // pure Lambert, kept for clarity
+const LIGHT_INTENSITY = 1.0;
+
+function normalize(v) {
+  const l = Math.hypot(v[0], v[1], v[2]) || 1;
+  return [v[0] / l, v[1] / l, v[2] / l];
+}
+
+/* ---------------- Rasterizer (Gouraud) ---------------- */
+
+// Screen-space vertex: x, y (pixels), invZ (for perspective-correct depth test),
+// and an RGB color computed from Lambert lighting at the vertex.
+// Gouraud: colors are interpolated linearly across the triangle.
+
+function rasterTriangle(v0, v1, v2) {
+  // Sort by y
+  let a = v0, b = v1, c = v2;
+  if (a.y > b.y) { const t = a; a = b; b = t; }
+  if (b.y > c.y) { const t = b; b = c; c = t; }
+  if (a.y > b.y) { const t = a; a = b; b = t; }
+
+  const yTop = Math.max(0, Math.ceil(a.y));
+  const yBot = Math.min(H - 1, Math.floor(c.y));
+  if (yBot < yTop) return;
+
+  const y0 = a.y, y1 = b.y, y2 = c.y;
+  const totalDy = y2 - y0;
+  if (Math.abs(totalDy) < 1e-9) return; // degenerate (flat) triangle
+
+  const longSlopeX = (c.x - a.x) / totalDy;
+  const longSlopeZ = (c.invZ - a.invZ) / totalDy;
+  const longSr = (c.r - a.r) / totalDy;
+  const longSg = (c.g - a.g) / totalDy;
+  const longSb = (c.b - a.b) / totalDy;
+
+  const dya = y1 - y0;
+  const shortSlopeX = (b.x - a.x) / (dya || 1e-9);
+  const shortSlopeZ = (b.invZ - a.invZ) / (dya || 1e-9);
+  const shortSr = (b.r - a.r) / (dya || 1e-9);
+  const shortSg = (b.g - a.g) / (dya || 1e-9);
+  const shortSb = (b.b - a.b) / (dya || 1e-9);
+
+  const dyb = y2 - y1;
+  const slope2X = (c.x - b.x) / (dyb || 1e-9);
+  const slope2Z = (c.invZ - b.invZ) / (dyb || 1e-9);
+  const slope2r = (c.r - b.r) / (dyb || 1e-9);
+  const slope2g = (c.g - b.g) / (dyb || 1e-9);
+  const slope2b = (c.b - b.b) / (dyb || 1e-9);
+
+  for (let y = yTop; y <= yBot; y++) {
+    const fy = y + 0.5;
+
+    // long edge from a -> c
+    let xl, zl, rl, gl, bl;
+    if (fy >= y1) {
+      // lower part: interpolate along b -> c segment for x as well,
+      // but using the long edge for the span keeps it consistent.
+      xl = a.x + longSlopeX * (fy - y0);
+      zl = a.invZ + longSlopeZ * (fy - y0);
+      rl = a.r + longSr * (fy - y0);
+      gl = a.g + longSg * (fy - y0);
+      bl = a.b + longSb * (fy - y0);
+    } else {
+      xl = a.x + longSlopeX * (fy - y0);
+      zl = a.invZ + longSlopeZ * (fy - y0);
+      rl = a.r + longSr * (fy - y0);
+      gl = a.g + longSg * (fy - y0);
+      bl = a.b + longSb * (fy - y0);
+    }
+
+    // short edge a -> b (upper part) or b -> c (lower part)
+    let xr, zr, rr, gr, br;
+    if (fy >= y1) {
+      xr = b.x + slope2X * (fy - y1);
+      zr = b.invZ + slope2Z * (fy - y1);
+      rr = b.r + slope2r * (fy - y1);
+      gr = b.g + slope2g * (fy - y1);
+      br = b.b + slope2b * (fy - y1);
+    } else {
+      xr = a.x + shortSlopeX * (fy - y0);
+      zr = a.invZ + shortSlopeZ * (fy - y0);
+      rr = a.r + shortSr * (fy - y0);
+      gr = a.g + shortSg * (fy - y0);
+      br = a.b + shortSb * (fy - y0);
+    }
+
+    // Ensure xl is the left edge
+    if (xl > xr) {
+      let t;
+      t = xl; xl = xr; xr = t;
+      t = zl; zl = zr; zr = t;
+      t = rl; rl = rr; rr = t;
+      t = gl; gl = gr; gr = t;
+      t = bl; bl = br; br = t;
+    }
+
+    const span = xr - xl;
+    if (span < 1e-9) continue;
+
+    const invSpan = 1 / span;
+    const dz = (zr - zl) * invSpan;
+    const dr = (rr - rl) * invSpan;
+    const dg = (gr - gl) * invSpan;
+    const db = (br - bl) * invSpan;
+
+    let xStart = Math.max(0, Math.ceil(xl - 0.5));
+    let xEnd = Math.min(W - 1, Math.floor(xr - 0.5));
+    if (xEnd < xStart) continue;
+
+    let z = zl + dz * (xStart + 0.5 - xl);
+    let r = rl + dr * (xStart + 0.5 - xl);
+    let g = gl + dg * (xStart + 0.5 - xl);
+    let bcol = bl + db * (xStart + 0.5 - xl);
+
+    for (let x = xStart; x <= xEnd; x++) {
+      const idx = (y * W + x);
+      if (z < zbuf[idx]) {          // smaller invZ... we store 1/depth
+        zbuf[idx] = z;
+        const ri = r < 0 ? 0 : (r > 255 ? 255 : r | 0);
+        const gi = g < 0 ? 0 : (g > 255 ? 255 : g | 0);
+        const bi = bcol < 0 ? 0 : (bcol > 255 ? 255 : bcol | 0);
+        fb[idx] = 0xff000000 | (bi << 16) | (gi << 8) | ri;
+      }
+      z += dz;
+      r += dr;
+      g += dg;
+      bcol += db;
+    }
+  }
+}
+
+/* ---------------- Buffers ---------------- */
+
+let fb = null;      // Uint32Array color buffer
+let zbuf = null;    // Float32Array depth (we store 1/depth, larger = farther... see below)
+let imageData = null;
+
+function ensureBuffers() {
+  const n = W * H;
+  if (!fb || fb.length !== n) {
+    fb = new Uint32Array(n);
+    zbuf = new Float32Array(n);
+    imageData = ctx.createImageData(W, H);
+    imageData.data.set(new Uint8ClampedArray(fb.buffer));
+  }
+}
+
+/* ---------------- Wireframe drawing ---------------- */
+
+function drawWireframe(projectedVerts) {
+  ctx.save();
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = "rgba(140, 220, 255, 0.9)";
+  ctx.beginPath();
+  for (const f of FACES) {
+    const p0 = projectedVerts[f.idx[0]];
+    ctx.moveTo(p0[0], p0[1]);
+    for (let i = 1; i < 4; i++) {
+      const p = projectedVerts[f.idx[i]];
+      ctx.lineTo(p[0], p[1]);
+    }
+    ctx.closePath();
+  }
+  ctx.stroke();
+
+  // vertex dots
+  ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
+  for (const p of projectedVerts) {
+    ctx.beginPath();
+    ctx.arc(p[0], p[1], 2.2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+/* ---------------- State ---------------- */
+
+let rotX = 0.6, rotY = 0.4, rotZ = 0.0;
+let wireframe = false;
+let paused = false;
+
+window.addEventListener("keydown", (e) => {
+  const k = e.key.toLowerCase();
+  if (k === "w") { wireframe = !wireframe; e.preventDefault(); }
+  else if (k === "p") { paused = !paused; e.preventDefault(); }
+  else if (k === "r") { rotX = 0.6; rotY = 0.4; rotZ = 0.0; e.preventDefault(); }
+});
+
+/* ---------------- FPS ---------------- */
+
+let frames = 0;
+let lastFpsTime = performance.now();
+let fps = 0;
+let fpsSmoothed = 0;
+
+/* ---------------- Main loop ---------------- */
+
+const tmp = [0, 0, 0];
+const mv = new Float32Array(8 * 3);        // model/view space vertices
+const proj = new Float32Array(8 * 3);      // view space
+const screen = [];                         // projected screen coords per vertex
+for (let i = 0; i < 8; i++) screen.push([0, 0, 0]);
+
+let lastTime = performance.now();
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dt = Math.min(0.1, (now - lastTime) / 1000);
+  lastTime = now;
+
+  if (!paused) {
+    rotY += dt * 0.9;
+    rotX += dt * 0.45;
+    rotZ += dt * 0.22;
+    lightAngle += dt * 1.4;
+  }
+
+  ensureBuffers();
+
+  // ---- update light ----
+  const lr = 3.2;
+  light.pos[0] = Math.cos(lightAngle) * lr;
+  light.pos[1] = 1.6 + Math.sin(lightAngle * 0.7) * 1.2;
+  light.pos[2] = Math.sin(lightAngle) * lr + 2.0;
+
+  // ---- clear buffers ----
+  fb.fill(0xff0d0f14);
+  zbuf.fill(Infinity); // we compare z < zbuf; store 1/depth so larger depth => smaller 1/depth...
+
+  // NOTE on depth: we store 1/depth in zbuf and test `z < zbuf` with
+  // z = 1/depth. Smaller 1/depth = farther. We want NEARER to win, i.e.
+  // larger depth => smaller 1/depth. So we must keep the SMALLEST 1/depth
+  // ... that would be wrong. Instead initialize to +Infinity and keep the
+  // LARGEST depth. To keep it simple we store depth directly (larger = nearer
+  // in view space since camera looks toward +z and objects are at z>0),
+  // and test `depth > zbuf`.
+  zbuf.fill(-Infinity); // will be replaced by depth comparisons below
+
+  // ---- rotation matrices (R = Rz * Ry * Rx) ----
+  const cx = Math.cos(rotX), sx = Math.sin(rotX);
+  const cy = Math.cos(rotY), sy = Math.sin(rotY);
+  const cz = Math.cos(rotZ), sz = Math.sin(rotZ);
+
+  // Combined 3x3 model matrix
+  const m00 = cz * cy + sz * sx * sy;
+  const m01 = -sz * cy + cz * sx * sy;
+  const m02 = cz * sy;
+  const m10 = sz * cx;
+  const m11 = cz * cx;
+  const m12 = -sx;
+  const m20 = -cz * sy * sx + sz * cx;
+  const m21 = sz * sy * sx + cz * cx;
+  const m22 = cy * cx;
+
+  // ---- transform vertices ----
+  for (let i = 0; i < 8; i++) {
+    const vx = V[i][0], vy = V[i][1], vz = V[i][2];
+    const x = m00 * vx + m01 * vy + m02 * vz;
+    const y = m10 * vx + m11 * vy + m12 * vz;
+    const z = m20 * vx + m21 * vy + m22 * vz;
+    mv[i * 3] = x; mv[i * 3 + 1] = y; mv[i * 3 + 2] = z;
+    // view space: translate camera back
+    proj[i * 3] = x;
+    proj[i * 3 + 1] = y;
+    proj[i * 3 + 2] = z + CAM_Z;
+  }
+
+  // ---- project to screen ----
+  const f = (H * 0.5) / Math.tan(FOV * 0.5);
+  for (let i = 0; i < 8; i++) {
+    const d = proj[i * 3 + 2];
+    if (d < NEAR) { screen[i][0] = -1e9; screen[i][1] = -1e9; screen[i][2] = d; continue; }
+    screen[i][0] = W * 0.5 + proj[i * 3] * f / d;
+    screen[i][1] = H * 0.5 - proj[i * 3 + 1] * f / d;
+    screen[i][2] = d;
+  }
+
+  // ---- per-vertex lighting (Lambert) ----
+  // Face normals from rotated geometry (flat base) — but Gouraud uses
+  // per-vertex shading: we light using the face normal of each triangle,
+  // evaluated at every vertex, then interpolate colors across the triangle.
+  const vertColor = new Float32Array(8 * 3);
+
+  // Precompute lighting for each of the 12 triangles' vertices
+  // (a vertex shared by several faces gets one color per triangle, so we
+  //  compute colors per-triangle below instead of per-vertex globally.)
+
+  if (!wireframe) {
+    // z-buffer uses depth (larger = nearer)
+    for (const tri of TRIANGLES) {
+      const i0 = tri.v[0], i1 = tri.v[1], i2 = tri.v[2];
+
+      // world-space (model) positions for normal computation
+      const ax = mv[i0 * 3], ay = mv[i0 * 3 + 1], az = mv[i0 * 3 + 2];
+      const bx = mv[i1 * 3], by = mv[i1 * 3 + 1], bz = mv[i1 * 3 + 2];
+      const cxv = mv[i2 * 3], cyv = mv[i2 * 3 + 1], czv = mv[i2 * 3 + 2];
+
+      // normal = (b-a) x (c-a)
+      let nx = (by - ay) * (czv - az) - (bz - az) * (cyv - ay);
+      let ny = (bz - az) * (cxv - ax) - (bx - ax) * (czv - az);
+      let nz = (bx - ax) * (cyv - ay) - (by - ay) * (cxv - ax);
+      const nl = Math.hypot(nx, ny, nz) || 1;
+      nx /= nl; ny /= nl; nz /= nl;
+
+      // Backface culling: in view space the camera looks down -z toward the
+      // object placed at +z... we placed the object at +CAM_Z, camera at 0
+      // looking toward +z. A front face has normal pointing toward camera,
+      // i.e. dot(normal, centroid) < 0 (centroid points away from origin
+      // toward camera side is negative z... need care).
+      // Centroid in view space:
+      const ccx = (proj[i0 * 3] + proj[i1 * 3] + proj[i2 * 3]) / 3;
+      const ccy = (proj[i0 * 3 + 1] + proj[i1 * 3 + 1] + proj[i2 * 3 + 1]) / 3;
+      const ccz = (proj[i0 * 3 + 2] + proj[i1 * 3 + 2] + proj[i2 * 3 + 2]) / 3;
+      // Vector from centroid to camera (origin): -centroid
+      const facing = -(nx * ccx + ny * ccy + nz * ccz);
+      if (facing <= 0) continue; // backface
+
+      // Per-vertex Lambert lighting
+      const base = tri.color;
+      const cols = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+      const vids = [i0, i1, i2];
+      for (let k = 0; k < 3; k++) {
+        const vi = vids[k];
+        // surface point in view space
+        const px = proj[vi * 3], py = proj[vi * 3 + 1], pz = proj[vi * 3 + 2];
+        // light direction (light is in view space coords, same frame)
+        const lx = light.pos[0] - px;
+        const ly = light.pos[1] - py;
+        const lz = light.pos[2] - pz;
+        const llen = Math.hypot(lx, ly, lz) || 1;
+        const ldx = lx / llen, ldy = ly / llen, ldz = lz / llen;
+        // attenuation
+        const atten = 1.0 / (1.0 + 0.045 * llen * llen);
+        let lam = nx * ldx + ny * ldy + nz * ldz;
+        if (lam < 0) lam = 0;
+        const shade = AMBIENT + LIGHT_INTENSITY * lam * atten * 2.2;
+        cols[k * 3]     = base[0] * shade;
+        cols[k * 3 + 1] = base[1] * shade;
+        cols[k * 3 + 2] = base[2] * shade;
+      }
+
+      // Build screen-space vertices with colors
+      const s0 = screen[i0], s1 = screen[i1], s2 = screen[i2];
+      if (s0[2] < NEAR || s1[2] < NEAR || s2[2] < NEAR) continue;
+
+      const vA = {
+        x: s0[0], y: s0[1], invZ: s0[2],
+        r: cols[0], g: cols[1], b: cols[2]
+      };
+      const vB = {
+        x: s1[0], y: s1[1], invZ: s1[2],
+        r: cols[3], g: cols[4], b: cols[5]
+      };
+      const vC = {
+        x: s2[0], y: s2[1], invZ: s2[2],
+        r: cols[6], g: cols[7], b: cols[8]
+      };
+
+      // depth test inside raster: we want NEARER (larger depth) to win.
+      // Our raster writes when `z < zbuf` where z is the interpolated
+      // "invZ" field. Since we store depth (larger = nearer), invert:
+      // store 1/depth so nearer => smaller value => `z < zbuf` keeps nearer.
+      const inv0 = 1 / s0[2], inv1 = 1 / s1[2], inv2 = 1 / s2[2];
+      vA.invZ = inv0; vB.invZ = inv1; vC.invZ = inv2;
+
+      rasterTriangle(vA, vB, vC);
+    }
+  }
+
+  // ---- blit ----
+  ctx.putImageData(imageData, 0, 0, 0, 0, W, H);
+
+  // ---- wireframe overlay ----
+  if (wireframe) {
+    drawWireframe(screen);
+  }
+
+  // ---- light indicator ----
+  {
+    const lf = (H * 0.5) / Math.tan(FOV * 0.5);
+    const ld = light.pos[2];
+    if (ld > NEAR) {
+      const lx = W * 0.5 + light.pos[0] * lf / ld;
+      const ly = H * 0.5 - light.pos[1] * lf / ld;
+      const grad = ctx.createRadialGradient(lx, ly, 0, lx, ly, 26);
+      grad.addColorStop(0, "rgba(255,250,210,0.95)");
+      grad.addColorStop(0.35, "rgba(255,220,120,0.55)");
+      grad.addColorStop(1, "rgba(255,200,80,0)");
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(lx, ly, 26, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#fff8dc";
+      ctx.beginPath();
+      ctx.arc(lx, ly, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // ---- FPS ----
+  frames++;
+  const t = performance.now();
+  if (t - lastFpsTime >= 500) {
+    fps = frames * 1000 / (t - lastFpsTime);
+    fpsSmoothed = fpsSmoothed === 0 ? fps : fpsSmoothed * 0.7 + fps * 0.3;
+    frames = 0;
+    lastFpsTime = t;
+    updateHud();
+  }
+}
+
+function updateHud() {
+  hud.innerHTML =
+    "<b>FPS</b> " + fpsSmoothed.toFixed(1) +
+    "\n<b>Wireframe</b> <span class=\"" + (wireframe ? "on" : "off") + "\">" + (wireframe ? "ON" : "OFF") + "</span>" +
+    "\n<b>Paused</b> <span class=\"" + (paused ? "on" : "off") + "\">" + (paused ? "YES" : "NO") + "</span>" +
+    "\n<b>Triangles</b> " + (wireframe ? "0 (cull skipped)" : "12") +
+    "\n<b>Renderer</b> Canvas 2D (software)";
+}
+
+updateHud();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

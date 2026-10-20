@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Gouraud Shaded Cube</title>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        canvas { display: block; }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+        
+        const vertices = [
+            [-1, -1, -1], // 0
+            [1, -1, -1],  // 1
+            [1, 1, -1],   // 2
+            [-1, 1, -1],  // 3
+            [-1, -1, 1],  // 4
+            [1, -1, 1],   // 5
+            [1, 1, 1],    // 6
+            [-1, 1, 1]    // 7
+        ];
+        
+        const faces = [
+            [0, 1, 2, 3], // back face (z=-1)
+            [4, 5, 6, 7], // front face (z=1)
+            [0, 3, 7, 4], // left face (x=-1)
+            [1, 2, 6, 5], // right face (x=1)
+            [2, 3, 7, 6], // top face (y=1)
+            [0, 1, 5, 4]  // bottom face (y=-1)
+        ];
+        
+        const faceNormals = [
+            [0, 0, -1], // back
+            [0, 0, 1],  // front
+            [-1, 0, 0], // left
+            [1, 0, 0],  // right
+            [0, 1, 0],  // top
+            [0, -1, 0]  // bottom
+        ];
+        
+        const triangles = [];
+        for (let i = 0; i < faces.length; i++) {
+            const face = faces[i];
+            const normal = faceNormals[i];
+            triangles.push({ vertices: [face[0], face[1], face[2]], normal });
+            triangles.push({ vertices: [face[0], face[2], face[3]], normal });
+        }
+        
+        let rotationX = 0;
+        let rotationY = 0;
+        let rotationZ = 0;
+        let lightPos = [5, 0, 0];
+        let wireframe = false;
+        let paused = false;
+        let lastTime = 0;
+        let frameCount = 0;
+        let fps = 0;
+        
+        const f = 100;
+        const d = 5;
+        const scaleFactor = 100;
+        const centerX = canvas.width / 2;
+        const centerY = canvas.height / 2;
+        
+        function rotateX(vertex, angle) {
+            const cos = Math.cos(angle);
+            const sin = Math.sin(angle);
+            const y = vertex[1] * cos - vertex[2] * sin;
+            const z = vertex[1] * sin + vertex[2] * cos;
+            return [vertex[0], y, z];
+        }
+        
+        function rotateY(vertex, angle) {
+            const cos = Math.cos(angle);
+            const sin = Math.sin(angle);
+            const x = vertex[0] * cos + vertex[2] * sin;
+            const z = -vertex[0] * sin + vertex[2] * cos;
+            return [x, vertex[1], z];
+        }
+        
+        function rotateZ(vertex, angle) {
+            const cos = Math.cos(angle);
+            const sin = Math.sin(angle);
+            const x = vertex[0] * cos - vertex[1] * sin;
+            const y = vertex[0] * sin + vertex[1] * cos;
+            return [x, y, vertex[2]];
+        }
+        
+        function normalize(v) {
+            const len = Math.sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
+            if (len === 0) return [0, 0, 0];
+            return [v[0]/len, v[1]/len, v[2]/len];
+        }
+        
+        function dot(a, b) {
+            return a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+        }
+        
+        function project(vertex) {
+            const x = vertex[0];
+            const y = vertex[1];
+            const z = vertex[2];
+            if (z + d <= 0) return null;
+            const scale = f / (z + d);
+            return [x * scale, y * scale];
+        }
+        
+        function pointInTriangle(p, v0, v1, v2) {
+            const v0v1 = [v1[0] - v0[0], v1[1] - v0[1]];
+            const v0v2 = [v2[0] - v0[0], v2[1] - v0[1]];
+            const v0p = [p[0] - v0[0], p[1] - v0[1]];
+            
+            const dot00 = v0v1[0]*v0v1[0] + v0v1[1]*v0v1[1];
+            const dot01 = v0v1[0]*v0v2[0] + v0v1[1]*v0v2[1];
+            const dot02 = v0v1[0]*v0p[0] + v0v1[1]*v0p[1];
+            const dot11 = v0v2[0]*v0v2[0] + v0v2[1]*v0v2[1];
+            const dot12 = v0v2[0]*v0p[0] + v0v2[1]*v0p[1];
+            
+            const invDenom = 1 / (dot00 * dot11 - dot01 * dot01);
+            const u = (dot11 * dot02 - dot01 * dot12) * invDenom;
+            const v = (dot00 * dot12 - dot01 * dot02) * invDenom;
+            
+            return u >= 0 && v >= 0 && u + v <= 1;
+        }
+        
+        function drawTriangleEdges(vertices) {
+            ctx.beginPath();
+            ctx.moveTo(vertices[0][0], vertices[0][1]);
+            ctx.lineTo(vertices[1][0], vertices[1][1]);
+            ctx.lineTo(vertices[2][0], vertices[2][1]);
+            ctx.closePath();
+            ctx.stroke();
+        }
+        
+        function drawFilledTriangle(vertices, lightingValues) {
+            const [v0, v1, v2] = vertices;
+            const [l0, l1, l2] = lightingValues;
+            
+            const minX = Math.floor(Math.min(v0[0], v1[0], v2[0]));
+            const maxX = Math.ceil(Math.max(v0[0], v1[0], v2[0]));
+            const minY = Math.floor(Math.min(v0[1], v1[1], v2[1]));
+            const maxY = Math.ceil(Math.max(v0[1], v1[1], v2[1]));
+            
+            for (let x = minX; x <= maxX; x++) {
+                for (let y = minY; y <= maxY; y++) {
+                    if (pointInTriangle([x, y], v0, v1, v2)) {
+                        const v0v1 = [v1[0] - v0[0], v1[1] - v0[1]];
+                        const v0v2 = [v2[0] - v0[0], v2[1] - v0[1]];
+                        const v0p = [x - v0[0], y - v0[1]];
+                        
+                        const dot00 = v0v1[0]*v0v1[0] + v0v1[1]*v0v1[1];
+                        const dot01 = v0v1[0]*v0v2[0] + v0v1[1]*v0v2[1];
+                        const dot02 = v0v1[0]*v0p[0] + v0v1[1]*v0p[1];
+                        const dot11 = v0v2[0]*v0v2[0] + v0v2[1]*v0v2[1];
+                        const dot12 = v0v2[0]*v0p[0] + v0v2[1]*v0p[1];
+                        
+                        const invDenom = 1 / (dot00 * dot11 - dot01 * dot01);
+                        const u = (dot11 * dot02 - dot01 * dot12) * invDenom;
+                        const v = (dot00 * dot12 - dot01 * dot02) * invDenom;
+                        const w = 1 - u - v;
+                        
+                        const c = u * l0 + v * l1 + w * l2;
+                        const color = `rgb(${Math.floor(c * 255)}, ${Math.floor(c * 255)}, ${Math.floor(c * 255)})`;
+                        
+                        ctx.fillStyle = color;
+                        ctx.fillRect(x, y, 1, 1);
+                    }
+                }
+            }
+        }
+        
+        function renderCube() {
+            for (const triangle of triangles) {
+                const vIndices = triangle.vertices;
+                const normal = triangle.normal;
+                
+                const rotatedVertices = vIndices.map(index => {
+                    let v = [...vertices[index]];
+                    v = rotateX(v, rotationX);
+                    v = rotateY(v, rotationY);
+                    v = rotateZ(v, rotationZ);
+                    return v;
+                });
+                
+                let n = [...normal];
+                n = rotateX(n, rotationX);
+                n = rotateY(n, rotationY);
+                n = rotateZ(n, rotationZ);
+                
+                if (n[2] >= 0) continue;
+                
+                const projectedVertices = rotatedVertices.map(v => {
+                    const proj = project(v);
+                    if (!proj) return null;
+                    return [
+                        proj[0] * scaleFactor + centerX,
+                        proj[1] * scaleFactor + centerY
+                    ];
+                });
+                
+                if (projectedVertices.some(v => !v)) continue;
+                
+                const lightingValues = [];
+                for (let i = 0; i < 3; i++) {
+                    const v = rotatedVertices[i];
+                    const lightDir = [
+                        lightPos[0] - v[0],
+                        lightPos[1] - v[1],
+                        lightPos[2] - v[2]
+                    ];
+                    const lightDirNorm = normalize(lightDir);
+                    const dotVal = dot(n, lightDirNorm);
+                    const lighting = Math.max(0, dotVal);
+                    lightingValues.push(lighting);
+                }
+                
+                if (wireframe) {
+                    drawTriangleEdges(projectedVertices);
+                } else {
+                    drawFilledTriangle(projectedVertices, lightingValues);
+                }
+            }
+        }
+        
+        function animate(currentTime) {
+            requestAnimationFrame(animate);
+            
+            if (lastTime === 0) lastTime = currentTime;
+            frameCount++;
+            if (currentTime - lastTime >= 1000) {
+                fps = frameCount;
+                frameCount = 0;
+                lastTime = currentTime;
+            }
+            
+            if (!paused) {
+                rotationY += 0.01;
+                rotationX += 0.005;
+            }
+            
+            const time = currentTime / 1000;
+            lightPos = [5 * Math.cos(time), 5 * Math.sin(time), 0];
+            
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            renderCube();
+            
+            ctx.fillStyle = 'white';
+            ctx.font = '16px Arial';
+            ctx.fillText(`FPS: ${fps}`, 10, 20);
+        }
+        
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'w' || e.key === 'W') {
+                wireframe = !wireframe;
+            } else if (e.key === 'p' || e.key === 'P') {
+                paused = !paused;
+            }
+        });
+        
+        animate(0);
+    </script>
+</body>
+</html>

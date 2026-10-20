@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gouraud-Shaded Rotating Cube (Canvas 2D)</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #0b0e14;
+    color: #cdd6e4;
+    font-family: "Segoe UI", system-ui, sans-serif;
+    overflow: hidden;
+  }
+  #stage {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+    cursor: crosshair;
+  }
+  #hud {
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    padding: 10px 14px;
+    background: rgba(15, 20, 30, 0.72);
+    border: 1px solid rgba(120, 160, 220, 0.25);
+    border-radius: 8px;
+    font-size: 13px;
+    line-height: 1.55;
+    letter-spacing: 0.3px;
+    pointer-events: none;
+    user-select: none;
+    backdrop-filter: blur(4px);
+  }
+  #hud b { color: #7fd0ff; font-weight: 600; }
+  #hud .val { color: #ffe08a; }
+  kbd {
+    display: inline-block;
+    min-width: 16px;
+    padding: 1px 5px;
+    margin-right: 4px;
+    background: #1c2433;
+    border: 1px solid #3a4a66;
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    font-family: inherit;
+    font-size: 11px;
+    color: #e6edf7;
+    text-align: center;
+  }
+  #hint { margin-top: 6px; color: #8a97ab; font-size: 12px; }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<div id="hud">
+  <div><b>FPS</b> <span class="val" id="fps">–</span></div>
+  <div><b>Wireframe</b> <span class="val" id="wf">off</span></div>
+  <div><b>Paused</b> <span class="val" id="ps">no</span></div>
+  <div id="hint"><kbd>W</kbd>wireframe &nbsp; <kbd>P</kbd>pause &nbsp; move mouse = light</div>
+</div>
+
+<script>
+"use strict";
+
+/* ------------------------------------------------------------------ *
+ *  Minimal 3D pipeline on Canvas 2D:
+ *    vertices -> rotation matrices -> perspective projection
+ *    -> backface culling -> triangle split -> Lambert per-vertex
+ *    -> scanline rasterizer with color interpolation (Gouraud)
+ * ------------------------------------------------------------------ */
+
+const canvas = document.getElementById("stage");
+const ctx = canvas.getContext("2d", { alpha: false });
+
+const fpsEl = document.getElementById("fps");
+const wfEl = document.getElementById("wf");
+const psEl = document.getElementById("ps");
+
+let W = 0, H = 0, DPR = 1;
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width = Math.max(1, Math.floor(W * DPR));
+  canvas.height = Math.max(1, Math.floor(H * DPR));
+  canvas.style.width = W + "px";
+  canvas.style.height = H + "px";
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+window.addEventListener("resize", resize);
+resize();
+
+/* ---------------------------- Cube geometry ---------------------------- */
+// 8 vertices of a unit cube centered at the origin
+const VERTS = [
+  [-1, -1, -1], [ 1, -1, -1], [ 1,  1, -1], [-1,  1, -1],
+  [-1, -1,  1], [ 1, -1,  1], [ 1,  1,  1], [-1,  1,  1]
+];
+
+// 6 quad faces, each split into two triangles (consistent winding)
+const FACES = [
+  { tri: [[4, 5, 6], [4, 6, 7]], base: [235,  90,  90] }, // +Z
+  { tri: [[1, 0, 3], [1, 3, 2]], base: [ 90, 210, 130] }, // -Z
+  { tri: [[5, 1, 2], [5, 2, 6]], base: [ 90, 150, 240] }, // +X
+  { tri: [[0, 4, 7], [0, 7, 3]], base: [240, 190,  80] }, // -X
+  { tri: [[7, 6, 2], [7, 2, 3]], base: [200, 110, 235] }, // +Y
+  { tri: [[0, 1, 5], [0, 5, 4]], base: [ 90, 210, 235] }  // -Y
+];
+
+/* ------------------------- Math / matrices ---------------------------- */
+function rotateX(v, a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return [v[0], v[1] * c - v[2] * s, v[1] * s + v[2] * c];
+}
+function rotateY(v, a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return [v[0] * c + v[2] * s, v[1], -v[0] * s + v[2] * c];
+}
+function rotateZ(v, a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return [v[0] * c - v[1] * s, v[0] * s + v[1] * c, v[2]];
+}
+function sub(a, b) { return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; }
+function cross(a, b) {
+  return [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0]
+  ];
+}
+function dot(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+function normalize(v) {
+  const l = Math.hypot(v[0], v[1], v[2]) || 1;
+  return [v[0] / l, v[1] / l, v[2] / l];
+}
+
+/* ------------------------------ Camera -------------------------------- */
+const FOCAL = 620;          // perspective focal length (px)
+const CAM_Z = 5.2;          // camera distance from origin
+const CUBE_SCALE = 130;     // world -> pixel scale of the cube
+
+/* Perspective projection: view space (camera looks down -Z) -> screen */
+function project(p) {
+  const z = CAM_Z - p[2];           // depth in front of camera
+  const k = FOCAL / Math.max(z, 0.1);
+  return { x: W / 2 + p[0] * k, y: H / 2 - p[1] * k, k, z };
+}
+
+/* --------------------------- Light source ----------------------------- */
+const light = { pos: [3, 3, 4], target: [0, 0, 0] };
+const AMBIENT = 0.16;
+
+function updateLight(t) {
+  // orbiting light + mouse influence
+  const r = 5.0;
+  const ax = mouse.active ? (mouse.y / H - 0.5) * 1.6 : Math.sin(t * 0.5) * 0.9;
+  const ay = mouse.active ? (mouse.x / W - 0.5) * 3.0 : t * 0.8;
+  light.pos = [
+    r * Math.cos(ax) * Math.sin(ay),
+    r * Math.sin(ax) + Math.sin(t * 0.7) * 0.6,
+    r * Math.cos(ax) * Math.cos(ay)
+  ];
+}
+
+/* ------------------------ Per-vertex lighting ------------------------- */
+/* Lambert diffuse: I = ambient + (1 - ambient) * max(0, N . L) */
+function shadeVertex(worldPos, normal) {
+  const L = normalize(sub(light.pos, worldPos));
+  const d = Math.max(0, dot(normal, L));
+  return AMBIENT + (1 - AMBIENT) * d;
+}
+
+/* ------------------------ Rasterizer (Gouraud) ------------------------ */
+/*
+ * Scanline triangle fill. Each vertex carries {x, y, r, g, b};
+ * colors are interpolated linearly along every edge and across each
+ * scanline — that interpolation IS the Gouraud shading step.
+ */
+function drawTriangle(v0, v1, v2) {
+  // sort by y
+  if (v0.y > v1.y) { const t = v0; v0 = v1; v1 = t; }
+  if (v1.y > v2.y) { const t = v1; v1 = v2; v2 = t; }
+  if (v0.y > v1.y) { const t = v0; v0 = v1; v1 = t; }
+
+  const y0 = Math.ceil(v0.y), y2 = Math.floor(v2.y);
+  if (y2 <= y0) return;
+
+  const span = v2.y - v0.y;
+  if (span <= 0) return;
+
+  // two-segment interpolation (v0->v2 long edge, v0->v1 / v1->v2 short edge)
+  const longA = (v2.x - v0.x) / span, longR = (v2.r - v0.r) / span,
+        longG = (v2.g - v0.g) / span, longB = (v2.b - v0.b) / span;
+
+  const midFrac = Math.min(1, Math.max(0, (v1.y - v0.y) / span));
+  const shortSpanTop = (v1.y - v0.y);
+  const shortSpanBot = (v2.y - v1.y);
+
+  const topA = shortSpanTop > 0 ? (v1.x - v0.x) / shortSpanTop : 0;
+  const topR = shortSpanTop > 0 ? (v1.r - v0.r) / shortSpanTop : 0;
+  const topG = shortSpanTop > 0 ? (v1.g - v0.g) / shortSpanTop : 0;
+  const topB = shortSpanTop > 0 ? (v1.b - v0.b) / shortSpanTop : 0;
+
+  const botA = shortSpanBot > 0 ? (v2.x - v1.x) / shortSpanBot : 0;
+  const botR = shortSpanBot > 0 ? (v2.r - v1.r) / shortSpanBot : 0;
+  const botG = shortSpanBot > 0 ? (v2.g - v1.g) / shortSpanBot : 0;
+  const botB = shortSpanBot > 0 ? (v2.b - v1.b) / shortSpanBot : 0;
+
+  const midY = v1.y;
+
+  for (let y = y0; y <= y2; y++) {
+    const fy = y + 0.5;
+    if (fy < v0.y || fy > v2.y) continue;
+
+    let xa, xb, ca, cb, cg, cc; // left/right x, and color at left/right
+
+    if (fy < midY || shortSpanBot <= 0) {
+      // upper segment
+      const dy = fy - v0.y;
+      xa = v0.x + longA * dy;
+      const r1 = v0.r + longR * dy, g1 = v0.g + longG * dy, b1 = v0.b + longB * dy;
+      const d2 = shortSpanTop > 0 ? dy : 0;
+      xb = v0.x + topA * d2;
+      ca = r1; cb = g1; cc = b1;
+      var xbR = v0.r + topR * d2, xbG = v0.g + topG * d2, xbB = v0.b + topB * d2;
+    } else {
+      // lower segment: interpolate from v1 to v2
+      const dy = fy - v1.y;
+      xa = v1.x + botA * dy;
+      const r1 = v1.r + botR * dy, g1 = v1.g + botG * dy, b1 = v1.b + botB * dy;
+      xb = v1.x + botA * dy;
+      ca = r1; cb = g1; cc = b1;
+      var xbR = r1, xbG = g1, xbB = b1;
+      // long edge still governs the other side
+      const dyL = fy - v0.y;
+      xa = v0.x + longA * dyL;
+      ca = v0.r + longR * dyL;
+      cb = v0.g + longG * dyL;
+      cc = v0.b + longB * dyL;
+    }
+
+    let left = xa, right = xb;
+    let lR = ca, lG = cb, lB = cc;
+    let rR = xbR, rG = xbG, rB = xbB;
+    if (left > right) {
+      const tx = left; left = right; right = tx;
+      const tr = lR; lR = rR; rR = tr;
+      const tg = lG; lG = rG; rG = tg;
+      const tb = lB; lB = rB; rB = tb;
+    }
+
+    const x0 = Math.ceil(left - 0.5), x1 = Math.floor(right - 0.5);
+    if (x1 < x0) continue;
+    const dx = right - left || 1;
+    const stepR = (rR - lR) / dx, stepG = (rG - lG) / dx, stepB = (rB - lB) / dx;
+    let cr = lR + (x0 + 0.5 - left) * stepR;
+    let cg = lG + (x0 + 0.5 - left) * stepG;
+    let cb2 = lB + (x0 + 0.5 - left) * stepB;
+
+    for (let x = x0; x <= x1; x++) {
+      ctx.fillStyle = "rgb(" + (cr | 0) + "," + (cg | 0) + "," + (cb2 | 0) + ")";
+      ctx.fillRect(x, y, 1, 1);
+      cr += stepR; cg += stepG; cb2 += stepB;
+    }
+  }
+}
+
+/* --------------------------- State / input ---------------------------- */
+let wireframe = false;
+let paused = false;
+const mouse = { x: 0, y: 0, active: false };
+
+window.addEventListener("mousemove", (e) => {
+  mouse.x = e.clientX;
+  mouse.y = e.clientY;
+  mouse.active = true;
+});
+window.addEventListener("mouseleave", () => { mouse.active = false; });
+
+window.addEventListener("keydown", (e) => {
+  const k = e.key.toLowerCase();
+  if (k === "w") {
+    wireframe = !wireframe;
+    wfEl.textContent = wireframe ? "on" : "off";
+    e.preventDefault();
+  } else if (k === "p") {
+    paused = !paused;
+    psEl.textContent = paused ? "yes" : "no";
+    e.preventDefault();
+  }
+});
+
+/* ------------------------------ Render -------------------------------- */
+let angleX = 0.5, angleY = 0.2, angleZ = 0;
+let last = performance.now();
+let fpsAcc = 0, fpsFrames = 0, fpsShown = 0;
+
+function frame(now) {
+  const dt = Math.min(0.1, (now - last) / 1000);
+  last = now;
+
+  // FPS (1-second moving average)
+  fpsAcc += dt; fpsFrames++;
+  if (fpsAcc >= 0.5) {
+    fpsShown = Math.round(fpsFrames / fpsAcc);
+    fpsEl.textContent = fpsShown;
+    fpsAcc = 0; fpsFrames = 0;
+  }
+
+  if (!paused) {
+    angleX += dt * 0.7;
+    angleY += dt * 1.05;
+    angleZ += dt * 0.35;
+    updateLight(now / 1000);
+  }
+
+  // clear
+  ctx.fillStyle = "#0b0e14";
+  ctx.fillRect(0, 0, W, H);
+
+  // subtle backdrop grid
+  ctx.strokeStyle = "rgba(80,110,160,0.08)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let gx = 0; gx < W; gx += 48) { ctx.moveTo(gx, 0); ctx.lineTo(gx, H); }
+  for (let gy = 0; gy < H; gy += 48) { ctx.moveTo(0, gy); ctx.lineTo(W, gy); }
+  ctx.stroke();
+
+  // --- transform vertices: model -> world (rotations) ---
+  const world = VERTS.map(v => {
+    let p = rotateZ(v, angleZ);
+    p = rotateX(p, angleX);
+    p = rotateY(p, angleY);
+    return [p[0] * CUBE_SCALE, p[1] * CUBE_SCALE, p[2] * CUBE_SCALE];
+  });
+
+  // light is in world space; scale it to match
+  const lightWorld = [light.pos[0] * CUBE_SCALE, light.pos[1] * CUBE_SCALE, light.pos[2] * CUBE_SCALE];
+  const savedLight = light.pos;
+  light.pos = lightWorld;
+
+  // project all vertices once
+  const proj = world.map(project);
+
+  // draw light marker
+  const lp = project(lightWorld);
+  if (lp.z > 0.1) {
+    const gl = ctx.createRadialGradient(lp.x, lp.y, 0, lp.x, lp.y, 26);
+    gl.addColorStop(0, "rgba(255,250,210,0.95)");
+    gl.addColorStop(0.3, "rgba(255,220,120,0.55)");
+    gl.addColorStop(1, "rgba(255,200,80,0)");
+    ctx.fillStyle = gl;
+    ctx.beginPath();
+    ctx.arc(lp.x, lp.y, 26, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // --- per-face: normals, backface culling, triangles ---
+  const drawn = [];
+  for (const face of FACES) {
+    // world-space normal from the first triangle
+    const [a, b, c] = face.tri[0];
+    const n = normalize(cross(sub(world[b], world[a]), sub(world[c], world[a])));
+
+    // backface culling: face normal vs view direction to camera (0,0,CAM_Z)
+    const centroid = [
+      (world[a][0] + world[b][0] + world[c][0]) / 3,
+      (world[a][1] + world[b][1] + world[c][1]) / 3,
+      (world[a][2] + world[b][2] + world[c][2]) / 3
+    ];
+    const view = normalize([0 - centroid[0], 0 - centroid[1], CAM_Z - centroid[2]]);
+    if (dot(n, view) <= 0) continue; // facing away
+
+    // per-vertex Lambert intensity
+    for (const tri of face.tri) {
+      const verts = tri.map(idx => {
+        const inten = shadeVertex(world[idx], n);
+        const col = face.base;
+        return {
+          x: proj[idx].x,
+          y: proj[idx].y,
+          r: Math.min(255, col[0] * inten),
+          g: Math.min(255, col[1] * inten),
+          b: Math.min(255, col[2] * inten)
+        };
+      });
+      drawn.push({ verts, idx: tri, face });
+    }
+  }
+
+  // depth sort faces (painter's algorithm) so overlapping edges look right
+  drawn.sort((p, q) => {
+    const dz = (p.idx.reduce((s, i) => s + world[i][2], 0)) -
+               (q.idx.reduce((s, i) => s + world[i][2], 0));
+    return dz; // far (small z) first
+  });
+
+  if (wireframe) {
+    ctx.lineWidth = 1.5;
+    for (const t of drawn) {
+      const [i0, i1, i2] = t.idx;
+      ctx.strokeStyle = "rgba(140,220,255,0.9)";
+      ctx.beginPath();
+      ctx.moveTo(proj[i0].x, proj[i0].y);
+      ctx.lineTo(proj[i1].x, proj[i1].y);
+      ctx.lineTo(proj[i2].x, proj[i2].y);
+      ctx.closePath();
+      ctx.stroke();
+    }
+  } else {
+    for (const t of drawn) {
+      drawTriangle(t.verts[0], t.verts[1], t.verts[2]);
+    }
+    // crisp edges on top
+    ctx.lineWidth = 1;
+    for (const t of drawn) {
+      const [i0, i1, i2] = t.idx;
+      ctx.strokeStyle = "rgba(0,0,0,0.35)";
+      ctx.beginPath();
+      ctx.moveTo(proj[i0].x, proj[i0].y);
+      ctx.lineTo(proj[i1].x, proj[i1].y);
+      ctx.lineTo(proj[i2].x, proj[i2].y);
+      ctx.closePath();
+      ctx.stroke();
+    }
+  }
+
+  light.pos = savedLight;
+
+  requestAnimationFrame(frame);
+}
+
+updateLight(0);
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gouraud-Shaded Rotating Cube — Canvas 2D</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #0b0e14; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  #hud {
+    position: fixed; top: 12px; left: 14px; color: #9fb3c8;
+    font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    user-select: none; pointer-events: none; text-shadow: 0 1px 2px #000;
+  }
+  #hud b { color: #e6f1ff; }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<div id="hud">
+  <div><b>FPS:</b> <span id="fps">--</span></div>
+  <div><b>W</b> wireframe &middot; <b>P</b> pause <span id="pauseState"></span></div>
+  <div>Gouraud shading &middot; Canvas 2D &middot; no WebGL</div>
+</div>
+<script>
+'use strict';
+/* =====================================================================
+ * Minimal realtime 3D pipeline on Canvas 2D:
+ *   vertices -> rotation matrices -> perspective projection
+ *   -> backface culling -> triangle split -> per-vertex Lambert lighting
+ *   -> Gouraud rasterization (barycentric colour interpolation)
+ * ===================================================================== */
+
+const canvas = document.getElementById('scene');
+const ctx = canvas.getContext('2d');
+const fpsEl = document.getElementById('fps');
+const pauseEl = document.getElementById('pauseState');
+
+let W = 0, H = 0, DPR = 1;
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = Math.floor(window.innerWidth * DPR);
+  H = Math.floor(window.innerHeight * DPR);
+  canvas.width = W;
+  canvas.height = H;
+  offscreen = null; // invalidate pixel buffer
+}
+window.addEventListener('resize', resize);
+resize();
+
+/* ---------------------------- math utils ---------------------------- */
+
+function mat3RotX(a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return [1, 0, 0,  0, c, -s,  0, s, c];
+}
+function mat3RotY(a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return [c, 0, s,  0, 1, 0,  -s, 0, c];
+}
+function mat3RotZ(a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return [c, -s, 0,  s, c, 0,  0, 0, 1];
+}
+// row-major 3x3 multiply: r = a * b
+function mat3Mul(a, b) {
+  const r = new Array(9);
+  for (let i = 0; i < 3; i++) {
+    for (let j = 0; j < 3; j++) {
+      r[i * 3 + j] = a[i * 3] * b[j] + a[i * 3 + 1] * b[3 + j] + a[i * 3 + 2] * b[6 + j];
+    }
+  }
+  return r;
+}
+function mat3Apply(m, v) {
+  return [
+    m[0] * v[0] + m[1] * v[1] + m[2] * v[2],
+    m[3] * v[0] + m[4] * v[1] + m[5] * v[2],
+    m[6] * v[0] + m[7] * v[1] + m[8] * v[2]
+  ];
+}
+function normalize(v) {
+  const l = Math.hypot(v[0], v[1], v[2]) || 1;
+  return [v[0] / l, v[1] / l, v[2] / l];
+}
+function dot(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+function cross(a, b) {
+  return [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0]
+  ];
+}
+function sub(a, b) { return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; }
+
+/* ------------------------------ geometry ----------------------------- */
+
+// Cube vertices (unit cube, size s)
+const S = 1.0;
+const VERTS = [
+  [-S, -S, -S], [ S, -S, -S], [ S,  S, -S], [-S,  S, -S], // back face  (z = -S)
+  [-S, -S,  S], [ S, -S,  S], [ S,  S,  S], [-S,  S,  S]  // front face (z = +S)
+];
+
+// Faces as quads with CCW winding when viewed from outside
+const QUAD_FACES = [
+  { verts: [4, 5, 6, 7], color: [235,  90,  90] }, // front  +Z
+  { verts: [1, 0, 3, 2], color: [ 90, 200, 235] }, // back   -Z
+  { verts: [5, 1, 2, 6], color: [120, 235, 110] }, // right  +X
+  { verts: [0, 4, 7, 3], color: [235, 200,  80] }, // left   -X
+  { verts: [3, 7, 6, 2], color: [180, 120, 240] }, // top    +Y
+  { verts: [0, 1, 5, 4], color: [245, 150,  60] }  // bottom -Y
+];
+
+// Split each quad into 2 triangles (6 faces -> 12 triangles)
+const TRIANGLES = [];
+for (const f of QUAD_FACES) {
+  const [a, b, c, d] = f.verts;
+  TRIANGLES.push({ idx: [a, b, c], color: f.color });
+  TRIANGLES.push({ idx: [a, c, d], color: f.color });
+}
+const EDGES = [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
+
+/* ------------------------- state / controls -------------------------- */
+
+let paused = false;
+let wireframe = false;
+
+window.addEventListener('keydown', (e) => {
+  const k = e.key.toLowerCase();
+  if (k === 'w') wireframe = !wireframe;
+  else if (k === 'p') {
+    paused = !paused;
+    pauseEl.textContent = paused ? '[PAUSED]' : '';
+  }
+});
+
+/* --------------------- perspective projection ------------------------ */
+
+const CAM_DIST = 4.2;          // camera at (0,0,CAM_DIST) looking at origin
+const FOV = 60 * Math.PI / 180;
+
+function project(p) {
+  // camera-space z (positive in front of camera)
+  const zc = CAM_DIST - p[2];
+  if (zc <= 0.05) return null; // behind / too close to camera
+  const f = (H * 0.5) / Math.tan(FOV * 0.5); // focal length in px
+  return [
+    W * 0.5 + (p[0] * f) / zc,
+    H * 0.5 - (p[1] * f) / zc,
+    zc
+  ];
+}
+
+/* --------------------------- Gouraud rasterizer ----------------------- */
+/* Triangle rasterized into an ImageData buffer with barycentric
+ * interpolation of per-vertex RGB. Depth test via z-buffer.             */
+
+let offscreen = null;   // { img, data, w, h }
+let zbuf = null;
+
+function ensureBuffers() {
+  if (!offscreen || offscreen.w !== W || offscreen.h !== H) {
+    offscreen = ctx.createImageData(W, H);
+    zbuf = new Float32Array(W * H);
+  }
+}
+
+function clearBuffers(bgR, bgG, bgB) {
+  ensureBuffers();
+  const d = offscreen.data;
+  // fast background fill (opaque)
+  for (let i = 0; i < d.length; i += 4) {
+    d[i] = bgR; d[i + 1] = bgG; d[i + 2] = bgB; d[i + 3] = 255;
+  }
+  zbuf.fill(Infinity);
+}
+
+function rasterizeTriangle(p0, p1, p2, c0, c1, c2) {
+  // p*: [x,y,z] screen-space (y down, z = camera depth); c*: [r,g,b] 0..255
+  const img = offscreen.data;
+  const d = (p1[0] - p0[0]) * (p2[1] - p0[1]) - (p2[0] - p0[0]) * (p1[1] - p0[1]);
+  if (Math.abs(d) < 1e-9) return;
+  const invD = 1 / d;
+
+  let minX = Math.floor(Math.min(p0[0], p1[0], p2[0]));
+  let maxX = Math.ceil (Math.max(p0[0], p1[0], p2[0]));
+  let minY = Math.floor(Math.min(p0[1], p1[1], p2[1]));
+  let maxY = Math.ceil (Math.max(p0[1], p1[1], p2[1]));
+  if (minX < 0) minX = 0;
+  if (minY < 0) minY = 0;
+  if (maxX > W - 1) maxX = W - 1;
+  if (maxY > H - 1) maxY = H - 1;
+
+  const [z0, z1, z2] = [p0[2], p1[2], p2[2]];
+
+  for (let y = minY; y <= maxY; y++) {
+    const fy = y + 0.5;
+    let row = (y * W) << 2;
+    for (let x = minX; x <= maxX; x++) {
+      const fx = x + 0.5;
+      // barycentric coords
+      const w0 = ((p1[0] - fx) * (p2[1] - fy) - (p2[0] - fx) * (p1[1] - fy)) * invD;
+      if (w0 < 0) continue;
+      const w1 = ((p2[0] - fx) * (p0[1] - fy) - (p0[0] - fx) * (p2[1] - fy)) * invD;
+      if (w1 < 0) continue;
+      const w2 = 1 - w0 - w1;
+      if (w2 < 0) continue;
+
+      const z = w0 * z0 + w1 * z1 + w2 * z2;
+      const zi = y * W + x;
+      if (z >= zbuf[zi]) continue;
+      zbuf[zi] = z;
+
+      const o = row + (x << 2);
+      img[o]     = w0 * c0[0] + w1 * c1[0] + w2 * c2[0];
+      img[o + 1] = w0 * c0[1] + w1 * c1[1] + w2 * c2[1];
+      img[o + 2] = w0 * c0[2] + w1 * c1[2] + w2 * c2[2];
+      img[o + 3] = 255;
+    }
+  }
+}
+
+/* ------------------------------ lighting ------------------------------ */
+
+const AMBIENT = 0.18;
+
+// Per-vertex Lambert: light direction per vertex = (lightPos - vertexPos)
+// shaded = base * (ambient + max(0, dot(normal, lightDir)))
+function shadeVertex(normal, worldPos, base) {
+  const l = normalize(sub(lightPos, worldPos));
+  const ndl = Math.max(0, dot(normalize(normal), l));
+  const k = AMBIENT + (1 - AMBIENT) * ndl;
+  return [
+    Math.min(255, base[0] * k),
+    Math.min(255, base[1] * k),
+    Math.min(255, base[2] * k)
+  ];
+}
+
+/* ------------------------------- render ------------------------------- */
+
+let angleX = 0.6, angleY = 0.4, angleZ = 0.1;
+let lightPos = [0, 0, 0];
+
+function updateLight(t) {
+  // Light orbits the cube on a tilted circle.
+  const r = 3.4;
+  lightPos = [
+    r * Math.cos(t * 0.9),
+    r * Math.sin(t * 0.6) * 0.8,
+    r * Math.sin(t * 0.9)
+  ];
+}
+
+function render(t) {
+  updateLight(t);
+
+  const rot = mat3Mul(mat3RotY(angleY), mat3Mul(mat3RotX(angleX), mat3RotZ(angleZ)));
+
+  // 1) transform vertices to world/camera space
+  const world = VERTS.map(v => mat3Apply(rot, v));
+  const screen = world.map(p => project(p));
+
+  // 2) clear
+  clearBuffers(11, 14, 20);
+
+  if (wireframe) {
+    // wireframe mode: draw projected edges over the dark background
+    ctx.putImageData(offscreen, 0, 0);
+    ctx.lineWidth = 1.25 * DPR;
+    ctx.strokeStyle = 'rgba(140, 200, 255, 0.9)';
+    ctx.beginPath();
+    for (const [a, b] of EDGES) {
+      const pa = screen[a], pb = screen[b];
+      if (!pa || !pb) continue;
+      ctx.moveTo(pa[0], pa[1]);
+      ctx.lineTo(pb[0], pb[1]);
+    }
+    ctx.stroke();
+    drawLightMarker();
+    return;
+  }
+
+  // 3) per-triangle: backface cull -> per-vertex lighting -> rasterize
+  for (const tri of TRIANGLES) {
+    const [ia, ib, ic] = tri.idx;
+    const va = world[ia], vb = world[ib], vc = world[ic];
+
+    // face normal (CCW winding => normal points outward)
+    const n = cross(sub(vb, va), sub(vc, va));
+
+    // backface culling: skip if normal faces away from camera.
+    // Camera at (0,0,CAM_DIST): visible if dot(normal, vertex->camera) > 0
+    const toCam = [0 - va[0], 0 - va[1], CAM_DIST - va[2]];
+    if (dot(n, toCam) <= 0) continue;
+
+    const nN = normalize(n);
+    const cA = shadeVertex(nN, va, tri.color);
+    const cB = shadeVertex(nN, vb, tri.color);
+    const cC = shadeVertex(nN, vc, tri.color);
+
+    const pa = screen[ia], pb = screen[ib], pc = screen[ic];
+    if (!pa || !pb || !pc) continue;
+
+    rasterizeTriangle(pa, pb, pc, cA, cB, cC);
+  }
+
+  ctx.putImageData(offscreen, 0, 0);
+  drawLightMarker();
+}
+
+// Small glow marker for the moving light (drawn in screen space)
+function drawLightMarker() {
+  const p = project(lightPos);
+  if (!p) return;
+  const r = Math.max(3, 90 / p[2]) * DPR * 0.35;
+  const g = ctx.createRadialGradient(p[0], p[1], 0, p[0], p[1], r * 3);
+  g.addColorStop(0, 'rgba(255,250,220,0.95)');
+  g.addColorStop(0.3, 'rgba(255,220,120,0.45)');
+  g.addColorStop(1, 'rgba(255,200,80,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(p[0], p[1], r * 3, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+/* ------------------------------ main loop ----------------------------- */
+
+let lastTime = performance.now();
+let fpsSmoothed = 0;
+let hudTimer = 0;
+
+function frame(now) {
+  const dt = Math.min((now - lastTime) / 1000, 0.1);
+  lastTime = now;
+
+  // FPS (EMA)
+  if (dt > 0) {
+    const inst = 1 / dt;
+    fpsSmoothed = fpsSmoothed ? fpsSmoothed * 0.9 + inst * 0.1 : inst;
+  }
+  hudTimer += dt;
+  if (hudTimer > 0.25) {
+    hudTimer = 0;
+    fpsEl.textContent = Math.round(fpsSmoothed);
+  }
+
+  if (!paused) {
+    angleY += 0.55 * dt;
+    angleX += 0.23 * dt;
+    angleZ += 0.11 * dt;
+  }
+
+  render(now / 1000);
+  requestAnimationFrame(frame);
+}
+
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

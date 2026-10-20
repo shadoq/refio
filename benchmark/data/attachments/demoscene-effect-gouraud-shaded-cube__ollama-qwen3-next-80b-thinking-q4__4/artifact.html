@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Gouraud Shaded Cube</title>
+</head>
+<body>
+    <canvas id="canvas" width="800" height="600"></canvas>
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = 800;
+        canvas.height = 600;
+
+        const vertices = [
+            { x: -1, y: -1, z: -1, nx: -1, ny: -1, nz: -1 },
+            { x: 1, y: -1, z: -1, nx: 1, ny: -1, nz: -1 },
+            { x: 1, y: 1, z: -1, nx: 1, ny: 1, nz: -1 },
+            { x: -1, y: 1, z: -1, nx: -1, ny: 1, nz: -1 },
+            { x: -1, y: -1, z: 1, nx: -1, ny: -1, nz: 1 },
+            { x: 1, y: -1, z: 1, nx: 1, ny: -1, nz: 1 },
+            { x: 1, y: 1, z: 1, nx: 1, ny: 1, nz: 1 },
+            { x: -1, y: 1, z: 1, nx: -1, ny: 1, nz: 1 }
+        ];
+
+        for (let i = 0; i < vertices.length; i++) {
+            const v = vertices[i];
+            const len = Math.sqrt(v.nx*v.nx + v.ny*v.ny + v.nz*v.nz);
+            if (len > 0) {
+                v.nx /= len;
+                v.ny /= len;
+                v.nz /= len;
+            }
+        }
+
+        const faces = [
+            [0, 1, 2], [0, 2, 3],
+            [4, 5, 6], [4, 6, 7],
+            [0, 3, 7], [0, 7, 4],
+            [1, 2, 6], [1, 6, 5],
+            [2, 3, 7], [2, 7, 6],
+            [0, 4, 5], [0, 5, 1]
+        ];
+
+        let angleX = 0;
+        let angleY = 0;
+        let rotationSpeed = 0.01;
+        let paused = false;
+        let wireframe = false;
+
+        let lightX = 5;
+        let lightY = 0;
+        let lightZ = 10;
+        let lightAngle = 0;
+
+        const focalLength = 200;
+        const distance = 5;
+
+        let lastTime = 0;
+        let fps = 0;
+        let frameCount = 0;
+        let fpsTime = 0;
+
+        function rotatePoint(point, angleX, angleY) {
+            let x = point.x * Math.cos(angleY) + point.z * Math.sin(angleY);
+            let z = -point.x * Math.sin(angleY) + point.z * Math.cos(angleY);
+            let y = point.y;
+
+            let y2 = y * Math.cos(angleX) - z * Math.sin(angleX);
+            let z2 = y * Math.sin(angleX) + z * Math.cos(angleX);
+
+            return { x, y: y2, z: z2 };
+        }
+
+        function projectPoint(point) {
+            const scale = focalLength / (point.z + distance);
+            return {
+                x: canvas.width / 2 + point.x * scale,
+                y: canvas.height / 2 - point.y * scale
+            };
+        }
+
+        function computeNormal(a, b, c) {
+            const ab = { x: b.x - a.x, y: b.y - a.y, z: b.z - a.z };
+            const ac = { x: c.x - a.x, y: c.y - a.y, z: c.z - a.z };
+            const nx = ab.y * ac.z - ab.z * ac.y;
+            const ny = ab.z * ac.x - ab.x * ac.z;
+            const nz = ab.x * ac.y - ab.y * ac.x;
+            const len = Math.sqrt(nx*nx + ny*ny + nz*nz);
+            return { x: nx/len, y: ny/len, z: nz/len };
+        }
+
+        function pointInTriangle(px, py, ax, ay, bx, by, cx, cy) {
+            const v0x = bx - ax;
+            const v0y = by - ay;
+            const v1x = cx - ax;
+            const v1y = cy - ay;
+            const v2x = px - ax;
+            const v2y = py - ay;
+
+            const dot00 = v0x*v0x + v0y*v0y;
+            const dot01 = v0x*v1x + v0y*v1y;
+            const dot02 = v0x*v2x + v0y*v2y;
+            const dot11 = v1x*v1x + v1y*v1y;
+            const dot12 = v1x*v2x + v1y*v2y;
+
+            const invDenom = 1 / (dot00 * dot11 - dot01 * dot01);
+            const u = (dot11 * dot02 - dot01 * dot12) * invDenom;
+            const v = (dot00 * dot12 - dot01 * dot02) * invDenom;
+
+            return (u >= 0) && (v >= 0) && (u + v <= 1);
+        }
+
+        function interpolateColor(px, py, a, b, c, colorA, colorB, colorC) {
+            const v0x = b.x - a.x;
+            const v0y = b.y - a.y;
+            const v1x = c.x - a.x;
+            const v1y = c.y - a.y;
+            const v2x = px - a.x;
+            const v2y = py - a.y;
+
+            const dot00 = v0x*v0x + v0y*v0y;
+            const dot01 = v0x*v1x + v0y*v1y;
+            const dot02 = v0x*v2x + v0y*v2y;
+            const dot11 = v1x*v1x + v1y*v1y;
+            const dot12 = v1x*v2x + v1y*v2y;
+
+            const invDenom = 1 / (dot00 * dot11 - dot01 * dot01);
+            const u = (dot11 * dot02 - dot01 * dot12) * invDenom;
+            const v = (dot00 * dot12 - dot01 * dot02) * invDenom;
+
+            const r = colorA.r * (1 - u - v) + colorB.r * u + colorC.r * v;
+            const g = colorA.g * (1 - u - v) + colorB.g * u + colorC.g * v;
+            const b = colorA.b * (1 - u - v) + colorB.b * u + colorC.b * v;
+
+            return { r, g, b };
+        }
+
+        function render() {
+            lightAngle += 0.01;
+            lightX = 5 * Math.sin(lightAngle);
+            lightY = 5 * Math.cos(lightAngle);
+            lightZ = 10;
+
+            if (!paused) {
+                angleX += rotationSpeed;
+                angleY += rotationSpeed;
+            }
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            const projectedVertices = [];
+            for (let i = 0; i < vertices.length; i++) {
+                const rotated = rotatePoint(vertices[i], angleX, angleY);
+                projectedVertices[i] = projectPoint(rotated);
+            }
+
+            for (const face of faces) {
+                const a = projectedVertices[face[0]];
+                const b = projectedVertices[face[1]];
+                const c = projectedVertices[face[2]];
+
+                const worldA = rotatePoint(vertices[face[0]], angleX, angleY);
+                const worldB = rotatePoint(vertices[face[1]], angleX, angleY);
+                const worldC = rotatePoint(vertices[face[2]], angleX, angleY);
+                const normal = computeNormal(worldA, worldB, worldC);
+
+                if (normal.z < 0) continue;
+
+                const lightPos = { x: lightX, y: lightY, z: lightZ };
+                const colors = [];
+                for (const idx of face) {
+                    const vertex = vertices[idx];
+                    const rotatedVertex = rotatePoint(vertex, angleX, angleY);
+                    const lightDir = {
+                        x: lightPos.x - rotatedVertex.x,
+                        y: lightPos.y - rotatedVertex.y,
+                        z: lightPos.z - rotatedVertex.z
+                    };
+                    const len = Math.sqrt(lightDir.x*lightDir.x + lightDir.y*lightDir.y + lightDir.z*lightDir.z);
+                    if (len > 0) {
+                        lightDir.x /= len;
+                        lightDir.y /= len;
+                        lightDir.z /= len;
+                    }
+                    const dot = vertex.nx * lightDir.x + vertex.ny * lightDir.y + vertex.nz * lightDir.z;
+                    const intensity = Math.max(0, dot);
+                    colors.push({ r: intensity * 255, g: intensity * 255, b: intensity * 255 });
+                }
+
+                if (wireframe) {
+                    ctx.beginPath();
+                    ctx.moveTo(a.x, a.y);
+                    ctx.lineTo(b.x, b.y);
+                    ctx.lineTo(c.x, c.y);
+                    ctx.closePath();
+                    ctx.strokeStyle = 'white';
+                    ctx.stroke();
+                } else {
+                    const minX = Math.min(a.x, b.x, c.x);
+                    const maxX = Math.max(a.x, b.x, c.x);
+                    const minY = Math.min(a.y, b.y, c.y);
+                    const maxY = Math.max(a.y, b.y, c.y);
+
+                    for (let y = Math.floor(minY); y <= Math.ceil(maxY); y++) {
+                        for (let x = Math.floor(minX); x <= Math.ceil(maxX); x++) {
+                            if (pointInTriangle(x, y, a.x, a.y, b.x, b.y, c.x, c.y)) {
+                                const color = interpolateColor(x, y, a, b, c, colors[0], colors[1], colors[2]);
+                                ctx.fillStyle = `rgb(${color.r}, ${color.g}, ${color.b})`;
+                                ctx.fillRect(x, y, 1, 1);
+                            }
+                        }
+                    }
+                }
+            }
+
+            frameCount++;
+            const now = Date.now();
+            if (now - fpsTime >= 1000) {
+                fps = frameCount;
+                frameCount = 0;
+                fpsTime = now;
+            }
+            ctx.fillStyle = 'white';
+            ctx.font = '16px Arial';
+            ctx.fillText(`FPS: ${fps}`, 10, 20);
+
+            requestAnimationFrame(render);
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'w' || e.key === 'W') {
+                wireframe = !wireframe;
+            } else if (e.key === 'p' || e.key === 'P') {
+                paused = !paused;
+            }
+        });
+
+        render();
+    </script>
+</body>
+</html>

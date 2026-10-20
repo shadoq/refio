@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Gouraud Shaded Cube</title>
+</head>
+<body>
+    <canvas id="canvas" width="800" height="600"></canvas>
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = 800;
+        canvas.height = 600;
+
+        const vertices = [
+            [-0.5, -0.5, -0.5],
+            [0.5, -0.5, -0.5],
+            [0.5, 0.5, -0.5],
+            [-0.5, 0.5, -0.5],
+            [-0.5, -0.5, 0.5],
+            [0.5, -0.5, 0.5],
+            [0.5, 0.5, 0.5],
+            [-0.5, 0.5, 0.5]
+        ];
+
+        const faces = [
+            [0, 1, 2], [0, 2, 3],
+            [4, 5, 6], [4, 6, 7],
+            [0, 3, 7], [0, 7, 4],
+            [1, 2, 6], [1, 6, 5],
+            [2, 3, 7], [2, 7, 6],
+            [0, 1, 5], [0, 5, 4]
+        ];
+
+        let rotationX = 0;
+        let rotationY = 0;
+        let rotationZ = 0;
+        let isPaused = false;
+        let isWireframe = false;
+        let lastTime = 0;
+        let fps = 0;
+
+        function cross(a, b) {
+            return [
+                a[1] * b[2] - a[2] * b[1],
+                a[2] * b[0] - a[0] * b[2],
+                a[0] * b[1] - a[1] * b[0]
+            ];
+        }
+
+        function normalize(v) {
+            const length = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+            if (length === 0) return v;
+            return [v[0] / length, v[1] / length, v[2] / length];
+        }
+
+        function rotatePoint(point, angleX, angleY, angleZ) {
+            let x = point[0];
+            let y = point[1];
+            let z = point[2];
+            const cosX = Math.cos(angleX);
+            const sinX = Math.sin(angleX);
+            const newY = y * cosX - z * sinX;
+            const newZ = y * sinX + z * cosX;
+            y = newY;
+            z = newZ;
+            const cosY = Math.cos(angleY);
+            const sinY = Math.sin(angleY);
+            const newX = x * cosY + z * sinY;
+            z = -x * sinY + z * cosY;
+            x = newX;
+            const cosZ = Math.cos(angleZ);
+            const sinZ = Math.sin(angleZ);
+            const newX2 = x * cosZ - y * sinZ;
+            const newY2 = x * sinZ + y * cosZ;
+            x = newX2;
+            y = newY2;
+            return [x, y, z];
+        }
+
+        function projectPoint(point) {
+            const f = 200;
+            const z = point[2];
+            if (z >= 0) {
+                return null;
+            }
+            const scale = f / (-z);
+            const x = point[0] * scale + canvas.width / 2;
+            const y = point[1] * scale + canvas.height / 2;
+            return [x, y];
+        }
+
+        function dot(a, b) {
+            return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        }
+
+        function drawTriangle(triangle, lightPos) {
+            const A = triangle[0];
+            const B = triangle[1];
+            const C = triangle[2];
+            const projA = projectPoint(A);
+            const projB = projectPoint(B);
+            const projC = projectPoint(C);
+            if (!projA || !projB || !projC) {
+                return;
+            }
+            const AB = [projB[0] - projA[0], projB[1] - projA[1]];
+            const AC = [projC[0] - projA[0], projC[1] - projA[1]];
+            const crossZ = AB[0] * AC[1] - AB[1] * AC[0];
+            if (crossZ > 0) {
+                return;
+            }
+            const AB3D = [B[0] - A[0], B[1] - A[1], B[2] - A[2]];
+            const AC3D = [C[0] - A[0], C[1] - A[1], C[2] - A[2]];
+            const faceNormal = normalize(cross(AB3D, AC3D));
+            const lightDirA = normalize([lightPos[0] - A[0], lightPos[1] - A[1], lightPos[2] - A[2]]);
+            const lightDirB = normalize([lightPos[0] - B[0], lightPos[1] - B[1], lightPos[2] - B[2]]);
+            const lightDirC = normalize([lightPos[0] - C[0], lightPos[1] - C[1], lightPos[2] - C[2]]);
+            const intensityA = Math.max(0, dot(faceNormal, lightDirA));
+            const intensityB = Math.max(0, dot(faceNormal, lightDirB));
+            const intensityC = Math.max(0, dot(faceNormal, lightDirC));
+            const avgIntensity = (intensityA + intensityB + intensityC) / 3;
+            const color = `rgb(${avgIntensity * 255}, ${avgIntensity * 255}, ${avgIntensity * 255})`;
+            if (isWireframe) {
+                ctx.beginPath();
+                ctx.moveTo(projA[0], projA[1]);
+                ctx.lineTo(projB[0], projB[1]);
+                ctx.lineTo(projC[0], projC[1]);
+                ctx.closePath();
+                ctx.stroke();
+            } else {
+                ctx.fillStyle = color;
+                ctx.beginPath();
+                ctx.moveTo(projA[0], projA[1]);
+                ctx.lineTo(projB[0], projB[1]);
+                ctx.lineTo(projC[0], projC[1]);
+                ctx.closePath();
+                ctx.fill();
+            }
+        }
+
+        function draw() {
+            const now = Date.now();
+            const deltaTime = now - lastTime;
+            lastTime = now;
+            fps = Math.round(1000 / deltaTime);
+            if (!isPaused) {
+                rotationX += 0.01;
+                rotationY += 0.01;
+                rotationZ += 0.01;
+            }
+            const time = now / 1000;
+            const lightPos = [Math.sin(time) * 2, Math.cos(time) * 2, 0];
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            for (const face of faces) {
+                const A = vertices[face[0]];
+                const B = vertices[face[1]];
+                const C = vertices[face[2]];
+                const rotatedA = rotatePoint(A, rotationX, rotationY, rotationZ);
+                const rotatedB = rotatePoint(B, rotationX, rotationY, rotationZ);
+                const rotatedC = rotatePoint(C, rotationX, rotationY, rotationZ);
+                drawTriangle([rotatedA, rotatedB, rotatedC], lightPos);
+            }
+            ctx.fillStyle = 'white';
+            ctx.font = '16px Arial';
+            ctx.fillText(`FPS: ${fps}`, 10, 20);
+            requestAnimationFrame(draw);
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'w' || e.key === 'W') {
+                isWireframe = !isWireframe;
+            }
+            if (e.key === 'p' || e.key === 'P') {
+                isPaused = !isPaused;
+            }
+        });
+
+        lastTime = Date.now();
+        draw();
+    </script>
+</body>
+</html>

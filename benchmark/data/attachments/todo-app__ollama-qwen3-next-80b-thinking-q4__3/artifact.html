@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Todo App</title>
+    <style>
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+        }
+        #todo-form {
+            display: flex;
+            margin-bottom: 20px;
+        }
+        #todo-input {
+            flex: 1;
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 16px;
+        }
+        button {
+            padding: 8px 12px;
+            margin-left: 5px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        .filters {
+            margin-bottom: 15px;
+            display: flex;
+            gap: 5px;
+        }
+        .filters button {
+            background: #e0e0e0;
+        }
+        .filters button.active {
+            background: #2196F3;
+        }
+        #todo-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        .todo-item {
+            display: flex;
+            align-items: center;
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+        }
+        .todo-item.completed .todo-text {
+            text-decoration: line-through;
+            color: #888;
+        }
+        .delete-btn {
+            margin-left: auto;
+            background: #f44336;
+        }
+        .delete-btn:hover {
+            background: #d32f2f;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Todo App</h1>
+        <form id="todo-form">
+            <input type="text" id="todo-input" placeholder="Add a new todo..." required>
+            <button type="submit">Add</button>
+        </form>
+        <div class="filters">
+            <button data-filter="all">All</button>
+            <button data-filter="active">Active</button>
+            <button data-filter="completed">Completed</button>
+        </div>
+        <ul id="todo-list"></ul>
+    </div>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const todoInput = document.getElementById('todo-input');
+            const todoForm = document.getElementById('todo-form');
+            const todoList = document.getElementById('todo-list');
+            const filterButtons = document.querySelectorAll('.filters button');
+            
+            let todos = JSON.parse(localStorage.getItem('todos')) || [];
+            let currentFilter = 'all';
+            
+            function saveTodos() {
+                localStorage.setItem('todos', JSON.stringify(todos));
+            }
+            
+            function renderTodos() {
+                todoList.innerHTML = '';
+                const filteredTodos = todos.filter(todo => {
+                    if (currentFilter === 'all') return true;
+                    if (currentFilter === 'active') return !todo.completed;
+                    if (currentFilter === 'completed') return todo.completed;
+                });
+                
+                filteredTodos.forEach(todo => {
+                    const todoItem = document.createElement('li');
+                    todoItem.className = 'todo-item';
+                    if (todo.completed) {
+                        todoItem.classList.add('completed');
+                    }
+                    
+                    const checkbox = document.createElement('input');
+                    checkbox.type = 'checkbox';
+                    checkbox.checked = todo.completed;
+                    checkbox.addEventListener('change', () => {
+                        todo.completed = checkbox.checked;
+                        saveTodos();
+                        renderTodos();
+                    });
+                    
+                    const todoText = document.createElement('span');
+                    todoText.className = 'todo-text';
+                    todoText.textContent = todo.text;
+                    
+                    const deleteBtn = document.createElement('button');
+                    deleteBtn.className = 'delete-btn';
+                    deleteBtn.textContent = 'Delete';
+                    deleteBtn.addEventListener('click', () => {
+                        todos = todos.filter(t => t.id !== todo.id);
+                        saveTodos();
+                        renderTodos();
+                    });
+                    
+                    todoItem.appendChild(checkbox);
+                    todoItem.appendChild(todoText);
+                    todoItem.appendChild(deleteBtn);
+                    todoList.appendChild(todoItem);
+                });
+                
+                filterButtons.forEach(button => {
+                    if (button.dataset.filter === currentFilter) {
+                        button.classList.add('active');
+                    } else {
+                        button.classList.remove('active');
+                    }
+                });
+            }
+            
+            todoForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                const text = todoInput.value.trim();
+                if (text) {
+                    const newTodo = {
+                        id: Date.now(),
+                        text,
+                        completed: false
+                    };
+                    todos.push(newTodo);
+                    saveTodos();
+                    renderTodos();
+                    todoInput.value = '';
+                }
+            });
+            
+            filterButtons.forEach(button => {
+                button.addEventListener('click', () => {
+                    currentFilter = button.dataset.filter;
+                    renderTodos();
+                });
+            });
+            
+            renderTodos();
+        });
+    </script>
+</body>
+</html>

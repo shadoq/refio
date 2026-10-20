@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Todo App</title>
+    <style>
+        .todo-app {
+            max-width: 500px;
+            margin: 20px auto;
+            padding: 20px;
+            background: #f9f9f9;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .todo-app h1 {
+            text-align: center;
+            margin-bottom: 20px;
+            color: #333;
+        }
+        #todo-form {
+            display: flex;
+            margin-bottom: 20px;
+        }
+        #todo-input {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+        }
+        #todo-form button {
+            padding: 10px 15px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-left: 10px;
+        }
+        #todo-form button:hover {
+            background: #45a049;
+        }
+        .filters {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 20px;
+        }
+        .filter-btn {
+            padding: 8px 15px;
+            margin: 0 5px;
+            background: #e0e0e0;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .filter-btn.active {
+            background: #4CAF50;
+            color: white;
+        }
+        #todo-list {
+            list-style: none;
+            padding: 0;
+        }
+        #todo-list li {
+            display: flex;
+            align-items: center;
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+        }
+        #todo-list li.completed .todo-text {
+            text-decoration: line-through;
+            color: #888;
+        }
+        #todo-list input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            margin-right: 10px;
+        }
+        .delete-btn {
+            padding: 5px 10px;
+            background: #f44336;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-left: auto;
+        }
+        .delete-btn:hover {
+            background: #d32f2f;
+        }
+    </style>
+</head>
+<body>
+    <div class="todo-app">
+        <h1>Todo App</h1>
+        <form id="todo-form">
+            <input type="text" id="todo-input" placeholder="Add a new todo..." required>
+            <button type="submit">Add</button>
+        </form>
+        <div class="filters">
+            <button class="filter-btn" data-filter="all">All</button>
+            <button class="filter-btn" data-filter="active">Active</button>
+            <button class="filter-btn" data-filter="completed">Completed</button>
+        </div>
+        <ul id="todo-list"></ul>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const todoInput = document.getElementById('todo-input');
+            const todoForm = document.getElementById('todo-form');
+            const todoList = document.getElementById('todo-list');
+            const filterButtons = document.querySelectorAll('.filter-btn');
+            
+            let todos = JSON.parse(localStorage.getItem('todos')) || [];
+            let currentFilter = 'all';
+            
+            function renderTodos() {
+                todoList.innerHTML = '';
+                const filteredTodos = todos.filter(todo => {
+                    if (currentFilter === 'all') return true;
+                    if (currentFilter === 'active') return !todo.completed;
+                    if (currentFilter === 'completed') return todo.completed;
+                });
+                
+                filteredTodos.forEach(todo => {
+                    const li = document.createElement('li');
+                    li.className = todo.completed ? 'completed' : '';
+                    li.innerHTML = `
+                        <input type="checkbox" ${todo.completed ? 'checked' : ''}>
+                        <span class="todo-text">${todo.text}</span>
+                        <button class="delete-btn">Delete</button>
+                    `;
+                    const checkbox = li.querySelector('input');
+                    checkbox.addEventListener('change', () => toggleTodo(todo.id));
+                    const deleteBtn = li.querySelector('.delete-btn');
+                    deleteBtn.addEventListener('click', () => deleteTodo(todo.id));
+                    todoList.appendChild(li);
+                });
+            }
+            
+            function addTodo(e) {
+                e.preventDefault();
+                const text = todoInput.value.trim();
+                if (text === '') return;
+                const newTodo = {
+                    id: Date.now(),
+                    text,
+                    completed: false
+                };
+                todos.push(newTodo);
+                localStorage.setItem('todos', JSON.stringify(todos));
+                todoInput.value = '';
+                renderTodos();
+            }
+            
+            function toggleTodo(id) {
+                const todo = todos.find(t => t.id === id);
+                if (todo) {
+                    todo.completed = !todo.completed;
+                    localStorage.setItem('todos', JSON.stringify(todos));
+                    renderTodos();
+                }
+            }
+            
+            function deleteTodo(id) {
+                todos = todos.filter(t => t.id !== id);
+                localStorage.setItem('todos', JSON.stringify(todos));
+                renderTodos();
+            }
+            
+            filterButtons.forEach(button => {
+                button.addEventListener('click', () => {
+                    currentFilter = button.dataset.filter;
+                    filterButtons.forEach(btn => btn.classList.remove('active'));
+                    button.classList.add('active');
+                    renderTodos();
+                });
+            });
+            
+            filterButtons[0].classList.add('active');
+            renderTodos();
+            todoForm.addEventListener('submit', addTodo);
+        });
+    </script>
+</body>
+</html>

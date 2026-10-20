@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gouraud-shaded rotating cube (Canvas 2D)</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0b0d12; overflow: hidden;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #cfe3ff; }
+  #stage { position: fixed; inset: 0; display: block; }
+  .hud { position: fixed; left: 12px; top: 12px; font-size: 13px; line-height: 1.6;
+    background: rgba(10,14,22,.72); border: 1px solid #22314a; border-radius: 8px;
+    padding: 8px 12px; pointer-events: none; white-space: pre; }
+  .hud b { color: #7fd1ff; font-weight: 600; }
+  .title { position: fixed; right: 12px; top: 12px; font-size: 12px; color: #6d86ad;
+    background: rgba(10,14,22,.72); border: 1px solid #22314a; border-radius: 8px;
+    padding: 6px 10px; pointer-events: none; }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<div class="hud" id="hud"></div>
+<div class="title">Canvas 2D &middot; Gouraud &middot; no WebGL</div>
+<script>
+"use strict";
+
+/* ------------------------------------------------------------------ *
+ *  Minimal software 3D pipeline on Canvas 2D:
+ *    vertices -> model rotation (YX euler) -> perspective projection
+ *    -> backface culling (screen-space winding)
+ *    -> split quads into 2 triangles
+ *    -> per-vertex Lambert lighting (diffuse + ambient + specular)
+ *    -> scanline rasterizer interpolating intensity (Gouraud shading)
+ * ------------------------------------------------------------------ */
+
+const canvas = document.getElementById('stage');
+const ctx = canvas.getContext('2d', { alpha: false });
+const hud = document.getElementById('hud');
+
+let W = 0, H = 0, DPR = 1;
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = Math.max(1, Math.floor(W * DPR));
+  canvas.height = Math.max(1, Math.floor(H * DPR));
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+window.addEventListener('resize', resize);
+resize();
+
+/* ---------------- scene / camera constants ---------------- */
+const S = 1.0;                       // cube half-size
+// Cube vertices
+const VERTS = [
+  [-S, -S, -S], [ S, -S, -S], [ S,  S, -S], [-S,  S, -S],
+  [-S, -S,  S], [ S, -S,  S], [ S,  S,  S], [-S,  S,  S]
+];
+// 6 quad faces, CCW when viewed from outside
+const FACES = [
+  { idx: [4, 5, 6, 7], col: [235,  70,  70] }, // +Z  red
+  { idx: [1, 0, 3, 2], col: [ 70, 130, 245] }, // -Z  blue
+  { idx: [5, 1, 2, 6], col: [ 70, 220, 120] }, // +X  green
+  { idx: [0, 4, 7, 3], col: [245, 190,  60] }, // -X  yellow
+  { idx: [7, 6, 2, 3], col: [210,  90, 235] }, // +Y  magenta
+  { idx: [0, 1, 5, 4], col: [ 70, 225, 235] }  // -Y  cyan
+];
+// Triangles per quad (two, sharing the diagonal 0-2)
+const QUAD_TRIS = [[0, 1, 2], [0, 2, 3]];
+
+const FOV = Math.PI / 3;             // 60 deg vertical field of view
+const CAM_Z = 6.0;                   // camera distance from origin
+const NEAR = 0.1;
+
+/* ---------------- input state ---------------- */
+let paused = false;
+let wireframe = false;
+window.addEventListener('keydown', (e) => {
+  const k = e.key.toLowerCase();
+  if (k === 'p') { paused = !paused; e.preventDefault(); }
+  else if (k === 'w') { wireframe = !wireframe; e.preventDefault(); }
+});
+
+/* ---------------- FPS ---------------- */
+let frames = 0, fps = 0, fpsLast = performance.now();
+
+/* ---------------- math helpers ---------------- */
+// rotate about Y then X (model rotation), returns scratch array
+const tmp = [0, 0, 0];
+function rotate(v, cy, sy, cx, sx) {
+  // Y axis
+  let x = v[0] * cy + v[2] * sy;
+  let z = -v[0] * sy + v[2] * cy;
+  let y = v[1];
+  // X axis
+  const y2 = y * cx - z * sx;
+  const z2 = y * sx + z * cx;
+  tmp[0] = x; tmp[1] = y2; tmp[2] = z2;
+  return tmp;
+}
+
+/* ---------------- pipeline buffers ---------------- */
+// screen-space projected points for the 8 vertices
+const px = new Float64Array(8);
+const py = new Float64Array(8);
+// camera-space coords (after rotation, before projection) for lighting/normals
+const camx = new Float64Array(8);
+const camy = new Float64Array(8);
+const camz = new Float64Array(8);
+// per-vertex lighting intensity 0..1
+const inten = new Float64Array(8);
+
+/* ---------------- Gouraud scanline rasterizer ---------------- *
+ * Fills a triangle whose vertices are (x0,y0,i0) etc.
+ * Interpolates intensity linearly along edges and across spans,
+ * converting a base colour * intensity into the destination pixels.
+ * Uses a clip buffer so spans are clipped to the viewport exactly.
+ * ---------------------------------------------------------------- */
+const clipBuf = new Float32Array(0);
+function ensureClip(n) {
+  if (clipBuf.length < n) { /* replaced below */ }
+}
+
+function fillTriangle(x0, y0, i0, x1, y1, i1, x2, y2, i2, r, g, b) {
+  // sort by y
+  if (y0 > y1) { let t = x0; x0 = x1; x1 = t; t = y0; y0 = y1; y1 = t; t = i0; i0 = i1; i1 = t; }
+  if (y1 > y2) { let t = x1; x1 = x2; x2 = t; t = y1; y1 = y2; y2 = t; t = i1; i1 = i2; i2 = t; }
+  if (y0 > y1) { let t = x0; x0 = x1; x1 = t; t = y0; y0 = y1; y1 = t; t = i0; i0 = i1; i1 = t; }
+
+  const ymin = Math.max(0, Math.ceil(y0));
+  const ymax = Math.min(H - 1, Math.floor(y2));
+  if (ymin > ymax) return;
+
+  const dyTotal = y2 - y0;
+  if (dyTotal <= 0) return;
+
+  const dyA = (y1 - y0) || 1e-9;   // upper part
+  const dyB = (y2 - y1) || 1e-9;   // lower part
+
+  const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+  for (let y = ymin; y <= ymax; y++) {
+    const yc = y + 0.5;
+    // long edge x0->x2
+    const t = (yc - y0) / dyTotal;
+    let xa = x0 + (x2 - x0) * t;
+    let ia = i0 + (i2 - i0) * t;
+    let xb, ib;
+    if (yc < y1) {
+      const t2 = (yc - y0) / dyA;
+      xb = x0 + (x1 - x0) * t2;
+      ib = i0 + (i1 - i0) * t2;
+    } else {
+      const t2 = (yc - y1) / dyB;
+      xb = x1 + (x2 - x1) * t2;
+      ib = i1 + (i2 - i1) * t2;
+    }
+    if (xa > xb) { let s = xa; xa = xb; xb = s; s = ia; ia = ib; ib = s; }
+
+    let xs = Math.max(0, Math.ceil(xa - 0.5));
+    let xe = Math.min(W - 1, Math.floor(xb - 0.5));
+    if (xs > xe) continue;
+
+    const span = xb - xa || 1e-9;
+    const rowOff = y * canvas.width * 4;
+    const data = img.data;
+    for (let x = xs; x <= xe; x++) {
+      const xc = x + 0.5;
+      let ti = (xc - xa) / span;
+      if (ti < 0) ti = 0; else if (ti > 1) ti = 1;
+      let intenV = ia + (ib - ia) * ti;
+      if (intenV < 0) intenV = 0; else if (intenV > 1) intenV = 1;
+      const o = rowOff + x * 4;
+      // simple gamma-ish response for a nicer falloff
+      const li = intenV * intenV * 0.55 + intenV * 0.45;
+      data[o]     = (r * li) | 0;
+      data[o + 1] = (g * li) | 0;
+      data[o + 2] = (b * li) | 0;
+      data[o + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+/* ---------------- main render ---------------- */
+let angleY = 0, angleX = 0.4;
+let last = performance.now();
+
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+
+  if (!paused) {
+    angleY += dt * 1.1;
+    angleX += dt * 0.45;
+  }
+
+  // FPS counter
+  frames++;
+  if (now - fpsLast >= 500) {
+    fps = frames * 1000 / (now - fpsLast);
+    frames = 0; fpsLast = now;
+  }
+
+  // --- clear ---
+  ctx.fillStyle = '#0b0d12';
+  ctx.fillRect(0, 0, W, H);
+
+  const cy = Math.cos(angleY), sy = Math.sin(angleY);
+  const cx = Math.cos(angleX), sx = Math.sin(angleX);
+
+  // --- moving light (orbiting the cube) ---
+  const lt = now / 1000;
+  const lightR = 3.2;
+  const Lx = Math.cos(lt * 1.3) * lightR;
+  const Ly = Math.sin(lt * 0.9) * 1.8;
+  const Lz = 2.6 + Math.sin(lt * 1.3) * lightR;
+
+  const focal = (H * 0.5) / Math.tan(FOV * 0.5);
+  const ox = W * 0.5, oy = H * 0.5;
+
+  // --- transform + project all vertices ---
+  for (let v = 0; v < 8; v++) {
+    const r = rotate(VERTS[v], cy, sy, cx, sx);
+    const X = r[0], Y = r[1], Z = r[2];
+    camx[v] = X; camy[v] = Y; camz[v] = Z;
+    const zc = CAM_Z - Z;             // camera space depth (camera at +Z)
+    if (zc < NEAR) { px[v] = NaN; py[v] = NaN; continue; }
+    px[v] = ox + X * focal / zc;
+    py[v] = oy - Y * focal / zc;
+  }
+
+  // --- per-vertex lighting (Lambert + ambient + Blinn-ish spec) ---
+  // Light is defined in world/camera space (camera fixed at origin looking -Z),
+  // so use camera-space vertex positions directly.
+  for (let v = 0; v < 8; v++) {
+    const X = camx[v], Y = camy[v], Z = camz[v];
+    // normal approximated by the vertex position direction (unit cube) — refined per face below
+    inten[v] = 0;
+  }
+
+  // --- draw faces (backface culled) ---
+  // Painter: draw back-to-front is unnecessary since we cull backfaces,
+  // but we still sort by depth for robustness with the wireframe overlay.
+  const order = [];
+  for (let f = 0; f < 6; f++) {
+    const idx = FACES[f].idx;
+    // screen-space winding -> backface culling
+    const a = idx[0], b = idx[1], c = idx[2];
+    if (isNaN(px[a]) || isNaN(px[b]) || isNaN(px[c])) continue;
+    const area = (px[b] - px[a]) * (py[c] - py[a]) - (py[b] - py[a]) * (px[c] - px[a]);
+    if (area >= 0) continue;          // facing away (CCW in screen = front; we keep area < 0)
+    let depth = 0;
+    for (const i of idx) depth += CAM_Z - camz[i];
+    order.push({ f, depth: depth / 4 });
+  }
+  order.sort((p, q) => q.depth - p.depth); // far first
+
+  for (const item of order) {
+    const face = FACES[item.f];
+    const idx = face.idx;
+    const [fr, fg, fb] = face.col;
+
+    // face normal in camera space (from two edges of the quad)
+    const i0 = idx[0], i1 = idx[1], i2 = idx[2];
+    let e1x = camx[i1] - camx[i0], e1y = camy[i1] - camy[i0], e1z = camz[i1] - camz[i0];
+    let e2x = camx[i2] - camx[i0], e2y = camy[i2] - camy[i0], e2z = camz[i2] - camz[i0];
+    let nx = e1y * e2z - e1z * e2y;
+    let ny = e1z * e2x - e1x * e2z;
+    let nz = e1x * e2y - e1y * e2x;
+    let nl = Math.hypot(nx, ny, nz) || 1;
+    nx /= nl; ny /= nl; nz /= nl;
+
+    // per-vertex intensity for this face (Lambert)
+    const vi = [0, 0, 0, 0];
+    for (let k = 0; k < 4; k++) {
+      const v = idx[k];
+      const vx = camx[v], vy = camy[v], vz = camz[v];
+      // light direction from vertex to light (camera space)
+      let lx = Lx - vx, ly = Ly - vy, lz = Lz - vz;
+      const ll = Math.hypot(lx, ly, lz) || 1;
+      lx /= ll; ly /= ll; lz /= ll;
+      let lam = nx * lx + ny * ly + nz * lz;
+      if (lam < 0) lam = 0;
+      // specular (view dir = toward camera at +Z)
+      let hx = lx, hy = ly, hz = lz + 1;   // half vector with view (0,0,1)
+      const hl = Math.hypot(hx, hy, hz) || 1;
+      hx /= hl; hy /= hl; hz /= hl;
+      let spec = nx * hx + ny * hy + nz * hz;
+      if (spec < 0) spec = 0;
+      spec = spec * spec * spec * spec * 0.35;
+      let I = 0.18 + 0.82 * lam + spec;     // ambient + diffuse + spec
+      if (I > 1.6) I = 1.6;
+      vi[k] = I;
+    }
+
+    // split quad into two triangles, rasterize with Gouraud interpolation
+    for (const tri of QUAD_TRIS) {
+      const a = idx[tri[0]], b = idx[tri[1]], c = idx[tri[2]];
+      if (isNaN(px[a]) || isNaN(px[b]) || isNaN(px[c])) continue;
+      fillTriangle(
+        px[a], py[a], vi[tri[0]],
+        px[b], py[b], vi[tri[1]],
+        px[c], py[c], vi[tri[2]],
+        fr, fg, fb
+      );
+    }
+
+    // wireframe overlay
+    if (wireframe) {
+      ctx.beginPath();
+      ctx.moveTo(px[idx[0]], py[idx[0]]);
+      for (let k = 1; k < 4; k++) ctx.lineTo(px[idx[k]], py[idx[k]]);
+      ctx.closePath();
+      ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+  }
+
+  // --- light gizmo ---
+  {
+    const zc = CAM_Z - Lz;
+    if (zc > NEAR) {
+      const lx = ox + Lx * focal / zc;
+      const ly = oy - Ly * focal / zc;
+      const grd = ctx.createRadialGradient(lx, ly, 0, lx, ly, 16);
+      grd.addColorStop(0, 'rgba(255,250,210,1)');
+      grd.addColorStop(0.35, 'rgba(255,220,120,0.75)');
+      grd.addColorStop(1, 'rgba(255,200,80,0)');
+      ctx.fillStyle = grd;
+      ctx.beginPath(); ctx.arc(lx, ly, 16, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  // --- HUD ---
+  const state = paused ? 'PAUSED' : 'running';
+  const mode = wireframe ? 'wireframe' : 'shaded';
+  hud.innerHTML =
+    'FPS        <b>' + fps.toFixed(1) + '</b>\n' +
+    'State      <b>' + state + '</b>\n' +
+    'Mode       <b>' + mode + '</b>\n' +
+    'Triangles  <b>' + (order.length * 2) + '</b>\n' +
+    '[P] pause   [W] wireframe';
+
+  requestAnimationFrame(frame);
+}
+
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

@@ -1,0 +1,157 @@
+{
+  "schemaVersion": 1,
+  "run": {
+    "debugLevel": "STANDARD",
+    "durationMs": 294334,
+    "startedAt": 1792425754499,
+    "endedAt": 1792426048833
+  },
+  "session": {
+    "id": "2a4be240-2536-45a5-a575-6a79618e9277",
+    "name": "headless-1792425754471",
+    "mode": "AGENT",
+    "executionMode": "INTERACTIVE",
+    "model": "qwen3.8-flash-next:125b-a6b-q4",
+    "provider": "ollama",
+    "status": "SUCCESS",
+    "tokensIn": 35947,
+    "tokensOut": 7864,
+    "costUsd": 0.0
+  },
+  "metrics": {
+    "durationMs": 294334,
+    "tokensIn": 35947,
+    "tokensOut": 7864,
+    "costUsd": 0.0,
+    "apiCallCount": 3,
+    "toolCallCount": 1,
+    "iterations": 2,
+    "maxIterations": 200,
+    "stopReason": "COMPLETED",
+    "contextOverflow": false,
+    "verification": {
+      "ran": false,
+      "attempts": 0,
+      "timedOut": false,
+      "attributionUncertain": false,
+      "notRunReason": "no verify.command configured and no known project marker detected"
+    },
+    "guardrails": {
+      "consolidationNudges": 0,
+      "regenerationNudges": 0,
+      "subagentInvokeNudges": 0,
+      "formatRetryNudges": 0,
+      "guardianReentries": 0,
+      "maxRepeatedCall": 1,
+      "toolErrorRate": 0.0,
+      "noopWrites": 0
+    },
+    "context": {
+      "budgetTokens": 27271,
+      "usedTokens": 1045,
+      "droppedMessages": 0,
+      "droppedSteps": 0,
+      "drops": {
+        "WORKING_MEMORY": 1,
+        "USER_CONTEXT": 2
+      }
+    },
+    "filesWritten": [
+      {
+        "path": "snake_ollama-qwen3.8-flash-next-125b-a6b-q4_01.html",
+        "writes": 1,
+        "netChanged": true
+      }
+    ]
+  },
+  "finalOutput": "Done. Created **`snake_ollama-qwen3.8-flash-next-125b-a6b-q4_01.html`** (646 lines) — a self-contained Snake game with HTML, CSS, and JavaScript in one file.\n\n**Features implemented:**\n- **30×30 grid** rendered on a canvas with subtle grid lines\n- **Continuous movement** in 4 directions; snake grows (+2 segments) when eating food; instant game over on wall or body collision (with tail-follow exemption so chasing your own tail is fair)\n- **Keyboard controls** — Arrows for Player 1 (green), WASD for Player 2 (yellow)\n- **CPU AI mode** — BFS pathfinding to the nearest food, obstacle avoidance, plus a flood-fill fallback that picks the move with the most open space when no food is reachable\n- **Three game modes** from the start menu: Human vs Human, CPU vs Human, CPU vs CPU (select with click, ↑/↓, or keys `1`/`2`/`3`)\n- **Live score display** in the HUD for both snakes (10 pts per food)\n- **Start menu overlay** and **game over screen** showing the winner, final scores, and crash reason\n- **Restart** with `R`, back to menu with `Esc`, pause with `P`\n\nJust open the file in any browser to play.",
+  "subtasks": [
+    {
+      "orderIndex": 0,
+      "kind": "CREATE_NEW_FILE",
+      "status": "SUCCESS",
+      "description": "create_new_file: snake_ollama-qwen3.8-flash-next-125b-a6b-q4_01.html",
+      "tokensIn": 0,
+      "tokensOut": 0,
+      "costUsd": 0.0,
+      "latencyMs": 0
+    }
+  ],
+  "conversation": [
+    {
+      "role": "USER",
+      "contentPreview": "Write a snake game in javascript, css, html in one file. Build a classic Snake game on a 30x30 grid. The snake moves continuously in one of four directions and grows when eating food. If it hits a wall or itself, the game ends. Implement keyboard controls for player movement. Add a CPU-controlled snake mode that automatically searches for food. Add the three game modes: human vs human, cpu vs human, cpu vs cpu. Display the score during gameplay. Include a start menu and game over screen. Allow restarting the game with a keypress. Use file name \"snake_ollama-qwen3.8-flash-next-125b-a6b-q4_01.html\"",
+      "toolCalls": [],
+      "toolCallDetails": [],
+      "createdAt": 1792425754627
+    },
+    {
+      "role": "ASSISTANT",
+      "contentPreview": "I'll create the snake game file directly.\n\n",
+      "toolCalls": [
+        "create_new_file"
+      ],
+      "toolCallDetails": [
+        {
+          "name": "create_new_file",
+          "arguments": "{\"path\":\"snake_ollama-qwen3.8-flash-next-125b-a6b-q4_01.html\",\"content\":\"<!DOCTYPE html>\\n<html lang=\\\"en\\\">\\n<head>\\n<meta charset=\\\"UTF-8\\\">\\n<meta name=\\\"viewport\\\" content=\\\"width=device-width, initial-scale=1.0\\\">\\n<title>Snake — 30x30</title>\\n<style>\\n  :root {\\n    --bg: #0d1117;\\n    --panel: #161b22;\\n    --border: #30363d;\\n    --text: #e6edf3;\\n    --muted: #8b949e;\\n    --p1: #2ea043;\\n    --p2: #d29922;\\n    --food: #f85149;\\n    --accent: #58a6ff;\\n  }\\n  * { box-sizing: border-box; }\\n  html, body {\\n    margin: 0;\\n    padding: 0;\\n    height: 100%;\\n    background: radial-gradient(circle at 50% 0%, #131a24 0%, var(--bg) 60%);\\n    color: var(--text);\\n    font-family: \\\"Segoe UI\\\", system-ui, -apple-system, sans-serif;\\n    overflow: hidden;\\n  }\\n  #app {\\n    height: 100%;\\n    display: flex;\\n    flex-direction: column;\\n    align-items: center;\\n    justify-content: center;\\n    gap: 10px;\\n    padding: 12px;\\n  }\\n  h1 {\\n    margin: 0;\\n    font-size: 26px;\\n    letter-spacing: 4px;\\n    text-transform: uppercase;\\n    color: var(--accent);\\n  }\\n  #hud {\\n    width: 640px;\\n    max-width: 96vw;\\n    display: flex;\\n    justify-content: space-between;\\n    align-items: center;\\n    gap: 12px;\\n    background: var(--panel);\\n    border: 1px solid var(--border);\\n    border-radius: 10px;\\n    padding: 8px 14px;\\n    font-size: 14px;\\n  }\\n  .score-box { display: flex; align-items: center; gap: 8px; }\\n  .dot { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }\\n  .dot.p1 { background: var(--p1); }\\n  .dot.p2 { background: var(--p2); }\\n  .score-box b { font-variant-numeric: tabular-nums; font-size: 18px; }\\n  .score-box .label { color: var(--muted); }\\n  #mode-label { color: var(--muted); font-size: 12px; letter-spacing: 1px; }\\n  #stage {\\n    position: relative;\\n    width: 640px;\\n    max-width: 96vw;\\n    aspect-ratio: 1 / 1;\\n    background: var(--panel);\\n    border: 1px solid var(--border);\\n    border-radius: 10px;\\n    overflow: hidden;\\n  }\\n  canvas { display: block; width: 100%; height: 100%; }\\n  #hint { color: var(--muted); font-size: 12px; letter-spacing: .5px; }\\n\\n  .overlay {\\n    position: absolute;\\n    inset: 0;\\n    display: flex;\\n    flex-direction: column;\\n    align-items: center;\\n    justify-content: center;\\n    gap: 18px;\\n    background: rgba(13, 17, 23, 0.92);\\n    backdrop-filter: blur(3px);\\n    text-align: center;\\n    padding: 20px;\\n  }\\n  .overlay.hidden { display: none; }\\n  .overlay h2 { margin: 0; font-size: 30px; letter-spacing: 3px; }\\n  .overlay p { margin: 0; color: var(--muted); max-width: 420px; line-height: 1.5; }\\n  .menu-list { display: flex; flex-direction: column; gap: 10px; width: 280px; }\\n  .menu-btn {\\n    background: #1f2733;\\n    border: 1px solid var(--border);\\n    color: var(--text);\\n    padding: 12px 16px;\\n    border-radius: 8px;\\n    font-size: 15px;\\n    cursor: pointer;\\n    transition: border-color .15s, transform .1s, background .15s;\\n    text-align: left;\\n  }\\n  .menu-btn:hover, .menu-btn.sel {\\n    border-color: var(--accent);\\n    background: #22304a;\\n    transform: translateX(3px);\\n  }\\n  .menu-btn small { display: block; color: var(--muted); font-size: 11px; margin-top: 3px; }\\n  #final-scores { font-size: 18px; line-height: 1.8; }\\n  .kbd {\\n    display: inline-block;\\n    border: 1px solid var(--border);\\n    border-bottom-width: 2px;\\n    border-radius: 5px;\\n    padding: 1px 7px;\\n    font-family: Consolas, monospace;\\n    font-size: 12px;\\n    background: #1f2733;\\n  }\\n  #winner-line { font-size: 22px; color: var(--accent); }\\n</style>\\n</head>\\n<body>\\n<div id=\\\"app\\\">\\n  <h1>Snake</h1>\\n\\n  <div id=\\\"hud\\\">\\n    <div class=\\\"score-box\\\"><span class=\\\"dot p1\\\"></span><span class=\\\"label\\\" id=\\\"name1\\\">Player 1</span><b id=\\\"score1\\\">0</b></div>\\n    <span id=\\\"mode-label\\\">—</span>\\n    <div class=\\\"score-box\\\"><span class=\\\"dot p2\\\"></span><span class=\\\"label\\\" id=\\\"name2\\\">Player 2</span><b id=\\\"score2\\\">0</b></div>\\n  </div>\\n\\n  <div id=\\\"stage\\\">\\n    <canvas id=\\\"canvas\\\" width=\\\"640\\\" height=\\\"640\\\"></canvas>\\n\\n    <div id=\\\"menu\\\" class=\\\"overlay\\\">\\n      <h2>Snake 30×30</h2>\\n      <p>Choose a game mode. Eat the red food to grow and score. Hit a wall or a snake and it's over.</p>\\n      <div class=\\\"menu-list\\\">\\n        <button class=\\\"menu-btn sel\\\" data-mode=\\\"hvh\\\">1. Human vs Human<small>Arrows (green) &nbsp;·&nbsp; WASD (yellow)</small></button>\\n        <button class=\\\"menu-btn\\\" data-mode=\\\"cvh\\\">2. CPU vs Human<small>Arrows control the green snake</small></button>\\n        <button class=\\\"menu-btn\\\" data-mode=\\\"cvc\\\">3. CPU vs CPU<small>Watch two bots fight for food</small></button>\\n      </div>\\n      <p><span class=\\\"kbd\\\">1</span> <span class=\\\"kbd\\\">2</span> <span class=\\\"kbd\\\">3</span> or click to select &nbsp;·&nbsp; <span class=\\\"kbd\\\">Enter</span> / <span class=\\\"kbd\\\">Space</span> to start</p>\\n    </div>\\n\\n    <div id=\\\"gameover\\\" class=\\\"overlay hidden\\\">\\n      <h2>Game Over</h2>\\n      <div id=\\\"winner-line\\\"></div>\\n      <div id=\\\"final-scores\\\"></div>\\n      <p>Press <span class=\\\"kbd\\\">R</span> to restart &nbsp;·&nbsp; <span class=\\\"kbd\\\">Esc</span> for menu</p>\\n    </div>\\n  </div>\\n\\n  <div id=\\\"hint\\\">Arrows / WASD to steer &nbsp;·&nbsp; <span class=\\\"kbd\\\">P</span> pause &nbsp;·&nbsp; <span class=\\\"kbd\\\">Esc</span> menu</div>\\n</div>\\n\\n<script>\\n(function () {\\n  'use strict';\\n\\n  // ---------- Constants ----------\\n  const GRID = 30;\\n  const CELL = 640 / GRID;           // 21.33 px\\n  const TICK_MS = 110;               // game speed\\n  const DIRS = {\\n    up:    { x: 0, y: -1 },\\n    down:  { x: 0, y: 1 },\\n    left:  { x: -1, y: 0 },\\n    right: { x: 1, y: 0 }\\n  };\\n\\n  const COLORS = {\\n    bg: '#0d1117',\\n    gridLine: '#1b222c',\\n    food: '#f85149',\\n    foodGlow: 'rgba(248,81,73,0.35)',\\n    p1Head: '#56d364', p1Body: '#2ea043',\\n    p2Head: '#e3b341', p2Body: '#bb8009'\\n  };\\n\\n  // ---------- DOM ----------\\n  const canvas = document.getElementById('canvas');\\n  const ctx = canvas.getContext('2d');\\n  const menuEl = document.getElementById('menu');\\n  const overEl = document.getElementById('gameover');\\n  const score1El = document.getElementById('score1');\\n  const score2El = document.getElementById('score2');\\n  const name1El = document.getElementById('name1');\\n  const name2El = document.getElementById('name2');\\n  const modeLabelEl = document.getElementById('mode-label');\\n  const winnerLineEl = document.getElementById('winner-line');\\n  const finalScoresEl = document.getElementById('final-scores');\\n  const menuBtns = Array.from(document.querySelectorAll('.menu-btn'));\\n\\n  // ---------- State ----------\\n  let mode = 'hvh';\\n  let state = 'menu';               // menu | playing | paused | over\\n  let snake1, snake2, foods;\\n  let timer = null;\\n  let paused = false;\\n  let menuIndex = 0;\\n\\n  const MODE_LABELS = {\\n    hvh: 'HUMAN vs HUMAN',\\n    cvh: 'CPU vs HUMAN',\\n    cvc: 'CPU vs CPU'\\n  };\\n\\n  // ---------- Helpers ----------\\n  const key = (x, y) => x + ',' + y;\\n\\n  function occupiedSet(extra) {\\n    const s = new Set();\\n    for (const seg of snake1.body) s.add(key(seg.x, seg.y));\\n    for (const seg of snake2.body) s.add(key(seg.x, seg.y));\\n    if (extra) extra.forEach(k => s.add(k));\\n    return s;\\n  }\\n\\n  function spawnFood() {\\n    const taken = occupiedSet(foods.map(f => key(f.x, f.y)));\\n    const free = [];\\n    for (let y = 0; y < GRID; y++) {\\n      for (let x = 0; x < GRID; x++) {\\n        if (!taken.has(key(x, y))) free.push({ x, y });\\n      }\\n    }\\n    if (free.length === 0) return null;\\n    foods.push(free[Math.floor(Math.random() * free.length)]);\\n    return true;\\n  }\\n\\n  function makeSnake(startX, startY, dir, name, isCPU) {\\n    const body = [];\\n    for (let i = 0; i < 4; i++) body.push({ x: startX - dir.x * i, y: startY - dir.y * i });\\n    return {\\n      body,\\n      dir,\\n      pendingDir: dir,\\n      score: 0,\\n      alive: true,\\n      grow: 0,\\n      name,\\n      isCPU\\n    };\\n  }\\n\\n  // ---------- Setup / lifecycle ----------\\n  function startGame() {\\n    snake1 = makeSnake(6, 10, DIRS.right, 'Player 1', mode !== 'hvh');\\n    snake2 = makeSnake(GRID - 7, GRID - 11, DIRS.left,\\n      mode === 'hvh' ? 'Player 2' : (mode === 'cvh' ? 'CPU' : 'CPU 1'),\\n      mode !== 'hvh' ? true : false);\\n    if (mode === 'hvh') { snake1.isCPU = false; snake2.isCPU = false; }\\n    else if (mode === 'cvh') { snake1.isCPU = false; snake2.isCPU = true; }\\n    else { snake1.isCPU = true; snake2.isCPU = true; }\\n    if (mode === 'cvc') snake2.name = 'CPU 2';\\n\\n    foods = [];\\n    spawnFood();\\n    spawnFood();\\n    spawnFood();\\n\\n    paused = false;\\n    state = 'playing';\\n    menuEl.classList.add('hidden');\\n    overEl.classList.add('hidden');\\n\\n    name1El.textContent = snake1.name + (snake1.isCPU ? ' (CPU)' : '');\\n    name2El.textContent = snake2.name + (snake2.isCPU ? ' (CPU)' : '');\\n    modeLabelEl.textContent = MODE_LABELS[mode];\\n    score1El.textContent = '0';\\n    score2El.textContent = '0';\\n\\n    if (timer) clearInterval(timer);\\n    timer = setInterval(step, TICK_MS);\\n    draw();\\n  }\\n\\n  function endGame(reason) {\\n    state = 'over';\\n    paused = false;\\n    clearInterval(timer);\\n    timer = null;\\n\\n    let line;\\n    if (snake1.score > snake2.score) line = snake1.name + ' wins!';\\n    else if (snake2.score > snake1.score) line = snake2.name + ' wins!';\\n    else line = \\\"It's a draw!\\\";\\n\\n    winnerLineEl.textContent = line;\\n    finalScoresEl.innerHTML =\\n      '<span style=\\\"color:var(--p1)\\\">' + snake1.name + ': ' + snake1.score + '</span> &nbsp;·&nbsp; ' +\\n      '<span style=\\\"color:var(--p2)\\\">' + snake2.name + ': ' + snake2.score + '</span>' +\\n      '<div style=\\\"font-size:13px;color:var(--muted);margin-top:6px\\\">' + reason + '</div>';\\n    overEl.classList.remove('hidden');\\n    draw();\\n  }\\n\\n  function toMenu() {\\n    state = 'menu';\\n    if (timer) { clearInterval(timer); timer = null; }\\n    overEl.classList.add('hidden');\\n    menuEl.classList.remove('hidden');\\n    modeLabelEl.textContent = '—';\\n  }\\n\\n  // ---------- CPU AI (BFS to nearest food, avoid bodies, survive) ----------\\n  function cpuChooseDir(snake, me, foe) {\\n    const obstacles = new Set();\\n    // Head is fine to leave; tail tip will move unless growing.\\n    for (let i = 0; i < snake.body.length - (snake.grow > 0 ? 0 : 1); i++) {\\n      const s = snake.body[i];\\n      obstacles.add(key(s.x, s.y));\\n    }\\n    for (const s of foe.body) obstacles.add(key(s.x, s.y));\\n\\n    const head = snake.body[0];\\n    const dirs = ['up', 'down', 'left', 'right'];\\n\\n    // 1) BFS to nearest food\\n    let best = bfsStep(head, obstacles, foods);\\n    if (best) {\\n      const d = DIRS[best];\\n      if (!isOpposite(d, snake.dir) && isSafe(head, d, obstacles)) return d;\\n    }\\n\\n    // 2) Any safe move — prefer the one with most free space (flood fill)\\n    let bestDir = null, bestSpace = -1;\\n    for (const name of dirs) {\\n      const d = DIRS[name];\\n      if (isOpposite(d, snake.dir)) continue;\\n      if (!isSafe(head, d, obstacles)) continue;\\n      let space = floodCount({ x: head.x + d.x, y: head.y + d.y }, obstacles);\\n      if (space > bestSpace) { bestSpace = space; bestDir = name; }\\n    }\\n    if (bestDir) return bestDir;\\n\\n    // 3) Desperation: any legal move\\n    for (const name of dirs) {\\n      if (!isOpposite(DIRS[name], snake.dir)) return name;\\n    }\\n    return snake.dirName || 'right';\\n  }\\n\\n  function isOpposite(d, cur) { return d.x === -cur.x && d.y === -cur.y; }\\n\\n  function isSafe(head, d, obstacles) {\\n    const nx = head.x + d.x, ny = head.y + d.y;\\n    if (nx < 0 || ny < 0 || nx >= GRID || ny >= GRID) return false;\\n    return !obstacles.has(key(nx, ny));\\n  }\\n\\n  function bfsStep(start, obstacles, targets) {\\n    if (targets.length === 0) return null;\\n    const targetSet = new Set(targets.map(f => key(f.x, f.y)));\\n    const prev = new Map();\\n    const startK = key(start.x, start.y);\\n    const queue = [start];\\n    const seen = new Set([startK]);\\n    let found = null;\\n\\n    while (queue.length) {\\n      const cur = queue.shift();\\n      const ck = key(cur.x, cur.y);\\n      if (targetSet.has(ck) && ck !== startK) { found = ck; break; }\\n      for (const name of ['up', 'down', 'left', 'right']) {\\n        const d = DIRS[name];\\n        const nx = cur.x + d.x, ny = cur.y + d.y;\\n        if (nx < 0 || ny < 0 || nx >= GRID || ny >= GRID) continue;\\n        const nk = key(nx, ny);\\n        if (seen.has(nk)) continue;\\n        if (obstacles.has(nk) && !targetSet.has(nk)) continue;\\n        seen.add(nk);\\n        prev.set(nk, ck);\\n        queue.push({ x: nx, y: ny });\\n      }\\n    }\\n    if (!found) return null;\\n\\n    // Walk back to the first step from start\\n    let cur = found;\\n    while (prev.get(cur) && prev.get(cur) !== startK) cur = prev.get(cur);\\n    const [fx, fy] = cur.split(',').map(Number);\\n    const dx = fx - start.x, dy = fy - start.y;\\n    for (const name of ['up', 'down', 'left', 'right']) {\\n      if (DIRS[name].x === dx && DIRS[name].y === dy) return name;\\n    }\\n    return null;\\n  }\\n\\n  function floodCount(start, obstacles) {\\n    const seen = new Set([key(start.x, start.y)]);\\n    const queue = [start];\\n    let count = 0;\\n    while (queue.length && count < 250) {\\n      const cur = queue.shift();\\n      count++;\\n      for (const name of ['up', 'down', 'left', 'right']) {\\n        const d = DIRS[name];\\n        const nx = cur.x + d.x, ny = cur.y + d.y;\\n        if (nx < 0 || ny < 0 || nx >= GRID || ny >= GRID) continue;\\n        const nk = key(nx, ny);\\n        if (seen.has(nk) || obstacles.has(nk)) continue;\\n        seen.add(nk);\\n        queue.push({ x: nx, y: ny });\\n      }\\n    }\\n    return count;\\n  }\\n\\n  // ---------- Game step ----------\\n  function step() {\\n    if (state !== 'playing' || paused) return;\\n\\n    // CPU decisions\\n    for (const s of [snake1, snake2]) {\\n      if (s.isCPU && s.alive) {\\n        const me = s, foe = (s === snake1) ? snake2 : snake1;\\n        const dirName = cpuChooseDir(s, me, foe);\\n        s.pendingDir = DIRS[dirName];\\n      }\\n    }\\n\\n    // Apply directions (ignore exact reversals)\\n    for (const s of [snake1, snake2]) {\\n      if (!s.alive) continue;\\n      if (!isOpposite(s.pendingDir, s.dir)) s.dir = s.pendingDir;\\n    }\\n\\n    // Compute new heads\\n    const h1 = snake1.alive ? { x: snake1.body[0].x + snake1.dir.x, y: snake1.body[0].y + snake1.dir.y } : null;\\n    const h2 = snake2.alive ? { x: snake2.body[0].x + snake2.dir.x, y: snake2.body[0].y + snake2.dir.y } : null;\\n\\n    // Wall collisions\\n    if (h1 && (h1.x < 0 || h1.y < 0 || h1.x >= GRID || h1.y >= GRID)) return endGame(snake1.name + ' hit the wall.');\\n    if (h2 && (h2.x < 0 || h2.y < 0 || h2.x >= GRID || h2.y >= GRID)) return endGame(snake2.name + ' hit the wall.');\\n\\n    // Head-on collision\\n    if (h1 && h2 && h1.x === h2.x && h1.y === h2.y) return endGame('Snakes collided head-on.');\\n\\n    // Body collisions (tail tip of the other snake moves away, so it is excluded)\\n    const body1Set = new Set(snake1.body.map(s => key(s.x, s.y)));\\n    const body2Set = new Set(snake2.body.map(s => key(s.x, s.y)));\\n    if (snake1.alive && h1) {\\n      const otherTail = key(snake2.body[snake2.body.length - 1].x, snake2.body[snake2.body.length - 1].y);\\n      if (body2Set.has(key(h1.x, h1.y)) && key(h1.x, h1.y) !== otherTail) return endGame(snake1.name + ' crashed into ' + snake2.name + '.');\\n      if (body1Set.has(key(h1.x, h1.y)) && key(h1.x, h1.y) !== key(snake1.body[snake1.body.length - 1].x, snake1.body[snake1.body.length - 1].y))\\n        return endGame(snake1.name + ' bit itself.');\\n    }\\n    if (snake2.alive && h2) {\\n      const otherTail = key(snake1.body[snake1.body.length - 1].x, snake1.body[snake1.body.length - 1].y);\\n      if (body1Set.has(key(h2.x, h2.y)) && key(h2.x, h2.y) !== otherTail) return endGame(snake2.name + ' crashed into ' + snake1.name + '.');\\n      if (body2Set.has(key(h2.x, h2.y)) && key(h2.x, h2.y) !== key(snake2.body[snake2.body.length - 1].x, snake2.body[snake2.body.length - 1].y))\\n        return endGame(snake2.name + ' bit itself.');\\n    }\\n\\n    // Move bodies\\n    moveSnake(snake1, h1);\\n    moveSnake(snake2, h2);\\n\\n    // Food\\n    handleFood(snake1);\\n    handleFood(snake2);\\n    while (foods.length < 3) spawnFood();\\n\\n    score1El.textContent = snake1.score;\\n    score2El.textContent = snake2.score;\\n\\n    if (snake1.score + snake2.score >= GRID * GRID - 20) return endGame('Board full — victory!');\\n\\n    draw();\\n  }\\n\\n  function moveSnake(snake, newHead) {\\n    if (!snake.alive || !newHead) return;\\n    snake.body.unshift(newHead);\\n    if (snake.grow > 0) snake.grow--;\\n    else snake.body.pop();\\n  }\\n\\n  function handleFood(snake) {\\n    const head = snake.body[0];\\n    for (let i = 0; i < foods.length; i++) {\\n      if (foods[i].x === head.x && foods[i].y === head.y) {\\n        foods.splice(i, 1);\\n        snake.score += 10;\\n        snake.grow += 2;\\n        return;\\n      }\\n    }\\n  }\\n\\n  // ---------- Rendering ----------\\n  function draw() {\\n    ctx.fillStyle = COLORS.bg;\\n    ctx.fillRect(0, 0, canvas.width, canvas.height);\\n\\n    // grid lines\\n    ctx.strokeStyle = COLORS.gridLine;\\n    ctx.lineWidth = 1;\\n    ctx.beginPath();\\n    for (let i = 1; i < GRID; i++) {\\n      ctx.moveTo(i * CELL, 0); ctx.lineTo(i * CELL, canvas.height);\\n      ctx.moveTo(0, i * CELL); ctx.lineTo(canvas.width, i * CELL);\\n    }\\n    ctx.stroke();\\n\\n    if (!snake1) return;\\n\\n    // food\\n    for (const f of foods) {\\n      const cx = (f.x + 0.5) * CELL, cy = (f.y + 0.5) * CELL;\\n      ctx.fillStyle = COLORS.foodGlow;\\n      ctx.beginPath();\\n      ctx.arc(cx, cy, CELL * 0.62, 0, Math.PI * 2);\\n      ctx.fill();\\n      ctx.fillStyle = COLORS.food;\\n      ctx.beginPath();\\n      ctx.arc(cx, cy, CELL * 0.34, 0, Math.PI * 2);\\n      ctx.fill();\\n    }\\n\\n    drawSnake(snake1, COLORS.p1Body, COLORS.p1Head);\\n    drawSnake(snake2, COLORS.p2Body, COLORS.p2Head);\\n\\n    if (paused && state === 'playing') {\\n      ctx.fillStyle = 'rgba(13,17,23,0.6)';\\n      ctx.fillRect(0, 0, canvas.width, canvas.height);\\n      ctx.fillStyle = '#e6edf3';\\n      ctx.font = '600 34px \\\"Segoe UI\\\", sans-serif';\\n      ctx.textAlign = 'center';\\n      ctx.fillText('PAUSED', canvas.width / 2, canvas.height / 2);\\n      ctx.textAlign = 'left';\\n    }\\n  }\\n\\n  function drawSnake(snake, bodyColor, headColor) {\\n    const pad = CELL * 0.08;\\n    snake.body.forEach((seg, i) => {\\n      ctx.fillStyle = i === 0 ? headColor : bodyColor;\\n      const r = i === 0 ? CELL * 0.35 : CELL * 0.22;\\n      roundRect(seg.x * CELL + pad, seg.y * CELL + pad, CELL - pad * 2, CELL - pad * 2, r);\\n      ctx.fill();\\n      if (i === 0) {\\n        // eyes\\n        ctx.fillStyle = '#0d1117';\\n        const cx = (seg.x + 0.5) * CELL, cy = (seg.y + 0.5) * CELL;\\n        const ex = snake.dir.x, ey = snake.dir.y;\\n        const off = CELL * 0.18;\\n        const px = ey !== 0 ? off : 0, py = ex !== 0 ? off : 0;\\n        const fx = ex * CELL * 0.12, fy = ey * CELL * 0.12;\\n        ctx.beginPath();\\n        ctx.arc(cx - px + fx, cy - py + fy, CELL * 0.08, 0, Math.PI * 2);\\n        ctx.arc(cx + px + fx, cy + py + fy, CELL * 0.08, 0, Math.PI * 2);\\n        ctx.fill();\\n      }\\n    });\\n  }\\n\\n  function roundRect(x, y, w, h, r) {\\n    ctx.beginPath();\\n    ctx.moveTo(x + r, y);\\n    ctx.arcTo(x + w, y, x + w, y + h, r);\\n    ctx.arcTo(x + w, y + h, x, y + h, r);\\n    ctx.arcTo(x, y + h, x, y, r);\\n    ctx.arcTo(x, y, x + w, y, r);\\n    ctx.closePath();\\n  }\\n\\n  // ---------- Menu ----------\\n  function selectMenu(i) {\\n    menuIndex = (i + menuBtns.length) % menuBtns.length;\\n    menuBtns.forEach((b, idx) => b.classList.toggle('sel', idx === menuIndex));\\n    mode = menuBtns[menuIndex].dataset.mode;\\n  }\\n\\n  menuBtns.forEach((btn, idx) => {\\n    btn.addEventListener('click', () => { selectMenu(idx); startGame(); });\\n  });\\n\\n  // ---------- Input ----------\\n  const P1_KEYS = {\\n    ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right'\\n  };\\n  const P2_KEYS = {\\n    w: 'up', s: 'down', a: 'left', d: 'right',\\n    W: 'up', S: 'down', A: 'left', D: 'right'\\n  };\\n\\n  document.addEventListener('keydown', (e) => {\\n    const k = e.key;\\n\\n    if (state === 'menu') {\\n      if (k === 'ArrowUp' || k === 'w' || k === 'W') { selectMenu(menuIndex - 1); e.preventDefault(); }\\n      else if (k === 'ArrowDown' || k === 's' || k === 'S') { selectMenu(menuIndex + 1); e.preventDefault(); }\\n      else if (k === 'Enter' || k === ' ') { startGame(); e.preventDefault(); }\\n      else if (k === '1') { selectMenu(0); startGame(); }\\n      else if (k === '2') { selectMenu(1); startGame(); }\\n      else if (k === '3') { selectMenu(2); startGame(); }\\n      return;\\n    }\\n\\n    if (state === 'over') {\\n      if (k === 'r' || k === 'R') { startGame(); }\\n      else if (k === 'Escape') { toMenu(); }\\n      return;\\n    }\\n\\n    // playing / paused\\n    if (k === 'p' || k === 'P') { paused = !paused; draw(); e.preventDefault(); return; }\\n    if (k === 'Escape') { toMenu(); return; }\\n    if (k === 'r' || k === 'R') { startGame(); return; }\\n\\n    if (paused) return;\\n\\n    // Player 1 controls: arrows (or WASD in single-human modes where snake1 is human)\\n    if (P1_KEYS[k] && !snake1.isCPU) {\\n      const d = DIRS[P1_KEYS[k]];\\n      if (!isOpposite(d, snake1.dir)) snake1.pendingDir = d;\\n      e.preventDefault();\\n    }\\n    // Player 2 controls: WASD (only when snake2 is human)\\n    if (P2_KEYS[k] && !snake2.isCPU) {\\n      const d = DIRS[P2_KEYS[k]];\\n      if (!isOpposite(d, snake2.dir)) snake2.pendingDir = d;\\n      e.preventDefault();\\n    }\\n    // In CPU vs Human, human is snake1 (arrows). Also let WASD drive snake1 there for comfort.\\n    if (mode === 'cvh' && P2_KEYS[k] && !snake1.isCPU) {\\n      const d = DIRS[P2_KEYS[k]];\\n      if (!isOpposite(d, snake1.dir)) snake1.pendingDir = d;\\n      e.preventDefault();\\n    }\\n  });\\n\\n  // ---------- Boot ----------\\n  draw();\\n})();\\n</script>\\n</body>\\n</html>\\n\"}",
+          "ok": true
+        }
+      ],
+      "tokensIn": 13071,
+      "tokensOut": 7465,
+      "createdAt": 1792426019192
+    },
+    {
+      "role": "TOOL",
+      "contentPreview": "File created successfully: snake_ollama-qwen3.8-flash-next-125b-a6b-q4_01.html (646 lines)",
+      "toolCalls": [],
+      "toolCallDetails": [],
+      "metadata": "{\"path\":\"snake_ollama-qwen3.8-flash-next-125b-a6b-q4_01.html\",\"line_count\":647,\"char_count\":21378,\"added_lines\":646,\"tool_name\":\"create_new_file\"}",
+      "createdAt": 1792426019657
+    },
+    {
+      "role": "ASSISTANT",
+      "contentPreview": "Done. Created **`snake_ollama-qwen3.8-flash-next-125b-a6b-q4_01.html`** (646 lines) — a self-contained Snake game with HTML, CSS, and JavaScript in one file.\n\n**Features implemented:**\n- **30×30 grid** rendered on a canvas with subtle grid lines\n- **Continuous movement** in 4 directions; snake grows (+2 segments) when eating food; instant game over on wall or body collision (with tail-follow exemption so chasing your own tail is fair)\n- **Keyboard controls** — Arrows for Player 1 (green), WASD for Player 2 (yellow)\n- **CPU AI mode** — BFS pathfinding to the nearest food, obstacle avoidance, plus a flood-fill fallback that picks the move with the most open space when no food is reachable\n- **Three game modes** from the start menu: Human vs Human, CPU vs Human, CPU vs CPU (select with click, ↑/↓, or keys `1`/`2`/`3`)\n- **Live score display** in the HUD for both snakes (10 pts per food)\n- **Start menu overlay** and **game over screen** showing the winner, final scores, and crash reason\n- **Restart** with `R`, back to menu with `Esc`, pause with `P`\n\nJust open the file in any browser to play.",
+      "toolCalls": [],
+      "toolCallDetails": [],
+      "tokensIn": 21006,
+      "tokensOut": 304,
+      "createdAt": 1792426048729
+    }
+  ],
+  "apiLogs": [
+    {
+      "provider": "ollama",
+      "model": "qwen3.8-flash-next:125b-a6b-q4",
+      "requestSource": "NextSpeakerJudge",
+      "httpStatus": 200,
+      "inputTokens": 1870,
+      "outputTokens": 95,
+      "costUsd": 0.0,
+      "latencyMs": 4947
+    },
+    {
+      "provider": "ollama",
+      "model": "qwen3.8-flash-next:125b-a6b-q4",
+      "requestSource": "AgentTurnLoop:AGENT",
+      "httpStatus": 200,
+      "inputTokens": 21006,
+      "outputTokens": 304,
+      "costUsd": 0.0,
+      "latencyMs": 22452
+    },
+    {
+      "provider": "ollama",
+      "model": "qwen3.8-flash-next:125b-a6b-q4",
+      "requestSource": "AgentTurnLoop:AGENT",
+      "httpStatus": 200,
+      "inputTokens": 13071,
+      "outputTokens": 7465,
+      "costUsd": 0.0,
+      "latencyMs": 259528
+    }
+  ],
+  "errors": [],
+  "warnings": []
+}

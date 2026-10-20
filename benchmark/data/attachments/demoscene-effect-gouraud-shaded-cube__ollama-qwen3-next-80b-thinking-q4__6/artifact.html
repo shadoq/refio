@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Gouraud Shaded Cube</title>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        canvas { display: block; background: #000; }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <script>
+        const vertices = [
+            [-1, -1, -1], // 0
+            [1, -1, -1],  // 1
+            [1, 1, -1],   // 2
+            [-1, 1, -1],  // 3
+            [-1, -1, 1],  // 4
+            [1, -1, 1],   // 5
+            [1, 1, 1],    // 6
+            [-1, 1, 1]    // 7
+        ];
+
+        const faces = [
+            [0, 3, 2], [0, 2, 1], // front
+            [4, 5, 6], [4, 6, 7], // back
+            [0, 4, 7], [0, 7, 3], // left
+            [1, 5, 6], [1, 6, 2], // right
+            [0, 1, 5], [0, 5, 4], // bottom
+            [3, 2, 6], [3, 6, 7]  // top
+        ];
+
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        let angleX = 0;
+        let angleY = 0;
+        let angleZ = 0;
+        let paused = false;
+        let wireframe = false;
+        let lastTime = 0;
+        let frameCount = 0;
+        let fps = 0;
+        let lightAngle = 0;
+        const lightRadius = 5;
+        const focalLength = 200;
+
+        function rotateX(point, angle) {
+            const cos = Math.cos(angle);
+            const sin = Math.sin(angle);
+            return [
+                point[0],
+                point[1] * cos - point[2] * sin,
+                point[1] * sin + point[2] * cos
+            ];
+        }
+
+        function rotateY(point, angle) {
+            const cos = Math.cos(angle);
+            const sin = Math.sin(angle);
+            return [
+                point[0] * cos + point[2] * sin,
+                point[1],
+                -point[0] * sin + point[2] * cos
+            ];
+        }
+
+        function rotateZ(point, angle) {
+            const cos = Math.cos(angle);
+            const sin = Math.sin(angle);
+            return [
+                point[0] * cos - point[1] * sin,
+                point[0] * sin + point[1] * cos,
+                point[2]
+            ];
+        }
+
+        function computeNormal(a, b, c) {
+            const ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+            const ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+            const nx = ab[1] * ac[2] - ab[2] * ac[1];
+            const ny = ab[2] * ac[0] - ab[0] * ac[2];
+            const nz = ab[0] * ac[1] - ab[1] * ac[0];
+            return [nx, ny, nz];
+        }
+
+        function getVertexNormal(vertex) {
+            const len = Math.sqrt(vertex[0]**2 + vertex[1]**2 + vertex[2]**2);
+            return [
+                vertex[0] / len,
+                vertex[1] / len,
+                vertex[2] / len
+            ];
+        }
+
+        function updateLight() {
+            lightAngle += 0.01;
+            return [
+                lightRadius * Math.cos(lightAngle),
+                lightRadius * Math.sin(lightAngle),
+                0
+            ];
+        }
+
+        function computeLightIntensity(vertex, lightPos) {
+            const vertexNormal = getVertexNormal(vertex);
+            const lightDir = [
+                lightPos[0] - vertex[0],
+                lightPos[1] - vertex[1],
+                lightPos[2] - vertex[2]
+            ];
+            const len = Math.sqrt(lightDir[0]**2 + lightDir[1]**2 + lightDir[2]**2);
+            if (len === 0) return 0;
+            lightDir[0] /= len;
+            lightDir[1] /= len;
+            lightDir[2] /= len;
+            const dot = vertexNormal[0] * lightDir[0] + vertexNormal[1] * lightDir[1] + vertexNormal[2] * lightDir[2];
+            return Math.max(0, dot);
+        }
+
+        function project(point) {
+            const x = point[0];
+            const y = point[1];
+            const z = point[2];
+            const scale = focalLength / (10 - z);
+            return [
+                x * scale + canvas.width / 2,
+                y * scale + canvas.height / 2
+            ];
+        }
+
+        function isPointInTriangle(p, a, b, c) {
+            const v0 = [c[0] - a[0], c[1] - a[1]];
+            const v1 = [b[0] - a[0], b[1] - a[1]];
+            const v2 = [p[0] - a[0], p[1] - a[1]];
+
+            const dot00 = v0[0] * v0[0] + v0[1] * v0[1];
+            const dot01 = v0[0] * v1[0] + v0[1] * v1[1];
+            const dot02 = v0[0] * v2[0] + v0[1] * v2[1];
+            const dot11 = v1[0] * v1[0] + v1[1] * v1[1];
+            const dot12 = v1[0] * v2[0] + v1[1] * v2[1];
+
+            const invDenom = 1 / (dot00 * dot11 - dot01 * dot01);
+            const u = (dot11 * dot02 - dot01 * dot12) * invDenom;
+            const v = (dot00 * dot12 - dot01 * dot02) * invDenom;
+
+            return (u >= 0) && (v >= 0) && (u + v <= 1);
+        }
+
+        function barycentric(p, a, b, c) {
+            const v0 = [c[0] - a[0], c[1] - a[1]];
+            const v1 = [b[0] - a[0], b[1] - a[1]];
+            const v2 = [p[0] - a[0], p[1] - a[1]];
+
+            const dot00 = v0[0] * v0[0] + v0[1] * v0[1];
+            const dot01 = v0[0] * v1[0] + v0[1] * v1[1];
+            const dot02 = v0[0] * v2[0] + v0[1] * v2[1];
+            const dot11 = v1[0] * v1[0] + v1[1] * v1[1];
+            const dot12 = v1[0] * v2[0] + v1[1] * v2[1];
+
+            const invDenom = 1 / (dot00 * dot11 - dot01 * dot01);
+            const u = (dot11 * dot02 - dot01 * dot12) * invDenom;
+            const v = (dot00 * dot12 - dot01 * dot02) * invDenom;
+            const w = 1 - u - v;
+
+            return [u, v, w];
+        }
+
+        function draw() {
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            if (!paused) {
+                angleX += 0.01;
+                angleY += 0.01;
+                angleZ += 0.01;
+            }
+
+            const lightPos = updateLight();
+            const rotatedVertices = vertices.map(v => {
+                let p = [...v];
+                p = rotateX(p, angleX);
+                p = rotateY(p, angleY);
+                p = rotateZ(p, angleZ);
+                return p;
+            });
+
+            const vertexNormals = rotatedVertices.map(v => getVertexNormal(v));
+            const vertexColors = rotatedVertices.map(v => {
+                const intensity = computeLightIntensity(v, lightPos);
+                const color = Math.floor(intensity * 255);
+                return [color, color, color];
+            });
+
+            faces.forEach(face => {
+                const a = rotatedVertices[face[0]];
+                const b = rotatedVertices[face[1]];
+                const c = rotatedVertices[face[2]];
+
+                const normal = computeNormal(a, b, c);
+                if (normal[2] >= 0) return;
+
+                const pa = project(a);
+                const pb = project(b);
+                const pc = project(c);
+
+                const colorA = vertexColors[face[0]];
+                const colorB = vertexColors[face[1]];
+                const colorC = vertexColors[face[2]];
+
+                if (wireframe) {
+                    ctx.strokeStyle = '#fff';
+                    ctx.beginPath();
+                    ctx.moveTo(pa[0], pa[1]);
+                    ctx.lineTo(pb[0], pb[1]);
+                    ctx.lineTo(pc[0], pc[1]);
+                    ctx.closePath();
+                    ctx.stroke();
+                } else {
+                    const minX = Math.min(pa[0], pb[0], pc[0]);
+                    const maxX = Math.max(pa[0], pb[0], pc[0]);
+                    const minY = Math.min(pa[1], pb[1], pc[1]);
+                    const maxY = Math.max(pa[1], pb[1], pc[1]);
+
+                    for (let x = Math.floor(minX); x <= Math.ceil(maxX); x++) {
+                        for (let y = Math.floor(minY); y <= Math.ceil(maxY); y++) {
+                            if (isPointInTriangle([x, y], pa, pb, pc)) {
+                                const [u, v, w] = barycentric([x, y], pa, pb, pc);
+                                const r = colorA[0] * u + colorB[0] * v + colorC[0] * w;
+                                const g = colorA[1] * u + colorB[1] * v + colorC[1] * w;
+                                const b = colorA[2] * u + colorB[2] * v + colorC[2] * w;
+                                ctx.fillStyle = `rgb(${r},${g},${b})`;
+                                ctx.fillRect(x, y, 1, 1);
+                            }
+                        }
+                    }
+                }
+            });
+
+            frameCount++;
+            const now = Date.now();
+            if (now - lastTime >= 1000) {
+                fps = frameCount;
+                frameCount = 0;
+                lastTime = now;
+            }
+            ctx.fillStyle = '#fff';
+            ctx.font = '16px Arial';
+            ctx.fillText(`FPS: ${fps}`, 10, 20);
+
+            requestAnimationFrame(draw);
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'w' || e.key === 'W') {
+                wireframe = !wireframe;
+            }
+            if (e.key === 'p' || e.key === 'P') {
+                paused = !paused;
+            }
+        });
+
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+
+        draw();
+    </script>
+</body>
+</html>

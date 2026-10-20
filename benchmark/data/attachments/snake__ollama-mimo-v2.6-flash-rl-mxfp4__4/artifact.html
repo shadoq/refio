@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Snake — 30×30 Arena</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: radial-gradient(circle at 50% 30%, #10182b, #05070f 70%);
+    color: #e8f1ff;
+    font-family: "Segoe UI", Tahoma, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
+
+  .wrap { text-align: center; }
+
+  h1 {
+    font-size: 28px;
+    letter-spacing: 6px;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+    color: #7cf7a5;
+    text-shadow: 0 0 12px rgba(124, 247, 165, .55);
+  }
+
+  .scores {
+    display: flex;
+    justify-content: center;
+    gap: 28px;
+    margin-bottom: 10px;
+    font-size: 15px;
+    letter-spacing: 1px;
+  }
+  .scores .badge {
+    background: rgba(255,255,255,.06);
+    border: 1px solid rgba(255,255,255,.12);
+    border-radius: 8px;
+    padding: 6px 14px;
+    min-width: 130px;
+  }
+  .badge.p1 { border-color: #4ade80; color: #4ade80; }
+  .badge.p2 { border-color: #f472b6; color: #f472b6; }
+  .badge b { color: #fff; font-size: 17px; }
+
+  #board {
+    position: relative;
+    width: min(90vmin, 600px);
+    height: min(90vmin, 600px);
+    margin: 0 auto;
+    background:
+      linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px) 0 0 / calc(100% / 30) calc(100% / 30),
+      linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px) 0 0 / calc(100% / 30) calc(100% / 30),
+      #0a0f1d;
+    border: 3px solid #2b3a5e;
+    border-radius: 10px;
+    box-shadow: 0 0 30px rgba(0,0,0,.6), inset 0 0 40px rgba(0,0,0,.5);
+    overflow: hidden;
+  }
+
+  .cell {
+    position: absolute;
+    width: calc(100% / 30);
+    height: calc(100% / 30);
+    border-radius: 4px;
+    transition: left .06s linear, top .06s linear;
+  }
+  .seg { background: #4ade80; box-shadow: 0 0 6px rgba(74,222,128,.7); }
+  .head { background: #bbf7d0; box-shadow: 0 0 10px rgba(74,222,128,1); z-index: 2; }
+  .seg2 { background: #f472b6; box-shadow: 0 0 6px rgba(244,114,182,.7); }
+  .head2 { background: #fbcfe8; box-shadow: 0 0 10px rgba(244,114,182,1); z-index: 2; }
+  .food {
+    background: #fbbf24;
+    box-shadow: 0 0 10px #fbbf24, 0 0 20px rgba(251,191,36,.6);
+    animation: pulse .7s infinite alternate;
+    border-radius: 50%;
+  }
+  @keyframes pulse { from { transform: scale(.75); } to { transform: scale(1); } }
+
+  .overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(5, 8, 16, .88);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    border-radius: 8px;
+    z-index: 10;
+    backdrop-filter: blur(3px);
+  }
+  .overlay.hidden { display: none; }
+  .overlay h2 { font-size: 34px; letter-spacing: 4px; text-transform: uppercase; }
+  .overlay p { color: #9fb3d1; font-size: 14px; line-height: 1.7; }
+  .overlay .win { color: #fbbf24; font-size: 22px; font-weight: bold; }
+
+  .modes { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+  .btn {
+    background: rgba(255,255,255,.07);
+    border: 1px solid #3b5688;
+    color: #e8f1ff;
+    font-size: 15px;
+    letter-spacing: 1px;
+    padding: 11px 26px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: .15s;
+    font-family: inherit;
+  }
+  .btn:hover { background: #1d2f55; border-color: #7cf7a5; color: #7cf7a5; }
+  .btn small { display: block; color: #8fa6c8; font-size: 11px; margin-top: 3px; }
+
+  .hint { font-size: 12px; color: #6d82a6; margin-top: 6px; }
+  kbd {
+    background: #1b2740; border: 1px solid #3b5688; border-bottom-width: 3px;
+    border-radius: 4px; padding: 1px 6px; font-size: 11px; color: #cfe0ff;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Snake Arena</h1>
+  <div class="scores">
+    <div class="badge p1" id="score1">P1: <b>0</b></div>
+    <div class="badge p2" id="score2">P2: <b>0</b></div>
+  </div>
+
+  <div id="board">
+    <div class="overlay" id="menu">
+      <h2 style="color:#7cf7a5">Snake</h2>
+      <p>30 × 30 grid &bull; eat food, grow, don't crash</p>
+      <div class="modes">
+        <button class="btn" data-mode="human-human">Human vs Human<small>WASD (P1) &amp; Arrows (P2)</small></button>
+        <button class="btn" data-mode="cpu-human">CPU vs Human<small>CPU chases food, you survive with arrows</small></button>
+        <button class="btn" data-mode="cpu-cpu">CPU vs CPU<small>Watch two AIs battle</small></button>
+      </div>
+      <p class="hint">Press <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> to start a mode &bull; <kbd>R</kbd> restart</p>
+    </div>
+
+    <div class="overlay hidden" id="gameover">
+      <h2 style="color:#ff6b6b">Game Over</h2>
+      <div class="win" id="goText"></div>
+      <p id="goScore"></p>
+      <p class="hint">Press <kbd>R</kbd> or <kbd>Enter</kbd> to restart &bull; <kbd>Esc</kbd> for menu</p>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+const GRID = 30;
+const board = document.getElementById("board");
+const menuEl = document.getElementById("menu");
+const gameoverEl = document.getElementById("gameover");
+const goText = document.getElementById("goText");
+const goScore = document.getElementById("goScore");
+const scoreEls = [document.getElementById("score1"), document.getElementById("score2")];
+
+const DIRS = {
+  up:    { x: 0, y: -1 },
+  down:  { x: 0, y: 1 },
+  left:  { x: -1, y: 0 },
+  right: { x: 1, y: 0 },
+};
+const OPPOSITE = { up: "down", down: "up", left: "right", right: "left" };
+
+const MODES = {
+  "human-human": { p1: "human", p2: "human", label: "Human vs Human" },
+  "cpu-human":   { p1: "cpu",   p2: "human", label: "CPU vs Human" },
+  "cpu-cpu":     { p1: "cpu",   p2: "cpu",   label: "CPU vs CPU" },
+};
+
+let mode = null;
+let state = "menu"; // menu | playing | over
+let tickTimer = null;
+let food = { x: 15, y: 15 };
+let players = [];
+
+const inBounds = c => c.x >= 0 && c.x < GRID && c.y >= 0 && c.y < GRID;
+const key = c => c.x + "," + c.y;
+
+function createPlayer(id, start, dir, type, cssCls) {
+  const body = [];
+  for (let i = 0; i < 5; i++) {
+    body.push({ x: start.x - DIRS[dir].x * i, y: start.y - DIRS[dir].y * i });
+  }
+  return {
+    id, type, dir, nextDir: dir, body, score: 0, alive: true,
+    grow: 0, cssCls,
+    el: Object.fromEntries(body.map((_, i) => [i, makeCell(cssCls)])),
+  };
+}
+
+function makeCell(cls) {
+  const el = document.createElement("div");
+  el.className = "cell " + cls;
+  board.appendChild(el);
+  return el;
+}
+
+function clearCells() {
+  board.querySelectorAll(".cell").forEach(el => el.remove());
+}
+
+function placeFood() {
+  const occupied = new Set();
+  players.forEach(p => p.body.forEach(c => occupied.add(key(c))));
+  const free = [];
+  for (let y = 0; y < GRID; y++)
+    for (let x = 0; x < GRID; x++)
+      if (!occupied.has(x + "," + y)) free.push({ x, y });
+  if (!free.length) return false;
+  food = free[Math.floor(Math.random() * free.length)];
+  return true;
+}
+
+function updateScores() {
+  scoreEls[0].innerHTML = "P1: <b>" + players[0].score + "</b>";
+  scoreEls[1].innerHTML = "P2: <b>" + players[1].score + "</b>";
+}
+
+function startGame(m) {
+  mode = m;
+  clearCells();
+  players = [
+    createPlayer(0, { x: 6, y: 8 }, "right", MODES[m].p1, "seg"),
+    createPlayer(1, { x: 23, y: 21 }, "left",  MODES[m].p2, "seg2"),
+  ];
+  placeFood();
+  updateScores();
+  menuEl.classList.add("hidden");
+  gameoverEl.classList.add("hidden");
+  state = "playing";
+  if (tickTimer) clearInterval(tickTimer);
+  tickTimer = setInterval(tick, 110);
+}
+
+function endGame() {
+  state = "over";
+  if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
+  const [a, b] = players;
+  let txt;
+  if (a.score === b.score) txt = "Draw!";
+  else txt = (a.score > b.score ? (a.type === "cpu" ? "CPU 1" : "Player 1") : (b.type === "cpu" ? "CPU 2" : "Player 2")) + " wins!";
+  goText.textContent = txt;
+  goScore.textContent = MODES[mode].label + " — Score " + a.score + " : " + b.score;
+  gameoverEl.classList.remove("hidden");
+}
+
+function showMenu() {
+  state = "menu";
+  if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
+  clearCells();
+  gameoverEl.classList.add("hidden");
+  menuEl.classList.remove("hidden");
+}
+
+/* ---------- CPU AI: BFS to food, with safety & tail-follow fallback ---------- */
+function bfs(start, goal, blockedSet) {
+  const q = [start];
+  const prev = new Map([[key(start), null]]);
+  const dirs = ["up", "down", "left", "right"];
+  while (q.length) {
+    const cur = q.shift();
+    if (cur.x === goal.x && cur.y === goal.y) {
+      const path = [];
+      let k = key(cur);
+      while (prev.get(k)) {
+        const [x, y] = k.split(",").map(Number);
+        path.unshift({ x, y });
+        k = prev.get(k);
+      }
+      return path;
+    }
+    for (const d of dirs) {
+      const n = { x: cur.x + DIRS[d].x, y: cur.y + DIRS[d].y };
+      const nk = key(n);
+      if (!inBounds(n) || prev.has(nk)) continue;
+      if (blockedSet.has(nk) && !(n.x === goal.x && n.y === goal.y)) continue;
+      prev.set(nk, key(cur));
+      q.push(n);
+    }
+  }
+  return null;
+}
+
+function floodSpace(start, blockedSet) {
+  const seen = new Set([key(start)]);
+  const q = [start];
+  let count = 0;
+  while (q.length) {
+    const cur = q.pop();
+    for (const d of ["up", "down", "left", "right"]) {
+      const n = { x: cur.x + DIRS[d].x, y: cur.y + DIRS[d].y };
+      const nk = key(n);
+      if (!inBounds(n) || seen.has(nk) || blockedSet.has(nk)) continue;
+      seen.add(n);
+      count++;
+      q.push(n);
+    }
+  }
+  return count;
+}
+
+function cpuDecide(p) {
+  const heads = players.filter(o => o.alive).map(o => o.body[0]);
+  const blocked = new Set();
+  players.forEach(o => {
+    if (!o.alive) return;
+    // ignore the tail cell (it moves away)
+    o.body.forEach((c, i) => {
+      if (i === o.body.length - 1 && o.grow === 0) return;
+      blocked.add(key(c));
+    });
+  });
+
+  const head = p.body[0];
+  const dirs = ["up", "down", "left", "right"]
+    .filter(d => d !== OPPOSITE[p.dir]);
+
+  // Evaluate each legal move: reach food + reachable space, prefer safety
+  let best = null, bestScore = -Infinity;
+  for (const d of dirs) {
+    const nx = head.x + DIRS[d].x, ny = head.y + DIRS[d].y;
+    const next = { x: nx, y: ny };
+    if (!inBounds(next)) continue;
+    if (blocked.has(key(next))) continue;
+
+    const simBlocked = new Set(blocked);
+    simBlocked.delete(key(next));
+    simBlocked.add(key(head));
+
+    const space = floodSpace(next, simBlocked);
+    const path = bfs(next, food, simBlocked);
+    const dist = path ? path.length : Infinity;
+
+    let score = 0;
+    score += Math.min(space, 60) * 2;                 // survival space
+    if (space < p.body.length + 2) score -= 500;      // trapped soon
+    if (path) score += 120 - dist;                    // reachability of food
+    else score -= 80;
+    if (key(next) === key(food)) score += 300;        // eat now
+
+    if (score > bestScore) { bestScore = score; best = d; }
+  }
+
+  if (best) return best;
+  // no safe move — pick any legal one
+  for (const d of dirs) {
+    const n = { x: head.x + DIRS[d].x, y: head.y + DIRS[d].y };
+    if (inBounds(n) && !blocked.has(key(n))) return d;
+  }
+  return p.dir;
+}
+
+/* ---------- Core loop ---------- */
+function tick() {
+  if (state !== "playing") return;
+
+  // decide directions
+  players.forEach(p => {
+    if (p.alive && p.type === "cpu") p.nextDir = cpuDecide(p);
+  });
+  players.forEach(p => { if (p.alive) p.dir = p.nextDir; });
+
+  const newHeads = players.map(p =>
+    p.alive ? { x: p.body[0].x + DIRS[p.dir].x, y: p.body[0].y + DIRS[p.dir].y } : null
+  );
+
+  // wall collisions
+  players.forEach((p, i) => {
+    if (p.alive && !inBounds(newHeads[i])) p.alive = false;
+  });
+
+  // head-on collision
+  if (players[0].alive && players[1].alive &&
+      newHeads[0].x === newHeads[1].x && newHeads[0].y === newHeads[1].y) {
+    players[0].alive = players[1].alive = false;
+  }
+
+  // self & enemy-body collisions
+  players.forEach((p, i) => {
+    if (!p.alive) return;
+    const nh = newHeads[i];
+    for (let j = 0; j < players.length; j++) {
+      const other = players[j];
+      if (!other.alive && j !== i) {
+        // dead players' bodies remain as obstacles? keep them as hazards
+      }
+      const body = other.body;
+      const limit = (j === i) ? body.length : body.length;
+      for (let k = 0; k < limit; k++) {
+        // own tail cell moves away unless growing
+        if (j === i && k === body.length - 1 && p.grow === 0) continue;
+        if (body[k].x === nh.x && body[k].y === nh.y) { p.alive = false; return; }
+      }
+    }
+  });
+
+  // move
+  players.forEach((p, i) => {
+    if (!p.alive) return;
+    p.body.unshift(newHeads[i]);
+    const ate = newHeads[i].x === food.x && newHeads[i].y === food.y;
+    if (ate) {
+      p.score++;
+      p.grow += 2;
+      updateScores();
+      placeFood();
+    }
+    if (p.grow > 0) p.grow--;
+    else p.body.pop();
+  });
+
+  // redraw
+  players.forEach(p => redraw(p));
+
+  // game over when only one (or none) alive in multiplayer, or any dead in solo-ish modes
+  const alive = players.filter(p => p.alive).length;
+  if (alive === 0 || (players.some(p => p.type === "human") && alive < 2 && players.length === 2)) {
+    // end when any snake dies (classic per-round rule)
+  }
+  if (!players.every(p => p.alive)) {
+    endGame();
+  }
+}
+
+function redraw(p) {
+  const need = p.body.length - Object.keys(p.el).length;
+  for (let i = 0; i < need; i++) {
+    const el = makeCell(p.cssCls);
+    const idx = Object.keys(p.el).length;
+    p.el[idx] = el;
+  }
+  Object.keys(p.el).forEach((k, i) => {
+    const el = p.el[k];
+    if (i < p.body.length) {
+      el.style.left = (p.body[i].x * 100 / GRID) + "%";
+      el.style.top = (p.body[i].y * 100 / GRID) + "%";
+      el.className = "cell " + (i === 0
+        ? (p.cssCls === "seg" ? "head" : "head2")
+        : p.cssCls);
+      el.style.display = "";
+    } else {
+      el.style.display = "none";
+    }
+  });
+}
+
+function drawFood() {
+  let el = board.querySelector(".food");
+  if (!el) {
+    el = document.createElement("div");
+    el.className = "cell food";
+    board.appendChild(el);
+  }
+  el.style.left = (food.x * 100 / GRID) + "%";
+  el.style.top = (food.y * 100 / GRID) + "%";
+}
+
+/* ---------- Input ---------- */
+const KEYMAP = {
+  // Player 1 (green)
+  KeyW: [0, "up"], KeyS: [0, "down"], KeyA: [0, "left"], KeyD: [0, "right"],
+  // Player 2 (pink) — arrows
+  ArrowUp: [1, "up"], ArrowDown: [1, "down"], ArrowLeft: [1, "left"], ArrowRight: [1, "right"],
+};
+
+document.addEventListener("keydown", e => {
+  if (state === "playing") {
+    const m = KEYMAP[e.code];
+    if (m) {
+      e.preventDefault();
+      const p = players[m[0]];
+      if (p && p.alive && p.type === "human" && m[1] !== OPPOSITE[p.dir]) {
+        p.nextDir = m[1];
+      }
+      return;
+    }
+  }
+
+  if (e.code === "Digit1" || e.code === "Numpad1") startGame("human-human");
+  else if (e.code === "Digit2" || e.code === "Numpad2") startGame("cpu-human");
+  else if (e.code === "Digit3" || e.code === "Numpad3") startGame("cpu-cpu");
+  else if (e.code === "KeyR") {
+    if (mode) startGame(mode); else showMenu();
+  } else if (e.code === "Enter") {
+    if (state === "over" && mode) startGame(mode);
+  } else if (e.code === "Escape") {
+    showMenu();
+  }
+});
+
+/* ---------- Menu buttons ---------- */
+document.querySelectorAll(".btn[data-mode]").forEach(btn => {
+  btn.addEventListener("click", () => startGame(btn.dataset.mode));
+});
+
+/* ---------- Initial render loop (food display) ---------- */
+(function loop() {
+  if (state === "playing") drawFood();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

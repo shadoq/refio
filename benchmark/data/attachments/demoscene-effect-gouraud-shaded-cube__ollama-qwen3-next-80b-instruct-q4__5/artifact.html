@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gouraud-Shaded Rotating Cube</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: Arial, sans-serif;
+        }
+        canvas {
+            background-color: #000;
+        }
+        #fps {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-size: 14px;
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 5px;
+            border-radius: 3px;
+        }
+        #instructions {
+            position: absolute;
+            bottom: 10px;
+            color: white;
+            font-size: 14px;
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 5px;
+            border-radius: 3px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <div id="fps">FPS: 0</div>
+    <div id="instructions">W: Toggle wireframe | P: Pause | Arrow keys: Rotate camera</div>
+
+    <script>
+        // Canvas setup
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const fpsDisplay = document.getElementById('fps');
+        
+        // Set canvas size
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        
+        // Cube vertices (8 corners of a cube centered at origin)
+        const vertices = [
+            [-1, -1, -1], // 0
+            [1, -1, -1],  // 1
+            [1, 1, -1],   // 2
+            [-1, 1, -1],  // 3
+            [-1, -1, 1],  // 4
+            [1, -1, 1],   // 5
+            [1, 1, 1],    // 6
+            [-1, 1, 1]    // 7
+        ];
+        
+        // Define faces as triangles (12 triangles for 6 faces)
+        // Each face is split into 2 triangles
+        const triangles = [
+            // Front face (z = -1)
+            [0, 1, 2], [0, 2, 3],
+            // Back face (z = 1)
+            [4, 7, 6], [4, 6, 5],
+            // Right face (x = 1)
+            [1, 5, 6], [1, 6, 2],
+            // Left face (x = -1)
+            [0, 3, 7], [0, 7, 4],
+            // Top face (y = 1)
+            [3, 2, 6], [3, 6, 7],
+            // Bottom face (y = -1)
+            [0, 4, 5], [0, 5, 1]
+        ];
+        
+        // Lighting
+        const lightPosition = [2, 2, 2]; // Initial position
+        const lightColor = [1, 1, 1]; // White light
+        const ambientLight = 0.2; // Ambient light component
+        
+        // Camera parameters
+        const cameraPosition = [0, 0, 5];
+        const fov = 500; // Field of view
+        let cameraRotation = [0, 0]; // [x, y] rotation in radians
+        
+        // Animation state
+        let rotation = [0, 0, 0]; // [x, y, z] rotation in radians
+        let isPaused = false;
+        let showWireframe = false;
+        let lastTime = 0;
+        let frameCount = 0;
+        let fps = 0;
+        let fpsTimer = 0;
+        
+        // Matrix operations
+        function multiplyMatrix(m1, m2) {
+            const result = [];
+            for (let i = 0; i < 3; i++) {
+                result[i] = [];
+                for (let j = 0; j < 3; j++) {
+                    result[i][j] = 0;
+                    for (let k = 0; k < 3; k++) {
+                        result[i][j] += m1[i][k] * m2[k][j];
+                    }
+                }
+            }
+            return result;
+        }
+        
+        function createRotationMatrix(axis, angle) {
+            const cos = Math.cos(angle);
+            const sin = Math.sin(angle);
+            const matrix = [
+                [1, 0, 0],
+                [0, 1, 0],
+                [0, 0, 1]
+            ];
+            
+            if (axis === 'x') {
+                matrix[1][1] = cos; matrix[1][2] = -sin;
+                matrix[2][1] = sin; matrix[2][2] = cos;
+            } else if (axis === 'y') {
+                matrix[0][0] = cos; matrix[0][2] = sin;
+                matrix[2][0] = -sin; matrix[2][2] = cos;
+            } else if (axis === 'z') {
+                matrix[0][0] = cos; matrix[0][1] = -sin;
+                matrix[1][0] = sin; matrix[1][1] = cos;
+            }
+            
+            return matrix;
+        }
+        
+        function multiplyVectorMatrix(vector, matrix) {
+            return [
+                vector[0] * matrix[0][0] + vector[1] * matrix[1][0] + vector[2] * matrix[2][0],
+                vector[0] * matrix[0][1] + vector[1] * matrix[1][1] + vector[2] * matrix[2][1],
+                vector[0] * matrix[0][2] + vector[1] * matrix[1][2] + vector[2] * matrix[2][2]
+            ];
+        }
+        
+        function normalize(vector) {
+            const length = Math.sqrt(vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2]);
+            if (length === 0) return [0, 0, 0];
+            return [vector[0] / length, vector[1] / length, vector[2] / length];
+        }
+        
+        function dotProduct(a, b) {
+            return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        }
+        
+        function subtractVectors(a, b) {
+            return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+        }
+        
+        function crossProduct(a, b) {
+            return [
+                a[1] * b[2] - a[2] * b[1],
+                a[2] * b[0] - a[0] * b[2],
+                a[0] * b[1] - a[1] * b[0]
+            ];
+        }
+        
+        // Project 3D point to 2D screen
+        function project(point) {
+            // Apply camera rotation
+            const cameraRotX = createRotationMatrix('x', cameraRotation[0]);
+            const cameraRotY = createRotationMatrix('y', cameraRotation[1]);
+            
+            // Translate point relative to camera
+            const translated = subtractVectors(point, cameraPosition);
+            
+            // Apply camera rotation
+            let rotated = multiplyVectorMatrix(translated, cameraRotY);
+            rotated = multiplyVectorMatrix(rotated, cameraRotX);
+            
+            // Perspective projection
+            if (rotated[2] <= 0) return null; // Behind camera
+            
+            const scale = fov / rotated[2];
+            return [
+                rotated[0] * scale,
+                rotated[1] * scale
+            ];
+        }
+        
+        // Calculate Lambertian lighting for a vertex
+        function calculateLighting(vertex) {
+            // For a cube, the normal at each vertex is the normalized vertex position
+            let normal = normalize(vertex);
+            
+            // Calculate light direction
+            const lightDir = normalize(subtractVectors(lightPosition, vertex));
+            
+            // Lambert's cosine law: I = I0 * max(0, N · L)
+            const intensity = Math.max(0, dotProduct(normal, lightDir));
+            
+            // Combine with ambient light
+            const finalIntensity = ambientLight + (1 - ambientLight) * intensity;
+            
+            // Apply light color
+            return [
+                lightColor[0] * finalIntensity,
+                lightColor[1] * finalIntensity,
+                lightColor[2] * finalIntensity
+            ];
+        }
+        
+        // Draw a triangle with Gouraud shading using pixel-by-pixel interpolation
+        function drawTriangle(v1, v2, v3, c1, c2, c3) {
+            // Convert 3D points to 2D screen coordinates
+            const p1 = project(v1);
+            const p2 = project(v2);
+            const p3 = project(v3);
+            
+            if (!p1 || !p2 || !p3) return; // Skip if any point is behind camera
+            
+            // Get screen coordinates
+            const x1 = p1[0] + canvas.width / 2;
+            const y1 = p1[1] + canvas.height / 2;
+            const x2 = p2[0] + canvas.width / 2;
+            const y2 = p2[1] + canvas.height / 2;
+            const x3 = p3[0] + canvas.width / 2;
+            const y3 = p3[1] + canvas.height / 2;
+            
+            // Find bounding box
+            const minX = Math.max(0, Math.min(x1, x2, x3));
+            const maxX = Math.min(canvas.width, Math.max(x1, x2, x3));
+            const minY = Math.max(0, Math.min(y1, y2, y3));
+            const maxY = Math.min(canvas.height, Math.max(y1, y2, y3));
+            
+            // Create image data for the triangle
+            const imageData = ctx.createImageData(canvas.width, canvas.height);
+            const data = imageData.data;
+            
+            // For each pixel in the bounding box
+            for (let y = minY; y < maxY; y++) {
+                for (let x = minX; x < maxX; x++) {
+                    // Calculate barycentric coordinates
+                    const denom = (y2 - y3) * (x1 - x3) + (x3 - x2) * (y1 - y3);
+                    if (denom === 0) continue;
+                    
+                    const a = ((y2 - y3) * (x - x3) + (x3 - x2) * (y - y3)) / denom;
+                    const b = ((y3 - y1) * (x - x3) + (x1 - x3) * (y - y3)) / denom;
+                    const c = 1 - a - b;
+                    
+                    // Check if point is inside triangle
+                    if (a >= 0 && b >= 0 && c >= 0) {
+                        // Interpolate colors using barycentric coordinates
+                        const r = a * c1[0] + b * c2[0] + c * c3[0];
+                        const g = a * c1[1] + b * c2[1] + c * c3[1];
+                        const bVal = a * c1[2] + b * c2[2] + c * c3[2];
+                        
+                        // Clamp values to [0, 1]
+                        const rClamped = Math.min(1, Math.max(0, r));
+                        const gClamped = Math.min(1, Math.max(0, g));
+                        const bClamped = Math.min(1, Math.max(0, bVal));
+                        
+                        // Convert to 0-255 range
+                        const rInt = Math.floor(rClamped * 255);
+                        const gInt = Math.floor(gClamped * 255);
+                        const bInt = Math.floor(bClamped * 255);
+                        
+                        // Set pixel
+                        const index = (y * canvas.width + x) * 4;
+                        data[index] = rInt;
+                        data[index + 1] = gInt;
+                        data[index + 2] = bInt;
+                        data[index + 3] = 255;
+                    }
+                }
+            }
+            
+            // Draw the interpolated triangle
+            ctx.putImageData(imageData, 0, 0);
+            
+            // Draw wireframe if enabled
+            if (showWireframe) {
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(x1, y1);
+                ctx.lineTo(x2, y2);
+                ctx.lineTo(x3, y3);
+                ctx.closePath();
+                ctx.stroke();
+            }
+        }
+        
+        // Animation loop
+        function animate(currentTime) {
+            // Calculate FPS
+            frameCount++;
+            fpsTimer += currentTime - lastTime;
+            if (fpsTimer >= 1000) {
+                fps = Math.round(frameCount * 1000 / fpsTimer);
+                frameCount = 0;
+                fpsTimer = 0;
+                fpsDisplay.textContent = `FPS: ${fps}`;
+            }
+            lastTime = currentTime;
+            
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            if (!isPaused) {
+                // Update rotation
+                rotation[0] += 0.005;
+                rotation[1] += 0.007;
+                rotation[2] += 0.003;
+                
+                // Update light position (orbit around cube)
+                const lightRadius = 3;
+                const lightAngle = currentTime * 0.0005;
+                lightPosition[0] = Math.cos(lightAngle) * lightRadius;
+                lightPosition[1] = Math.sin(lightAngle) * lightRadius;
+                lightPosition[2] = Math.sin(lightAngle * 0.7) * lightRadius * 0.5;
+            }
+            
+            // Apply rotations to vertices
+            const rotX = createRotationMatrix('x', rotation[0]);
+            const rotY = createRotationMatrix('y', rotation[1]);
+            const rotZ = createRotationMatrix('z', rotation[2]);
+            
+            // Combine rotations
+            const rotXY = multiplyMatrix(rotX, rotY);
+            const rotXYZ = multiplyMatrix(rotXY, rotZ);
+            
+            // Transform vertices
+            const transformedVertices = vertices.map(v => multiplyVectorMatrix(v, rotXYZ));
+            
+            // Calculate lighting for each vertex
+            const vertexColors = transformedVertices.map(v => calculateLighting(v));
+            
+            // Draw triangles
+            triangles.forEach(triangle => {
+                const v1 = transformedVertices[triangle[0]];
+                const v2 = transformedVertices[triangle[1]];
+                const v3 = transformedVertices[triangle[2]];
+                
+                const c1 = vertexColors[triangle[0]];
+                const c2 = vertexColors[triangle[1]];
+                const c3 = vertexColors[triangle[2]];
+                
+                // Backface culling
+                // Calculate normal of triangle
+                const edge1 = subtractVectors(v2, v1);
+                const edge2 = subtractVectors(v3, v1);
+                const normal = crossProduct(edge1, edge2);
+                
+                // Calculate vector from camera to triangle center
+                const center = [
+                    (v1[0] + v2[0] + v3[0]) / 3,
+                    (v1[1] + v2[1] + v3[1]) / 3,
+                    (v1[2] + v2[2] + v3[2]) / 3
+                ];
+                const viewVector = subtractVectors(center, cameraPosition);
+                
+                // If dot product of normal and view vector is positive, face is visible
+                if (dotProduct(normal, viewVector) > 0) {
+                    drawTriangle(v1, v2, v3, c1, c2, c3);
+                }
+            });
+            
+            requestAnimationFrame(animate);
+        }
+        
+        // Handle keyboard input
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'w' || e.key === 'W') {
+                showWireframe = !showWireframe;
+            } else if (e.key === 'p' || e.key === 'P') {
+                isPaused = !isPaused;
+            } else if (e.key === 'ArrowUp') {
+                cameraRotation[0] -= 0.1;
+            } else if (e.key === 'ArrowDown') {
+                cameraRotation[0] += 0.1;
+            } else if (e.key === 'ArrowLeft') {
+                cameraRotation[1] -= 0.1;
+            } else if (e.key === 'ArrowRight') {
+                cameraRotation[1] += 0.1;
+            }
+        });
+        
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+        
+        // Start animation
+        animate(0);
+    </script>
+</body>
+</html>
