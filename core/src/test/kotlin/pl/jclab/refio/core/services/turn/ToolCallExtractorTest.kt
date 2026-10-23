@@ -185,6 +185,30 @@ class ToolCallExtractorTest {
     }
 
     @Test
+    fun `native channel with no calls at finishReason=length is output truncation, not a finish`() {
+        // glm-5.3-flash spent 32649 of 32684 completion tokens on reasoning and was cut off before
+        // emitting any tool call; the turn used to end as success with zero tools and no file written.
+        val result = extract(response(content = "", native = emptyList(), finishReason = "length"))
+        assertIs<ExtractionResult.None>(result)
+        assertEquals("output-truncated-no-calls", result.reason)
+        assertTrue(result.isOutputTruncated)
+    }
+
+    @Test
+    fun `blank text response at finishReason=length is output truncation, not a blank finish`() {
+        val result = extract(response(content = "  ", finishReason = "length"))
+        assertIs<ExtractionResult.None>(result)
+        assertTrue(result.isOutputTruncated)
+    }
+
+    @Test
+    fun `native prose answer that stopped normally is still a legitimate finish`() {
+        val result = extract(response(content = "All done.", native = emptyList(), finishReason = "stop"))
+        assertIs<ExtractionResult.None>(result)
+        assertTrue(!result.isOutputTruncated)
+    }
+
+    @Test
     fun `a complete envelope is parsed even when finishReason=length, never mislabeled truncated`() {
         // finishReason=length alone must not trigger truncation handling — only an *incomplete* envelope
         // does. A complete, parseable envelope still yields its calls.
@@ -205,16 +229,6 @@ class ToolCallExtractorTest {
         val result = extract(r)
         assertIs<ExtractionResult.None>(result)
         assertEquals("final-text-no-toolcall", result.reason)
-    }
-
-    @Test
-    fun `native channel is never flagged truncated even at finishReason=length`() {
-        // Native is authoritative and returns before truncation inspection; an empty native reply is a
-        // finish regardless of finishReason (mirrors the loop's !usedNativeChannel precondition).
-        val r = response(content = "", native = emptyList(), finishReason = "length")
-        val result = extract(r)
-        assertIs<ExtractionResult.None>(result)
-        assertEquals("native-channel-no-calls", result.reason)
     }
 
     @Test

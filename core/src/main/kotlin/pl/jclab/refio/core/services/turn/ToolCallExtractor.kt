@@ -40,7 +40,16 @@ sealed interface ExtractionResult {
     data class Calls(val calls: List<ToolCallData>, val source: ToolCallSource) : ExtractionResult
 
     /** No tool call. [reason] distinguishes a legitimate finish from a failed attempt. */
-    data class None(val reason: String) : ExtractionResult
+    data class None(val reason: String) : ExtractionResult {
+        /** The model hit the output-token cap before finishing; the turn must fail, not end as done. */
+        val isOutputTruncated: Boolean
+            get() = reason == INCOMPLETE_JSON_TRUNCATED || reason == OUTPUT_TRUNCATED_NO_CALLS
+    }
+
+    companion object {
+        const val INCOMPLETE_JSON_TRUNCATED = "incomplete-json-truncated"
+        const val OUTPUT_TRUNCATED_NO_CALLS = "output-truncated-no-calls"
+    }
 }
 
 /**
@@ -85,6 +94,9 @@ class ToolCallExtractor(
     // value up to the next comma (group 3).
     private val labeledArgRegex = Regex("""([A-Za-z_]\w*)\s*=\s*(?:"([^"]*)"|([^,]+))""")
 
+    private fun isOutputCapped(response: LLMResponse): Boolean =
+        response.finishReason == "length" || response.finishReason == StreamFinishReason.TRUNCATED
+
     fun extract(
         response: LLMResponse,
         contentForExtraction: String,
@@ -120,6 +132,9 @@ class ToolCallExtractor(
                     return ExtractionResult.Calls(recovered, ToolCallSource.JSON)
                 }
             }
+            // Cut off by the output cap before any call (e.g. reasoning ate the whole budget): the
+            // model never finished, so this must not pass as a prose finish.
+            if (isOutputCapped(response)) return ExtractionResult.None(ExtractionResult.OUTPUT_TRUNCATED_NO_CALLS)
             return ExtractionResult.None("native-channel-no-calls")
         }
 
@@ -159,10 +174,13 @@ class ToolCallExtractor(
         //    matching the turn loop's long-standing `!usedNativeChannel` precondition.
         // A stream cut off mid-answer leaves the same unclosed envelope as an exhausted output
         // budget, so both reach this branch.
-        if (response.finishReason == "length" || response.finishReason == StreamFinishReason.TRUNCATED) {
+        if (isOutputCapped(response)) {
             val envelope = parser.inspectJsonEnvelope(contentForExtraction)
             if (envelope.hasJsonEnvelope && !envelope.isComplete) {
-                return ExtractionResult.None("incomplete-json-truncated")
+                return ExtractionResult.None(ExtractionResult.INCOMPLETE_JSON_TRUNCATED)
+            }
+            if (contentForExtraction.isBlank()) {
+                return ExtractionResult.None(ExtractionResult.OUTPUT_TRUNCATED_NO_CALLS)
             }
         }
 

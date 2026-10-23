@@ -1273,15 +1273,15 @@ internal class TurnExecutor(
                         jsonEnvelopeInspection.hasJsonEnvelope || contentForExtraction.trim().startsWith("[")
                     }
 
-                    // Truncated response with incomplete JSON. Detection now lives in ToolCallExtractor
+                    // Response cut off by the output cap before a complete tool call. Detection lives in ToolCallExtractor
                     // — it inspects the envelope and reports the distinct reason — so the
                     // turn loop only reacts to that verdict instead of re-deriving the condition here.
-                    val isTruncatedWithIncompleteJson =
-                        extraction is ExtractionResult.None && extraction.reason == "incomplete-json-truncated"
+                    val isOutputTruncated = extraction is ExtractionResult.None && extraction.isOutputTruncated
 
-                    if (isTruncatedWithIncompleteJson) {
+                    if (isOutputTruncated) {
                         logger.error {
-                            "[TRUNCATED_RESPONSE] Response truncated (finishReason=length) with incomplete JSON. " +
+                            "[TRUNCATED_RESPONSE] Response truncated (finishReason=${llmResponse.finishReason}) " +
+                            "before a complete tool call (reason=${(extraction as ExtractionResult.None).reason}). " +
                             "Response length: ${llmResponse.content.length} chars"
                         }
                         val result = TurnResult(
