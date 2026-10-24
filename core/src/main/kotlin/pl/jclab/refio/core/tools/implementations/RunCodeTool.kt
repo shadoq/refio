@@ -1,10 +1,9 @@
 package pl.jclab.refio.core.tools.implementations
 
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import pl.jclab.refio.core.logging.dualLogger
+import pl.jclab.refio.core.services.ProcessTreeTracker
 import pl.jclab.refio.core.tools.PathSandbox
 import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolCategory
@@ -18,6 +17,7 @@ import pl.jclab.refio.core.security.ExecutionSandbox
 import pl.jclab.refio.core.security.HostExecutionSandbox
 import java.nio.file.Files
 import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 
 private val logger = dualLogger("RunCodeTool")
 
@@ -125,18 +125,42 @@ class RunCodeTool(
             }
             val process = processBuilder.start()
 
-            val outputDeferred = async(Dispatchers.IO) {
-                process.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            // The script runs under a shell, and anything it spawns inherits stdout. Killing only
+            // the shell leaves that child holding the pipe open, so retain the descendant tree.
+            val processTree = ProcessTreeTracker(process, threadName = "run-code-descendants")
+
+            // Drain on a plain daemon thread: a blocking pipe read ignores coroutine cancellation,
+            // and as a child coroutine it would keep this withContext from ever returning.
+            val outputBuffer = StringBuilder()
+            val reader = thread(isDaemon = true, name = "run-code-reader") {
+                try {
+                    process.inputStream.bufferedReader(Charsets.UTF_8).use { br ->
+                        val buffer = CharArray(READER_CHUNK_CHARS)
+                        while (true) {
+                            val read = br.read(buffer)
+                            if (read < 0) {
+                                break
+                            }
+                            synchronized(outputBuffer) {
+                                outputBuffer.append(buffer, 0, read)
+                            }
+                        }
+                    }
+                } catch (streamClosed: Exception) {
+                    // Stream was closed (e.g. process tree destroyed) - stop draining.
+                }
             }
 
+            fun snapshotOutput(): String = synchronized(outputBuffer) { outputBuffer.toString() }
+
             val completed = process.waitFor(effectiveTimeout, TimeUnit.SECONDS)
+            processTree.close()
 
             if (!completed) {
-                process.destroyForcibly()
+                processTree.destroyTree()
+                reader.join(READER_FINAL_GRACE_MS)
                 // Capture partial output instead of discarding it
-                val partialOutput = withTimeoutOrNull(3000L) {
-                    runCatching { outputDeferred.await() }.getOrDefault("")
-                } ?: ""
+                val partialOutput = snapshotOutput()
                 val duration = (System.currentTimeMillis() - startTime).toInt()
 
                 logger.warn { "Code execution timed out after ${effectiveTimeout}s, partial output=${partialOutput.length} chars" }
@@ -169,7 +193,15 @@ class RunCodeTool(
                 )
             }
 
-            val output = runCatching { outputDeferred.await() }.getOrDefault("")
+            // The script exited, but a child it left running may still hold stdout open.
+            reader.join(READER_DRAIN_GRACE_MS)
+            if (reader.isAlive) {
+                logger.warn { "Code exited but left a child holding stdout open; killing surviving process tree" }
+                processTree.destroyTree()
+                reader.join(READER_FINAL_GRACE_MS)
+            }
+
+            val output = snapshotOutput()
             val exitCode = process.exitValue()
             val duration = (System.currentTimeMillis() - startTime).toInt()
 
@@ -346,6 +378,12 @@ class RunCodeTool(
         /** Head/tail snippet sizes returned to the model when the hard cap is exceeded. */
         const val LARGE_OUTPUT_HEAD_CHARS = 4_000
         const val LARGE_OUTPUT_TAIL_CHARS = 2_000
+
+        private const val READER_CHUNK_CHARS = 8192
+        /** How long the reader may keep flushing after the script exits before survivors are killed. */
+        private const val READER_DRAIN_GRACE_MS = 2000L
+        /** How long to wait for the reader once the process tree has been killed. */
+        private const val READER_FINAL_GRACE_MS = 3000L
 
         val SUPPORTED_LANGUAGES = mapOf(
             "python" to LanguageConfig(

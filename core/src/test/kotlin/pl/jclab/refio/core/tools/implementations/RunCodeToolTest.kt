@@ -3,14 +3,21 @@ package pl.jclab.refio.core.tools.implementations
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Nested
+import org.junit.jupiter.api.Assertions.assertTimeoutPreemptively
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.condition.DisabledOnOs
+import org.junit.jupiter.api.condition.OS
 import org.junit.jupiter.api.io.TempDir
 import pl.jclab.refio.core.security.ExecutionIsolationMode
 import pl.jclab.refio.core.security.HostExecutionSandbox
 import pl.jclab.refio.core.tools.PathSandbox
 import pl.jclab.refio.core.tools.base.ToolCategory
 import pl.jclab.refio.core.tools.base.ToolMode
+import pl.jclab.refio.core.tools.base.ToolResult
+import java.nio.file.Files
 import java.nio.file.Path
+import java.time.Duration
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
@@ -281,6 +288,38 @@ class RunCodeToolTest {
                     "Expected timeout error but got: ${result.error}"
                 )
             }
+        }
+
+        /**
+         * A script whose child inherits stdout (a spawned server, a never-ending emulator loop)
+         * kept the pipe open after the timeout killed only the shell, so the output reader never
+         * finished and the whole turn hung for hours.
+         */
+        @Test
+        @DisabledOnOs(OS.WINDOWS)
+        fun `timeout returns promptly and kills a child that keeps stdout open`() {
+            assumeTrue(runCatching { ProcessBuilder("python3", "--version").start().waitFor() == 0 }.getOrDefault(false))
+            val pidFile = tempDir.resolve("child.pid")
+            val shortTimeoutTool = RunCodeTool(sandbox, timeoutSeconds = 2)
+
+            val result = assertTimeoutPreemptively<ToolResult>(Duration.ofSeconds(20)) {
+                runBlocking {
+                    shortTimeoutTool.execute(mapOf(
+                        "language" to "python",
+                        "code" to """
+                            import subprocess, time
+                            child = subprocess.Popen(["sleep", "120"])
+                            open("child.pid", "w").write(str(child.pid))
+                            time.sleep(120)
+                        """.trimIndent()
+                    ))
+                }
+            }
+
+            assertEquals(true, result.metadata?.get("timed_out"))
+            val childPid = Files.readString(pidFile).trim().toLong()
+            val child = ProcessHandle.of(childPid)
+            assertFalse(child.map { it.isAlive }.orElse(false), "child process must be killed on timeout")
         }
     }
 
