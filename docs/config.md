@@ -373,6 +373,7 @@ These keys have no YAML mapping. Set them as store keys, for example `--config a
 - `agent.max_cost_usd` (default `0.0` = off) - per-session cost ceiling; the CLI `--max-cost` flag sets it
 - `agent.max_format_nudges` (default `2`) - how many times the loop asks for a well-formed answer before giving up
 - `agent.decision_temperature` (default `0.7`, range `0.0`-`2.0`) - sampling temperature of the PLAN/AGENT decision turn
+- `agent.prompt_layout` (default `trailing`; `system` / `trailing`) - where a top-level PLAN/AGENT turn sends its per-iteration work state. `system`: working memory, recent work and a copy of the conversation inside the system prompt. `trailing`: no conversation copy in the system prompt (the message list already carries it), and working memory, recent work and the task requirements in a final `<system-reminder>` message rebuilt every iteration, so the rest of the request stays identical between iterations and a local server's prompt cache re-reads only the tail. Subagents always use `system`
 - `agent.max_consecutive_tool_errors` (default `5`) - identical failing tool calls (same tool and arguments) before the turn aborts
 - `general.next_speaker_judge_enabled` (default `true`) - AGENT-only check that a tool-free answer really means the task is done
 - `general.judge_extended_reentry_enabled` (default `true`) - allows more than one judge re-entry early in a turn that delivered nothing
@@ -634,6 +635,7 @@ mcp:
 | - | `agent.max_cost_usd` | `0.0` (disabled) |
 | - | `agent.max_format_nudges` | `2` |
 | - | `agent.decision_temperature` | `0.7` |
+| - | `agent.prompt_layout` | `trailing` |
 | - | `agent.max_consecutive_tool_errors` | `5` |
 | - | `agent.task_verification_enabled` | `false` |
 

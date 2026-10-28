@@ -435,10 +435,27 @@ class ContextService(
      * Build LLM context prompt.
      * Organized by TIER priority: Essential → Work → Supplementary → Reference
      */
-    fun buildLLMContextPrompt(context: ProjectContextDTO, staticPrefixTokens: Int = 0, modelId: String? = null): String {
+    fun buildLLMContextPrompt(context: ProjectContextDTO, staticPrefixTokens: Int = 0, modelId: String? = null): String =
+        buildLLMContext(context, staticPrefixTokens, modelId, trailingState = false).prompt
+
+    /**
+     * Same as [buildLLMContextPrompt], optionally split for [ConfigKeys.AGENT_PROMPT_LAYOUT] = trailing:
+     * with [trailingState] WORKING_MEMORY and RECENT_WORK are returned in [LLMContextParts.trailingState]
+     * instead of the prompt (they still count against the budget, they are still sent), and
+     * CONVERSATION_HISTORY is not built, because the caller sends the message list that carries the
+     * same conversation.
+     */
+    fun buildLLMContext(
+        context: ProjectContextDTO,
+        staticPrefixTokens: Int = 0,
+        modelId: String? = null,
+        trailingState: Boolean = false
+    ): LLMContextParts {
         formatter.resetDropCounters()
         val budget = pruner.resolveContextBudget(context, modelOperation = null, staticPrefixTokens = staticPrefixTokens)
         val parts = mutableListOf<String>()
+        val stateParts = mutableListOf<String>()
+        val workStateTarget = if (trailingState) stateParts else parts
         val usage = mutableListOf<String>()
         val actualUsage = mutableMapOf<ContextSection, Int>()
         val traceRecords = mutableListOf<pl.jclab.refio.core.services.turn.ContextSectionRecord>()
@@ -452,7 +469,12 @@ class ContextService(
         }
         var overflowTokensRemaining = overflowTokensInitial
 
-        fun addSection(section: ContextSection, content: String, maxTokens: Int = budget.budgetFor(section)) {
+        fun addSection(
+            section: ContextSection,
+            content: String,
+            maxTokens: Int = budget.budgetFor(section),
+            target: MutableList<String> = parts
+        ) {
             if (content.isBlank()) {
                 traceRecords.add(pl.jclab.refio.core.services.turn.ContextSectionRecord(
                     section = section,
@@ -495,7 +517,7 @@ class ContextService(
 
             if (tokens <= 0 || sectionContent.isBlank()) return
 
-            parts.add(sectionContent)
+            target.add(sectionContent)
             actualUsage[section] = (actualUsage[section] ?: 0) + tokens
             if (tokens <= remainingTokens) {
                 remainingTokens = (remainingTokens - tokens).coerceAtLeast(0)
@@ -622,7 +644,7 @@ class ContextService(
                     maxTokens = workingBudget,
                     skipExcerptForOriginIds = recentWorkSubtaskIds
                 )
-                addSection(ContextSection.WORKING_MEMORY, workingMemory, workingBudget)
+                addSection(ContextSection.WORKING_MEMORY, workingMemory, workingBudget, workStateTarget)
             }
         }
 
@@ -636,7 +658,8 @@ class ContextService(
             addSection(
                 ContextSection.RECENT_WORK,
                 formatter.buildRecentWorkSection(context, recentBudgetWithBuffer),
-                recentBudgetWithBuffer
+                recentBudgetWithBuffer,
+                workStateTarget
             )
         }
 
@@ -654,7 +677,7 @@ class ContextService(
         // CONVERSATION so they can benefit from slack.
         val redistributedBudget = budgetAfterStable.redistributeUnused(actualUsage)
 
-        if (context.conversationHistory.isNotEmpty()) {
+        if (!trailingState && context.conversationHistory.isNotEmpty()) {
             val conversationBudget = minOf(redistributedBudget.budgetFor(ContextSection.CONVERSATION), remainingTokens)
             addSection(
                 ContextSection.CONVERSATION,
@@ -664,6 +687,7 @@ class ContextService(
         }
 
         val contextPrompt = parts.joinToString("\n\n")
+        val stateText = stateParts.joinToString("\n\n")
 
         val baseUsed = budget.totalTokens - remainingTokens
         val overflowUsed = overflowTokensInitial - overflowTokensRemaining
@@ -683,9 +707,11 @@ class ContextService(
         )
 
         // Parse XML tags from the built prompt for granular section token breakdown
-        lastSectionTokens = PromptSectionTokenReport.parsePromptSectionTokens(contextPrompt)
+        lastSectionTokens = PromptSectionTokenReport.parsePromptSectionTokens(
+            if (stateText.isBlank()) contextPrompt else "$contextPrompt\n\n$stateText"
+        )
 
-        return contextPrompt
+        return LLMContextParts(prompt = contextPrompt, trailingState = stateText)
     }
 
     // ===========================
@@ -750,6 +776,12 @@ class ContextService(
          * default `true`.
          */
         allowSummarization: Boolean = true,
+        /**
+         * True for [ConfigKeys.AGENT_PROMPT_LAYOUT] = trailing: the work state comes back in
+         * [AgentTurnMessagesResult.trailingState] instead of [AgentTurnMessagesResult.projectContextPrompt],
+         * and the duplicated CONVERSATION_HISTORY section is not built (see [buildLLMContext]).
+         */
+        trailingState: Boolean = false,
     ): AgentTurnMessagesResult {
         logger.info {
             "[AGENT_TURN] Building messages for task=$taskId, contextRefs=${userContextRefs.size}, " +
@@ -817,8 +849,8 @@ class ContextService(
         // 4. Build project context (with user context refs). Skipped when the caller only needs
         // the message list (the context-panel preview discards projectContextPrompt) — this
         // avoids a redundant full buildProjectContext on every UI refresh.
-        val projectContextPrompt = if (!includeProjectContext) {
-            ""
+        val contextParts = if (!includeProjectContext) {
+            LLMContextParts(prompt = "", trailingState = "")
         } else try {
             val projectContext = buildProjectContext(
                 projectRoot = projectRoot,
@@ -826,18 +858,22 @@ class ContextService(
                 query = query,
                 userContextRefs = userContextRefs
             )
-            buildLLMContextPrompt(projectContext, staticPrefixTokens, modelId)
+            buildLLMContext(projectContext, staticPrefixTokens, modelId, trailingState)
         } catch (e: Exception) {
             logger.warn(e) { "[AGENT_TURN] Failed to build project context: ${e.message}" }
-            ""  // Continue without project context if it fails
+            LLMContextParts(prompt = "", trailingState = "")  // Continue without project context if it fails
         }
 
-        logger.info { "[AGENT_TURN] Built ${messages.size} messages, contextLength=${projectContextPrompt.length}" }
+        logger.info {
+            "[AGENT_TURN] Built ${messages.size} messages, contextLength=${contextParts.prompt.length}, " +
+                "trailingStateLength=${contextParts.trailingState.length}"
+        }
 
         return AgentTurnMessagesResult(
             messages = messages,
-            projectContextPrompt = projectContextPrompt,
-            historySize = filteredHistory.size
+            projectContextPrompt = contextParts.prompt,
+            historySize = filteredHistory.size,
+            trailingState = contextParts.trailingState
         )
     }
 
@@ -1225,7 +1261,15 @@ data class AgentTurnMessagesResult(
     /** Project context prompt (project analysis, user @ mentions) */
     val projectContextPrompt: String,
     /** Size of conversation history before filtering */
-    val historySize: Int
+    val historySize: Int,
+    /** Work state (WORKING_MEMORY, RECENT_WORK) for a trailing harness message; empty in the default layout */
+    val trailingState: String = ""
+)
+
+/** Context prompt for the system prompt plus, in the trailing layout, the work state kept out of it. */
+data class LLMContextParts(
+    val prompt: String,
+    val trailingState: String
 )
 
 
