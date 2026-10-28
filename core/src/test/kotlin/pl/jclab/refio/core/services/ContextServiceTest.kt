@@ -27,6 +27,7 @@ import pl.jclab.refio.testutil.MockFactory
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -462,6 +463,45 @@ class ContextServiceTest {
             )
             val prompt = service.buildLLMContextPrompt(context)
             assertTrue(prompt.contains("Build feature ABC") || prompt.contains("<CONVERSATION_HISTORY>"))
+        }
+
+        private fun contextWithHistoryAndWork() = createMinimalProjectContextDTO().copy(
+            conversationHistory = listOf(
+                ConversationMessageDTO(id = "msg-1", role = "user", content = "Build feature ABC"),
+                ConversationMessageDTO(id = "msg-2", role = "assistant", content = "Working on it")
+            ),
+            executedSteps = listOf(
+                pl.jclab.refio.core.models.context.ExecutedStepDTO(
+                    subtaskId = "step-1",
+                    file = "src/app.js",
+                    tool = "read_file",
+                    parameters = mapOf("path" to "src/app.js"),
+                    result = "function total() { return 41 }",
+                    summary = null,
+                    timestamp = java.time.Instant.now()
+                )
+            )
+        )
+
+        @Test
+        fun `trailing layout moves the work state out of the system context and drops the duplicated history`() {
+            // The message list already carries the conversation, so CONVERSATION_HISTORY is a pure
+            // copy; RECENT_WORK changes every iteration and must not sit in the cached system prompt.
+            val parts = service.buildLLMContext(contextWithHistoryAndWork(), trailingState = true)
+
+            assertFalse(parts.prompt.contains("<CONVERSATION_HISTORY>"))
+            assertFalse(parts.prompt.contains("<RECENT_WORK>"))
+            assertTrue(parts.prompt.contains("<PROJECT_CONTEXT>"))
+            assertTrue(parts.trailingState.contains("<RECENT_WORK>"))
+            assertTrue(parts.trailingState.contains("function total() { return 41 }"))
+        }
+
+        @Test
+        fun `default layout keeps work state and history inside the system context`() {
+            val prompt = service.buildLLMContextPrompt(contextWithHistoryAndWork())
+
+            assertTrue(prompt.contains("<RECENT_WORK>"))
+            assertTrue(prompt.contains("<CONVERSATION_HISTORY>"))
         }
     }
 

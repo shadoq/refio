@@ -907,6 +907,30 @@ object ConfigKeys {
         validator = { it in 0.0..2.0 }
     )
 
+    const val PROMPT_LAYOUT_SYSTEM = "system"
+    const val PROMPT_LAYOUT_TRAILING = "trailing"
+
+    /**
+     * Where the decision prompt of a top-level PLAN/AGENT turn carries the per-iteration work state.
+     * - "system": WORKING_MEMORY, RECENT_WORK and CONVERSATION_HISTORY sit inside the
+     *   system prompt's `<context>`, after the task requirements.
+     * - "trailing" (default): CONVERSATION_HISTORY is not built (the message list already carries the same
+     *   conversation), and WORKING_MEMORY, RECENT_WORK plus a copy of the task requirements go into a
+     *   final user message wrapped in `<system-reminder>`, rebuilt every iteration and never stored.
+     *
+     * In the system layout the work state changes in the middle of the request every iteration, so a
+     * server-side prefix cache (Ollama) re-reads everything after it, the whole conversation included.
+     * In the trailing layout the system prompt and the earlier messages stay byte-identical between
+     * iterations and only the tail is re-read; the state also sits where models attend most, at the end.
+     * Subagent turns always use the system layout.
+     */
+    val AGENT_PROMPT_LAYOUT = ConfigKey(
+        key = "agent.prompt_layout",
+        parser = { raw -> raw.trim().lowercase().takeIf { it in setOf(PROMPT_LAYOUT_SYSTEM, PROMPT_LAYOUT_TRAILING) } },
+        default = PROMPT_LAYOUT_TRAILING,
+        validator = { it in setOf(PROMPT_LAYOUT_SYSTEM, PROMPT_LAYOUT_TRAILING) }
+    )
+
     // ==================== VERIFY ====================
 
     /**
@@ -1073,6 +1097,7 @@ object ConfigKeys {
             AGENT_MAX_TURN_MINUTES,
             AGENT_MAX_FORMAT_NUDGES,
             AGENT_DECISION_TEMPERATURE,
+            AGENT_PROMPT_LAYOUT,
             JSON_THINKING_XML_TAGS,
             // Verify
             VERIFY_ENABLED,

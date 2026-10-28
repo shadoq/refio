@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `agent.prompt_layout` (`trailing` by default, `system`) decides where a top-level PLAN/AGENT turn sends its per-iteration work state. In the previous layout (`system`) working memory and recent work sit in the middle of the system prompt and change every iteration, so a local server's prompt cache (Ollama) re-reads everything after them, the whole conversation included. `trailing`, now the default, moves working memory, recent work and a copy of the task requirements into a final `<system-reminder>` message that is rebuilt every iteration and never stored, and stops copying the conversation into the system prompt, because the message list already carries it. The system prompt and the earlier messages stay identical between iterations, only the tail is re-read, and the state lands where models attend most, at the end. `system` keeps the previous behaviour for a model that does worse with it. Subagents always use `system`, because their context profile filters the system-prompt context and a trailing message would bypass it.
+
+### Fixed
+
+- GLM models on Z.AI kept reasoning with thinking switched off. GLM 4.5 and later think unless told otherwise, and Refio only omitted the field, so reasoning could eat the whole output budget before a single tool call was written. Z.AI now always receives `thinking.type`, `disabled` or `enabled` according to the reasoning setting.
+- A response cut off by the output cap before any tool call ended the turn as if the model had finished. When reasoning used the whole budget, the native channel came back with no calls (or the text came back empty) and the loop read that as a prose answer. It is now reported as a truncated response and the turn fails, the same way an unfinished JSON envelope already did.
+- `run_code` could hang forever when the script started a child process that kept running. The script runs under a shell and its children inherit stdout, so killing only the shell left the pipe open and the read never returned. The output is now drained on its own thread, the whole process tree is tracked, and after the script exits a surviving child is killed after a short grace period; a timeout also kills the whole tree instead of the shell alone, and still returns the partial output.
+- An empty tool result was dropped from the conversation history (a script that printed nothing), which left its tool call unanswered, and providers rejected the next request (Ollama: "Cannot continue an assistant message that contains tool calls"). A result that answers a call is now always kept.
+- "invalid tool call arguments" from llama-server (a model split across a cluster behind Ollama) is recognised as a broken native tool template, like the XML template errors, so the turn falls back to the text format instead of repeating the same rejected call on every retry.
+
 ## [0.0.2.1] - 2026-10-11
 
 ### Added

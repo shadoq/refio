@@ -40,6 +40,17 @@ class NativeToolTemplateErrorTest {
     }
 
     @Test
+    fun `recognises llama-server rejecting cut-off tool-call arguments`() {
+        // Seen on cluster-split models (qwen3.8-flash-next, mimo-v2.6-flash): three identical retries,
+        // then the turn died with the deliverable already written.
+        val real = RuntimeException(
+            """Ollama API error (HTTP 500): {"error":"llama-server returned invalid tool call arguments for \"run_code\": unexpected end of JSON input"}"""
+        )
+
+        assertTrue(NativeToolTemplateError.matches(real))
+    }
+
+    @Test
     fun `either word pair alone is enough`() {
         assertTrue(NativeToolTemplateError.matches(RuntimeException("HTTP 500: failed to parse tool call")))
         assertTrue(NativeToolTemplateError.matches(RuntimeException("HTTP 500: malformed parameter block")))

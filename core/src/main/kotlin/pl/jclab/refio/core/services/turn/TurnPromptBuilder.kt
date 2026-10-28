@@ -83,6 +83,8 @@ class TurnPromptBuilder(
     companion object {
         private const val STICKY_REQUIREMENTS_MAX_CHARS = 4_000
         private const val REQUIREMENT_ENTRY_MAX_CHARS = 1_500
+        private const val TRAILING_STATE_PREAMBLE = "Harness state refreshed for this step. This is context, " +
+            "not a new request; continue the task from the conversation above."
     }
 
     private val structuredPromptBuilder = StructuredPromptBuilder()
@@ -199,14 +201,16 @@ class TurnPromptBuilder(
         if (stickyRequirements.isNotBlank()) {
             promptSections += PromptSection(
                 id = "task_requirements",
-                content = """
-<task_requirements>
-$stickyRequirements
-</task_requirements>
-                """.trimIndent(),
+                content = taskRequirementsBlock(stickyRequirements),
                 stable = false
             )
         }
+        // Subagents always use the system layout: their context profile filters and truncates the
+        // system-prompt context, which the trailing message would bypass. Checked on the run profile,
+        // not on contextProfile, because a subagent without a context_profile has none.
+        val trailingLayout = runProfile != TurnRunProfile.SUBAGENT &&
+            configService?.getTyped(pl.jclab.refio.core.config.ConfigKeys.AGENT_PROMPT_LAYOUT, taskId) ==
+            pl.jclab.refio.core.config.ConfigKeys.PROMPT_LAYOUT_TRAILING
 
         // Append sections from providers
         if (sectionProviders.isNotEmpty()) {
@@ -281,6 +285,7 @@ $stickyRequirements
                     staticPrefixTokens = staticPrefixTokens,
                     modelId = modelId,
                     agentInstanceId = profileOverrides?.agentInstanceId,
+                    trailingState = trailingLayout,
                 )
 
                 // Apply context profile filtering for subagents
@@ -357,8 +362,15 @@ $filteredContextPrompt
                 // would be rejected by the Anthropic adapter.
                 cacheableSystemLen = cacheableSystemLen.coerceAtMost(systemPrompt.length)
 
+                if (trailingLayout) {
+                    trailingStateMessage(turnResult.trailingState, stickyRequirements)?.let {
+                        filteredMessages = filteredMessages + it
+                    }
+                }
+
                 logger.info { "[BUILD_PROMPT] Using ContextService: ${filteredMessages.size} messages, context=${filteredContextPrompt.length} chars" +
-                    if (contextProfile != null) ", contextProfile applied" else "" }
+                    (if (contextProfile != null) ", contextProfile applied" else "") +
+                    if (trailingLayout) ", trailing state=${turnResult.trailingState.length} chars" else "" }
 
                 // Fold this iteration's context decision into the task's running total. The trace
                 // itself is overwritten on the next build, so anything not accumulated here is
@@ -467,6 +479,25 @@ $filteredContextPrompt
             }
         }
         return messages + LLMMessage(role = "system", content = content)
+    }
+
+    private fun taskRequirementsBlock(stickyRequirements: String): String = """
+<task_requirements>
+$stickyRequirements
+</task_requirements>
+    """.trimIndent()
+
+    /**
+     * Final user message of the trailing layout: the work state and a repeat of the task
+     * requirements, rebuilt every iteration and never persisted, so everything before it stays
+     * byte-identical between iterations. The requirements also stay in the system prompt; the repeat
+     * is what puts the goal at the end of the request.
+     */
+    private fun trailingStateMessage(state: String, stickyRequirements: String): LLMMessage? {
+        val requirements = if (stickyRequirements.isNotBlank()) taskRequirementsBlock(stickyRequirements) else ""
+        val body = listOf(state.trim(), requirements).filter { it.isNotBlank() }.joinToString("\n")
+        if (body.isBlank()) return null
+        return LLMMessage(role = "user", content = "<system-reminder>\n$TRAILING_STATE_PREAMBLE\n$body\n</system-reminder>")
     }
 
     private fun buildStickyRequirementsBlock(history: List<ChatMessage>): String {

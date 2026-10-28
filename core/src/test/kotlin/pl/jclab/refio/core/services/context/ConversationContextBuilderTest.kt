@@ -114,6 +114,35 @@ class ConversationContextBuilderTest {
     }
 
     @Test
+    fun `filterMeaningfulConversation keeps an empty tool result so its call is never left unanswered`() {
+        // A run_code that printed nothing: dropping its result left the assistant tool call as the
+        // last message and Ollama rejected the request ("Cannot continue an assistant message that
+        // contains tool calls"), ending the turn.
+        val call = assistantMessage(
+            id = "a1",
+            content = "",
+            toolCalls = listOf(ToolCallData(id = "tc1", name = "run_code", arguments = """{"code":"pass"}"""))
+        )
+        val emptyResult = ChatMessage(
+            id = "t1",
+            taskId = "task-1",
+            role = MessageRole.TOOL,
+            content = "",
+            metadata = null,
+            toolCalls = null,
+            toolCallId = "tc1",
+            tokensIn = null,
+            tokensOut = null,
+            cost = null,
+            createdAt = 1L
+        )
+
+        val filtered = builder.filterMeaningfulConversation(listOf(call, emptyResult))
+
+        assertEquals(listOf("a1", "t1"), filtered.map { it.id })
+    }
+
+    @Test
     fun `filterMeaningfulConversation still drops blank assistant messages with no tool calls`() {
         val msg = assistantMessage(id = "a3", content = "", toolCalls = null)
         val filtered = builder.filterMeaningfulConversation(listOf(msg))

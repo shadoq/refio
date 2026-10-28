@@ -44,7 +44,10 @@ class ConversationContextBuilder {
                     msg.content.isNotBlank() || !msg.toolCalls.isNullOrEmpty()
                 }
                 MessageRole.TOOL -> {
-                    msg.content.isNotBlank() || !msg.rawOutput.isNullOrBlank()
+                    // A result that answers a call stays even when empty (a script that printed
+                    // nothing): without it the call is left unanswered and providers reject the
+                    // history (Ollama: "Cannot continue an assistant message that contains tool calls").
+                    msg.content.isNotBlank() || !msg.rawOutput.isNullOrBlank() || msg.toolCallId != null
                 }
                 MessageRole.SYSTEM -> {
                     isConversationSummary(msg) ||

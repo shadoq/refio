@@ -16,7 +16,9 @@ package pl.jclab.refio.core.errors
  */
 object NativeToolTemplateError {
 
-    private val SIGNATURES = listOf("xml syntax error", "element <parameter>")
+    // "invalid tool call arguments" is llama-server (behind a cluster-split Ollama model) refusing
+    // arguments it could not decode; it repeats on every retry just like the XML template error.
+    private val SIGNATURES = listOf("xml syntax error", "element <parameter>", "invalid tool call arguments")
 
     // Other template families word the same failure differently ("parse Glimmer call to tasks:
     // malformed ATEM parameter"). Each word alone is too broad (a bare "parse" error can be a bad
