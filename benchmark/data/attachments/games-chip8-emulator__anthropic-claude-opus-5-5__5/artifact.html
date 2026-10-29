@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>CHIP-8 Emulator</title>
+<style>
+body{background:#111;color:#ddd;font-family:monospace;margin:0;padding:16px;display:flex;gap:16px;flex-wrap:wrap}
+canvas{background:#000;border:2px solid #444;image-rendering:pixelated;width:640px;height:320px}
+button,input,select{font-family:monospace;background:#222;color:#ddd;border:1px solid #555;padding:4px 8px;margin:2px;cursor:pointer}
+button:hover{background:#333}
+.panel{background:#1a1a1a;border:1px solid #333;padding:10px}
+#keypad{display:grid;grid-template-columns:repeat(4,56px);gap:4px;margin-top:8px}
+#keypad button{height:48px;font-size:14px;margin:0}
+#keypad button.on{background:#2a6;color:#000}
+#regs{display:grid;grid-template-columns:repeat(4,1fr);gap:2px 12px}
+h3{margin:4px 0 8px}
+#status{color:#8c8}
+</style></head><body>
+<div>
+<canvas id="screen" width="64" height="32"></canvas>
+<div class="panel">
+<button id="run">Run</button><button id="pause">Pause</button><button id="step">Step</button><button id="reset">Reset</button>
+<button id="demo">Load Demo</button>
+<label>ROM: <input type="file" id="file"></label><br>
+<label>Instructions/frame: <input type="range" id="speed" min="1" max="50" value="10"> <span id="speedv">10</span></label>
+<span id="status">Paused</span>
+</div>
+<div class="panel"><b>Keypad</b> (keyboard 1-4 / Q-R / A-F / Z-V; click works too). Demo: 2/4/6/8 = W/Q/E/S move.
+<div id="keypad"></div></div>
+</div>
+<div class="panel" style="min-width:300px">
+<h3>Debugger</h3>
+<div id="regs"></div><br>
+<div id="misc"></div><br>
+<div>Current: <span id="cur"></span></div><br>
+<div>Stack:<div id="stack"></div></div>
+</div>
+<script>
+"use strict";
+const FONT=[0xF0,0x90,0x90,0x90,0xF0,0x20,0x60,0x20,0x20,0x70,0xF0,0x10,0xF0,0x80,0xF0,0xF0,0x10,0xF0,0x10,0xF0,
+0x90,0x90,0xF0,0x10,0x10,0xF0,0x80,0xF0,0x10,0xF0,0xF0,0x80,0xF0,0x90,0xF0,0xF0,0x10,0x20,0x40,0x40,
+0xF0,0x90,0xF0,0x90,0xF0,0xF0,0x90,0xF0,0x10,0xF0,0xF0,0x90,0xF0,0x90,0x90,0xE0,0x90,0xE0,0x90,0xE0,
+0xF0,0x80,0x80,0x80,0xF0,0xE0,0x90,0x90,0x90,0xE0,0xF0,0x80,0xF0,0x80,0xF0,0xF0,0x80,0xF0,0x80,0x80];
+// Demo ROM (hand-assembled): moves a sprite with keys 2(up) 8(down) 4(left) 6(right)
+const DEMO=[
+0x60,0x10, // 200 LD V0,16
+0x61,0x0C, // 202 LD V1,12
+0xA2,0x38, // 204 LD I,0x238
+0xD0,0x15, // 206 DRW V0,V1,5
+0xD0,0x15, // 208 loop: DRW (erase)
+0x62,0x02,0xE2,0xA1,0x71,0xFF, // 20A key 2 -> V1-=1
+0x62,0x08,0xE2,0xA1,0x71,0x01, // 210 key 8 -> V1+=1
+0x62,0x04,0xE2,0xA1,0x70,0xFF, // 216 key 4 -> V0-=1
+0x62,0x06,0xE2,0xA1,0x70,0x01, // 21C key 6 -> V0+=1
+0x63,0x3F,0x80,0x32, // 222 V0&=63
+0x64,0x1F,0x81,0x42, // 226 V1&=31
+0xD0,0x15, // 22A DRW
+0x65,0x03,0xF5,0x15, // 22C DT=3
+0xF5,0x07,0x35,0x00,0x12,0x30, // 230 wait DT==0
+0x12,0x08, // 236 JP loop
+0x3C,0x7E,0xDB,0xFF,0x66 // 238 sprite
+];
+const KEYMAP={'1':1,'2':2,'3':3,'4':0xC,'q':4,'w':5,'e':6,'r':0xD,'a':7,'s':8,'d':9,'f':0xE,'z':0xA,'x':0,'c':0xB,'v':0xF};
+const LAYOUT=[['1',1],['2',2],['3',3],['4',0xC],['q',4],['w',5],['e',6],['r',0xD],['a',7],['s',8],['d',9],['f',0xE],['z',0xA],['x',0],['c',0xB],['v',0xF]];
+const h=(n,d)=>n.toString(16).toUpperCase().padStart(d,'0');
+const C={mem:new Uint8Array(4096),V:new Uint8Array(16),I:0,pc:0x200,stack:[],dt:0,st:0,disp:new Uint8Array(2048),keys:new Array(16).fill(false),waitReg:-1,rom:DEMO};
+function reset(){C.mem.fill(0);C.mem.set(FONT,0x50);C.mem.set(C.rom.slice(0,4096-0x200),0x200);C.V.fill(0);C.I=0;C.pc=0x200;C.stack=[];C.dt=C.st=0;C.disp.fill(0);C.waitReg=-1;draw();dbg();}
+function step(){
+  if(C.waitReg>=0)return;
+  const op=(C.mem[C.pc]<<8)|C.mem[(C.pc+1)&0xFFF];C.pc=(C.pc+2)&0xFFF;
+  const x=(op>>8)&15,y=(op>>4)&15,n=op&15,nn=op&255,nnn=op&0xFFF,V=C.V;
+  switch(op>>12){
+  case 0:if(op===0x00E0)C.disp.fill(0);else if(op===0x00EE){if(C.stack.length)C.pc=C.stack.pop();}break; // 0NNN SYS ignored
+  case 1:C.pc=nnn;break;
+  case 2:if(C.stack.length<16)C.stack.push(C.pc);C.pc=nnn;break;
+  case 3:if(V[x]===nn)C.pc+=2;break;
+  case 4:if(V[x]!==nn)C.pc+=2;break;
+  case 5:if(V[x]===V[y])C.pc+=2;break;
+  case 6:V[x]=nn;break;
+  case 7:V[x]=(V[x]+nn)&255;break;
+  case 8:{let f;switch(n){
+    case 0:V[x]=V[y];break;case 1:V[x]|=V[y];V[15]=0;break;case 2:V[x]&=V[y];V[15]=0;break;case 3:V[x]^=V[y];V[15]=0;break;
+    case 4:{const s=V[x]+V[y];V[x]=s&255;V[15]=s>255?1:0;break;}
+    case 5:f=V[x]>=V[y]?1:0;V[x]=(V[x]-V[y])&255;V[15]=f;break;
+    case 6:f=V[x]&1;V[x]=V[x]>>1;V[15]=f;break;
+    case 7:f=V[y]>=V[x]?1:0;V[x]=(V[y]-V[x])&255;V[15]=f;break;
+    case 0xE:f=V[x]>>7;V[x]=(V[x]<<1)&255;V[15]=f;break;}break;}
+  case 9:if(V[x]!==V[y])C.pc+=2;break;
+  case 0xA:C.I=nnn;break;
+  case 0xB:C.pc=(nnn+V[0])&0xFFF;break;
+  case 0xC:V[x]=Math.floor(Math.random()*256)&nn;break;
+  case 0xD:{const px=V[x]&63,py=V[y]&31;V[15]=0;
+    for(let r=0;r<n;r++){if(py+r>31)break;const b=C.mem[(C.I+r)&0xFFF];
+      for(let c=0;c<8;c++){if(px+c>63)break;if(b&(0x80>>c)){const i=(py+r)*64+px+c;if(C.disp[i])V[15]=1;C.disp[i]^=1;}}}
+    break;}
+  case 0xE:if(nn===0x9E){if(C.keys[V[x]&15])C.pc+=2;}else if(nn===0xA1){if(!C.keys[V[x]&15])C.pc+=2;}break;
+  case 0xF:switch(nn){
+    case 0x07:V[x]=C.dt;break;case 0x0A:C.waitReg=x;break;case 0x15:C.dt=V[x];break;case 0x18:C.st=V[x];break;
+    case 0x1E:C.I=(C.I+V[x])&0xFFFF;break;case 0x29:C.I=0x50+(V[x]&15)*5;break;
+    case 0x33:C.mem[C.I&0xFFF]=Math.floor(V[x]/100);C.mem[(C.I+1)&0xFFF]=Math.floor(V[x]/10)%10;C.mem[(C.I+2)&0xFFF]=V[x]%10;break;
+    case 0x55:for(let i=0;i<=x;i++)C.mem[(C.I+i)&0xFFF]=V[i];break;
+    case 0x65:for(let i=0;i<=x;i++)V[i]=C.mem[(C.I+i)&0xFFF];break;}break;}
+}
+function dis(op){const x=h((op>>8)&15,1),y=h((op>>4)&15,1),n=op&15,nn=h(op&255,2),nnn=h(op&0xFFF,3);
+  switch(op>>12){case 0:return op===0xE0?'CLS':op===0xEE?'RET':'SYS '+nnn;case 1:return'JP '+nnn;case 2:return'CALL '+nnn;
+  case 3:return`SE V${x},${nn}`;case 4:return`SNE V${x},${nn}`;case 5:return`SE V${x},V${y}`;case 6:return`LD V${x},${nn}`;case 7:return`ADD V${x},${nn}`;
+  case 8:return(['LD','OR','AND','XOR','ADD','SUB','SHR','SUBN',,,,,,,'SHL'][n]||'???')+` V${x},V${y}`;
+  case 9:return`SNE V${x},V${y}`;case 0xA:return'LD I,'+nnn;case 0xB:return'JP V0,'+nnn;case 0xC:return`RND V${x},${nn}`;case 0xD:return`DRW V${x},V${y},${n}`;
+  case 0xE:return nn==='9E'?'SKP V'+x:nn==='A1'?'SKNP V'+x:'???';
+  case 0xF:return({'07':`LD V${x},DT`,'0A':`LD V${x},K`,'15':`LD DT,V${x}`,'18':`LD ST,V${x}`,'1E':`ADD I,V${x}`,'29':`LD F,V${x}`,'33':`LD B,V${x}`,'55':`LD [I],V${x}`,'65':`LD V${x},[I]`})[nn]||'???';}}
+const cv=document.getElementById('screen'),ctx=cv.getContext('2d'),img=ctx.createImageData(64,32);
+function draw(){for(let i=0;i<2048;i++){const o=i*4,on=C.disp[i];img.data[o]=on?0x33:0;img.data[o+1]=on?0xFF:0x10;img.data[o+2]=on?0x66:0;img.data[o+3]=255;}ctx.putImageData(img,0,0);}
+const $=id=>document.getElementById(id);
+function dbg(){let s='';for(let i=0;i<16;i++)s+=`<span>V${h(i,1)}=${h(C.V[i],2)}</span>`;$('regs').innerHTML=s;
+  $('misc').innerHTML=`PC=${h(C.pc,4)} I=${h(C.I,4)} DT=${h(C.dt,2)} ST=${h(C.st,2)} SP=${C.stack.length}${C.waitReg>=0?' (waiting key)':''}`;
+  const op=(C.mem[C.pc]<<8)|C.mem[(C.pc+1)&0xFFF];$('cur').textContent=`${h(C.pc,3)}: ${h(op,4)}  ${dis(op)}`;
+  $('stack').innerHTML=C.stack.length?C.stack.map((a,i)=>`${i}: ${h(a,3)}`).reverse().join('<br>'):'(empty)';}
+let audio=null,osc=null;
+function sound(on){try{if(on&&!osc){audio=audio||new AudioContext();osc=audio.createOscillator();const g=audio.createGain();g.gain.value=0.05;osc.type='square';osc.frequency.value=440;osc.connect(g).connect(audio.destination);osc.start();}
+  else if(!on&&osc){osc.stop();osc=null;}}catch(e){}}
+let running=false,ipf=10,last=0,acc=0;
+function frame(t){if(running){acc+=Math.min(t-last,100);while(acc>=1000/60){acc-=1000/60;for(let i=0;i<ipf;i++)step();if(C.dt>0)C.dt--;if(C.st>0)C.st--;}
+  sound(C.st>0);draw();dbg();}last=t;requestAnimationFrame(frame);}
+requestAnimationFrame(frame);
+function setRun(r){running=r;$('status').textContent=r?'Running':'Paused';if(!r)sound(false);}
+$('run').onclick=()=>setRun(true);$('pause').onclick=()=>setRun(false);
+$('step').onclick=()=>{setRun(false);step();draw();dbg();};
+$('reset').onclick=()=>{reset();};
+$('demo').onclick=()=>{C.rom=DEMO;reset();setRun(true);};
+$('speed').oninput=e=>{ipf=+e.target.value;$('speedv').textContent=ipf;};
+$('file').onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{C.rom=Array.from(new Uint8Array(r.result));reset();setRun(true);e.target.blur();};r.readAsArrayBuffer(f);};
+const btns={};
+for(const [k,v] of LAYOUT){const b=document.createElement('button');b.textContent=`${h(v,1)} (${k.toUpperCase()})`;btns[v]=b;
+  b.onpointerdown=e=>{e.preventDefault();b.setPointerCapture(e.pointerId);press(v,true);};b.onpointerup=b.onpointercancel=()=>press(v,false);$('keypad').appendChild(b);}
+function press(k,down){const was=C.keys[k];C.keys[k]=down;btns[k].classList.toggle('on',down);
+  if(!down&&was&&C.waitReg>=0){C.V[C.waitReg]=k;C.waitReg=-1;if(!running)dbg();}}
+document.addEventListener('keydown',e=>{const k=KEYMAP[e.key.toLowerCase()];if(k!==undefined){e.preventDefault();press(k,true);}});
+document.addEventListener('keyup',e=>{const k=KEYMAP[e.key.toLowerCase()];if(k!==undefined){e.preventDefault();press(k,false);}});
+window.addEventListener('blur',()=>{for(let i=0;i<16;i++)if(C.keys[i])press(i,false);});
+reset();
+</script></body></html>

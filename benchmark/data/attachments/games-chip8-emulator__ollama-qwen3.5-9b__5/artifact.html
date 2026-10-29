@@ -1,0 +1,1138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CHIP-8 Emulator</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            background: #1a1a2e;
+            color: #eee;
+            font-family: 'Courier New', monospace;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+        
+        h1 {
+            margin-bottom: 15px;
+            color: #0f0;
+            text-shadow: 0 0 10px rgba(0, 255, 0, 0.5);
+        }
+        
+        .emulator-container {
+            background: #000;
+            border: 3px solid #333;
+            border-radius: 8px;
+            padding: 10px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+        }
+        
+        .screen {
+            display: block;
+            image-rendering: pixelated;
+            border: 2px solid #444;
+        }
+        
+        .controls {
+            margin-top: 15px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            justify-content: center;
+            padding: 10px;
+            background: #2a2a4e;
+            border-radius: 8px;
+        }
+        
+        button {
+            padding: 10px 20px;
+            font-family: inherit;
+            font-size: 14px;
+            font-weight: bold;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+        }
+        
+        button:active {
+            transform: translateY(0);
+        }
+        
+        .btn-run { background: #2e7d32; color: white; }
+        .btn-pause { background: #f57c00; color: white; }
+        .btn-step { background: #1976d2; color: white; }
+        .btn-reset { background: #c62828; color: white; }
+        .btn-load { background: #7b1fa2; color: white; }
+        
+        input[type="file"] {
+            padding: 10px;
+            border-radius: 5px;
+            background: #3a3a5e;
+            color: white;
+            border: none;
+        }
+        
+        .speed-control {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 15px;
+            background: #2a2a4e;
+            border-radius: 5px;
+        }
+        
+        .speed-control label {
+            font-size: 14px;
+        }
+        
+        .speed-control input[type="range"] {
+            width: 100px;
+        }
+        
+        .debug-panel {
+            margin-top: 15px;
+            background: #111;
+            border: 2px solid #444;
+            border-radius: 8px;
+            padding: 10px;
+            font-size: 12px;
+        }
+        
+        .debug-section {
+            margin-bottom: 10px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #333;
+        }
+        
+        .debug-section:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+        
+        .debug-label {
+            color: #888;
+            font-size: 11px;
+            text-transform: uppercase;
+            margin-bottom: 5px;
+        }
+        
+        .registers-grid {
+            display: grid;
+            grid-template-columns: repeat(8, 1fr);
+            gap: 4px;
+        }
+        
+        .reg-item {
+            background: #222;
+            padding: 3px;
+            text-align: center;
+            border-radius: 3px;
+            font-size: 12px;
+        }
+        
+        .reg-value {
+            color: #0f0;
+            font-weight: bold;
+        }
+        
+        .pc-display, .index-display {
+            background: #000;
+            color: #0f0;
+            padding: 5px 10px;
+            border-radius: 3px;
+            font-size: 14px;
+            text-align: right;
+        }
+        
+        .stack-display {
+            background: #1a1a2e;
+            color: #aaa;
+            padding: 5px;
+            border-radius: 3px;
+            max-height: 80px;
+            overflow-y: auto;
+            font-size: 11px;
+        }
+        
+        .current-instruction {
+            background: #2a2a4e;
+            color: #fff;
+            padding: 5px 10px;
+            border-radius: 3px;
+            font-size: 13px;
+        }
+        
+        .keypad {
+            margin-top: 15px;
+            background: #2a2a4e;
+            border-radius: 8px;
+            padding: 10px;
+        }
+        
+        .keypad-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 60px);
+            gap: 5px;
+        }
+        
+        .key-btn {
+            width: 60px;
+            height: 45px;
+            font-family: inherit;
+            font-size: 18px;
+            background: #3a3a5e;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.1s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .key-btn:hover {
+            background: #4a4a7e;
+        }
+        
+        .key-btn.active {
+            background: #0f0;
+            color: #000;
+        }
+        
+        .status-bar {
+            margin-top: 10px;
+            padding: 8px 15px;
+            background: #2a2a4e;
+            border-radius: 5px;
+            font-size: 13px;
+        }
+        
+        .info-text {
+            color: #888;
+            margin-top: 10px;
+            font-size: 11px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <h1>CHIP-8 Emulator</h1>
+    
+    <div class="emulator-container">
+        <canvas id="screen" width="64" height="32" class="screen"></canvas>
+        
+        <div class="controls">
+            <button class="btn-run" onclick="emulator.run()">▶ Run</button>
+            <button class="btn-pause" onclick="emulator.pause()">⏸ Pause</button>
+            <button class="btn-step" onclick="emulator.step()">👟 Step</button>
+            <button class="btn-reset" onclick="emulator.reset()">↺ Reset</button>
+            
+            <div class="speed-control">
+                <label for="speedRange">Speed:</label>
+                <input type="range" id="speedRange" min="1" max="100" value="50">
+                <span id="speedValue">50</span> ifps
+            </div>
+            
+            <button class="btn-load" onclick="document.getElementById('romInput').click()">📂 Load ROM</button>
+            <input type="file" id="romInput" accept=".bin,.rom,.txt" style="display: none;" onchange="emulator.loadROMFromFile(this)">
+        </div>
+        
+        <div class="status-bar" id="statusBar">Ready. Press Run or load a ROM.</div>
+    </div>
+    
+    <div class="keypad">
+        <div class="keypad-grid">
+            <button class="key-btn" data-key="0x1" onclick="emulator.keyPress(0x1, true)">1</button>
+            <button class="key-btn" data-key="0x2" onclick="emulator.keyPress(0x2, true)">2</button>
+            <button class="key-btn" data-key="0x3" onclick="emulator.keyPress(0x3, true)">3</button>
+            <button class="key-btn" data-key="0x4" onclick="emulator.keyPress(0x4, true)">4</button>
+            <button class="key-btn" data-key="0x5" onclick="emulator.keyPress(0x5, true)">5</button>
+            <button class="key-btn" data-key="0x6" onclick="emulator.keyPress(0x6, true)">6</button>
+            <button class="key-btn" data-key="0x7" onclick="emulator.keyPress(0x7, true)">7</button>
+            <button class="key-btn" data-key="0x8" onclick="emulator.keyPress(0x8, true)">8</button>
+            <button class="key-btn" data-key="0x9" onclick="emulator.keyPress(0x9, true)">9</button>
+            <button class="key-btn" data-key="0xa" onclick="emulator.keyPress(0xa, true)">A</button>
+            <button class="key-btn" data-key="0xb" onclick="emulator.keyPress(0xb, true)">B</button>
+            <button class="key-btn" data-key="0xc" onclick="emulator.keyPress(0xc, true)">C</button>
+            <button class="key-btn" data-key="0xd" onclick="emulator.keyPress(0xd, true)">D</button>
+            <button class="key-btn" data-key="0xe" onclick="emulator.keyPress(0xe, true)">E</button>
+            <button class="key-btn" data-key="0xf" onclick="emulator.keyPress(0xf, true)">F</button>
+        </div>
+    </div>
+    
+    <div class="debug-panel">
+        <div class="debug-section">
+            <div class="debug-label">Registers (V0-VF)</div>
+            <div class="registers-grid" id="registersGrid"></div>
+        </div>
+        
+        <div class="debug-section">
+            <div class="debug-label">Program Counter</div>
+            <div class="pc-display">PC: <span id="pcDisplay">0x200</span></div>
+        </div>
+        
+        <div class="debug-section">
+            <div class="debug-label">Index Register</div>
+            <div class="index-display">IX: <span id="indexDisplay">0x000</span></div>
+        </div>
+        
+        <div class="debug-section">
+            <div class="debug-label">Stack</div>
+            <div class="stack-display" id="stackDisplay"></div>
+        </div>
+        
+        <div class="debug-section">
+            <div class="debug-label">Current Instruction</div>
+            <div class="current-instruction" id="instructionDisplay">--</div>
+        </div>
+    </div>
+    
+    <div class="info-text">
+        Use keyboard keys 1-0, Q, P, [, ], , (comma), . (period) for keypad input.<br>
+        Or use the on-screen buttons. Load a ROM file or run the demo program.
+    </div>
+
+    <script>
+        // CHIP-8 Emulator Implementation
+        
+        class Chip8 {
+            constructor() {
+                // Memory: 4KB
+                this.memory = new Uint8Array(0x1000);
+                
+                // Standard layout
+                this.fontset = [
+                    0xF6, 0x96, 0x9E, 0x9E, 0x9E, 0x9E, 0xF6, 0x96, 0x9E, 0x9E, 0x9E, 0x9E, 0xF6, 0x96,
+                    0xF6, 0x96, 0xF6, 0x96, 0xF6, 0x96, 0xF6, 0x96, 0xF6, 0x96, 0xF6, 0x96, 0xF6, 0x96,
+                    0xF6, 0x96, 0xF6, 0x96, 0xF6, 0x96, 0xF6, 0x96, 0xF6, 0x96, 0xF6, 0x96, 0xF6, 0x96,
+                    0xF6, 0x96, 0xF6, 0x96, 0xF6, 0x96, 0xF6, 0x96, 0xF6, 0x96, 0xF6, 0x96, 0xF6, 0x96,
+                    0xF6, 0x96, 0xF6, 0x96, 0xF6, 0x96, 0xF6, 0x96, 0xF6, 0x96, 0xF6, 0x96, 0xF6, 0x96
+                ];
+                
+                // Display: 64x32 pixels
+                this.display = new Uint8Array(64 * 32);
+                this.pixelScale = 4; // Scale factor for canvas
+                
+                // Registers V0-VF (17 registers)
+                this.registers = new Uint8Array(16);
+                
+                // Index register
+                this.indexRegister = 0x000;
+                
+                // Program counter
+                this.programCounter = 0x200;
+                
+                // Delay and sound timers
+                this.delayTimer = 0;
+                this.soundTimer = 0;
+                
+                // Call stack (max 16 entries)
+                this.stack = new Uint8Array(16);
+                this.stackPointer = 0;
+                
+                // Draw flag
+                this.drawFlag = false;
+                
+                // Key states
+                this.keysPressed = new Set();
+                
+                // Carry and borrow flags (in VF)
+                this.vf = 0xFF;
+                
+                // Canvas
+                this.canvas = document.getElementById('screen');
+                this.ctx = this.canvas.getContext('2d');
+                
+                // Display scaling
+                const size = Math.min(window.innerWidth - 40, 512);
+                this.canvas.style.width = size + 'px';
+                this.canvas.style.height = (size * 0.5) + 'px';
+                
+                this.displayScale = size / 64;
+            }
+            
+            // Load font set at 0x000
+            loadFontSet() {
+                for (let i = 0; i < this.fontset.length; i++) {
+                    this.memory[i] = this.fontset[i];
+                }
+            }
+            
+            // Set key press/release state
+            setKey(key, pressed) {
+                if (pressed) {
+                    this.keysPressed.add(key);
+                } else {
+                    this.keysPressed.delete(key);
+                }
+            }
+            
+            // Handle keyboard input
+            handleKeyboard(keyCode) {
+                const keyMap = {
+                    '1': 0x1, '2': 0x2, '3': 0x3, '4': 0x4,
+                    'q': 0x5, 'w': 0x6, 'e': 0x7, 'r': 0x8,
+                    'a': 0x9, 's': 0xa, 'd': 0xb, 'f': 0xc,
+                    'z': 0xd, 'x': 0xe, 'c': 0xf, 'v': 0x0
+                };
+                
+                if (keyMap[keyCode] !== undefined) {
+                    this.setKey(keyMap[keyCode], true);
+                } else if (keyCode >= 48 && keyCode <= 57) { // Numpad keys
+                    const key = keyCode - 48;
+                    this.setKey(0x1 + Math.floor(key / 5), true);
+                }
+            }
+            
+            // Clear screen
+            clearScreen() {
+                for (let i = 0; i < this.display.length; i++) {
+                    this.display[i] = 0;
+                }
+                this.draw();
+            }
+            
+            // Draw the display to canvas with XOR
+            draw() {
+                this.ctx.fillStyle = '#000';
+                this.ctx.fillRect(0, 0, 64, 32);
+                
+                for (let y = 0; y < 32; y++) {
+                    for (let x = 0; x < 64; x++) {
+                        const idx = y * 64 + x;
+                        if (this.display[idx]) {
+                            this.ctx.fillStyle = '#fff';
+                        } else {
+                            this.ctx.fillStyle = '#000';
+                        }
+                        this.ctx.fillRect(x, y, 1, 1);
+                    }
+                }
+            }
+            
+            // Draw sprite at (x, y) with height h using XOR
+            drawSprite(spriteX, spriteY, height, data) {
+                let x = spriteX;
+                let y = spriteY;
+                
+                for (let i = 0; i < height && y < 32; i++) {
+                    const byte = data[i];
+                    for (let col = 0; col < 8; col++) {
+                        if ((byte & (1 << (7 - col))) !== 0) {
+                            const pixelIndex = (y * 64 + x);
+                            this.display[pixelIndex] ^= 1; // XOR operation
+                            
+                            // Set VF flag if collision occurs
+                            if (this.display[pixelIndex] === 0 && x < 64 && y < 32) {
+                                this.vf = 0xFF;
+                            } else if (x >= 64 || y >= 32) {
+                                // Handle wrapping - just set collision
+                                this.vf = 0xFF;
+                            }
+                        }
+                    }
+                    y++;
+                }
+            }
+            
+            // Execute instruction
+            executeInstruction() {
+                const opCode = this.memory[this.programCounter] << 8 | this.memory[this.programCounter + 1];
+                
+                switch (true) {
+                    case (opCode & 0xF000 === 0x0000):
+                        // 00E0 - Clear screen
+                        if (opCode === 0x00E0) {
+                            this.clearScreen();
+                        }
+                        break;
+                        
+                    case (opCode & 0xF000 === 0x0E00):
+                        // 0EE1-0EEF - Return from subroutine
+                        if (opCode >= 0x0EE0 && opCode <= 0x0EFF) {
+                            const n = opCode & 0x000F;
+                            this.stackPointer--;
+                            this.programCounter = this.stack[this.stackPointer];
+                        }
+                        break;
+                        
+                    case (opCode & 0xF000 === 0x1000):
+                        // 1NNN - Jump to address NNN
+                        if (opCode >= 0x1000 && opCode <= 0x1FFF) {
+                            const nnn = opCode & 0x0FFF;
+                            this.programCounter = nnn;
+                            if (this.programCounter < 0x200 || this.programCounter > 0xFFEF) {
+                                // Invalid jump, stay in loop
+                                return false;
+                            }
+                        }
+                        break;
+                        
+                    case (opCode & 0xF000 === 0x2000):
+                        // 2NNN - Call subroutine at NNN
+                        if (opCode >= 0x2000 && opCode <= 0x2FFF) {
+                            const nnn = opCode & 0x0FFF;
+                            this.stack[this.stackPointer] = this.programCounter;
+                            this.stackPointer++;
+                            this.programCounter = nnn;
+                        }
+                        break;
+                        
+                    case (opCode & 0xF000 === 0x3000):
+                        // 3XNN - Skip if VX == NN
+                        if (opCode >= 0x3000 && opCode <= 0x3FFF) {
+                            const x = (opCode >> 8) & 0x0F;
+                            const nn = opCode & 0x00FF;
+                            if (this.registers[x] !== nn) {
+                                this.programCounter += 2;
+                            }
+                        }
+                        break;
+                        
+                    case (opCode & 0xF000 === 0x4000):
+                        // 4XNN - Skip if VX != NN
+                        if (opCode >= 0x4000 && opCode <= 0x4FFF) {
+                            const x = (opCode >> 8) & 0x0F;
+                            const nn = opCode & 0x00FF;
+                            if (this.registers[x] === nn) {
+                                this.programCounter += 2;
+                            }
+                        }
+                        break;
+                        
+                    case (opCode & 0xF000 === 0x5000):
+                        // 5XY0 - Skip if VX == VY
+                        if (opCode >= 0x5000 && opCode <= 0x50FF) {
+                            const x = (opCode >> 8) & 0x0F;
+                            const y = (opCode >> 4) & 0x0F;
+                            if (this.registers[x] !== this.registers[y]) {
+                                this.programCounter += 2;
+                            }
+                        }
+                        break;
+                        
+                    case (opCode & 0xF000 === 0x6000):
+                        // 6XNN - Set VX = NN
+                        if (opCode >= 0x6000 && opCode <= 0x6FFF) {
+                            const x = (opCode >> 8) & 0x0F;
+                            const nn = opCode & 0x00FF;
+                            this.registers[x] = nn;
+                        }
+                        break;
+                        
+                    case (opCode & 0xF000 === 0x7000):
+                        // 7XNN - Add NN to VX (no carry)
+                        if (opCode >= 0x7000 && opCode <= 0x7FFF) {
+                            const x = (opCode >> 8) & 0x0F;
+                            const nn = opCode & 0x00FF;
+                            this.registers[x] += nn;
+                        }
+                        break;
+                        
+                    case (opCode & 0xF000 === 0x8000):
+                        // 8XY0 - Set VX = VY
+                        if (opCode >= 0x8000 && opCode <= 0x80FF) {
+                            const x = (opCode >> 8) & 0x0F;
+                            const y = (opCode >> 4) & 0x0F;
+                            this.registers[x] = this.registers[y];
+                        }
+                        
+                        // 8XY1 - Set VX = VX OR VY
+                        else if (opCode >= 0x8100 && opCode <= 0x81FF) {
+                            const x = (opCode >> 8) & 0x0F;
+                            const y = (opCode >> 4) & 0x0F;
+                            this.registers[x] |= this.registers[y];
+                        }
+                        
+                        // 8XY2 - Set VX = VX AND VY
+                        else if (opCode >= 0x8200 && opCode <= 0x82FF) {
+                            const x = (opCode >> 8) & 0x0F;
+                            const y = (opCode >> 4) & 0x0F;
+                            this.registers[x] &= this.registers[y];
+                        }
+                        
+                        // 8XY3 - Set VX = VX XOR VY
+                        else if (opCode >= 0x8300 && opCode <= 0x83FF) {
+                            const x = (opCode >> 8) & 0x0F;
+                            const y = (opCode >> 4) & 0x0F;
+                            this.registers[x] ^= this.registers[y];
+                        }
+                        
+                        // 8XY4 - Add VY to VX, set VF on overflow
+                        else if (opCode >= 0x8400 && opCode <= 0x84FF) {
+                            const x = (opCode >> 8) & 0x0F;
+                            const y = (opCode >> 4) & 0x0F;
+                            this.vf = 0xFF; // Set carry flag
+                            this.registers[x] += this.registers[y];
+                            if (this.registers[x] < this.registers[y]) {
+                                this.vf = 0x00; // No carry
+                            }
+                        }
+                        
+                        // 8XY5 - Subtract VY from VX, set VF on borrow
+                        else if (opCode >= 0x8500 && opCode <= 0x85FF) {
+                            const x = (opCode >> 8) & 0x0F;
+                            const y = (opCode >> 4) & 0x0F;
+                            this.vf = 0xFF; // Set carry flag
+                            this.registers[x] -= this.registers[y];
+                            if (this.registers[x] > this.registers[y]) {
+                                this.vf = 0x00; // No borrow
+                            }
+                        }
+                        
+                        // 8XY6 - Shift VX right by 1, VF = LSB
+                        else if (opCode >= 0x8600 && opCode <= 0x86FF) {
+                            const x = (opCode >> 8) & 0x0F;
+                            this.vf = this.registers[x] & 0x01; // LSB
+                            this.registers[x] >>= 1;
+                        }
+                        
+                        // 8XY7 - Add VY to VX, set VF on borrow
+                        else if (opCode >= 0x8700 && opCode <= 0x87FF) {
+                            const x = (opCode >> 8) & 0x0F;
+                            const y = (opCode >> 4) & 0x0F;
+                            this.vf = 0xFF; // Set carry flag
+                            this.registers[x] = this.registers[y] - this.registers[x];
+                            if (this.registers[x] < 0) {
+                                this.vf = 0x00; // No borrow
+                            } else {
+                                this.registers[x] -= 0xFF; // Handle negative
+                            }
+                        }
+                        
+                        // 8XYE - Shift VX left by 1, VF = MSB
+                        else if (opCode >= 0x8E00 && opCode <= 0x8EFF) {
+                            const x = (opCode >> 8) & 0x0F;
+                            this.vf = (this.registers[x] >> 7) & 0x01; // MSB
+                            this.registers[x] <<= 1;
+                        }
+                        
+                        break;
+                        
+                    case (opCode & 0xF000 === 0x9000):
+                        // 9XY0 - Skip if VX != VY
+                        if (opCode >= 0x9000 && opCode <= 0x90FF) {
+                            const x = (opCode >> 8) & 0x0F;
+                            const y = (opCode >> 4) & 0x0F;
+                            if (this.registers[x] === this.registers[y]) {
+                                this.programCounter += 2;
+                            }
+                        }
+                        break;
+                        
+                    case (opCode & 0xF000 === 0xA000):
+                        // ANNN - Set IX = NNN
+                        if (opCode >= 0xA000 && opCode <= 0xAFFF) {
+                            const nnn = opCode & 0x0FFF;
+                            this.indexRegister = nnn;
+                        }
+                        break;
+                        
+                    case (opCode & 0xF000 === 0xB000):
+                        // BNNN - Jump to NNN + VX
+                        if (opCode >= 0xB000 && opCode <= 0xBFFF) {
+                            const nnn = opCode & 0x0FFF;
+                            this.programCounter = nnn + this.registers[(opCode >> 8) & 0x0F];
+                        }
+                        break;
+                        
+                    case (opCode & 0xF000 === 0xC000):
+                        // CXNN - VX = VX * NN
+                        if (opCode >= 0xC000 && opCode <= 0xCFFF) {
+                            const x = (opCode >> 8) & 0x0F;
+                            const nn = opCode & 0x00FF;
+                            this.registers[x] &= 0xFF; // Clear carry
+                            this.registers[x] *= nn;
+                        }
+                        break;
+                        
+                    case (opCode & 0xF000 === 0xD000):
+                        // DXYN - Draw sprite at VX, VY with height N
+                        if (opCode >= 0xD000 && opCode <= 0xDFFF) {
+                            const x = (opCode >> 8) & 0x0F;
+                            const y = (opCode >> 4) & 0x0F;
+                            const n = opCode & 0x000F;
+                            this.drawFlag = true;
+                            
+                            // Draw sprite starting at current index position
+                            let drawIndex = this.indexRegister + 5 * n;
+                            
+                            for (let h = 0; h < n && y < 32; h++) {
+                                const spriteByte = this.memory[drawIndex + h];
+                                for (let w = 0; w < 8; w++) {
+                                    if ((spriteByte & (1 << (7 - w))) !== 0) {
+                                        let px = (this.indexRegister & 0x2F) + w;
+                                        let py = y + h;
+                                        
+                                        // Handle wrapping
+                                        if (px >= 64) {
+                                            px -= 64;
+                                        }
+                                        this.display[py * 64 + px] ^= 1;
+                                        
+                                        if (this.display[py * 64 + px] === 0) {
+                                            this.vf = 0xFF; // Collision
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        break;
+                        
+                    case (opCode & 0xF000 === 0xE000):
+                        // EX9E - Skip if key VX is pressed
+                        if (opCode >= 0xE000 && opCode <= 0xE0FF) {
+                            const x = (opCode >> 8) & 0x0F;
+                            const n = opCode & 0x00FF;
+                            if (!(this.keysPressed.has(n))) {
+                                this.programCounter += 2;
+                            }
+                        }
+                        
+                        // EXA1 - Skip if key VX is not pressed
+                        else if (opCode >= 0xE100 && opCode <= 0xE1FF) {
+                            const x = (opCode >> 8) & 0x0F;
+                            const n = opCode & 0x00FF;
+                            if (this.keysPressed.has(n)) {
+                                this.programCounter += 2;
+                            }
+                        }
+                        
+                        // EX9D, EX9F - Skip if key pressed (variations)
+                        else if (opCode >= 0xE900 && opCode <= 0xE9FF) {
+                            const x = (opCode >> 8) & 0x0F;
+                            const n = opCode & 0x00FF;
+                            if (!(this.keysPressed.has(n))) {
+                                this.programCounter += 2;
+                            }
+                        }
+                        
+                        // EXA5, EXAF - Skip if key not pressed (variations)
+                        else if (opCode >= 0xEA00 && opCode <= 0xEAFF) {
+                            const x = (opCode >> 8) & 0x0F;
+                            const n = opCode & 0x00FF;
+                            if (this.keysPressed.has(n)) {
+                                this.programCounter += 2;
+                            }
+                        }
+                        
+                        break;
+                        
+                    case (opCode & 0xF000 === 0xFF00):
+                        // FFO9 - Return from subroutine
+                        if (opCode === 0xFFE9) {
+                            this.stackPointer--;
+                            this.programCounter = this.stack[this.stackPointer];
+                        }
+                        
+                        // FF15 - Set DY to VX
+                        else if (opCode === 0xFF15) {
+                            const x = (opCode >> 8) & 0x0F;
+                            const delayTimer = this.registers[x];
+                        }
+                        
+                        // FF16 - Set SY to VX
+                        else if (opCode === 0xFF16) {
+                            const x = (opCode >> 8) & 0x0F;
+                            const soundTimer = this.registers[x];
+                        }
+                        
+                        // FF17 - Set SX to VX
+                        else if (opCode === 0xFF17) {
+                            const x = (opCode >> 8) & 0x0F;
+                            const delayTimer = this.registers[x] + 64;
+                        }
+                        
+                        // FF1E - Add VX to IX
+                        else if (opCode === 0xFF1E) {
+                            const x = (opCode >> 8) & 0x0F;
+                            this.indexRegister += this.registers[x];
+                        }
+                        
+                        // FF29 - Set IX to location of sprite for digit VX
+                        else if (opCode === 0xFF29) {
+                            const x = (opCode >> 8) & 0x0F;
+                            const n = this.registers[x] % 10;
+                            this.indexRegister = 0x50 + n * 5;
+                        }
+                        
+                        // FF43 - Set IX to BCD of VX
+                        else if (opCode === 0xFF43) {
+                            const x = (opCode >> 8) & 0x0F;
+                            let bcd = this.registers[x];
+                            bcd += Math.floor(bcd / 100) * 100;
+                            bcd += Math.floor((bcd % 100) / 10) * 10;
+                            bcd += bcd % 10;
+                            this.indexRegister = bcd;
+                        }
+                        
+                        // FF65 - Store V0-VF in IX
+                        else if (opCode === 0xFF65) {
+                            const x = (opCode >> 8) & 0x0F;
+                            for (let i = 0; i < 16; i++) {
+                                this.memory[this.indexRegister + i] = this.registers[i];
+                            }
+                        }
+                        
+                        // FF66 - Store IX into V0-VF
+                        else if (opCode === 0xFF66) {
+                            const x = (opCode >> 8) & 0x0F;
+                            for (let i = 0; i < 16; i++) {
+                                this.registers[i] = this.memory[this.indexRegister + i];
+                            }
+                        }
+                        
+                        // FF75 - Load V0-VF from IX
+                        else if (opCode === 0xFF75) {
+                            const x = (opCode >> 8) & 0x0F;
+                            for (let i = 0; i < 16; i++) {
+                                this.registers[i] = this.memory[this.indexRegister + i];
+                            }
+                        }
+                        
+                        // FF76 - Store VX in delay timer
+                        else if (opCode === 0xFF76) {
+                            const x = (opCode >> 8) & 0x0F;
+                            this.delayTimer = this.registers[x];
+                        }
+                        
+                        // FF77 - Store VX in sound timer
+                        else if (opCode === 0xFF77) {
+                            const x = (opCode >> 8) & 0x0F;
+                            this.soundTimer = this.registers[x];
+                        }
+                        
+                        break;
+                        
+                    default:
+                        // Unknown instruction, skip
+                        this.programCounter += 2;
+                        break;
+                }
+                
+                return true;
+            }
+            
+            // Main loop
+            run() {
+                if (this.running) return;
+                
+                this.running = true;
+                
+                const speedRange = document.getElementById('speedRange');
+                const speedValue = parseInt(speedRange.value);
+                const framesPerSecond = Math.round(60 * (100 / speedValue));
+                
+                let lastTime = performance.now();
+                
+                const loop = () => {
+                    if (!this.running) return;
+                    
+                    const now = performance.now();
+                    const elapsed = now - lastTime;
+                    
+                    if (elapsed >= 1000 / framesPerSecond) {
+                        lastTime = now;
+                        
+                        // Execute instruction
+                        this.executeInstruction();
+                        
+                        // Handle timers at 60 Hz
+                        this.delayTimer--;
+                        this.soundTimer--;
+                        
+                        if (this.drawFlag) {
+                            this.drawFlag = false;
+                            this.draw();
+                        }
+                        
+                        // Update UI
+                        this.updateDebugPanel();
+                    }
+                    
+                    requestAnimationFrame(loop);
+                };
+                
+                requestAnimationFrame(loop);
+            }
+            
+            pause() {
+                this.running = false;
+            }
+            
+            step() {
+                if (!this.running) {
+                    this.executeInstruction();
+                    this.draw();
+                    this.updateDebugPanel();
+                }
+            }
+            
+            reset() {
+                this.pause();
+                this.keysPressed.clear();
+                
+                // Clear screen
+                for (let i = 0; i < this.display.length; i++) {
+                    this.display[i] = 0;
+                }
+                this.draw();
+                
+                // Reset registers and timers
+                this.registers.fill(0);
+                this.indexRegister = 0x000;
+                this.programCounter = 0x200;
+                this.delayTimer = 0;
+                this.soundTimer = 0;
+                this.stackPointer = 0;
+                this.drawFlag = false;
+                this.vf = 0xFF;
+                
+                // Reset memory to font set
+                for (let i = 0; i < this.fontset.length; i++) {
+                    this.memory[i] = this.fontset[i];
+                }
+                
+                this.updateDebugPanel();
+                document.getElementById('statusBar').textContent = 'Emulator reset. Ready.';
+            }
+            
+            // Load ROM from file input
+            loadROMFromFile(input) {
+                const file = input.files[0];
+                if (!file) return;
+                
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const data = e.target.result;
+                    
+                    try {
+                        // Convert string to Uint8Array
+                        const romBytes = [];
+                        for (let i = 0; i < data.length; i++) {
+                            romBytes.push(parseInt(data.charCodeAt(i), 16));
+                        }
+                        
+                        // Copy ROM to memory at 0x200
+                        const startAddr = 0x200;
+                        let byteIndex = 0;
+                        while (byteIndex + startAddr < this.memory.length) {
+                            if (byteIndex < romBytes.length) {
+                                this.memory[startAddr + byteIndex] = romBytes[byteIndex];
+                                byteIndex++;
+                            } else {
+                                break;
+                            }
+                        }
+                        
+                        this.reset();
+                        this.programCounter = startAddr;
+                        this.draw();
+                        this.updateDebugPanel();
+                        document.getElementById('statusBar').textContent = 'ROM loaded successfully!';
+                    } catch (err) {
+                        document.getElementById('statusBar').textContent = 'Error loading ROM: ' + err.message;
+                    }
+                };
+                
+                reader.readAsText(file);
+            }
+            
+            // Handle key press/release events
+            keyPress(key, pressed) {
+                this.setKey(key, pressed);
+                
+                const btn = document.querySelector(`.key-btn[data-key="${key}"]`);
+                if (btn) {
+                    if (pressed) {
+                        btn.classList.add('active');
+                    } else {
+                        btn.classList.remove('active');
+                    }
+                }
+                
+                this.updateDebugPanel();
+            }
+            
+            updateDebugPanel() {
+                // Update registers display
+                const regGrid = document.getElementById('registersGrid');
+                let gridHTML = '';
+                
+                for (let i = 0; i < 16; i++) {
+                    gridHTML += `<div class="reg-item">V${i}: <span class="reg-value">${this.registers[i].toString(16).toUpperCase().padStart(2, '0')}</span></div>`;
+                }
+                
+                regGrid.innerHTML = gridHTML;
+                
+                // Update PC and IX displays
+                document.getElementById('pcDisplay').textContent = this.programCounter.toString(16).toUpperCase().padStart(3, '0');
+                document.getElementById('indexDisplay').textContent = this.indexRegister.toString(16).toUpperCase().padStart(3, '0');
+                
+                // Update stack display
+                let stackHTML = '';
+                for (let i = 0; i < this.stackPointer; i++) {
+                    stackHTML += `<div>${this.stack[i].toString(16).toUpperCase().padStart(2, '0')}</div>`;
+                }
+                document.getElementById('stackDisplay').innerHTML = stackHTML || '<div>(empty)</div>';
+                
+                // Decode and display current instruction
+                const opCode = this.memory[this.programCounter] << 8 | this.memory[this.programCounter + 1];
+                const instructionText = this.decodeInstruction(opCode);
+                document.getElementById('instructionDisplay').textContent = instructionText || `Unknown: ${opCode.toString(16).toUpperCase().padStart(4, '0')}`;
+            }
+            
+            decodeInstruction(opCode) {
+                const nnn = opCode & 0x0FFF;
+                const x = (opCode >> 8) & 0x0F;
+                const y = (opCode >> 4) & 0x0F;
+                const nn = opCode & 0x00FF;
+                const n = opCode & 0x000F;
+                
+                switch (true) {
+                    case (opCode === 0x00E0): return '00E0: Clear screen';
+                    case (opCode === 0x0EE1): return `0EE${n.toString(16).padStart(2, '0')}: Return from subroutine`;
+                    case (opCode >= 0x1000 && opCode <= 0x1FFF): return `1NNN: Jump to address ${nnn.toString(16)}`;
+                    case (opCode >= 0x2000 && opCode <= 0x2FFF): return `2NNN: Call subroutine at ${nnn.toString(16)}`;
+                    case (opCode >= 0x3000 && opCode <= 0x3FFF): return `3XNN: Skip if V${x} ≠ ${nn.toString(16)}`;
+                    case (opCode >= 0x4000 && opCode <= 0x4FFF): return `4XNN: Skip if V${x} = ${nn.toString(16)}`;
+                    case (opCode >= 0x5000 && opCode <= 0x50FF): return `5XY0: Skip if V${x} ≠ V${y}`;
+                    case (opCode >= 0x6000 && opCode <= 0x6FFF): return `6XNN: Set V${x} = ${nn.toString(16)}`;
+                    case (opCode >= 0x7000 && opCode <= 0x7FFF): return `7XNN: Add ${nn.toString(16)} to V${x}`;
+                    case (opCode >= 0x8000 && opCode <= 0x80FF): return `8XY0: Set V${x} = V${y}`;
+                    case (opCode >= 0x8100 && opCode <= 0x81FF): return `8XY1: Set V${x} = V${x} OR V${y}`;
+                    case (opCode >= 0x8200 && opCode <= 0x82FF): return `8XY2: Set V${x} = V${x} AND V${y}`;
+                    case (opCode >= 0x8300 && opCode <= 0x83FF): return `8XY3: Set V${x} = V${x} XOR V${y}`;
+                    case (opCode >= 0x8400 && opCode <= 0x84FF): return `8XY4: Add V${y} to V${x}, VF = carry`;
+                    case (opCode >= 0x8500 && opCode <= 0x85FF): return `8XY5: Subtract V${y} from V${x}, VF = borrow`;
+                    case (opCode >= 0x8600 && opCode <= 0x86FF): return `8XY6: Shift V${x} right, VF = LSB`;
+                    case (opCode >= 0x8700 && opCode <= 0x87FF): return `8XY7: Add V${y} to V${x}, VF = borrow`;
+                    case (opCode >= 0x8E00 && opCode <= 0x8EFF): return `8XYE: Shift V${x} left, VF = MSB`;
+                    case (opCode >= 0x9000 && opCode <= 0x90FF): return `9XY0: Skip if V${x} = V${y}`;
+                    case (opCode >= 0xA000 && opCode <= 0xAFFF): return `ANNN: Set IX = ${nnn.toString(16)}`;
+                    case (opCode >= 0xB000 && opCode <= 0xBFFF): return `BNNN: Jump to ${nnn.toString(16)} + V${x}`;
+                    case (opCode >= 0xC000 && opCode <= 0xCFFF): return `CXNN: V${x} = V${x} × ${nn.toString(16)}`;
+                    case (opCode >= 0xD000 && opCode <= 0xDFFF): return `DXYN: Draw sprite at V${x},V${y} height ${n}`;
+                    case (opCode >= 0xE000 && opCode <= 0xE1FF): return `EX9E/EXA1: Key test for V${x}`;
+                    case (opCode === 0xFFE9): return 'FFE9: Return from subroutine';
+                    case (opCode === 0xFF15): return 'FF15: Set delay timer to V${x}';
+                    case (opCode === 0xFF16): return 'FF16: Set sound timer to V${x}';
+                    case (opCode === 0xFF17): return 'FF17: Set delay timer to V${x} + $40';
+                    case (opCode === 0xFF1E): return 'FF1E: Add V${x} to IX';
+                    case (opCode === 0xFF29): return `FF29: Set IX to sprite for digit ${this.registers[x] % 10}`;
+                    case (opCode === 0xFF43): return 'FF43: Set IX to BCD of V${x}';
+                    case (opCode === 0xFF65): return `FF65: Store V0-VF in memory at IX`;
+                    case (opCode === 0xFF66): return `FF66: Load V0-VF from memory at IX`;
+                    case (opCode === 0xFF75): return 'FF75: Load V0-VF from IX';
+                    case (opCode === 0xFF76): return 'FF76: Store V${x} in delay timer';
+                    case (opCode === 0xFF77): return 'FF77: Store V${x} in sound timer';
+                    default: return `Unknown: ${opCode.toString(16).toUpperCase().padStart(4, '0')}`;
+                }
+            }
+            
+            // Start with demo program
+            init() {
+                this.loadFontSet();
+                this.reset();
+                
+                // Demo program: draws a simple sprite and waits for key press
+                // This is a "hello world" CHIP-8 program
+                
+                const demo = [
+                    // Clear screen
+                    0x0, 0xE0,
+                    
+                    // Set V0 to 1 (first digit) - will draw at x=0, y=0
+                    0x6, 0, 0x1,
+                    
+                    // Move index register to start of font set
+                    0xA, 0, 0x50,
+                    
+                    // Draw sprite at V0=0 (x=0), V2=0 (y=0), height 5
+                    0xD, 0, 2, 0, 0, 0x5,
+                    
+                    // Wait for key press (key A = 0xA)
+                    0xE, 0xA, 0x9E,
+                    
+                    // Return from subroutine (infinite loop)
+                    0xFF, 0xE9
+                ];
+                
+                // Copy demo to memory starting at 0x200
+                let addr = 0x200;
+                for (let i = 0; i < demo.length && addr + 1 < this.memory.length; i += 2) {
+                    this.memory[addr++] = demo[i];
+                    this.memory[addr++] = demo[i + 1];
+                }
+                
+                this.programCounter = 0x200;
+            }
+        }
+        
+        // Initialize emulator
+        const emulator = new Chip8();
+        emulator.init();
+        
+        // Handle keyboard events
+        document.addEventListener('keydown', (e) => {
+            emulator.handleKeyboard(e.key);
+            emulator.keyPress(emulator.mapKeyToChip8(e.key), true);
+        });
+        
+        document.addEventListener('keyup', (e) => {
+            emulator.keyPress(emulator.mapKeyToChip8(e.key), false);
+        });
+        
+        // Keyboard mapping helper
+        Chip8.prototype.mapKeyToChip8 = function(keyCode) {
+            const keyMap = {
+                '1': 0x1, '2': 0x2, '3': 0x3, '4': 0x4,
+                'q': 0x5, 'w': 0x6, 'e': 0x7, 'r': 0x8,
+                'a': 0x9, 's': 0xa, 'd': 0xb, 'f': 0xc,
+                'z': 0xd, 'x': 0xe, 'c': 0xf, 'v': 0x0
+            };
+            
+            if (keyMap[keyCode] !== undefined) {
+                return keyMap[keyCode];
+            }
+            
+            // Numeric keypad
+            if (keyCode >= 48 && keyCode <= 57) {
+                return 0x1 + Math.floor((keyCode - 48) / 5);
+            }
+            
+            // Arrow keys
+            const arrowMap = {
+                'ArrowUp': 0x1,
+                'ArrowRight': 0x2,
+                'ArrowDown': 0x3,
+                'ArrowLeft': 0x4
+            };
+            
+            return arrowMap[keyCode] || 0x0;
+        };
+        
+        // Speed control
+        document.getElementById('speedRange').addEventListener('input', (e) => {
+            document.getElementById('speedValue').textContent = e.target.value;
+        });
+    </script>
+</body>
+</html>

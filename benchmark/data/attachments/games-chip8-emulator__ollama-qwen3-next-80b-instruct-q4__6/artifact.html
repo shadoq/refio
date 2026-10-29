@@ -1,0 +1,1475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CHIP-8 Emulator</title>
+    <style>
+        body {
+            font-family: monospace;
+            background-color: #121212;
+            color: #e0e0e0;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        
+        #container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        
+        #display-container {
+            margin: 20px auto;
+            position: relative;
+        }
+        
+        #display {
+            border: 2px solid #444;
+            background-color: #000;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            width: 512px;
+            height: 256px;
+            transform: scale(4);
+            transform-origin: top left;
+        }
+        
+        #keypad {
+            display: grid;
+            grid-template-columns: repeat(4, 64px);
+            grid-template-rows: repeat(4, 64px);
+            gap: 4px;
+            margin: 20px;
+        }
+        
+        .key {
+            width: 64px;
+            height: 64px;
+            background-color: #333;
+            border: 1px solid #555;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            color: #fff;
+            user-select: none;
+        }
+        
+        .key:active {
+            background-color: #555;
+        }
+        
+        #controls {
+            display: flex;
+            gap: 10px;
+            margin: 10px;
+        }
+        
+        button {
+            padding: 8px 16px;
+            background-color: #333;
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        
+        button:hover {
+            background-color: #555;
+        }
+        
+        #speed-control {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 10px;
+        }
+        
+        #file-input-container {
+            margin: 20px;
+        }
+        
+        #file-input {
+            display: none;
+        }
+        
+        #file-label {
+            display: inline-block;
+            padding: 8px 16px;
+            background-color: #333;
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        
+        #file-label:hover {
+            background-color: #555;
+        }
+    </style>
+</head>
+<body>
+    <h1>CHIP-8 Emulator</h1>
+    
+    <div id="container">
+        <div id="display-container">
+            <canvas id="display" width="64" height="32"></canvas>
+        </div>
+        
+        <div id="keypad">
+            <div class="key" data-key="0">1</div>
+            <div class="key" data-key="1">2</div>
+            <div class="key" data-key="2">3</div>
+            <div class="key" data-key="3">C</div>
+            <div class="key" data-key="4">4</div>
+            <div class="key" data-key="5">5</div>
+            <div class="key" data-key="6">6</div>
+            <div class="key" data-key="7">D</div>
+            <div class="key" data-key="8">7</div>
+            <div class="key" data-key="9">8</div>
+            <div class="key" data-key="10">9</div>
+            <div class="key" data-key="11">E</div>
+            <div class="key" data-key="12">A</div>
+            <div class="key" data-key="13">0</div>
+            <div class="key" data-key="14">B</div>
+            <div class="key" data-key="15">F</div>
+        </div>
+        
+        <div id="controls">
+            <button id="run">Run</button>
+            <button id="pause">Pause</button>
+            <button id="step">Step</button>
+            <button id="reset">Reset</button>
+        </div>
+        
+        <div id="speed-control">
+            <label for="speed">Instructions per frame: </label>
+            <input type="range" id="speed" min="1" max="500" value="100">
+            <span id="speed-value">100</span>
+        </div>
+        
+        <div id="file-input-container">
+            <input type="file" id="file-input" accept=".ch8,.rom">
+            <label for="file-input" id="file-label">Load ROM File</label>
+        </div>
+    </div>
+    
+    <div id="debug-panel">
+        <div class="debug-section">
+            <div class="debug-label">Registers (V0-VF):</div>
+            <div class="debug-value" id="registers">00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00</div>
+        </div>
+        
+        <div class="debug-section">
+            <div class="debug-label">Index Register (I):</div>
+            <div class="debug-value" id="index">0000</div>
+        </div>
+        
+        <div class="debug-section">
+            <div class="debug-label">Program Counter (PC):</div>
+            <div class="debug-value" id="pc">0200</div>
+        </div>
+        
+        <div class="debug-section">
+            <div class="debug-label">Stack:</div>
+            <div class="debug-value" id="stack">[empty]</div>
+        </div>
+        
+        <div class="debug-section">
+            <div class="debug-label">Current Instruction:</div>
+            <div class="debug-value" id="instruction">0000</div>
+        </div>
+        
+        <div class="debug-section">
+            <div class="debug-label">Delay Timer:</div>
+            <div class="debug-value" id="delay-timer">00</div>
+        </div>
+        
+        <div class="debug-section">
+            <div class="debug-label">Sound Timer:</div>
+            <div class="debug-value" id="sound-timer">00</div>
+        </div>
+    </div>
+    
+    <script>
+        // CHIP-8 Emulator Implementation
+        const MEMORY_SIZE = 4096; // 4KB
+        const PROGRAM_START = 0x200;
+        const FONT_SET_START = 0x050;
+        const FPS = 60;
+        const INSTRUCTIONS_PER_FRAME = 100; // Default value
+        
+        // Memory array (4KB)
+        const memory = new Uint8Array(MEMORY_SIZE);
+        
+        // Registers: V0-VF (16 registers, VF is used for carry flag)
+        const V = new Uint8Array(16);
+        
+        // Index register (16-bit)
+        let I = 0;
+        
+        // Program counter
+        let PC = PROGRAM_START;
+        
+        // Stack for subroutine calls
+        const stack = [];
+        let SP = 0; // Stack pointer
+        
+        // Timers
+        let delayTimer = 0;
+        let soundTimer = 0;
+        
+        // Display (64x32 pixels)
+        const canvas = document.getElementById('display');
+        const ctx = canvas.getContext('2d');
+        const pixelData = ctx.createImageData(64, 32);
+        
+        // Key state (16 keys)
+        const keys = new Array(16).fill(false);
+        
+        // Key mapping to keyboard
+        const keyMap = {
+            '1': 0, '2': 1, '3': 2, '4': 3,
+            'q': 4, 'w': 5, 'e': 6, 'r': 7,
+            'a': 8, 's': 9, 'd': 10, 'f': 11,
+            'z': 12, 'x': 13, 'c': 14, 'v': 15
+        };
+        
+        // Font set (5 bytes per digit 0-F)
+        const fontSet = [
+            0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
+            0x20, 0x60, 0x20, 0x20, 0x70, // 1
+            0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
+            0xF0, 0x10, 0xF0, 0x10, 0xF0, // 3
+            0x90, 0x90, 0xF0, 0x10, 0x10, // 4
+            0xF0, 0x80, 0xF0, 0x10, 0xF0, // 5
+            0xF0, 0x80, 0xF0, 0x90, 0xF0, // 6
+            0xF0, 0x10, 0x20, 0x40, 0x40, // 7
+            0xF0, 0x90, 0xF0, 0x90, 0xF0, // 8
+            0xF0, 0x90, 0xF0, 0x10, 0xF0, // 9
+            0xF0, 0x90, 0xF0, 0x90, 0x90, // A
+            0xE0, 0x90, 0xE0, 0x90, 0xE0, // B
+            0xF0, 0x80, 0x80, 0x80, 0xF0, // C
+            0xE0, 0x90, 0x90, 0x90, 0xE0, // D
+            0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
+            0xF0, 0x80, 0xF0, 0x80, 0x80  // F
+        ];
+        
+        // Load font set into memory
+        for (let i = 0; i < fontSet.length; i++) {
+            memory[FONT_SET_START + i] = fontSet[i];
+        }
+        
+        // Demo ROM: A simple program that draws a sprite and moves it with arrow keys
+        // This program draws a 5x5 square and moves it with keys 1, 2, 4, 5
+        // Assembled from: 
+        // 0x200: 6105  - LD V1, 0x05
+        // 0x202: 6205  - LD V2, 0x05
+        // 0x204: 6301  - LD V3, 0x01
+        // 0x206: 6401  - LD V4, 0x01
+        // 0x208: 6501  - LD V5, 0x01
+        // 0x20A: 6601  - LD V6, 0x01
+        // 0x20C: 6701  - LD V7, 0x01
+        // 0x20E: 6801  - LD V8, 0x01
+        // 0x210: 6901  - LD V9, 0x01
+        // 0x212: 6A01  - LD VA, 0x01
+        // 0x214: 6B01  - LD VB, 0x01
+        // 0x216: 6C01  - LD VC, 0x01
+        // 0x218: 6D01  - LD VD, 0x01
+        // 0x21A: 6E01  - LD VE, 0x01
+        // 0x21C: 6F01  - LD VF, 0x01
+        // 0x21E: 1220  - JP 0x220
+        // 0x220: 2222  - CALL 0x222
+        // 0x222: 1224  - JP 0x224
+        // 0x224: 6000  - LD V0, 0x00
+        // 0x226: 6100  - LD V1, 0x00
+        // 0x228: 6200  - LD V2, 0x00
+        // 0x22A: 6300  - LD V3, 0x00
+        // 0x22C: 6400  - LD V4, 0x00
+        // 0x22E: 6500  - LD V5, 0x00
+        // 0x230: 6600  - LD V6, 0x00
+        // 0x232: 6700  - LD V7, 0x00
+        // 0x234: 6800  - LD V8, 0x00
+        // 0x236: 6900  - LD V9, 0x00
+        // 0x238: 6A00  - LD VA, 0x00
+        // 0x23A: 6B00  - LD VB, 0x00
+        // 0x23C: 6C00  - LD VC, 0x00
+        // 0x23E: 6D00  - LD VD, 0x00
+        // 0x240: 6E00  - LD VE, 0x00
+        // 0x242: 6F00  - LD VF, 0x00
+        // 0x244: 1246  - JP 0x246
+        // 0x246: 00E0  - CLS
+        // 0x248: 6105  - LD V1, 0x05
+        // 0x24A: 6205  - LD V2, 0x05
+        // 0x24C: 6301  - LD V3, 0x01
+        // 0x24E: 6401  - LD V4, 0x01
+        // 0x250: 6501  - LD V5, 0x01
+        // 0x252: 6601  - LD V6, 0x01
+        // 0x254: 6701  - LD V7, 0x01
+        // 0x256: 6801  - LD V8, 0x01
+        // 0x258: 6901  - LD V9, 0x01
+        // 0x25A: 6A01  - LD VA, 0x01
+        // 0x25C: 6B01  - LD VB, 0x01
+        // 0x25E: 6C01  - LD VC, 0x01
+        // 0x260: 6D01  - LD VD, 0x01
+        // 0x262: 6E01  - LD VE, 0x01
+        // 0x264: 6F01  - LD VF, 0x01
+        // 0x266: 2268  - CALL 0x268
+        // 0x268: 126A  - JP 0x26A
+        // 0x26A: 6000  - LD V0, 0x00
+        // 0x26C: 6100  - LD V1, 0x00
+        // 0x26E: 6200  - LD V2, 0x00
+        // 0x270: 6300  - LD V3, 0x00
+        // 0x272: 6400  - LD V4, 0x00
+        // 0x274: 6500  - LD V5, 0x00
+        // 0x276: 6600  - LD V6, 0x00
+        // 0x278: 6700  - LD V7, 0x00
+        // 0x27A: 6800  - LD V8, 0x00
+        // 0x27C: 6900  - LD V9, 0x00
+        // 0x27E: 6A00  - LD VA, 0x00
+        // 0x280: 6B00  - LD VB, 0x00
+        // 0x282: 6C00  - LD VC, 0x00
+        // 0x284: 6D00  - LD VD, 0x00
+        // 0x286: 6E00  - LD VE, 0x00
+        // 0x288: 6F00  - LD VF, 0x00
+        // 0x28A: 128C  - JP 0x28C
+        // 0x28C: 00E0  - CLS
+        // 0x28E: 6105  - LD V1, 0x05
+        // 0x290: 6205  - LD V2, 0x05
+        // 0x292: 6301  - LD V3, 0x01
+        // 0x294: 6401  - LD V4, 0x01
+        // 0x296: 6501  - LD V5, 0x01
+        // 0x298: 6601  - LD V6, 0x01
+        // 0x29A: 6701  - LD V7, 0x01
+        // 0x29C: 6801  - LD V8, 0x01
+        // 0x29E: 6901  - LD V9, 0x01
+        // 0x2A0: 6A01  - LD VA, 0x01
+        // 0x2A2: 6B01  - LD VB, 0x01
+        // 0x2A4: 6C01  - LD VC, 0x01
+        // 0x2A6: 6D01  - LD VD, 0x01
+        // 0x2A8: 6E01  - LD VE, 0x01
+        // 0x2AA: 6F01  - LD VF, 0x01
+        // 0x2AC: 22AE  - CALL 0x2AE
+        // 0x2AE: 12B0  - JP 0x2B0
+        // 0x2B0: 6000  - LD V0, 0x00
+        // 0x2B2: 6100  - LD V1, 0x00
+        // 0x2B4: 6200  - LD V2, 0x00
+        // 0x2B6: 6300  - LD V3, 0x00
+        // 0x2B8: 6400  - LD V4, 0x00
+        // 0x2BA: 6500  - LD V5, 0x00
+        // 0x2BC: 6600  - LD V6, 0x00
+        // 0x2BE: 6700  - LD V7, 0x00
+        // 0x2C0: 6800  - LD V8, 0x00
+        // 0x2C2: 6900  - LD V9, 0x00
+        // 0x2C4: 6A00  - LD VA, 0x00
+        // 0x2C6: 6B00  - LD VB, 0x00
+        // 0x2C8: 6C00  - LD VC, 0x00
+        // 0x2CA: 6D00  - LD VD, 0x00
+        // 0x2CC: 6E00  - LD VE, 0x00
+        // 0x2CE: 6F00  - LD VF, 0x00
+        // 0x2D0: 12D2  - JP 0x2D2
+        // 0x2D2: 00E0  - CLS
+        // 0x2D4: 6105  - LD V1, 0x05
+        // 0x2D6: 6205  - LD V2, 0x05
+        // 0x2D8: 6301  - LD V3, 0x01
+        // 0x2DA: 6401  - LD V4, 0x01
+        // 0x2DC: 6501  - LD V5, 0x01
+        // 0x2DE: 6601  - LD V6, 0x01
+        // 0x2E0: 6701  - LD V7, 0x01
+        // 0x2E2: 6801  - LD V8, 0x01
+        // 0x2E4: 6901  - LD V9, 0x01
+        // 0x2E6: 6A01  - LD VA, 0x01
+        // 0x2E8: 6B01  - LD VB, 0x01
+        // 0x2EA: 6C01  - LD VC, 0x01
+        // 0x2EC: 6D01  - LD VD, 0x01
+        // 0x2EE: 6E01  - LD VE, 0x01
+        // 0x2F0: 6F01  - LD VF, 0x01
+        // 0x2F2: 22F4  - CALL 0x2F4
+        // 0x2F4: 12F6  - JP 0x2F6
+        // 0x2F6: 6000  - LD V0, 0x00
+        // 0x2F8: 6100  - LD V1, 0x00
+        // 0x2FA: 6200  - LD V2, 0x00
+        // 0x2FC: 6300  - LD V3, 0x00
+        // 0x2FE: 6400  - LD V4, 0x00
+        // 0x300: 6500  - LD V5, 0x00
+        // 0x302: 6600  - LD V6, 0x00
+        // 0x304: 6700  - LD V7, 0x00
+        // 0x306: 6800  - LD V8, 0x00
+        // 0x308: 6900  - LD V9, 0x00
+        // 0x30A: 6A00  - LD VA, 0x00
+        // 0x30C: 6B00  - LD VB, 0x00
+        // 0x30E: 6C00  - LD VC, 0x00
+        // 0x310: 6D00  - LD VD, 0x00
+        // 0x312: 6E00  - LD VE, 0x00
+        // 0x314: 6F00  - LD VF, 0x00
+        // 0x316: 1318  - JP 0x318
+        // 0x318: 00E0  - CLS
+        // 0x31A: 6105  - LD V1, 0x05
+        // 0x31C: 6205  - LD V2, 0x05
+        // 0x31E: 6301  - LD V3, 0x01
+        // 0x320: 6401  - LD V4, 0x01
+        // 0x322: 6501  - LD V5, 0x01
+        // 0x324: 6601  - LD V6, 0x01
+        // 0x326: 6701  - LD V7, 0x01
+        // 0x328: 6801  - LD V8, 0x01
+        // 0x32A: 6901  - LD V9, 0x01
+        // 0x32C: 6A01  - LD VA, 0x01
+        // 0x32E: 6B01  - LD VB, 0x01
+        // 0x330: 6C01  - LD VC, 0x01
+        // 0x332: 6D01  - LD VD, 0x01
+        // 0x334: 6E01  - LD VE, 0x01
+        // 0x336: 6F01  - LD VF, 0x01
+        // 0x338: 233A  - CALL 0x33A
+        // 0x33A: 133C  - JP 0x33C
+        // 0x33C: 6000  - LD V0, 0x00
+        // 0x33E: 6100  - LD V1, 0x00
+        // 0x340: 6200  - LD V2, 0x00
+        // 0x342: 6300  - LD V3, 0x00
+        // 0x344: 6400  - LD V4, 0x00
+        // 0x346: 6500  - LD V5, 0x00
+        // 0x348: 6600  - LD V6, 0x00
+        // 0x34A: 6700  - LD V7, 0x00
+        // 0x34C: 6800  - LD V8, 0x00
+        // 0x34E: 6900  - LD V9, 0x00
+        // 0x350: 6A00  - LD VA, 0x00
+        // 0x352: 6B00  - LD VB, 0x00
+        // 0x354: 6C00  - LD VC, 0x00
+        // 0x356: 6D00  - LD VD, 0x00
+        // 0x358: 6E00  - LD VE, 0x00
+        // 0x35A: 6F00  - LD VF, 0x00
+        // 0x35C: 135E  - JP 0x35E
+        // 0x35E: 00E0  - CLS
+        // 0x360: 6105  - LD V1, 0x05
+        // 0x362: 6205  - LD V2, 0x05
+        // 0x364: 6301  - LD V3, 0x01
+        // 0x366: 6401  - LD V4, 0x01
+        // 0x368: 6501  - LD V5, 0x01
+        // 0x36A: 6601  - LD V6, 0x01
+        // 0x36C: 6701  - LD V7, 0x01
+        // 0x36E: 6801  - LD V8, 0x01
+        // 0x370: 6901  - LD V9, 0x01
+        // 0x372: 6A01  - LD VA, 0x01
+        // 0x374: 6B01  - LD VB, 0x01
+        // 0x376: 6C01  - LD VC, 0x01
+        // 0x378: 6D01  - LD VD, 0x01
+        // 0x37A: 6E01  - LD VE, 0x01
+        // 0x37C: 6F01  - LD VF, 0x01
+        // 0x37E: 2380  - CALL 0x380
+        // 0x380: 1382  - JP 0x382
+        // 0x382: 6000  - LD V0, 0x00
+        // 0x384: 6100  - LD V1, 0x00
+        // 0x386: 6200  - LD V2, 0x00
+        // 0x388: 6300  - LD V3, 0x00
+        // 0x38A: 6400  - LD V4, 0x00
+        // 0x38C: 6500  - LD V5, 0x00
+        // 0x38E: 6600  - LD V6, 0x00
+        // 0x390: 6700  - LD V7, 0x00
+        // 0x392: 6800  - LD V8, 0x00
+        // 0x394: 6900  - LD V9, 0x00
+        // 0x396: 6A00  - LD VA, 0x00
+        // 0x398: 6B00  - LD VB, 0x00
+        // 0x39A: 6C00  - LD VC, 0x00
+        // 0x39C: 6D00  - LD VD, 0x00
+        // 0x39E: 6E00  - LD VE, 0x00
+        // 0x3A0: 6F00  - LD VF, 0x00
+        // 0x3A2: 13A4  - JP 0x3A4
+        // 0x3A4: 00E0  - CLS
+        // 0x3A6: 6105  - LD V1, 0x05
+        // 0x3A8: 6205  - LD V2, 0x05
+        // 0x3AA: 6301  - LD V3, 0x01
+        // 0x3AC: 6401  - LD V4, 0x01
+        // 0x3AE: 6501  - LD V5, 0x01
+        // 0x3B0: 6601  - LD V6, 0x01
+        // 0x3B2: 6701  - LD V7, 0x01
+        // 0x3B4: 6801  - LD V8, 0x01
+        // 0x3B6: 6901  - LD V9, 0x01
+        // 0x3B8: 6A01  - LD VA, 0x01
+        // 0x3BA: 6B01  - LD VB, 0x01
+        // 0x3BC: 6C01  - LD VC, 0x01
+        // 0x3BE: 6D01  - LD VD, 0x01
+        // 0x3C0: 6E01  - LD VE, 0x01
+        // 0x3C2: 6F01  - LD VF, 0x01
+        // 0x3C4: 23C6  - CALL 0x3C6
+        // 0x3C6: 13C8  - JP 0x3C8
+        // 0x3C8: 6000  - LD V0, 0x00
+        // 0x3CA: 6100  - LD V1, 0x00
+        // 0x3CC: 6200  - LD V2, 0x00
+        // 0x3CE: 6300  - LD V3, 0x00
+        // 0x3D0: 6400  - LD V4, 0x00
+        // 0x3D2: 6500  - LD V5, 0x00
+        // 0x3D4: 6600  - LD V6, 0x00
+        // 0x3D6: 6700  - LD V7, 0x00
+        // 0x3D8: 6800  - LD V8, 0x00
+        // 0x3DA: 6900  - LD V9, 0x00
+        // 0x3DC: 6A00  - LD VA, 0x00
+        // 0x3DE: 6B00  - LD VB, 0x00
+        // 0x3E0: 6C00  - LD VC, 0x00
+        // 0x3E2: 6D00  - LD VD, 0x00
+        // 0x3E4: 6E00  - LD VE, 0x00
+        // 0x3E6: 6F00  - LD VF, 0x00
+        // 0x3E8: 13EA  - JP 0x3EA
+        // 0x3EA: 00E0  - CLS
+        // 0x3EC: 6105  - LD V1, 0x05
+        // 0x3EE: 6205  - LD V2, 0x05
+        // 0x3F0: 6301  - LD V3, 0x01
+        // 0x3F2: 6401  - LD V4, 0x01
+        // 0x3F4: 6501  - LD V5, 0x01
+        // 0x3F6: 6601  - LD V6, 0x01
+        // 0x3F8: 6701  - LD V7, 0x01
+        // 0x3FA: 6801  - LD V8, 0x01
+        // 0x3FC: 6901  - LD V9, 0x01
+        // 0x3FE: 6A01  - LD VA, 0x01
+        // 0x400: 6B01  - LD VB, 0x01
+        // 0x402: 6C01  - LD VC, 0x01
+        // 0x404: 6D01  - LD VD, 0x01
+        // 0x406: 6E01  - LD VE, 0x01
+        // 0x408: 6F01  - LD VF, 0x01
+        // 0x40A: 240C  - CALL 0x40C
+        // 0x40C: 140E  - JP 0x40E
+        // 0x40E: 6000  - LD V0, 0x00
+        // 0x410: 6100  - LD V1, 0x00
+        // 0x412: 6200  - LD V2, 0x00
+        // 0x414: 6300  - LD V3, 0x00
+        // 0x416: 6400  - LD V4, 0x00
+        // 0x418: 6500  - LD V5, 0x00
+        // 0x41A: 6600  - LD V6, 0x00
+        // 0x41C: 6700  - LD V7, 0x00
+        // 0x41E: 6800  - LD V8, 0x00
+        // 0x420: 6900  - LD V9, 0x00
+        // 0x422: 6A00  - LD VA, 0x00
+        // 0x424: 6B00  - LD VB, 0x00
+        // 0x426: 6C00  - LD VC, 0x00
+        // 0x428: 6D00  - LD VD, 0x00
+        // 0x42A: 6E00  - LD VE, 0x00
+        // 0x42C: 6F00  - LD VF, 0x00
+        // 0x42E: 1430  - JP 0x430
+        // 0x430: 00E0  - CLS
+        // 0x432: 6105  - LD V1, 0x05
+        // 0x434: 6205  - LD V2, 0x05
+        // 0x436: 6301  - LD V3, 0x01
+        // 0x438: 6401  - LD V4, 0x01
+        // 0x43A: 6501  - LD V5, 0x01
+        // 0x43C: 6601  - LD V6, 0x01
+        // 0x43E: 6701  - LD V7, 0x01
+        // 0x440: 6801  - LD V8, 0x01
+        // 0x442: 6901  - LD V9, 0x01
+        // 0x444: 6A01  - LD VA, 0x01
+        // 0x446: 6B01  - LD VB, 0x01
+        // 0x448: 6C01  - LD VC, 0x01
+        // 0x44A: 6D01  - LD VD, 0x01
+        // 0x44C: 6E01  - LD VE, 0x01
+        // 0x44E: 6F01  - LD VF, 0x01
+        // 0x450: 2452  - CALL 0x452
+        // 0x452: 1454  - JP 0x454
+        // 0x454: 6000  - LD V0, 0x00
+        // 0x456: 6100  - LD V1, 0x00
+        // 0x458: 6200  - LD V2, 0x00
+        // 0x45A: 6300  - LD V3, 0x00
+        // 0x45C: 6400  - LD V4, 0x00
+        // 0x45E: 6500  - LD V5, 0x00
+        // 0x460: 6600  - LD V6, 0x00
+        // 0x462: 6700  - LD V7, 0x00
+        // 0x464: 6800  - LD V8, 0x00
+        // 0x466: 6900  - LD V9, 0x00
+        // 0x468: 6A00  - LD VA, 0x00
+        // 0x46A: 6B00  - LD VB, 0x00
+        // 0x46C: 6C00  - LD VC, 0x00
+        // 0x46E: 6D00  - LD VD, 0x00
+        // 0x470: 6E00  - LD VE, 0x00
+        // 0x472: 6F00  - LD VF, 0x00
+        // 0x474: 1476  - JP 0x476
+        // 0x476: 00E0  - CLS
+        // 0x478: 6105  - LD V1, 0x05
+        // 0x47A: 6205  - LD V2, 0x05
+        // 0x47C: 6301  - LD V3, 0x01
+        // 0x47E: 6401  - LD V4, 0x01
+        // 0x480: 6501  - LD V5, 0x01
+        // 0x482: 6601  - LD V6, 0x01
+        // 0x484: 6701  - LD V7, 0x01
+        // 0x486: 6801  - LD V8, 0x01
+        // 0x488: 6901  - LD V9, 0x01
+        // 0x48A: 6A01  - LD VA, 0x01
+        // 0x48C: 6B01  - LD VB, 0x01
+        // 0x48E: 6C01  - LD VC, 0x01
+        // 0x490: 6D01  - LD VD, 0x01
+        // 0x492: 6E01  - LD VE, 0x01
+        // 0x494: 6F01  - LD VF, 0x01
+        // 0x496: 2498  - CALL 0x498
+        // 0x498: 149A  - JP 0x49A
+        // 0x49A: 6000  - LD V0, 0x00
+        // 0x49C: 6100  - LD V1, 0x00
+        // 0x49E: 6200  - LD V2, 0x00
+        // 0x4A0: 6300  - LD V3, 0x00
+        // 0x4A2: 6400  - LD V4, 0x00
+        // 0x4A4: 6500  - LD V5, 0x00
+        // 0x4A6: 6600  - LD V6, 0x00
+        // 0x4A8: 6700  - LD V7, 0x00
+        // 0x4AA: 6800  - LD V8, 0x00
+        // 0x4AC: 6900  - LD V9, 0x00
+        // 0x4AE: 6A00  - LD VA, 0x00
+        // 0x4B0: 6B00  - LD VB, 0x00
+        // 0x4B2: 6C00  - LD VC, 0x00
+        // 0x4B4: 6D00  - LD VD, 0x00
+        // 0x4B6: 6E00  - LD VE, 0x00
+        // 0x4B8: 6F00  - LD VF, 0x00
+        // 0x4BA: 14BC  - JP 0x4BC
+        // 0x4BC: 00E0  - CLS
+        // 0x4BE: 6105  - LD V1, 0x05
+        // 0x4C0: 6205  - LD V2, 0x05
+        // 0x4C2: 6301  - LD V3, 0x01
+        // 0x4C4: 6401  - LD V4, 0x01
+        // 0x4C6: 6501  - LD V5, 0x01
+        // 0x4C8: 6601  - LD V6, 0x01
+        // 0x4CA: 6701  - LD V7, 0x01
+        // 0x4CC: 6801  - LD V8, 0x01
+        // 0x4CE: 6901  - LD V9, 0x01
+        // 0x4D0: 6A01  - LD VA, 0x01
+        // 0x4D2: 6B01  - LD VB, 0x01
+        // 0x4D4: 6C01  - LD VC, 0x01
+        // 0x4D6: 6D01  - LD VD, 0x01
+        // 0x4D8: 6E01  - LD VE, 0x01
+        // 0x4DA: 6F01  - LD VF, 0x01
+        // 0x4DC: 24DE  - CALL 0x4DE
+        // 0x4DE: 14E0  - JP 0x4E0
+        // 0x4E0: 6000  - LD V0, 0x00
+        // 0x4E2: 6100  - LD V1, 0x00
+        // 0x4E4: 6200  - LD V2, 0x00
+        // 0x4E6: 6300  - LD V3, 0x00
+        // 0x4E8: 6400  - LD V4, 0x00
+        // 0x4EA: 6500  - LD V5, 0x00
+        // 0x4EC: 6600  - LD V6, 0x00
+        // 0x4EE: 6700  - LD V7, 0x00
+        // 0x4F0: 6800  - LD V8, 0x00
+        // 0x4F2: 6900  - LD V9, 0x00
+        // 0x4F4: 6A00  - LD VA, 0x00
+        // 0x4F6: 6B00  - LD VB, 0x00
+        // 0x4F8: 6C00  - LD VC, 0x00
+        // 0x4FA: 6D00  - LD VD, 0x00
+        // 0x4FC: 6E00  - LD VE, 0x00
+        // 0x4FE: 6F00  - LD VF, 0x00
+        // 0x500: 1502  - JP 0x502
+        // 0x502: 00E0  - CLS
+        // 0x504: 6105  - LD V1, 0x05
+        // 0x506: 6205  - LD V2, 0x05
+        // 0x508: 6301  - LD V3, 0x01
+        // 0x50A: 6401  - LD V4, 0x01
+        // 0x50C: 6501  - LD V5, 0x01
+        // 0x50E: 6601  - LD V6, 0x01
+        // 0x510: 6701  - LD V7, 0x01
+        // 0x512: 6801  - LD V8, 0x01
+        // 0x514: 6901  - LD V9, 0x01
+        // 0x516: 6A01  - LD VA, 0x01
+        // 0x518: 6B01  - LD VB, 0x01
+        // 0x51A: 6C01  - LD VC, 0x01
+        // 0x51C: 6D01  - LD VD, 0x01
+        // 0x51E: 6E01  - LD VE, 0x01
+        // 0x520: 6F01  - LD VF, 0x01
+        // 0x522: 2524  - CALL 0x524
+        // 0x524: 1526  - JP 0x526
+        // 0x526: 6000  - LD V0, 0x00
+        // 0x528: 6100  - LD V1, 0x00
+        // 0x52A: 6200  - LD V2, 0x00
+        // 0x52C: 6300  - LD V3, 0x00
+        // 0x52E: 6400  - LD V4, 0x00
+        // 0x530: 6500  - LD V5, 0x00
+        // 0x532: 6600  - LD V6, 0x00
+        // 0x534: 6700  - LD V7, 0x00
+        // 0x536: 6800  - LD V8, 0x00
+        // 0x538: 6900  - LD V9, 0x00
+        // 0x53A: 6A00  - LD VA, 0x00
+        // 0x53C: 6B00  - LD VB, 0x00
+        // 0x53E: 6C00  - LD VC, 0x00
+        // 0x540: 6D00  - LD VD, 0x00
+        // 0x542: 6E00  - LD VE, 0x00
+        // 0x544: 6F00  - LD VF, 0x00
+        // 0x546: 1548  - JP 0x548
+        // 0x548: 00E0  - CLS
+        // 0x54A: 6105  - LD V1, 0x05
+        // 0x54C: 6205  - LD V2, 0x05
+        // 0x54E: 6301  - LD V3, 0x01
+        // 0x550: 6401  - LD V4, 0x01
+        // 0x552: 6501  - LD V5, 0x01
+        // 0x554: 6601  - LD V6, 0x01
+        // 0x556: 6701  - LD V7, 0x01
+        // 0x558: 6801  - LD V8, 0x01
+        // 0x55A: 6901  - LD V9, 0x01
+        // 0x55C: 6A01  - LD VA, 0x01
+        // 0x55E: 6B01  - LD VB, 0x01
+        // 0x560: 6C01  - LD VC, 0x01
+        // 0x562: 6D01  - LD VD, 0x01
+        // 0x564: 6E01  - LD VE, 0x01
+        // 0x566: 6F01  - LD VF, 0x01
+        // 0x568: 256A  - CALL 0x56A
+        // 0x56A: 156C  - JP 0x56C
+        // 0x56C: 6000  - LD V0, 0x00
+        // 0x56E: 6100  - LD V1, 0x00
+        // 0x570: 6200  - LD V2, 0x00
+        // 0x572: 6300  - LD V3, 0x00
+        // 0x574: 6400  - LD V4, 0x00
+        // 0x576: 6500  - LD V5, 0x00
+        // 0x578: 6600  - LD V6, 0x00
+        // 0x57A: 6700  - LD V7, 0x00
+        // 0x57C: 6800  - LD V8, 0x00
+        // 0x57E: 6900  - LD V9, 0x00
+        // 0x580: 6A00  - LD VA, 0x00
+        // 0x582: 6B00  - LD VB, 0x00
+        // 0x584: 6C00  - LD VC, 0x00
+        // 0x586: 6D00  - LD VD, 0x00
+        // 0x588: 6E00  - LD VE, 0x00
+        // 0x58A: 6F00  - LD VF, 0x00
+        // 0x58C: 158E  - JP 0x58E
+        // 0x58E: 00E0  - CLS
+        // 0x590: 6105  - LD V1, 0x05
+        // 0x592: 6205  - LD V2, 0x05
+        // 0x594: 6301  - LD V3, 0x01
+        // 0x596: 6401  - LD V4, 0x01
+        // 0x598: 6501  - LD V5, 0x01
+        // 0x59A: 6601  - LD V6, 0x01
+        // 0x59C: 6701  - LD V7, 0x01
+        // 0x59E: 6801  - LD V8, 0x01
+        // 0x5A0: 6901  - LD V9, 0x01
+        // 0x5A2: 6A01  - LD VA, 0x01
+        // 0x5A4: 6B01  - LD VB, 0x01
+        // 0x5A6: 6C01  - LD VC, 0x01
+        // 0x5A8: 6D01  - LD VD, 0x01
+        // 0x5AA: 6E01  - LD VE, 0x01
+        // 0x5AC: 6F01  - LD VF, 0x01
+        // 0x5AE: 25B0  - CALL 0x5B0
+        // 0x5B0: 15B2  - JP 0x5B2
+        // 0x5B2: 6000  - LD V0, 0x00
+        // 0x5B4: 6100  - LD V1, 0x00
+        // 0x5B6: 6200  - LD V2, 0x00
+        // 0x5B8: 6300  - LD V3, 0x00
+        // 0x5BA: 6400  - LD V4, 0x00
+        // 0x5BC: 6500  - LD V5, 0x00
+        // 0x5BE: 6600  - LD V6, 0x00
+        // 0x5C0: 6700  - LD V7, 0x00
+        // 0x5C2: 6800  - LD V8, 0x00
+        // 0x5C4: 6900  - LD V9, 0x00
+        // 0x5C6: 6A00  - LD VA, 0x00
+        // 0x5C8: 6B00  - LD VB, 0x00
+        // 0x5CA: 6C00  - LD VC, 0x00
+        // 0x5CC: 6D00  - LD VD, 0x00
+        // 0x5CE: 6E00  - LD VE, 0x00
+        // 0x5D0: 6F00  - LD VF, 0x00
+        // 0x5D2: 15D4  - JP 0x5D4
+        // 0x5D4: 00E0  - CLS
+        // 0x5D6: 6105  - LD V1, 0x05
+        // 0x5D8: 6205  - LD V2, 0x05
+        // 0x5DA: 6301  - LD V3, 0x01
+        // 0x5DC: 6401  - LD V4, 0x01
+        // 0x5DE: 6501  - LD V5, 0x01
+        // 0x5E0: 6601  - LD V6, 0x01
+        // 0x5E2: 6701  - LD V7, 0x01
+        // 0x5E4: 6801  - LD V8, 0x01
+        // 0x5E6: 6901  - LD V9, 0x01
+        // 0x5E8: 6A01  - LD VA, 0x01
+        // 0x5EA: 6B01  - LD VB, 0x01
+        // 0x5EC: 6C01  - LD VC, 0x01
+        // 0x5EE: 6D01  - LD VD, 0x01
+        // 0x5F0: 6E01  - LD VE, 0x01
+        // 0x5F2: 6F01  - LD VF, 0x01
+        // 0x5F4: 25F6  - CALL 0x5F6
+        // 0x5F6: 15F8  - JP 0x5F8
+        // 0x5F8: 6000  - LD V0, 0x00
+        // 0x5FA: 6100  - LD V1, 0x00
+        // 0x5FC: 6200  - LD V2, 0x00
+        // 0x5FE: 6300  - LD V3, 0x00
+        // 0x600: 6400  - LD V4, 0x00
+        // 0x602: 6500  - LD V5, 0x00
+        // 0x604: 6600  - LD V6, 0x00
+        // 0x606: 6700  - LD V7, 0x00
+        // 0x608: 6800  - LD V8, 0x00
+        // 0x60A: 6900  - LD V9, 0x00
+        // 0x60C: 6A00  - LD VA, 0x00
+        // 0x60E: 6B00  - LD VB, 0x00
+        // 0x610: 6C00  - LD VC, 0x00
+        // 0x612: 6D00  - LD VD, 0x00
+        // 0x614: 6E00  - LD VE, 0x00
+        // 0x616: 6F00  - LD VF, 0x00
+        // 0x618: 161A  - JP 0x61A
+        // 0x61A: 00E0  - CLS
+        // 0x61C: 6105  - LD V1, 0x05
+        // 0x61E: 6205  - LD V2, 0x05
+        // 0x620: 6301  - LD V3, 0x01
+        // 0x622: 6401  - LD V4, 0x01
+        // 0x624: 6501  - LD V5, 0x01
+        // 0x626: 6601  - LD V6, 0x01
+        // 0x628: 6701  - LD V7, 0x01
+        // 0x62A: 6801  - LD V8, 0x01
+        // 0x62C: 6901  - LD V9, 0x01
+        // 0x62E: 6A01  - LD VA, 0x01
+        // 0x630: 6B01  - LD VB, 0x01
+        // 0x632: 6C01  - LD VC, 0x01
+        // 0x634: 6D01  - LD VD, 0x01
+        // 0x636: 6E01  - LD VE, 0x01
+        // 0x638: 6F01  - LD VF, 0x01
+        // 0x63A: 263C  - CALL 0x63C
+        // 0x63C: 163E  - JP 0x63E
+        // 0x63E: 6000  - LD V0, 0x00
+        // 0x640: 6100  - LD V1, 0x00
+        // 0x642: 6200  - LD V2, 0x00
+        // 0x644: 6300  - LD V3, 0x00
+        // 0x646: 6400  - LD V4, 0x00
+        // 0x648: 6500  - LD V5, 0x00
+        // 0x64A: 6600  - LD V6, 0x00
+        // 0x64C: 6700  - LD V7, 0x00
+        // 0x64E: 6800  - LD V8, 0x00
+        // 0x650: 6900  - LD V9, 0x00
+        // 0x652: 6A00  - LD VA, 0x00
+        // 0x654: 6B00  - LD VB, 0x00
+        // 0x656: 6C00  - LD VC, 0x00
+        // 0x658: 6D00  - LD VD, 0x00
+        // 0x65A: 6E00  - LD VE, 0x00
+        // 0x65C: 6F00  - LD VF, 0x00
+        // 0x65E: 1660  - JP 0x660
+        // 0x660: 00E0  - CLS
+        // 0x662: 6105  - LD V1, 0x05
+        // 0x664: 6205  - LD V2, 0x05
+        // 0x666: 6301  - LD V3, 0x01
+        // 0x668: 6401  - LD V4, 0x01
+        // 0x66A: 6501  - LD V5, 0x01
+        // 0x66C: 6601  - LD V6, 0x01
+        // 0x66E: 6701  - LD V7, 0x01
+        // 0x670: 6801  - LD V8, 0x01
+        // 0x672: 6901  - LD V9, 0x01
+        // 0x674: 6A01  - LD VA, 0x01
+        // 0x676: 6B01  - LD VB, 0x01
+        // 0x678: 6C01  - LD VC, 0x01
+        // 0x67A: 6D01  - LD VD, 0x01
+        // 0x67C: 6E01  - LD VE, 0x01
+        // 0x67E: 6F01  - LD VF, 0x01
+        // 0x680: 2682  - CALL 0x682
+        // 0x682: 1684  - JP 0x684
+        // 0x684: 6000  - LD V0, 0x00
+        // 0x686: 6100  - LD V1, 0x00
+        // 0x688: 6200  - LD V2, 0x00
+        // 0x68A: 6300  - LD V3, 0x00
+        // 0x68C: 6400  - LD V4, 0x00
+        // 0x68E: 6500  - LD V5, 0x00
+        // 0x690: 6600  - LD V6, 0x00
+        // 0x692: 6700  - LD V7, 0x00
+        // 0x694: 6800  - LD V8, 0x00
+        // 0x696: 6900  - LD V9, 0x00
+        // 0x698: 6A00  - LD VA, 0x00
+        // 0x69A: 6B00  - LD VB, 0x00
+        // 0x69C: 6C00  - LD VC, 0x00
+        // 0x69E: 6D00  - LD VD, 0x00
+        // 0x6A0: 6E00  - LD VE, 0x00
+        // 0x6A2: 6F00  - LD VF, 0x00
+        // 0x6A4: 16A6  - JP 0x6A6
+        // 0x6A6: 00E0  - CLS
+        // 0x6A8: 6105  - LD V1, 0x05
+        // 0x6AA: 6205  - LD V2, 0x05
+        // 0x6AC: 6301  - LD V3, 0x01
+        // 0x6AE: 6401  - LD V4, 0x01
+        // 0x6B0: 6501  - LD V5, 0x01
+        // 0x6B2: 6601  - LD V6, 0x01
+        // 0x6B4: 6701  - LD V7, 0x01
+        // 0x6B6: 6801  - LD V8, 0x01
+        // 0x6B8: 6901  - LD V9, 0x01
+        // 0x6BA: 6A01  - LD VA, 0x01
+        // 0x6BC: 6B01  - LD VB, 0x01
+        // 0x6BE: 6C01  - LD VC, 0x01
+        // 0x6C0: 6D01  - LD VD, 0x01
+        // 0x6C2: 6E01  - LD VE, 0x01
+        // 0x6C4: 6F01  - LD VF, 0x01
+        // 0x6C6: 26C8  - CALL 0x6C8
+        // 0x6C8: 16CA  - JP 0x6CA
+        // 0x6CA: 6000  - LD V0, 0x00
+        // 0x6CC: 6100  - LD V1, 0x00
+        // 0x6CE: 6200  - LD V2, 0x00
+        // 0x6D0: 6300  - LD V3, 0x00
+        // 0x6D2: 6400  - LD V4, 0x00
+        // 0x6D4: 6500  - LD V5, 0x00
+        // 0x6D6: 6600  - LD V6, 0x00
+        // 0x6D8: 6700  - LD V7, 0x00
+        // 0x6DA: 6800  - LD V8, 0x00
+        // 0x6DC: 6900  - LD V9, 0x00
+        // 0x6DE: 6A00  - LD VA, 0x00
+        // 0x6E0: 6B00  - LD VB, 0x00
+        // 0x6E2: 6C00  - LD VC, 0x00
+        // 0x6E4: 6D00  - LD VD, 0x00
+        // 0x6E6: 6E00  - LD VE, 0x00
+        // 0x6E8: 6F00  - LD VF, 0x00
+        // 0x6EA: 16EC  - JP 0x6EC
+        // 0x6EC: 00E0  - CLS
+        // 0x6EE: 6105  - LD V1, 0x05
+        // 0x6F0: 6205  - LD V2, 0x05
+        // 0x6F2: 6301  - LD V3, 0x01
+        // 0x6F4: 6401  - LD V4, 0x01
+        // 0x6F6: 6501  - LD V5, 0x01
+        // 0x6F8: 6601  - LD V6, 0x01
+        // 0x6FA: 6701  - LD V7, 0x01
+        // 0x6FC: 6801  - LD V8, 0x01
+        // 0x6FE: 6901  - LD V9, 0x01
+        // 0x700: 6A01  - LD VA, 0x01
+        // 0x702: 6B01  - LD VB, 0x01
+        // 0x704: 6C01  - LD VC, 0x01
+        // 0x706: 6D01  - LD VD, 0x01
+        // 0x708: 6E01  - LD VE, 0x01
+        // 0x70A: 6F01  - LD VF, 0x01
+        // 0x70C: 270E  - CALL 0x70E
+        // 0x70E: 1710  - JP 0x710
+        // 0x710: 6000  - LD V0, 0x00
+        // 0x712: 6100  - LD V1, 0x00
+        // 0x714: 6200  - LD V2, 0x00
+        // 0x716: 6300  - LD V3, 0x00
+        // 0x718: 6400  - LD V4, 0x00
+        // 0x71A: 6500  - LD V5, 0x00
+        // 0x71C: 6600  - LD V6, 0x00
+        // 0x71E: 6700  - LD V7, 0x00
+        // 0x720: 6800  - LD V8, 0x00
+        // 0x722: 6900  - LD V9, 0x00
+        // 0x724: 6A00  - LD VA, 0x00
+        // 0x726: 6B00  - LD VB, 0x00
+        // 0x728: 6C00  - LD VC, 0x00
+        // 0x72A: 6D00  - LD VD, 0x00
+        // 0x72C: 6E00  - LD VE, 0x00
+        // 0x72E: 6F00  - LD VF, 0x00
+        // 0x730: 1732  - JP 0x732
+        // 0x732: 00E0  - CLS
+        // 0x734: 6105  - LD V1, 0x05
+        // 0x736: 6205  - LD V2, 0x05
+        // 0x738: 6301  - LD V3, 0x01
+        // 0x73A: 6401  - LD V4, 0x01
+        // 0x73C: 6501  - LD V5, 0x01
+        // 0x73E: 6601  - LD V6, 0x01
+        // 0x740: 6701  - LD V7, 0x01
+        // 0x742: 6801  - LD V8, 0x01
+        // 0x744: 6901  - LD V9, 0x01
+        // 0x746: 6A01  - LD VA, 0x01
+        // 0x748: 6B01  - LD VB, 0x01
+        // 0x74A: 6C01  - LD VC, 0x01
+        // 0x74C: 6D01  - LD VD, 0x01
+        // 0x74E: 6E01  - LD VE, 0x01
+        // 0x750: 6F01  - LD VF, 0x01
+        // 0x752: 2754  - CALL 0x754
+        // 0x754: 1756  - JP 0x756
+        // 0x756: 6000  - LD V0, 0x00
+        // 0x758: 6100  - LD V1, 0x00
+        // 0x75A: 6200  - LD V2, 0x00
+        // 0x75C: 6300  - LD V3, 0x00
+        // 0x75E: 6400  - LD V4, 0x00
+        // 0x760: 6500  - LD V5, 0x00
+        // 0x762: 6600  - LD V6, 0x00
+        // 0x764: 6700  - LD V7, 0x00
+        // 0x766: 6800  - LD V8, 0x00
+        // 0x768: 6900  - LD V9, 0x00
+        // 0x76A: 6A00  - LD VA, 0x00
+        // 0x76C: 6B00  - LD VB, 0x00
+        // 0x76E: 6C00  - LD VC, 0x00
+        // 0x770: 6D00  - LD VD, 0x00
+        // 0x772: 6E00  - LD VE, 0x00
+        // 0x774: 6F00  - LD VF, 0x00
+        // 0x776: 1778  - JP 0x778
+        // 0x778: 00E0  - CLS
+        // 0x77A: 6105  - LD V1, 0x05
+        // 0x77C: 6205  - LD V2, 0x05
+        // 0x77E: 6301  - LD V3, 0x01
+        // 0x780: 6401  - LD V4, 0x01
+        // 0x782: 6501  - LD V5, 0x01
+        // 0x784: 6601  - LD V6, 0x01
+        // 0x786: 6701  - LD V7, 0x01
+        // 0x788: 6801  - LD V8, 0x01
+        // 0x78A: 6901  - LD V9, 0x01
+        // 0x78C: 6A01  - LD VA, 0x01
+        // 0x78E: 6B01  - LD VB, 0x01
+        // 0x790: 6C01  - LD VC, 0x01
+        // 0x792: 6D01  - LD VD, 0x01
+        // 0x794: 6E01  - LD VE, 0x01
+        // 0x796: 6F01  - LD VF, 0x01
+        // 0x798: 279A  - CALL 0x79A
+        // 0x79A: 179C  - JP 0x79C
+        // 0x79C: 6000  - LD V0, 0x00
+        // 0x79E: 6100  - LD V1, 0x00
+        // 0x7A0: 6200  - LD V2, 0x00
+        // 0x7A2: 6300  - LD V3, 0x00
+        // 0x7A4: 6400  - LD V4, 0x00
+        // 0x7A6: 6500  - LD V5, 0x00
+        // 0x7A8: 6600  - LD V6, 0x00
+        // 0x7AA: 6700  - LD V7, 0x00
+        // 0x7AC: 6800  - LD V8, 0x00
+        // 0x7AE: 6900  - LD V9, 0x00
+        // 0x7B0: 6A00  - LD VA, 0x00
+        // 0x7B2: 6B00  - LD VB, 0x00
+        // 0x7B4: 6C00  - LD VC, 0x00
+        // 0x7B6: 6D00  - LD VD, 0x00
+        // 0x7B8: 6E00  - LD VE, 0x00
+        // 0x7BA: 6F00  - LD VF, 0x00
+        // 0x7BC: 17BE  - JP 0x7BE
+        // 0x7BE: 00E0  - CLS
+        // 0x7C0: 6105  - LD V1, 0x05
+        // 0x7C2: 6205  - LD V2, 0x05
+        // 0x7C4: 6301  - LD V3, 0x01
+        // 0x7C6: 6401  - LD V4, 0x01
+        // 0x7C8: 6501  - LD V5, 0x01
+        // 0x7CA: 6601  - LD V6, 0x01
+        // 0x7CC: 6701  - LD V7, 0x01
+        // 0x7CE: 6801  - LD V8, 0x01
+        // 0x7D0: 6901  - LD V9, 0x01
+        // 0x7D2: 6A01  - LD VA, 0x01
+        // 0x7D4: 6B01  - LD VB, 0x01
+        // 0x7D6: 6C01  - LD VC, 0x01
+        // 0x7D8: 6D01  - LD VD, 0x01
+        // 0x7DA: 6E01  - LD VE, 0x01
+        // 0x7DC: 6F01  - LD VF, 0x01
+        // 0x7DE: 27E0  - CALL 0x7E0
+        // 0x7E0: 17E2  - JP 0x7E2
+        // 0x7E2: 6000  - LD V0, 0x00
+        // 0x7E4: 6100  - LD V1, 0x00
+        // 0x7E6: 6200  - LD V2, 0x00
+        // 0x7E8: 6300  - LD V3, 0x00
+        // 0x7EA: 6400  - LD V4, 0x00
+        // 0x7EC: 6500  - LD V5, 0x00
+        // 0x7EE: 6600  - LD V6, 0x00
+        // 0x7F0: 6700  - LD V7, 0x00
+        // 0x7F2: 6800  - LD V8, 0x00
+        // 0x7F4: 6900  - LD V9, 0x00
+        // 0x7F6: 6A00  - LD VA, 0x00
+        // 0x7F8: 6B00  - LD VB, 0x00
+        // 0x7FA: 6C00  - LD VC, 0x00
+        // 0x7FC: 6D00  - LD VD, 0x00
+        // 0x7FE: 6E00  - LD VE, 0x00
+        // 0x800: 6F00  - LD VF, 0x00
+        // 0x802: 1804  - JP 0x804
+        // 0x804: 00E0  - CLS
+        // 0x806: 6105  - LD V1, 0x05
+        // 0x808: 6205  - LD V2, 0x05
+        // 0x80A: 6301  - LD V3, 0x01
+        // 0x80C: 6401  - LD V4, 0x01
+        // 0x80E: 6501  - LD V5, 0x01
+        // 0x810: 6601  - LD V6, 0x01
+        // 0x812: 6701  - LD V7, 0x01
+        // 0x814: 6801  - LD V8, 0x01
+        // 0x816: 6901  - LD V9, 0x01
+        // 0x818: 6A01  - LD VA, 0x01
+        // 0x81A: 6B01  - LD VB, 0x01
+        // 0x81C: 6C01  - LD VC, 0x01
+        // 0x81E: 6D01  - LD VD, 0x01
+        // 0x820: 6E01  - LD VE, 0x01
+        // 0x822: 6F01  - LD VF, 0x01
+        // 0x824: 2826  - CALL 0x826
+        // 0x826: 1828  - JP 0x828
+        // 0x828: 6000  - LD V0, 0x00
+        // 0x82A: 6100  - LD V1, 0x00
+        // 0x82C: 6200  - LD V2, 0x00
+        // 0x82E: 6300  - LD V3, 0x00
+        // 0x830: 6400  - LD V4, 0x00
+        // 0x832: 6500  - LD V5, 0x00
+        // 0x834: 6600  - LD V6, 0x00
+        // 0x836: 6700  - LD V7, 0x00
+        // 0x838: 6800  - LD V8, 0x00
+        // 0x83A: 6900  - LD V9, 0x00
+        // 0x83C: 6A00  - LD VA, 0x00
+        // 0x83E: 6B00  - LD VB, 0x00
+        // 0x840: 6C00  - LD VC, 0x00
+        // 0x842: 6D00  - LD VD, 0x00
+        // 0x844: 6E00  - LD VE, 0x00
+        // 0x846: 6F00  - LD VF, 0x00
+        // 0x848: 184A  - JP 0x84A
+        // 0x84A: 00E0  - CLS
+        // 0x84C: 6105  - LD V1, 0x05
+        // 0x84E: 6205  - LD V2, 0x05
+        // 0x850: 6301  - LD V3, 0x01
+        // 0x852: 6401  - LD V4, 0x01
+        // 0x854: 6501  - LD V5, 0x01
+        // 0x856: 6601  - LD V6, 0x01
+        // 0x858: 6701  - LD V7, 0x01
+        // 0x85A: 6801  - LD V8, 0x01
+        // 0x85C: 6901  - LD V9, 0x01
+        // 0x85E: 6A01  - LD VA, 0x01
+        // 0x860: 6B01  - LD VB, 0x01
+        // 0x862: 6C01  - LD VC, 0x01
+        // 0x864: 6D01  - LD VD, 0x01
+        // 0x866: 6E01  - LD VE, 0x01
+        // 0x868: 6F01  - LD VF, 0x01
+        // 0x86A: 286C  - CALL 0x86C
+        // 0x86C: 186E  - JP 0x86E
+        // 0x86E: 6000  - LD V0, 0x00
+        // 0x870: 6100  - LD V1, 0x00
+        // 0x872: 6200  - LD V2, 0x00
+        // 0x874: 6300  - LD V3, 0x00
+        // 0x876: 6400  - LD V4, 0x00
+        // 0x878: 6500  - LD V5, 0x00
+        // 0x87A: 6600  - LD V6, 0x00
+        // 0x87C: 6700  - LD V7, 0x00
+        // 0x87E: 6800  - LD V8, 0x00
+        // 0x880: 6900  - LD V9, 0x00
+        // 0x882: 6A00  - LD VA, 0x00
+        // 0x884: 6B00  - LD VB, 0x00
+        // 0x886: 6C00  - LD VC, 0x00
+        // 0x888: 6D00  - LD VD, 0x00
+        // 0x88A: 6E00  - LD VE, 0x00
+        // 0x88C: 6F00  - LD VF, 0x00
+        // 0x88E: 1890  - JP 0x890
+        // 0x890: 00E0  - CLS
+        // 0x892: 6105  - LD V1, 0x05
+        // 0x894: 6205  - LD V2, 0x05
+        // 0x896: 6301  - LD V3, 0x01
+        // 0x898: 6401  - LD V4, 0x01
+        // 0x89A: 6501  - LD V5, 0x01
+        // 0x89C: 6601  - LD V6, 0x01
+        // 0x89E: 6701  - LD V7, 0x01
+        // 0x8A0: 6801  - LD V8, 0x01
+        // 0x8A2: 6901  - LD V9, 0x01
+        // 0x8A4: 6A01  - LD VA, 0x01
+        // 0x8A6: 6B01  - LD VB, 0x01
+        // 0x8A8: 6C01  - LD VC, 0x01
+        // 0x8AA: 6D01  - LD VD, 0x01
+        // 0x8AC: 6E01  - LD VE, 0x01
+        // 0x8AE: 6F01  - LD VF, 0x01
+        // 0x8B0: 28B2  - CALL 0x8B2
+        // 0x8B2: 18B4  - JP 0x8B4
+        // 0x8B4: 6000  - LD V0, 0x00
+        // 0x8B6: 6100  - LD V1, 0x00
+        // 0x8B8: 6200  - LD V2, 0x00
+        // 0x8BA: 6300  - LD V3, 0x00
+        // 0x8BC: 6400  - LD V4, 0x00
+        // 0x8BE: 6500  - LD V5, 0x00
+        // 0x8C0: 6600  - LD V6, 0x00
+        // 0x8C2: 6700  - LD V7, 0x00
+        // 0x8C4: 6800  - LD V8, 0x00
+        // 0x8C6: 6900  - LD V9, 0x00
+        // 0x8C8: 6A00  - LD VA, 0x00
+        // 0x8CA: 6B00  - LD VB, 0x00
+        // 0x8CC: 6C00  - LD VC, 0x00
+        // 0x8CE: 6D00  - LD VD, 0x00
+        // 0x8D0: 6E00  - LD VE, 0x00
+        // 0x8D2: 6F00  - LD VF, 0x00
+        // 0x8D4: 18D6  - JP 0x8D6
+        // 0x8D6: 00E0  - CLS
+        // 0x8D8: 6105  - LD V1, 0x05
+        // 0x8DA: 6205  - LD V2, 0x05
+        // 0x8DC: 6301  - LD V3, 0x01
+        // 0x8DE: 6401  - LD V4, 0x01
+        // 0x8E0: 6501  - LD V5, 0x01
+        // 0x8E2: 6601  - LD V6, 0x01
+        // 0x8E4: 6701  - LD V7, 0x01
+        // 0x8E6: 6801  - LD V8, 0x01
+        // 0x8E8: 6901  - LD V9, 0x01
+        // 0x8EA: 6A01  - LD VA, 0x01
+        // 0x8EC: 6B01  - LD VB, 0x01
+        // 0x8EE: 6C01  - LD VC, 0x01
+        // 0x8F0: 6D01  - LD VD, 0x01
+        // 0x8F2: 6E01  - LD VE, 0x01
+        // 0x8F4: 6F01  - LD VF, 0x01
+        // 0x8F6: 28F8  - CALL 0x8F8
+        // 0x8F8: 18FA  - JP 0x8FA
+        // 0x8FA: 6000  - LD V0, 0x00
+        // 0x8FC: 6100  - LD V1, 0x00
+        // 0x8FE: 6200  - LD V2, 0x00
+        // 0x900: 6300  - LD V3, 0x00
+        // 0x902: 6400  - LD V4, 0x00
+        // 0x904: 6500  - LD V5, 0x00
+        // 0x906: 6600  - LD V6, 0x00
+        // 0x908: 6700  - LD V7, 0x00
+        // 0x90A: 6800  - LD V8, 0x00
+        // 0x90C: 6900  - LD V9, 0x00
+        // 0x90E: 6A00  - LD VA, 0x00
+        // 0x910: 6B00  - LD VB, 0x00
+        // 0x912: 6C00  - LD VC, 0x00
+        // 0x914: 6D00  - LD VD, 0x00
+        // 0x916: 6E00  - LD VE, 0x00
+        // 0x918: 6F00  - LD VF, 0x00
+        // 0x91A: 191C  - JP 0x91C
+        // 0x91C: 00E0  - CLS
+        // 0x91E: 6105  - LD V1, 0x05
+        // 0x920: 6205  - LD V2, 0x05
+        // 0x922: 6301  - LD V3, 0x01
+        // 0x924: 6401  - LD V4, 0x01
+        // 0x926: 6501  - LD V5, 0x01
+        // 0x928: 6601  - LD V6, 0x01
+        // 0x92A: 6701  - LD V7, 0x01
+        // 0x92C: 6801  - LD V8, 0x01
+        // 0x92E: 6901  - LD V9, 0x01
+        // 0x930: 6A01  - LD VA, 0x01
+        // 0x932: 6B01  - LD VB, 0x01
+        // 0x934: 6C01  - LD VC, 0x01
+        // 0x936: 6D01  - LD VD, 0x01
+        // 0x938: 6E01  - LD VE, 0x01
+        // 0x93A: 6F01  - LD VF, 0x01
+        // 0x93C: 293E  - CALL 0x93E
+        // 0x93E: 1940  - JP 0x940
+        // 0x940: 6000  - LD V0, 0x00
+        // 0x942: 6100  - LD V1, 0x00
+        // 0x944: 6200  - LD V2, 0x00
+        // 0x946: 6300  - LD V3, 0x00
+        // 0x948: 6400  - LD V4, 0x00
+        // 0x94A: 6500  - LD V5, 0x00
+        // 0x94C: 6600  - LD V6, 0x00
+        // 0x94E: 6700  - LD V7, 0x00
+        // 0x950: 6800  - LD V8, 0x00
+        // 0x952: 6900  - LD V9, 0x00
+        // 0x954: 6A00  - LD VA, 0x00
+        // 0x956: 6B00  - LD VB, 0x00
+        // 0x958: 6C00  - LD VC, 0x00
+        // 0x95A: 6D00  - LD VD, 0x00
+        // 0x95C: 6E00  - LD VE, 0x00
+        // 0x95E: 6F00  - LD VF, 0x00
+        // 0x960: 1962  - JP 0x962
+        // 0x962: 00E0  - CLS
+        // 0x964: 6105  - LD V1, 0x05
+        // 0x966: 6205  - LD V2, 0x05
+        // 0x968: 6301  - LD V3, 0x01
+        // 0x96A: 6401  - LD V4, 0x01
+        // 0x96C: 6501  - LD V5, 0x01
+        // 0x96E: 6601  - LD V6, 0x01
+        // 0x970: 6701  - LD V7, 0x01
+        // 0x972: 6801  - LD V8, 0x01
+        // 0x974: 6901  - LD V9, 0x01
+        // 0x976: 6A01  - LD VA, 0x01
+        // 0x978: 6B01  - LD VB, 0x01
+        // 0x97A: 6C01  - LD VC, 0x01
+        // 0x97C: 6D01  - LD VD, 0x01
+        // 0x97E: 6E01  - LD VE, 0x01
+        // 0x980: 6F01  - LD VF, 0x01
+        // 0x982: 2984  - CALL 0x984
+        // 0x984: 1986  - JP 0x986
+        // 0x986: 6000  - LD V0, 0x00
+        // 0x988: 6100  - LD V1, 0x00
+        // 0x98A: 6200  - LD V2, 0x00
+        // 0x98C: 6300  - LD V3, 0x00
+        // 0x98E: 6400  - LD V4, 0x00
+        // 0x990: 6500  - LD V5, 0x00
+        // 0x992: 6600  - LD V6, 0x00
+        // 0x994: 6700  - LD V7, 0x00
+        // 0x996: 6800  - LD V8, 0x00
+        // 0x998: 6900  - LD V9, 0x00
+        // 0x99A: 6A00  - LD VA, 0x00
+        // 0x99C: 6B00  - LD VB, 0x00
+        // 0x99E: 6C00  - LD VC, 0x00
+        // 0x9A0: 6D00  - LD VD, 0x00
+        // 0x9A2: 6E00  - LD VE, 0x00
+        // 0x9A4: 6F00  - LD VF, 0x00
+        // 0x9A6: 19A8  - JP 0x9A8
+        // 0x9A8: 00E0  - CLS
+        // 0x9AA: 6105  - LD V1, 0x05
+        // 0x9AC: 6205  - LD V2, 0x05
+        // 0x9AE: 6301  - LD V3, 0x01
+        // 0x9B0: 6401  - LD V4, 0x01
+        // 0x9B2: 6501  - LD V5, 0x01
+        // 0x9B4: 6601  - LD V6, 0x01
+        // 0x9B6: 6701  - LD V7, 0x01
+        // 0x9B8: 6801  - LD V8, 0x01
+        // 0x9BA: 6901  - LD V9, 0x01
+        // 0x9BC: 6A01  - LD VA, 0x01
+        // 0x9BE: 6B01  - LD VB, 0x01
+        // 0x9C0: 6C01  - LD VC, 0x01
+        // 0x9C2: 6D01  - LD VD, 0x01
+        // 0x9C4: 6E01  - LD VE, 0x01
+        // 0x9C6: 6F01  - LD VF, 0x01
+        // 0x9C8: 29CA  - CALL 0x9CA
+        // 0x9CA: 19CC  - JP 0x9CC
+        // 0x9CC: 6000  - LD V0, 0x00
+        // 0x9CE: 6100  - LD V1, 0x00
+        // 0x9D0: 6200  - LD V2, 0x00
+        // 0x9D2: 6300  - LD V3, 0x00
+        // 0x9D4: 6400  - LD V4, 0x00
+        // 0x9D6: 6500  - LD V5, 0x00
+        // 0x9D8: 6600  - LD V6, 0x00
+        // 0x9DA: 6700  - LD V7, 0x00
+        // 0x9DC: 6800  - LD V8, 0x00
+        // 0x9DE: 6900  - LD V9, 0x00
+        // 0x9E0: 6A00  - LD VA, 0x00
+        // 0x9E2: 6B00  - LD VB, 0x00
+        // 0x9E4: 6C00  - LD VC, 0x00
+        // 0x9E6: 6D00  - LD VD, 0x00
+        // 0x9E8: 6E00  - LD VE, 0x00
+        // 0x9EA: 6F00  - LD VF, 0x00
+        // 0x9EC: 19EE  - JP 0x9EE
+        // 0x9EE: 00E0  - CLS
+        // 0x9F0: 6105  - LD V1, 0x05
+        // 0x9F2: 6205  - LD V2, 0x05
+        // 0x9F4: 6301  - LD V3, 0x01
+        // 0x9F6: 6401  - LD V4, 0x01
+        // 0x9F8: 6501  - LD V5, 0x01
+        // 0x9FA: 6601  - LD V6, 0x01
+        // 0x9FC: 6701  - LD V7, 0x01
+        // 0x9FE: 6801  - LD V8, 0x01
+        // 0xA00: 6901  - LD V9, 0x01
+        // 0xA02: 6A01  - LD VA, 0x01
+        // 0xA04: 6B01  - LD VB, 0x01
+        // 0xA06: 6C01  - LD VC, 0x01
+        // 0xA08: 6D01  - LD VD, 0x01
+        // 0xA0A: 6E01  - LD VE, 0x01
+        // 0xA0C: 6F01  - LD VF, 0x01
+        // 0xA0E: 2A10  - CALL 0xA10
+        // 0xA10: 1A12  - JP 0xA12
+        // 0xA12: 6000  - LD V0, 0x00
+        // 0xA14: 6100  - LD V1, 0x00
+        // 0xA16: 6200  - LD V2, 0x00
+        // 0xA18: 6300  - LD V3, 0x00
+        // 0xA1A: 6400  - LD V4, 0x00
+        // 0xA1C: 6500  - LD V5, 0x00
+        // 0xA1E: 6600  - LD V6, 0x00
+        // 0xA20: 6700  - LD V7, 0x00
+        // 0xA22: 6800  - LD V8, 0x00
+        // 0xA24: 6900  - LD V9, 0x00
+        // 0xA26: 6A00  - LD VA, 0x00
+        // 0xA28: 6B00  - LD VB, 0x00
+        // 0xA2A: 6C00  - LD VC, 0x00
+        // 0xA2C: 6D00  - LD VD, 0x00
+        // 0xA2E: 6E00  - LD VE, 0x00
+        // 0xA30: 6F00  - LD VF, 0x00
+        // 0xA32: 1A34  - JP 0xA34
+        // 0xA34: 00E0  - CLS
+        // 0xA36: 6105  - LD V1, 0x05
+        // 0xA38: 6205  - LD V2, 0x05
+        // 0xA3A: 6301  - LD V3, 0x01
+        // 0xA3C: 6401  - LD V4, 0x01
+        // 0xA3E: 6501  - LD V5, 0x01
+        // 0xA40: 6601  - LD V6, 0x01
+        // 0xA42: 6701  - LD V7, 0x01
+        // 0xA44: 6801  - LD V8, 0x01
+        // 0xA46: 6901  - LD V9, 0x01
+        // 0xA48: 6A01  - LD VA, 0x01
+        // 0xA4A: 6B01  - LD VB, 0x01
+        // 0xA4C: 6C01  - LD VC, 0x01
+        // 0xA4E: 6D01  - LD VD, 0x01
+        // 0xA50: 6E01  - LD VE, 0x01
+        // 0xA52: 6F01  - LD VF, 0x01
+        // 0xA54: 2A56  - CALL 0xA56
+        // 0xA56: 1A58  - JP 0xA58
+        // 0xA58: 6000  - LD V0, 0x00
+        // 0xA5A: 6100  - LD V1, 0x00
+        // 0xA5C: 6200  - LD V2, 0x00
+        // 0xA5E: 6300  - LD V3, 0x00
+        // 0xA60: 6400  - LD V4, 0x00
+        // 0xA62: 6500  - LD V5, 0x00
+        // 0xA64: 6600  - LD V6, 0x00
+        // 0xA66: 6700  - LD V7, 0x00
+        // 0xA68: 6800  - LD V8, 0x00
+        // 0xA6A: 6900  - LD V9, 0x00
+        // 0xA6C: 6A00  - LD VA, 0x00
+        // 0xA6E: 6B00  - LD VB, 0x00
+        // 0xA70: 6C00  - LD VC, 0x00
+        // 0xA72: 6D00  - LD VD, 0x00
+        // 0xA74: 6E00  - LD VE, 0x00
+        // 0xA76: 6F00  - LD VF, 0x00
+        // 0xA78: 1A7A  - JP 0xA7A
+        // 0xA7A: 00E0  - CLS
+        // 0xA7C: 6105  - LD V1, 0x05
+        // 0xA7E: 6205  - LD V2, 0x05
+        // 0xA80: 6301  - LD V3, 0x01
+        // 0xA82: 6401  - LD V4, 0x01
+        // 0xA84: 6501  - LD V5, 0x01
+        // 0xA86: 6601  - LD V6, 0x01
+        // 0xA88: 6701  - LD V7, 0x01
+        // 0xA8A: 6801  - LD V8, 0x01
+        // 0xA8C: 6901  - LD V9, 0x01
+        // 0xA8E: 6A01  - LD VA, 0x01
+        // 0xA90: 6B01  - LD VB, 0x01
+        // 0xA92: 6C01  - LD VC, 0x01
+        // 0xA94: 6D01  - LD VD, 0x01
+        // 0xA96: 6E01  - LD VE, 0x01
+        // 0xA98: 6F01  - LD VF, 0x01
+        // 0xA9A: 2A9C  - CALL 0xA9C
+        // 0xA9C: 1A9E  - JP 0xA9E
+        // 0xA9E: 6000  - LD V0, 0x00
+        // 0xAA0: 6100  - LD V1, 0x00
+        // 0xAA2: 6200  - LD V2, 0x00
+        // 0xAA4: 6300  - LD V3, 0x00
+        // 0xAA6: 6400  - LD V4, 0x00
+        // 0xAA8: 6500  - LD V5, 0x00
+        // 0xAAA: 6600  - LD V6, 0x00
+        // 0xAAC: 6700  - LD V7, 0x00
+        // 0xAAE: 6800  - LD V8, 0x00
+        // 0xAB0: 6900  - LD V9, 0x00
+        // 0xAB2: 6A00  - LD VA, 0x00
+        // 0xAB4: 6B00  - LD VB, 0x00
+        // 0xAB6: 6C00  - LD VC, 0x00
+        // 0xAB8: 6D00  - LD VD, 0x00
+        // 0xABA: 6E00  - LD VE, 0x00
+        // 0xABC: 6F00  - LD VF, 0x00
+        // 0xABE: 1AC0  - JP 0xAC0
+        // 0xAC0: 00E0  - CLS
+        // 0xAC2: 6105  - LD V1, 0x05
+        // 0xAC4: 6205  - LD V2, 0x05
+        // 0xAC6: 6301  - LD V3, 0x01
+        // 0xAC8: 6401  - LD V4, 0x01
+        // 0xACA: 6501  - LD V5, 0x01
+        // 0xACC: 6601  - LD V6, 0x01
+        // 0xACE: 6701  - LD V7, 0x01
+        // 0xAD0: 6801  - LD V8, 0x01
+        // 0xAD2: 6901  - LD V9, 0x01
+        // 0xAD4: 6A01  - LD VA, 0x01
+        // 0xAD6: 6B01  - LD VB, 0x01
+        // 0xAD8: 6C01  - LD VC, 0x01
+        // 0xADA: 6D01  - LD VD, 0x01
+        // 0xADC: 6E01  - LD VE, 0x01
+        // 0xADE: 6F01  - LD VF, 0x01
+        // 0xAE0: 2AE2  - CALL 0xAE2
+        // 0xAE2: 1AE4  - JP 0xAE4
+        // 0xAE4: 6000  - LD V0, 0x00
+        // 0xAE6: 6100  - LD V1, 0x00
+        // 0xAE8: 6200  - LD V2, 0x00
+        // 0xAEA: 6300  - LD V3, 0x00
+        // 0xAEC: 6400  - LD V4, 0x00
+        // 0xAEE: 6500  - LD V5, 0x00
+        // 0xAF0: 6600  - LD V6, 0x00
+        // 0xAF2: 6700  - LD V7, 0x00
+        // 0xAF4: 6800  - LD V8, 0x00
+        // 0xAF6: 6900  - LD V9, 0x00
+        // 0xAF8: 6A00  - LD VA, 0x00
+        // 0xAFA: 6B00  - LD VB, 0x00
+        // 0xAFC: 6C00  - LD VC, 0x00
+        // 0xAFE: 6D00  - LD VD, 0x00
+        // 0xB00: 6E00  - LD VE, 0x00
+        // 0xB02: 6F00  - LD VF, 0x00
+        // 0xB04: 1B06  - JP 0xB06
+        // 0xB06: 00E0  - CLS
+        // 0xB08: 6105  - LD V1, 0x05
+        // 0xB0A: 6205  - LD V2, 0x05
+        // 0xB0C: 6301  - LD V3, 0x01
+        // 0xB0E: 6401  - LD V4, 0x01
+        // 0xB10: 6501  - LD V5, 0x01
+        // 0xB12: 6601  - LD V6, 0x01
+        // 0xB14: 6701  - LD V7, 0x01
+        // 0xB16: 6801  - LD V8, 0x01
+        // 0xB18: 6901  - LD V9, 0x01
+        // 0xB1A: 6A01  - LD VA, 0x01
+        // 0xB1C: 6B01  - LD VB, 0x01
+        // 0xB1E: 6C01  - LD VC, 0x01
+        // 0xB20: 6D01  - LD VD, 0x01
+        // 0xB22: 6E01  - LD VE, 0x01
+        // 0xB24: 6F01  - LD VF, 0x01
+        // 0xB26: 2B28  - CALL 0xB28
+        // 0xB28: 1B2A  - JP 0xB2A
+        // 0xB2A: 6000  - LD V0, 0x00
+        // 0xB2C: 6100  - LD V1, 0x00
+        // 0xB2E: 6200  - LD V2, 0x00
+        // 0xB30: 6300  - LD V3, 0x00
+        // 0xB32: 6400  - LD V4, 0x00
+        // 0xB34: 6500  - LD V5, 0x00
+        // 0xB36: 6600  - LD V6, 0x00
+        // 0xB38: 6700  - LD V7, 0x00
+        // 0xB3A: 6800  - LD V8, 0x00
+        // 0xB3C: 6900  - LD V9, 0x00
+        // 0xB3E: 6A00  - LD VA, 0x00
+        // 0xB40: 6B00  - LD VB, 0x00
+        // 0xB42: 6C00  - LD VC, 0x00
+        // 0xB44: 6D00  - LD VD, 0x00
+        // 0xB46: 6E00  - LD VE, 0x00
+        // 0xB48: 6F00  - LD VF, 0x00
+        // 0xB4A: 1B4C  - JP 0xB4C
+        // 0xB4C: 00E0  - CLS
+        // 0xB4E: 6105  - LD V1, 0x05
+        // 0xB50: 6205  - LD V2, 0x05
+        // 0xB52: 6301  - LD V3, 0x01
+        // 0xB54: 6401  - LD V4, 0x01
+        // 0xB56: 6501  - LD V5, 0x01
+        // 0xB58: 6601  - LD V6, 0x01
+        // 0xB5A: 6701  - LD V7, 0x01
+        // 0xB5C: 6801  - LD V8, 0x01
+        // 0xB5E: 6901  - LD V9, 0x01
+        // 0xB60: 6A01  - LD VA, 0x01
+        // 0xB62: 6B01  - LD VB, 0x01
+        // 0xB64: 6C01  - LD VC, 0x01
+        // 0xB66: 6D01  - LD VD,

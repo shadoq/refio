@@ -1,0 +1,1305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#090d12">
+  <title>CHIP-8 // Neon Machine</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #090d12;
+      --panel: #111820;
+      --panel-raised: #151f29;
+      --line: #263642;
+      --muted: #8ba0ad;
+      --text: #e3f1f4;
+      --cyan: #54f4df;
+      --green: #b4ff70;
+      --amber: #ffc56e;
+      --red: #ff727c;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(ellipse at 12% 0%, rgba(28, 105, 109, .16), transparent 38rem),
+        radial-gradient(ellipse at 100% 90%, rgba(75, 53, 112, .12), transparent 34rem),
+        var(--bg);
+      color: var(--text);
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    button {
+      color: inherit;
+    }
+
+    button:focus-visible,
+    input:focus-visible {
+      outline: 2px solid var(--cyan);
+      outline-offset: 3px;
+    }
+
+    .shell {
+      width: min(1440px, 100%);
+      margin: 0 auto;
+      padding: 28px clamp(16px, 3vw, 40px) 38px;
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 20px;
+      margin-bottom: 24px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 13px;
+    }
+
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 42px;
+      height: 42px;
+      border: 1px solid rgba(84, 244, 223, .52);
+      border-radius: 10px;
+      color: var(--cyan);
+      background: rgba(84, 244, 223, .07);
+      box-shadow: 0 0 24px rgba(84, 244, 223, .1), inset 0 0 18px rgba(84, 244, 223, .06);
+      font-size: 15px;
+      font-weight: 800;
+      letter-spacing: -2px;
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: clamp(18px, 2.3vw, 25px);
+      letter-spacing: .08em;
+    }
+
+    .brand p {
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 11px;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    .live-indicator {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      color: var(--muted);
+      font-size: 11px;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .led {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #52636c;
+      box-shadow: 0 0 0 4px rgba(82, 99, 108, .12);
+    }
+
+    .led.running {
+      background: var(--green);
+      box-shadow: 0 0 12px var(--green), 0 0 0 4px rgba(180, 255, 112, .12);
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.45fr) minmax(330px, .9fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .left-column,
+    .right-column {
+      display: grid;
+      gap: 18px;
+      min-width: 0;
+    }
+
+    .panel {
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: linear-gradient(145deg, rgba(21, 31, 41, .96), rgba(14, 21, 28, .97));
+      box-shadow: 0 12px 34px rgba(0, 0, 0, .18);
+    }
+
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      min-height: 49px;
+      padding: 12px 16px;
+      border-bottom: 1px solid rgba(38, 54, 66, .8);
+    }
+
+    .panel-title {
+      margin: 0;
+      color: #b5c8d1;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+    }
+
+    .eyebrow {
+      color: var(--muted);
+      font-size: 10px;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .screen-wrap {
+      padding: clamp(14px, 3vw, 25px);
+    }
+
+    .screen-frame {
+      position: relative;
+      overflow: hidden;
+      width: 100%;
+      aspect-ratio: 2 / 1;
+      border: 1px solid #264750;
+      border-radius: 7px;
+      background: #071211;
+      box-shadow: inset 0 0 28px rgba(0, 0, 0, .8), 0 0 26px rgba(84, 244, 223, .06);
+    }
+
+    .screen-frame::after {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background: repeating-linear-gradient(
+        to bottom,
+        transparent 0,
+        transparent 3px,
+        rgba(0, 0, 0, .13) 4px
+      );
+      content: "";
+    }
+
+    #display {
+      display: block;
+      width: 100%;
+      height: 100%;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+    }
+
+    .screen-footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 10px;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+
+    .screen-footer strong {
+      color: var(--cyan);
+      font-weight: 600;
+    }
+
+    .controls-body {
+      padding: 15px 16px 17px;
+    }
+
+    .button-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 9px;
+    }
+
+    .action {
+      min-height: 38px;
+      padding: 0 13px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #18232c;
+      color: #c9d9de;
+      cursor: pointer;
+      font-size: 11px;
+      transition: border-color .15s, background .15s, transform .15s, color .15s;
+    }
+
+    .action:hover {
+      border-color: #4e7581;
+      background: #1d2b35;
+      color: #fff;
+    }
+
+    .action:active {
+      transform: translateY(1px);
+    }
+
+    .action.primary {
+      border-color: rgba(84, 244, 223, .45);
+      background: rgba(84, 244, 223, .1);
+      color: var(--cyan);
+    }
+
+    .action.primary:hover {
+      background: rgba(84, 244, 223, .17);
+    }
+
+    .action:disabled {
+      opacity: .42;
+      cursor: not-allowed;
+    }
+
+    .speed-row {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      align-items: center;
+      gap: 14px;
+      margin-top: 17px;
+      padding-top: 14px;
+      border-top: 1px solid rgba(38, 54, 66, .8);
+    }
+
+    .speed-row label {
+      color: #b5c8d1;
+      font-size: 11px;
+    }
+
+    .speed-row output {
+      min-width: 76px;
+      color: var(--cyan);
+      font-size: 11px;
+      text-align: right;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--cyan);
+      cursor: pointer;
+    }
+
+    .rom-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 14px;
+    }
+
+    .rom-meta {
+      min-width: 0;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.5;
+    }
+
+    .rom-meta strong {
+      display: block;
+      overflow: hidden;
+      color: #d8e6ea;
+      font-size: 11px;
+      font-weight: 500;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    #fileInput {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      clip-path: inset(50%);
+    }
+
+    .debug-content {
+      padding: 14px 16px 16px;
+    }
+
+    .debug-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    .debug-cell {
+      padding: 9px 10px;
+      border: 1px solid rgba(38, 54, 66, .75);
+      border-radius: 6px;
+      background: rgba(7, 13, 17, .32);
+    }
+
+    .debug-cell span {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--muted);
+      font-size: 9px;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+    }
+
+    .debug-cell strong {
+      color: var(--cyan);
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .section-label {
+      display: flex;
+      justify-content: space-between;
+      margin: 13px 0 8px;
+      color: var(--muted);
+      font-size: 9px;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    .register-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 5px;
+    }
+
+    .register {
+      display: flex;
+      justify-content: space-between;
+      gap: 4px;
+      padding: 6px 7px;
+      border: 1px solid rgba(38, 54, 66, .65);
+      border-radius: 4px;
+      background: rgba(7, 13, 17, .3);
+      font-size: 10px;
+    }
+
+    .register span {
+      color: var(--muted);
+    }
+
+    .register strong {
+      color: #dce8e9;
+      font-weight: 600;
+    }
+
+    .stack-box,
+    .instruction-box {
+      overflow-wrap: anywhere;
+      padding: 9px 10px;
+      border: 1px solid rgba(38, 54, 66, .75);
+      border-radius: 6px;
+      background: rgba(7, 13, 17, .36);
+      color: #d8e6ea;
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    .instruction-box {
+      color: var(--green);
+    }
+
+    .statusline {
+      min-height: 36px;
+      padding: 10px 15px;
+      border-top: 1px solid rgba(38, 54, 66, .8);
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.5;
+    }
+
+    .statusline.error {
+      color: var(--red);
+    }
+
+    .statusline.success {
+      color: var(--green);
+    }
+
+    .keypad-panel .panel-header {
+      align-items: baseline;
+    }
+
+    .keypad-hint {
+      color: var(--muted);
+      font-size: 9px;
+      text-align: right;
+    }
+
+    .keypad {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      padding: 14px 16px 17px;
+    }
+
+    .key {
+      display: grid;
+      place-items: center;
+      min-height: 50px;
+      border: 1px solid #30434e;
+      border-radius: 7px;
+      background: linear-gradient(180deg, #1a2630, #131d25);
+      color: #d5e2e6;
+      cursor: pointer;
+      touch-action: none;
+      user-select: none;
+      transition: .1s ease;
+    }
+
+    .key:hover {
+      border-color: #50727d;
+      background: #21323b;
+    }
+
+    .key .chip-key {
+      color: var(--cyan);
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    .key .physical-key {
+      margin-top: 3px;
+      color: #718691;
+      font-size: 9px;
+      text-transform: uppercase;
+    }
+
+    .key.is-pressed {
+      transform: translateY(1px);
+      border-color: var(--cyan);
+      background: rgba(84, 244, 223, .17);
+      box-shadow: 0 0 15px rgba(84, 244, 223, .16), inset 0 0 12px rgba(84, 244, 223, .08);
+    }
+
+    .key.is-pressed .chip-key {
+      color: #eafffb;
+    }
+
+    .help {
+      padding: 15px 16px;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.7;
+    }
+
+    .help strong {
+      color: #c9d9de;
+      font-weight: 600;
+    }
+
+    .help kbd {
+      padding: 1px 4px;
+      border: 1px solid #354854;
+      border-radius: 3px;
+      background: #111a20;
+      color: var(--cyan);
+      font: inherit;
+    }
+
+    @media (max-width: 900px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      .right-column {
+        grid-template-columns: minmax(0, 1.2fr) minmax(280px, .8fr);
+        align-items: start;
+      }
+    }
+
+    @media (max-width: 620px) {
+      .shell {
+        padding: 18px 12px 28px;
+      }
+
+      .topbar {
+        margin-bottom: 16px;
+      }
+
+      .live-indicator {
+        font-size: 9px;
+      }
+
+      .right-column {
+        grid-template-columns: 1fr;
+      }
+
+      .screen-footer {
+        font-size: 9px;
+      }
+
+      .action {
+        flex: 1 1 auto;
+      }
+
+      .rom-row {
+        align-items: flex-start;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        scroll-behavior: auto !important;
+        transition-duration: .01ms !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">8▦</div>
+        <div>
+          <h1>CHIP-8 <span style="color:var(--cyan)">//</span> NEON MACHINE</h1>
+          <p>Virtual console · 1977 instruction set</p>
+        </div>
+      </div>
+      <div class="live-indicator" aria-live="polite">
+        <span id="runLed" class="led" aria-hidden="true"></span>
+        <span id="runLabel">System paused</span>
+      </div>
+    </header>
+
+    <div class="layout">
+      <section class="left-column" aria-label="Console">
+        <section class="panel">
+          <div class="panel-header">
+            <h2 class="panel-title">Display output</h2>
+            <span class="eyebrow">64 × 32 px · monochrome</span>
+          </div>
+          <div class="screen-wrap">
+            <div class="screen-frame">
+              <canvas id="display" width="640" height="320" role="img" aria-label="CHIP-8 64 by 32 pixel display"></canvas>
+            </div>
+            <div class="screen-footer">
+              <span>Frame buffer <strong>1-bit</strong></span>
+              <span id="soundStatus" aria-live="polite">Sound timer <strong>off</strong></span>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2 class="panel-title">Machine controls</h2>
+            <span class="eyebrow">Cycle execution</span>
+          </div>
+          <div class="controls-body">
+            <div class="button-row">
+              <button id="runButton" class="action primary" type="button">▶ Run</button>
+              <button id="pauseButton" class="action" type="button">Ⅱ Pause</button>
+              <button id="stepButton" class="action" type="button">▸ Step</button>
+              <button id="resetButton" class="action" type="button">↺ Reset</button>
+              <button id="demoButton" class="action" type="button">Load demo</button>
+              <button id="loadButton" class="action" type="button">Open ROM…</button>
+              <input id="fileInput" type="file" accept=".ch8,.c8,.rom,.bin,application/octet-stream" aria-label="Choose a CHIP-8 ROM file">
+            </div>
+            <div class="speed-row">
+              <label for="speed">Speed</label>
+              <input id="speed" type="range" min="1" max="30" value="8">
+              <output id="speedValue" for="speed">8 / frame</output>
+            </div>
+            <div class="rom-row">
+              <div class="rom-meta">
+                Active ROM
+                <strong id="romName">Neon Heart Demo</strong>
+              </div>
+              <span id="romSize" class="eyebrow">23 bytes</span>
+            </div>
+          </div>
+          <div id="status" class="statusline" role="status" aria-live="polite">Ready. Run the demo or load a local ROM.</div>
+        </section>
+
+        <section class="panel keypad-panel">
+          <div class="panel-header">
+            <h2 class="panel-title">CHIP-8 keypad</h2>
+            <span class="keypad-hint">Keyboard and pointer input</span>
+          </div>
+          <div id="keypad" class="keypad" aria-label="Clickable CHIP-8 keypad"></div>
+        </section>
+      </section>
+
+      <aside class="right-column" aria-label="Debugger and help">
+        <section class="panel">
+          <div class="panel-header">
+            <h2 class="panel-title">Machine debugger</h2>
+            <span id="instructionCount" class="eyebrow">0 instructions</span>
+          </div>
+          <div class="debug-content">
+            <div class="debug-grid">
+              <div class="debug-cell"><span>Program counter</span><strong id="pcValue">0200</strong></div>
+              <div class="debug-cell"><span>Index register</span><strong id="iValue">0000</strong></div>
+              <div class="debug-cell"><span>Delay timer</span><strong id="delayValue">00</strong></div>
+              <div class="debug-cell"><span>Sound timer</span><strong id="soundValue">00</strong></div>
+            </div>
+
+            <div class="section-label"><span>General registers</span><span>Hex</span></div>
+            <div id="registers" class="register-grid"></div>
+
+            <div class="section-label"><span>Call stack</span><span id="stackDepth">0 / 16</span></div>
+            <div id="stackView" class="stack-box">Empty</div>
+
+            <div class="section-label"><span>Current instruction</span><span id="instructionAddress">0200</span></div>
+            <div id="instructionView" class="instruction-box">—</div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2 class="panel-title">Quick reference</h2>
+            <span class="eyebrow">Input map</span>
+          </div>
+          <div class="help">
+            Move the demo marker with CHIP-8 keys <strong>4</strong> and <strong>6</strong> (physical <kbd>Q</kbd> and <kbd>E</kbd>).<br>
+            Keypad layout follows the original mapping:<br>
+            <kbd>1 2 3 4</kbd> → <strong>1 2 3 C</strong><br>
+            <kbd>Q W E R</kbd> → <strong>4 5 6 D</strong><br>
+            <kbd>A S D F</kbd> → <strong>7 8 9 E</strong><br>
+            <kbd>Z X C V</kbd> → <strong>A 0 B F</strong><br><br>
+            Use <strong>Step</strong> to execute one instruction while paused. Timers continue at 60 Hz whenever the console is running.
+          </div>
+        </section>
+      </aside>
+    </div>
+  </main>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const SCREEN_WIDTH = 64;
+      const SCREEN_HEIGHT = 32;
+      const MEMORY_SIZE = 4096;
+      const PROGRAM_START = 0x200;
+      const STACK_LIMIT = 16;
+      const FONT_START = 0x050;
+      const FONT = [
+        0xF0, 0x90, 0x90, 0x90, 0xF0,
+        0x20, 0x60, 0x20, 0x20, 0x70,
+        0xF0, 0x10, 0xF0, 0x80, 0xF0,
+        0xF0, 0x10, 0xF0, 0x10, 0xF0,
+        0x90, 0x90, 0xF0, 0x10, 0x10,
+        0xF0, 0x80, 0xF0, 0x10, 0xF0,
+        0xF0, 0x80, 0xF0, 0x90, 0xF0,
+        0xF0, 0x10, 0x20, 0x40, 0x40,
+        0xF0, 0x90, 0xF0, 0x90, 0xF0,
+        0xF0, 0x90, 0xF0, 0x10, 0xF0,
+        0xF0, 0x90, 0xF0, 0x90, 0x90,
+        0xE0, 0x90, 0xE0, 0x90, 0xE0,
+        0xF0, 0x80, 0x80, 0x80, 0xF0,
+        0xE0, 0x90, 0x90, 0x90, 0xE0,
+        0xF0, 0x80, 0xF0, 0x80, 0xF0,
+        0xF0, 0x80, 0xF0, 0x80, 0x80
+      ];
+
+      // 0x200: initialize position and sprite; clear/draw, move with keys 4/6, repeat.
+      // The heart sprite begins at 0x218 (ROM offset 0x18).
+      const DEMO_ROM = new Uint8Array([
+        0x60, 0x1E, 0x61, 0x0E, 0xA2, 0x18, 0x00, 0xE0,
+        0xD0, 0x15, 0x64, 0x04, 0xE4, 0xA1, 0x70, 0xFF,
+        0x65, 0x06, 0xE5, 0xA1, 0x70, 0x01, 0x12, 0x06,
+        0x3C, 0x7E, 0xFF, 0xFF, 0x7E
+      ]);
+
+      const KEY_LAYOUT = [
+        { chip: 0x1, physical: "1", code: "Digit1" },
+        { chip: 0x2, physical: "2", code: "Digit2" },
+        { chip: 0x3, physical: "3", code: "Digit3" },
+        { chip: 0xC, physical: "4", code: "Digit4" },
+        { chip: 0x4, physical: "Q", code: "KeyQ" },
+        { chip: 0x5, physical: "W", code: "KeyW" },
+        { chip: 0x6, physical: "E", code: "KeyE" },
+        { chip: 0xD, physical: "R", code: "KeyR" },
+        { chip: 0x7, physical: "A", code: "KeyA" },
+        { chip: 0x8, physical: "S", code: "KeyS" },
+        { chip: 0x9, physical: "D", code: "KeyD" },
+        { chip: 0xE, physical: "F", code: "KeyF" },
+        { chip: 0xA, physical: "Z", code: "KeyZ" },
+        { chip: 0x0, physical: "X", code: "KeyX" },
+        { chip: 0xB, physical: "C", code: "KeyC" },
+        { chip: 0xF, physical: "V", code: "KeyV" }
+      ];
+
+      const canvas = document.getElementById("display");
+      const context = canvas.getContext("2d", { alpha: false });
+      const keypadElement = document.getElementById("keypad");
+      const statusElement = document.getElementById("status");
+      const registersElement = document.getElementById("registers");
+      const keys = new Uint8Array(16);
+      const screen = new Uint8Array(SCREEN_WIDTH * SCREEN_HEIGHT);
+      const keyButtons = new Map();
+      const keyboardToChip = new Map(KEY_LAYOUT.map(key => [key.code, key.chip]));
+
+      let memory = new Uint8Array(MEMORY_SIZE);
+      let V = new Uint8Array(16);
+      let I = 0;
+      let pc = PROGRAM_START;
+      let stack = [];
+      let delayTimer = 0;
+      let soundTimer = 0;
+      let instructionCount = 0;
+      let romBytes = DEMO_ROM.slice();
+      let romName = "Neon Heart Demo";
+      let running = false;
+      let waitingForKey = null;
+      let fault = "";
+      let previousFrameTime = 0;
+      let timerAccumulator = 0;
+      let animationFrame = 0;
+      let lastFrameTime = 0;
+
+      function hex(value, digits = 2) {
+        return (value >>> 0).toString(16).toUpperCase().padStart(digits, "0");
+      }
+
+      function setStatus(message, type = "") {
+        statusElement.textContent = message;
+        statusElement.className = `statusline${type ? ` ${type}` : ""}`;
+      }
+
+      function updateRunState() {
+        document.getElementById("runLed").classList.toggle("running", running);
+        document.getElementById("runLabel").textContent = running ? "System running" : "System paused";
+        document.getElementById("runButton").disabled = running || Boolean(fault);
+        document.getElementById("pauseButton").disabled = !running;
+      }
+
+      function updateSoundStatus() {
+        const active = soundTimer > 0;
+        document.getElementById("soundStatus").innerHTML = `Sound timer <strong>${active ? "active" : "off"}</strong>`;
+        document.getElementById("soundValue").textContent = hex(soundTimer);
+        document.getElementById("delayValue").textContent = hex(delayTimer);
+      }
+
+      function renderScreen() {
+        context.fillStyle = "#071211";
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.fillStyle = "#54f4df";
+        for (let y = 0; y < SCREEN_HEIGHT; y++) {
+          for (let x = 0; x < SCREEN_WIDTH; x++) {
+            if (screen[y * SCREEN_WIDTH + x]) {
+              context.fillRect(x * 10, y * 10, 10, 10);
+            }
+          }
+        }
+      }
+
+      function renderRegisters() {
+        registersElement.innerHTML = "";
+        for (let index = 0; index < 16; index++) {
+          const cell = document.createElement("div");
+          cell.className = "register";
+          cell.innerHTML = `<span>V${index.toString(16).toUpperCase()}</span><strong>${hex(V[index])}</strong>`;
+          registersElement.appendChild(cell);
+        }
+      }
+
+      function decodeInstruction(opcode) {
+        const x = (opcode >> 8) & 0xF;
+        const y = (opcode >> 4) & 0xF;
+        const kk = opcode & 0xFF;
+        const nnn = opcode & 0x0FFF;
+        const n = opcode & 0xF;
+
+        switch (opcode) {
+          case 0x00E0: return "CLS — clear display";
+          case 0x00EE: return "RET — return from subroutine";
+        }
+
+        switch (opcode & 0xF000) {
+          case 0x0000: return `SYS ${hex(nnn, 3)} (ignored)`;
+          case 0x1000: return `JP ${hex(nnn, 3)}`;
+          case 0x2000: return `CALL ${hex(nnn, 3)}`;
+          case 0x3000: return `SE V${x.toString(16).toUpperCase()}, ${hex(kk)}`;
+          case 0x4000: return `SNE V${x.toString(16).toUpperCase()}, ${hex(kk)}`;
+          case 0x5000: return n === 0 ? `SE V${x.toString(16).toUpperCase()}, V${y.toString(16).toUpperCase()}` : "Invalid 5xyN";
+          case 0x6000: return `LD V${x.toString(16).toUpperCase()}, ${hex(kk)}`;
+          case 0x7000: return `ADD V${x.toString(16).toUpperCase()}, ${hex(kk)}`;
+          case 0x8000: {
+            const operations = {
+              0x0: "LD",
+              0x1: "OR",
+              0x2: "AND",
+              0x3: "XOR",
+              0x4: "ADD",
+              0x5: "SUB",
+              0x6: "SHR",
+              0x7: "SUBN",
+              0xE: "SHL"
+            };
+            const name = operations[n];
+            return name ? `${name} V${x.toString(16).toUpperCase()}, V${y.toString(16).toUpperCase()}` : "Invalid 8xyN";
+          }
+          case 0x9000: return n === 0 ? `SNE V${x.toString(16).toUpperCase()}, V${y.toString(16).toUpperCase()}` : "Invalid 9xyN";
+          case 0xA000: return `LD I, ${hex(nnn, 3)}`;
+          case 0xB000: return `JP V0, ${hex(nnn, 3)}`;
+          case 0xC000: return `RND V${x.toString(16).toUpperCase()}, ${hex(kk)}`;
+          case 0xD000: return `DRW V${x.toString(16).toUpperCase()}, V${y.toString(16).toUpperCase()}, ${n}`;
+          case 0xE000:
+            if (kk === 0x9E) return `SKP V${x.toString(16).toUpperCase()}`;
+            if (kk === 0xA1) return `SKNP V${x.toString(16).toUpperCase()}`;
+            return "Invalid ExNN";
+          case 0xF000: {
+            const operations = {
+              0x07: `LD V${x.toString(16).toUpperCase()}, DT`,
+              0x0A: `LD V${x.toString(16).toUpperCase()}, K`,
+              0x15: `LD DT, V${x.toString(16).toUpperCase()}`,
+              0x18: `LD ST, V${x.toString(16).toUpperCase()}`,
+              0x1E: `ADD I, V${x.toString(16).toUpperCase()}`,
+              0x29: `LD F, V${x.toString(16).toUpperCase()}`,
+              0x33: `BCD V${x.toString(16).toUpperCase()}`,
+              0x55: `LD [I], V0-V${x.toString(16).toUpperCase()}`,
+              0x65: `LD V0-V${x.toString(16).toUpperCase()}, [I]`
+            };
+            return operations[kk] || "Invalid FxNN";
+          }
+          default:
+            return "Invalid instruction";
+        }
+      }
+
+      function updateDebugger() {
+        renderRegisters();
+        document.getElementById("pcValue").textContent = hex(pc, 4);
+        document.getElementById("iValue").textContent = hex(I, 4);
+        document.getElementById("delayValue").textContent = hex(delayTimer);
+        document.getElementById("instructionCount").textContent = `${instructionCount.toLocaleString()} instructions`;
+        document.getElementById("stackDepth").textContent = `${stack.length} / ${STACK_LIMIT}`;
+        document.getElementById("stackView").textContent = stack.length
+          ? stack.map((address, index) => `${index}: ${hex(address, 4)}`).join("  ·  ")
+          : "Empty";
+        const address = pc >= 0 && pc + 1 < MEMORY_SIZE ? pc : -1;
+        document.getElementById("instructionAddress").textContent = address >= 0 ? hex(address, 4) : "----";
+        const opcode = address >= 0 ? (memory[address] << 8) | memory[address + 1] : 0;
+        document.getElementById("instructionView").textContent = address >= 0
+          ? `${hex(opcode, 4)}  ${decodeInstruction(opcode)}`
+          : "PC outside memory";
+        updateSoundStatus();
+        updateRunState();
+      }
+
+      function setFault(message) {
+        fault = message;
+        running = false;
+        setStatus(message, "error");
+        updateDebugger();
+      }
+
+      function resetMachine() {
+        running = false;
+        fault = "";
+        waitingForKey = null;
+        memory = new Uint8Array(MEMORY_SIZE);
+        memory.set(FONT, FONT_START);
+        memory.set(romBytes, PROGRAM_START);
+        V = new Uint8Array(16);
+        I = 0;
+        pc = PROGRAM_START;
+        stack = [];
+        delayTimer = 0;
+        soundTimer = 0;
+        instructionCount = 0;
+        screen.fill(0);
+        keys.fill(0);
+        releaseAllKeys();
+        timerAccumulator = 0;
+        lastFrameTime = 0;
+        renderScreen();
+        updateDebugger();
+        setStatus("Machine reset. Ready to execute.", "success");
+      }
+
+      function loadRom(bytes, name) {
+        if (!bytes || bytes.length === 0) {
+          setStatus("The selected file is empty.", "error");
+          return;
+        }
+        if (bytes.length > MEMORY_SIZE - PROGRAM_START) {
+          setStatus(`ROM is too large (${bytes.length} bytes). Maximum size is ${MEMORY_SIZE - PROGRAM_START} bytes.`, "error");
+          return;
+        }
+        romBytes = new Uint8Array(bytes);
+        romName = name;
+        document.getElementById("romName").textContent = romName;
+        document.getElementById("romSize").textContent = `${romBytes.length} bytes`;
+        resetMachine();
+        setStatus(`Loaded ${romName} (${romBytes.length} bytes).`, "success");
+      }
+
+      function readByte(address) {
+        if (address < 0 || address >= MEMORY_SIZE) {
+          throw new Error(`Memory read outside address space at ${hex(address, 4)}.`);
+        }
+        return memory[address];
+      }
+
+      function writeByte(address, value) {
+        if (address < 0 || address >= MEMORY_SIZE) {
+          throw new Error(`Memory write outside address space at ${hex(address, 4)}.`);
+        }
+        memory[address] = value & 0xFF;
+      }
+
+      function executeInstruction() {
+        if (fault) return false;
+        if (waitingForKey) return false;
+        if (pc < 0 || pc + 1 >= MEMORY_SIZE) {
+          setFault(`Program counter outside memory at ${hex(pc, 4)}.`);
+          return false;
+        }
+
+        const address = pc;
+        const opcode = (readByte(pc) << 8) | readByte(pc + 1);
+        const x = (opcode >> 8) & 0xF;
+        const y = (opcode >> 4) & 0xF;
+        const kk = opcode & 0xFF;
+        const nnn = opcode & 0x0FFF;
+        const n = opcode & 0xF;
+        pc += 2;
+
+        try {
+          switch (opcode & 0xF000) {
+            case 0x0000:
+              if (opcode === 0x00E0) {
+                screen.fill(0);
+                renderScreen();
+              } else if (opcode === 0x00EE) {
+                if (stack.length === 0) throw new Error("Stack underflow on RET.");
+                pc = stack.pop();
+              } else {
+                // SYS addr is a legacy RCA 1802 call; modern CHIP-8 systems ignore it.
+              }
+              break;
+            case 0x1000:
+              pc = nnn;
+              break;
+            case 0x2000:
+              if (stack.length >= STACK_LIMIT) throw new Error("Call stack overflow.");
+              stack.push(pc);
+              pc = nnn;
+              break;
+            case 0x3000:
+              if (V[x] === kk) pc += 2;
+              break;
+            case 0x4000:
+              if (V[x] !== kk) pc += 2;
+              break;
+            case 0x5000:
+              if (n !== 0) throw new Error(`Unsupported opcode ${hex(opcode, 4)} at ${hex(address, 4)}.`);
+              if (V[x] === V[y]) pc += 2;
+              break;
+            case 0x6000:
+              V[x] = kk;
+              break;
+            case 0x7000:
+              V[x] = (V[x] + kk) & 0xFF;
+              break;
+            case 0x8000: {
+              const vx = V[x];
+              const vy = V[y];
+              switch (n) {
+                case 0x0: V[x] = vy; break;
+                case 0x1: V[x] = vx | vy; break;
+                case 0x2: V[x] = vx & vy; break;
+                case 0x3: V[x] = vx ^ vy; break;
+                case 0x4: {
+                  const result = vx + vy;
+                  V[0xF] = result > 0xFF ? 1 : 0;
+                  V[x] = result & 0xFF;
+                  break;
+                }
+                case 0x5:
+                  V[0xF] = vx >= vy ? 1 : 0;
+                  V[x] = (vx - vy) & 0xFF;
+                  break;
+                case 0x6:
+                  V[0xF] = vy & 1;
+                  V[x] = vy >>> 1;
+                  break;
+                case 0x7:
+                  V[0xF] = vy >= vx ? 1 : 0;
+                  V[x] = (vy - vx) & 0xFF;
+                  break;
+                case 0xE:
+                  V[0xF] = (vy >> 7) & 1;
+                  V[x] = (vy << 1) & 0xFF;
+                  break;
+                default:
+                  throw new Error(`Unsupported opcode ${hex(opcode, 4)} at ${hex(address, 4)}.`);
+              }
+              break;
+            }
+            case 0x9000:
+              if (n !== 0) throw new Error(`Unsupported opcode ${hex(opcode, 4)} at ${hex(address, 4)}.`);
+              if (V[x] !== V[y]) pc += 2;
+              break;
+            case 0xA000:
+              I = nnn;
+              break;
+            case 0xB000:
+              pc = nnn + V[0];
+              break;
+            case 0xC000:
+              V[x] = Math.floor(Math.random() * 256) & kk;
+              break;
+            case 0xD000: {
+              const startX = V[x] % SCREEN_WIDTH;
+              const startY = V[y] % SCREEN_HEIGHT;
+              V[0xF] = 0;
+              for (let row = 0; row < n; row++) {
+                const sprite = readByte(I + row);
+                for (let column = 0; column < 8; column++) {
+                  if ((sprite & (0x80 >> column)) === 0) continue;
+                  const pixelX = (startX + column) % SCREEN_WIDTH;
+                  const pixelY = (startY + row) % SCREEN_HEIGHT;
+                  const pixelIndex = pixelY * SCREEN_WIDTH + pixelX;
+                  if (screen[pixelIndex]) V[0xF] = 1;
+                  screen[pixelIndex] ^= 1;
+                }
+              }
+              renderScreen();
+              break;
+            }
+            case 0xE000:
+              if (kk === 0x9E) {
+                if (V[x] < 16 && keys[V[x]]) pc += 2;
+              } else if (kk === 0xA1) {
+                if (V[x] >= 16 || !keys[V[x]]) pc += 2;
+              } else {
+                throw new Error(`Unsupported opcode ${hex(opcode, 4)} at ${hex(address, 4)}.`);
+              }
+              break;
+            case 0xF000:
+              switch (kk) {
+                case 0x07:
+                  V[x] = delayTimer;
+                  break;
+                case 0x0A: {
+                  let pressed = -1;
+                  for (let key = 0; key < 16; key++) {
+                    if (keys[key]) {
+                      pressed = key;
+                      break;
+                    }
+                  }
+                  if (pressed >= 0) {
+                    V[x] = pressed;
+                  } else {
+                    pc = address;
+                    waitingForKey = { register: x, address };
+                  }
+                  break;
+                }
+                case 0x15:
+                  delayTimer = V[x];
+                  break;
+                case 0x18:
+                  soundTimer = V[x];
+                  break;
+                case 0x1E:
+                  I += V[x];
+                  break;
+                case 0x29:
+                  I = FONT_START + (V[x] & 0xF) * 5;
+                  break;
+                case 0x33:
+                  writeByte(I, Math.floor(V[x] / 100));
+                  writeByte(I + 1, Math.floor((V[x] % 100) / 10));
+                  writeByte(I + 2, V[x] % 10);
+                  break;
+                case 0x55:
+                  for (let register = 0; register <= x; register++) writeByte(I + register, V[register]);
+                  break;
+                case 0x65:
+                  for (let register = 0; register <= x; register++) V[register] = readByte(I + register);
+                  break;
+                default:
+                  throw new Error(`Unsupported opcode ${hex(opcode, 4)} at ${hex(address, 4)}.`);
+              }
+              break;
+            default:
+              throw new Error(`Unsupported opcode ${hex(opcode, 4)} at ${hex(address, 4)}.`);
+          }
+        } catch (error) {
+          setFault(`${error.message} Execution paused.`);
+          return false;
+        }
+
+        instructionCount++;
+        updateDebugger();
+        return true;
+      }
+
+      function timerTick() {
+        if (delayTimer > 0) delayTimer--;
+        if (soundTimer > 0) soundTimer--;
+        updateSoundStatus();
+      }
+
+      function frame(timestamp) {
+        animationFrame = requestAnimationFrame(frame);
+        if (!lastFrameTime) lastFrameTime = timestamp;
+        const elapsed = Math.min(timestamp - lastFrameTime, 250);
+        lastFrameTime = timestamp;
+        timerAccumulator += elapsed;
+
+        while (timerAccumulator >= 1000 / 60) {
+          timerAccumulator -= 1000 / 60;
+          if (running) timerTick();
+        }
+
+        if (running && !waitingForKey && !fault) {
+          const cycles = Number(document.getElementById("speed").value);
+          for (let cycle = 0; cycle < cycles && running && !waitingForKey && !fault; cycle++) {
+            if (!executeInstruction()) break;
+          }
+        }
+      }
+
+      function startMachine() {
+        if (fault) return;
+        if (!running) {
+          running = true;
+          lastFrameTime = performance.now();
+          updateRunState();
+          setStatus("Machine running.", "success");
+        }
+      }
+
+      function pauseMachine() {
+        running = false;
+        updateRunState();
+        if (!fault) setStatus("Machine paused.");
+      }
+
+      function keyDown(chipKey) {
+        if (keys[chipKey]) return;
+        keys[chipKey] = 1;
+        const button = keyButtons.get(chipKey);
+        if (button) button.classList.add("is-pressed");
+
+        if (waitingForKey) {
+          V[waitingForKey.register] = chipKey;
+          pc = waitingForKey.address + 2;
+          waitingForKey = null;
+          updateDebugger();
+        }
+      }
+
+      function keyUp(chipKey) {
+        keys[chipKey] = 0;
+        const button = keyButtons.get(chipKey);
+        if (button) button.classList.remove("is-pressed");
+      }
+
+      function releaseAllKeys() {
+        for (let key = 0; key < 16; key++) keyUp(key);
+      }
+
+      function buildKeypad() {
+        for (const item of KEY_LAYOUT) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "key";
+          button.dataset.chipKey = item.chip;
+          button.setAttribute("aria-label", `CHIP-8 key ${item.chip.toString(16).toUpperCase()}, keyboard ${item.physical}`);
+          button.innerHTML = `<span><span class="chip-key">${item.chip.toString(16).toUpperCase()}</span><span class="physical-key">${item.physical}</span></span>`;
+          button.addEventListener("pointerdown", event => {
+            event.preventDefault();
+            button.setPointerCapture?.(event.pointerId);
+            keyDown(item.chip);
+          });
+          button.addEventListener("pointerup", () => keyUp(item.chip));
+          button.addEventListener("pointercancel", () => keyUp(item.chip));
+          button.addEventListener("lostpointercapture", () => keyUp(item.chip));
+          button.addEventListener("pointerleave", event => {
+            if (event.buttons === 0) keyUp(item.chip);
+          });
+          button.addEventListener("keydown", event => {
+            if (event.key === " " || event.key === "Enter") {
+              event.preventDefault();
+              keyDown(item.chip);
+            }
+          });
+          button.addEventListener("keyup", event => {
+            if (event.key === " " || event.key === "Enter") keyUp(item.chip);
+          });
+          keypadElement.appendChild(button);
+          keyButtons.set(item.chip, button);
+        }
+      }
+
+      document.addEventListener("keydown", event => {
+        const chipKey = keyboardToChip.get(event.code);
+        if (chipKey === undefined || event.repeat) return;
+        event.preventDefault();
+        keyDown(chipKey);
+      });
+
+      document.addEventListener("keyup", event => {
+        const chipKey = keyboardToChip.get(event.code);
+        if (chipKey !== undefined) keyUp(chipKey);
+      });
+
+      window.addEventListener("blur", releaseAllKeys);
+
+      document.getElementById("runButton").addEventListener("click", startMachine);
+      document.getElementById("pauseButton").addEventListener("click", pauseMachine);
+      document.getElementById("stepButton").addEventListener("click", () => {
+        if (running || fault) return;
+        if (waitingForKey) {
+          setStatus("Waiting for a key press to complete Fx0A.", "success");
+          return;
+        }
+        executeInstruction();
+        if (!fault) setStatus("Executed one instruction.", "success");
+      });
+      document.getElementById("resetButton").addEventListener("click", resetMachine);
+      document.getElementById("demoButton").addEventListener("click", () => loadRom(DEMO_ROM, "Neon Heart Demo"));
+      document.getElementById("loadButton").addEventListener("click", () => document.getElementById("fileInput").click());
+      document.getElementById("fileInput").addEventListener("change", async event => {
+        const file = event.target.files && event.target.files[0];
+        if (!file) return;
+        try {
+          const bytes = new Uint8Array(await file.arrayBuffer());
+          loadRom(bytes, file.name);
+        } catch (error) {
+          setStatus(`Could not read ROM: ${error.message}`, "error");
+        }
+        event.target.value = "";
+      });
+      document.getElementById("speed").addEventListener("input", event => {
+        document.getElementById("speedValue").textContent = `${event.target.value} / frame`;
+      });
+
+      buildKeypad();
+      document.getElementById("romSize").textContent = `${romBytes.length} bytes`;
+      resetMachine();
+      setStatus("Ready. Run the demo or load a local ROM.", "success");
+      animationFrame = requestAnimationFrame(frame);
+    })();
+  </script>
+</body>
+</html>

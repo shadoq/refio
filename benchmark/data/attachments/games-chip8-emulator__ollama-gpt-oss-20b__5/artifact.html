@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>CHIP-8 Emulator</title>
+<style>
+body {font-family: monospace;background:#222;color:#eee;margin:0;padding:0;}
+#container {display:flex;flex-wrap:wrap;justify-content:center;padding:20px;}
+#display {border:1px solid #555;background:#000;}
+#controls {margin-left:20px;display:flex;flex-direction:column;gap:10px;}
+button {padding:5px 10px;background:#444;color:#eee;border:none;cursor:pointer;}
+button:hover {background:#555;}
+button:disabled {background:#222;color:#777;cursor:not-allowed;}
+#debug {background:#111;padding:10px;border:1px solid #555;font-size:12px;overflow:auto;height:200px;}
+.keypad {display:grid;grid-template-columns:repeat(4,50px);grid-gap:5px;}
+.keypad button {width:50px;height:50px;background:#444;color:#eee;border:none;cursor:pointer;}
+.keypad button.pressed {background:#888;}
+</style>
+</head>
+<body>
+<h1 style="text-align:center;">CHIP-8 Emulator</h1>
+<div id="container">
+<canvas id="display" width="640" height="320"></canvas>
+<div id="controls">
+<button id="runBtn">Run</button>
+<button id="pauseBtn" disabled>Pause</button>
+<button id="stepBtn">Step</button>
+<button id="resetBtn">Reset</button>
+<label>Speed: <input type="range" id="speedSlider" min="1" max="1000" value="500"></label>
+<input type="file" id="romInput" accept=".ch8,.bin">
+<div id="debug"></div>
+<div class="keypad" id="keypad"></div>
+</div>
+</div>
+<script>
+const MEMORY_SIZE = 4096;
+const REGISTER_COUNT = 16;
+const STACK_SIZE = 16;
+const DISPLAY_WIDTH = 64;
+const DISPLAY_HEIGHT = 32;
+const SCALE = 10;
+const START_ADDRESS = 0x200;
+
+const memory = new Uint8Array(MEMORY_SIZE);
+const V = new Uint8Array(REGISTER_COUNT);
+let I = 0;
+let pc = START_ADDRESS;
+const stack = new Uint16Array(STACK_SIZE);
+let sp = 0;
+let delayTimer = 0;
+let soundTimer = 0;
+const display = new Uint8Array(DISPLAY_WIDTH * DISPLAY_HEIGHT);
+const keyState = new Uint8Array(REGISTER_COUNT);
+
+const fontSet = [
+0xF0,0x90,0x90,0x90,0xF0,
+0x20,0x60,0x20,0x20,0x70,
+0xF0,0x10,0xF0,0x80,0xF0,
+0xF0,0x10,0xF0,0x10,0xF0,
+0x90,0x90,0xF0,0x10,0x10,
+0xF0,0x80,0xF0,0x10,0xF0,
+0xF0,0x80,0xF0,0x90,0xF0,
+0xF0,0x10,0x20,0x40,0x40,
+0xF0,0x90,0xF0,0x90,0xF0,
+0xF0,0x90,0xF0,0x10,0xF0,
+0xF0,0x90,0xF0,0x90,0x90,
+0xE0,0x90,0xE0,0x90,0xE0,
+0xF0,0x80,0x80,0x80,0xF0,
+0xE0,0x90,0x90,0x90,0xE0,
+0xF0,0x80,0xF0,0x80,0xF0,
+0xF0,0x80,0xF0,0x80,0x80
+];
+
+const demoROM = [
+0x00,0xE0, // CLS
+0x60,0x00, // LD V0, 0
+0x61,0x00, // LD V1, 0
+0xA3,0x00, // LD I, 0x300
+0xD0,0x15, // DRW V0, V1, 5
+0x12,0x00, // JP 0x200
+0xF0,0x90,0x90,0x90,0xF0 // Sprite data at 0x300
+];
+
+let running = false;
+let speed = 500;
+let lastTime = 0;
+
+const canvas = document.getElementById('display');
+const ctx = canvas.getContext('2d');
+ctx.fillStyle = '#0F0';
+ctx.scale(SCALE, SCALE);
+
+const runBtn = document.getElementById('runBtn');
+const pauseBtn = document.getElementById('pauseBtn');
+const stepBtn = document.getElementById('stepBtn');
+const resetBtn = document.getElementById('resetBtn');
+const speedSlider = document.getElementById('speedSlider');
+const romInput = document.getElementById('romInput');
+const debugDiv = document.getElementById('debug');
+const keypadDiv = document.getElementById('keypad');
+
+const keyMap = {
+'1':0,'2':1,'3':2,'4':3,
+'q':4,'w':5,'e':6,'r':7,
+'a':8,'s':9,'d':10,'f':11,
+'z':12,'x':13,'c':14,'v':15
+};
+
+function initKeypad() {
+    keypadDiv.innerHTML = '';
+    for(let i=0;i<16;i++){
+        const btn = document.createElement('button');
+        btn.dataset.index = i;
+        btn.textContent = Object.keys(keyMap).find(k=>keyMap[k]===i).toUpperCase();
+        keypadDiv.appendChild(btn);
+    }
+}
+
+function updateKeypad() {
+    const buttons = keypadDiv.querySelectorAll('button');
+    buttons.forEach(btn=>{
+        const idx = parseInt(btn.dataset.index);
+        if(keyState[idx]) btn.classList.add('pressed');
+        else btn.classList.remove('pressed');
+    });
+}
+
+function loadROM(rom) {
+    memory.fill(0);
+    for(let i=0;i<fontSet.length;i++) memory[0x050 + i] = fontSet[i];
+    for(let i=0;i<rom.length;i++) memory[START_ADDRESS + i] = rom[i];
+    pc = START_ADDRESS;
+    I = 0;
+    sp = 0;
+    V.fill(0);
+    delayTimer = 0;
+    soundTimer = 0;
+    display.fill(0);
+}
+
+function reset() {
+    loadROM(demoROM);
+    running = false;
+    runBtn.disabled = false;
+    pauseBtn.disabled = true;
+    stepBtn.disabled = false;
+}
+
+function step() {
+    executeInstruction();
+    updateDebug();
+    drawDisplay();
+}
+
+function run() {
+    running = true;
+    runBtn.disabled = true;
+    pauseBtn.disabled = false;
+    stepBtn.disabled = true;
+}
+
+function pause() {
+    running = false;
+    runBtn.disabled = false;
+    pauseBtn.disabled = true;
+    stepBtn.disabled = false;
+}
+
+function executeInstruction() {
+    const opcode = (memory[pc] << 8) | memory[pc + 1];
+    const nnn = opcode & 0x0FFF;
+    const n = opcode & 0x000F;
+    const x = (opcode & 0x0F00) >> 8;
+    const y = (opcode & 0x00F0) >> 4;
+    const kk = opcode & 0x00FF;
+    pc += 2;
+    switch(opcode & 0xF000){
+        case 0x0000:
+            switch(opcode){
+                case 0x00E0: CLS(); break;
+                case 0x00EE: RET(); break;
+                default: break;
+            }
+            break;
+        case 0x1000: JP(nnn); break;
+        case 0x2000: CALL(nnn); break;
+        case 0x3000: SE_Vx_kk(x,kk); break;
+        case 0x4000: SNE_Vx_kk(x,kk); break;
+        case 0x5000: SE_Vx_Vy(x,y); break;
+        case 0x6000: LD_Vx_kk(x,kk); break;
+        case 0x7000: ADD_Vx_kk(x,kk); break;
+        case 0x8000:
+            switch(n){
+                case 0x0: LD_Vx_Vy(x,y); break;
+                case 0x1: OR_Vx_Vy(x,y); break;
+                case 0x2: AND_Vx_Vy(x,y); break;
+                case 0x3: XOR_Vx_Vy(x,y); break;
+                case 0x4: ADD_Vx_Vy(x,y); break;
+                case 0x5: SUB_Vx_Vy(x,y); break;
+                case 0x6: SHR_Vx(x); break;
+                case 0x7: SUBN_Vx_Vy(x,y); break;
+                case 0xE: SHL_Vx(x); break;
+            }
+            break;
+        case 0x9000: SNE_Vx_Vy(x,y); break;
+        case 0xA000: LD_I(nnn); break;
+        case 0xB000: JP_V0(nnn); break;
+        case 0xC000: RND_Vx_kk(x,kk); break;
+        case 0xD000: DRW_Vx_Vy_N(x,y,n); break;
+        case 0xE000:
+            switch(kk){
+                case 0x9E: SKP_Vx(x); break;
+                case 0xA1: SKNP_Vx(x); break;
+            }
+            break;
+        case 0xF000:
+            switch(kk){
+                case 0x07: LD_Vx_DT(x); break;
+                case 0x0A: LD_Vx_K(x); break;
+                case 0x15: LD_DT_Vx(x); break;
+                case 0x18: LD_ST_Vx(x); break;
+                case 0x1E: ADD_I_Vx(x); break;
+                case 0x29: LD_F_Vx(x); break;
+                case 0x33: LD_B_Vx(x); break;
+                case 0x55: LD_I_Vx(x); break;
+                case 0x65: LD_Vx_I(x); break;
+            }
+            break;
+    }
+}
+
+function CLS(){ display.fill(0); }
+function RET(){ sp--; pc = stack[sp]; }
+function JP(addr){ pc = addr; }
+function CALL(addr){ stack[sp++] = pc; pc = addr; }
+function SE_Vx_kk(x,kk){ if(V[x]===kk) pc+=2; }
+function SNE_Vx_kk(x,kk){ if(V[x]!==kk) pc+=2; }
+function SE_Vx_Vy(x,y){ if(V[x]===V[y]) pc+=2; }
+function LD_Vx_kk(x,kk){ V[x]=kk; }
+function ADD_Vx_kk(x,kk){ V[x]=(V[x]+kk)&0xFF; }
+function LD_Vx_Vy(x,y){ V[x]=V[y]; }
+function OR_Vx_Vy(x,y){ V[x]|=V[y]; }
+function AND_Vx_Vy(x,y){ V[x]&=V[y]; }
+function XOR_Vx_Vy(x,y){ V[x]^=V[y]; }
+function ADD_Vx_Vy(x,y){ const sum=V[x]+V[y]; V[0xF]=sum>0xFF?1:0; V[x]=sum&0xFF; }
+function SUB_Vx_Vy(x,y){ V[0xF]=V[x]>V[y]?1:0; V[x]=(V[x]-V[y])&0xFF; }
+function SHR_Vx(x){ V[0xF]=V[x]&0x1; V[x]>>=1; }
+function SUBN_Vx_Vy(x,y){ V[0xF]=V[y]>V[x]?1:0; V[x]=(V[y]-V[x])&0xFF; }
+function SHL_Vx(x){ V[0xF]=(V[x]>>7)&0x1; V[x]=(V[x]<<1)&0xFF; }
+function SNE_Vx_Vy(x,y){ if(V[x]!==V[y]) pc+=2; }
+function LD_I(addr){ I=addr; }
+function JP_V0(addr){ pc=(V[0]+addr)&0xFFF; }
+function RND_Vx_kk(x,kk){ V[x]=(Math.random()*256)&kk; }
+function DRW_Vx_Vy_N(x,y,n){
+    V[0xF]=0;
+    for(let row=0;row<n;row++){
+        const sprite=memory[I+row];
+        for(let col=0;col<8;col++){
+            const pixel=(sprite>>(7-col))&1;
+            const xCoord=(V[x]+col)%DISPLAY_WIDTH;
+            const yCoord=(V[y]+row)%DISPLAY_HEIGHT;
+            const idx=yCoord*DISPLAY_WIDTH+xCoord;
+            if(pixel){
+                if(display[idx]) V[0xF]=1;
+                display[idx]^=1;
+            }
+        }
+    }
+}
+function SKP_Vx(x){ if(keyState[V[x]]) pc+=2; }
+function SKNP_Vx(x){ if(!keyState[V[x]]) pc+=2; }
+function LD_Vx_DT(x){ V[x]=delayTimer; }
+function LD_Vx_K(x){
+    let pressed=false;
+    for(let i=0;i<16;i++){
+        if(keyState[i]){ V[x]=i; pressed=true; break; }
+    }
+    if(!pressed) pc-=2;
+}
+function LD_DT_Vx(x){ delayTimer=V[x]; }
+function LD_ST_Vx(x){ soundTimer=V[x]; }
+function ADD_I_Vx(x){ I=(I+V[x])&0xFFF; }
+function LD_F_Vx(x){ I=0x50+V[x]*5; }
+function LD_B_Vx(x){
+    const val=V[x];
+    memory[I]=Math.floor(val/100);
+    memory[I+1]=Math.floor((val%100)/10);
+    memory[I+2]=val%10;
+}
+function LD_I_Vx(x){
+    for(let i=0;i<=x;i++) memory[I+i]=V[i];
+}
+function LD_Vx_I(x){
+    for(let i=0;i<=x;i++) V[i]=memory[I+i];
+}
+
+function drawDisplay(){
+    ctx.clearRect(0,0,DISPLAY_WIDTH,DISPLAY_HEIGHT);
+    for(let y=0;y<DISPLAY_HEIGHT;y++){
+        for(let x=0;x<DISPLAY_WIDTH;x++){
+            if(display[y*DISPLAY_WIDTH+x]) ctx.fillRect(x,y,1,1);
+        }
+    }
+}
+
+function updateDebug(){
+    let regStr='';
+    for(let i=0;i<16;i++){
+        regStr+=`V${i.toString(16).toUpperCase()}: ${V[i].toString(16).padStart(2,'0')} `;
+        if(i%4===3) regStr+='\n';
+    }
+    const stackStr=Array.from(stack.slice(0,sp)).map(v=>v.toString(16).padStart(4,'0')).join(' ');
+    const opcode = (memory[pc] << 8) | memory[pc + 1];
+    debugDiv.textContent=`PC: ${pc.toString(16).padStart(4,'0')}
+I: ${I.toString(16).padStart(4,'0')}
+${regStr}
+Stack: ${stackStr}
+Current: ${decodeOpcode(opcode)}\n`;
+}
+
+function decodeOpcode(opcode){
+    const nnn = opcode & 0x0FFF;
+    const n = opcode & 0x000F;
+    const x = (opcode & 0x0F00) >> 8;
+    const y = (opcode & 0x00F0) >> 4;
+    const kk = opcode & 0x00FF;
+    switch(opcode & 0xF000){
+        case 0x0000:
+            switch(opcode){
+                case 0x00E0: return 'CLS';
+                case 0x00EE: return 'RET';
+                default: return `SYS ${nnn.toString(16)}`;
+            }
+        case 0x1000: return `JP ${nnn.toString(16)}`;
+        case 0x2000: return `CALL ${nnn.toString(16)}`;
+        case 0x3000: return `SE V${x.toString(16)} ${kk.toString(16)}`;
+        case 0x4000: return `SNE V${x.toString(16)} ${kk.toString(16)}`;
+        case 0x5000: return `SE V${x.toString(16)} V${y.toString(16)}`;
+        case 0x6000: return `LD V${x.toString(16)} ${kk.toString(16)}`;
+        case 0x7000: return `ADD V${x.toString(16)} ${kk.toString(16)}`;
+        case 0x8000:
+            switch(n){
+                case 0x0: return `LD V${x.toString(16)} V${y.toString(16)}`;
+                case 0x1: return `OR V${x.toString(16)} V${y.toString(16)}`;
+                case 0x2: return `AND V${x.toString(16)} V${y.toString(16)}`;
+                case 0x3: return `XOR V${x.toString(16)} V${y.toString(16)}`;
+                case 0x4: return `ADD V${x.toString(16)} V${y.toString(16)}`;
+                case 0x5: return `SUB V${x.toString(16)} V${y.toString(16)}`;
+                case 0x6: return `SHR V${x.toString(16)}`;
+                case 0x7: return `SUBN V${x.toString(16)} V${y.toString(16)}`;
+                case 0xE: return `SHL V${x.toString(16)}`;
+            }
+        case 0x9000: return `SNE V${x.toString(16)} V${y.toString(16)}`;
+        case 0xA000: return `LD I ${nnn.toString(16)}`;
+        case 0xB000: return `JP V0 ${nnn.toString(16)}`;
+        case 0xC000: return `RND V${x.toString(16)} ${kk.toString(16)}`;
+        case 0xD000: return `DRW V${x.toString(16)} V${y.toString(16)} ${n}`;
+        case 0xE000:
+            switch(kk){
+                case 0x9E: return `SKP V${x.toString(16)}`;
+                case 0xA1: return `SKNP V${x.toString(16)}`;
+            }
+        case 0xF000:
+            switch(kk){
+                case 0x07: return `LD V${x.toString(16)} DT`;
+                case 0x0A: return `LD V${x.toString(16)} K`;
+                case 0x15: return `LD DT V${x.toString(16)}`;
+                case 0x18: return `LD ST V${x.toString(16)}`;
+                case 0x1E: return `ADD I V${x.toString(16)}`;
+                case 0x29: return `LD F V${x.toString(16)}`;
+                case 0x33: return `LD B V${x.toString(16)}`;
+                case 0x55: return `LD [I] V${x.toString(16)}`;
+                case 0x65: return `LD V${x.toString(16)} [I]`;
+            }
+    }
+    return 'UNKNOWN';
+}
+
+function mainLoop(timestamp){
+    if(!lastTime) lastTime=timestamp;
+    const delta=timestamp-lastTime;
+    if(delta>1000/60){
+        if(delayTimer>0) delayTimer--;
+        if(soundTimer>0) soundTimer--;
+        lastTime=timestamp;
+    }
+    if(running){
+        for(let i=0;i<speed;i++) executeInstruction();
+        updateDebug();
+        drawDisplay();
+    }
+    requestAnimationFrame(mainLoop);
+}
+
+runBtn.addEventListener('click',run);
+pauseBtn.addEventListener('click',pause);
+stepBtn.addEventListener('click',step);
+resetBtn.addEventListener('click',reset);
+speedSlider.addEventListener('input',e=>{speed=parseInt(e.target.value);});
+romInput.addEventListener('change',e=>{
+    const file=e.target.files[0];
+    if(file){
+        const reader=new FileReader();
+        reader.onload=function(){
+            const arr=new Uint8Array(this.result);
+            loadROM(arr);
+            updateDebug();
+            drawDisplay();
+        };
+        reader.readAsArrayBuffer(file);
+    }
+});
+
+document.addEventListener('keydown',e=>{
+    const key=keyMap[e.key.toLowerCase()];
+    if(key!==undefined){
+        keyState[key]=1;
+        updateKeypad();
+    }
+});
+document.addEventListener('keyup',e=>{
+    const key=keyMap[e.key.toLowerCase()];
+    if(key!==undefined){
+        keyState[key]=0;
+        updateKeypad();
+    }
+});
+
+initKeypad();
+reset();
+requestAnimationFrame(mainLoop);
+</script>
+</body>
+</html>

@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>CHIP-8 Emulator</title>
+<style>
+body{margin:0;font-family:system-ui;background:#111;color:#eee;display:flex;flex-direction:column;height:100vh}
+header{padding:8px;background:#222;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+button,input,select{background:#333;color:#eee;border:1px solid #555;padding:4px 8px;border-radius:4px}
+canvas{background:#000;border:2px solid #555;image-rendering:pixelated}
+main{flex:1;display:flex;gap:12px;padding:12px;overflow:auto}
+#screenWrap{display:flex;flex-direction:column;align-items:center}
+#keys{display:grid;grid-template-columns:repeat(4,48px);gap:4px;margin-top:8px}
+.key{width:48px;height:48px;background:#333;border:1px solid #555;display:flex;align-items:center;justify-content:center;user-select:none}
+.key.active{background:#0a0}
+aside{width:340px;background:#1a1a1a;padding:8px;border:1px solid #444;border-radius:6px;overflow:auto}
+table{width:100%;border-collapse:collapse;font-size:12px}
+td,th{padding:2px 4px;border-bottom:1px solid #333}
+code{font-family:monospace}
+</style>
+</head>
+<body>
+<header>
+<button id="runBtn">Run</button>
+<button id="pauseBtn">Pause</button>
+<button id="stepBtn">Step</button>
+<button id="resetBtn">Reset</button>
+<label>IPS <input id="ips" type="range" min="60" max="1000" value="500"></label>
+<span id="ipsVal">500</span>
+<input type="file" id="romFile" accept=".ch8,.c8,.bin">
+<button id="loadDemo">Load Demo</button>
+</header>
+<main>
+<div id="screenWrap">
+<canvas id="screen" width="64" height="32"></canvas>
+<div id="keys"></div>
+</div>
+<aside>
+<h3>Debugger</h3>
+<div>PC: <code id="pc">0x200</code> I: <code id="i">0x000</code> SP: <code id="sp">0</code></div>
+<div>Instr: <code id="instr">----</code></div>
+<table id="regs"><thead><tr><th>V</th><th>Val</th></tr></thead><tbody></tbody></table>
+<div style="margin-top:8px">Stack</div>
+<div id="stack" style="font-family:monospace;font-size:12px"></div>
+</aside>
+</main>
+<script>
+const canvas=document.getElementById('screen');
+const ctx=canvas.getContext('2d');
+const scale=10;
+canvas.style.width=canvas.width*scale+'px';
+canvas.style.height=canvas.height*scale+'px';
+ctx.scale(scale,scale);
+
+const mem=new Uint8Array(4096);
+const V=new Uint8Array(16);
+let I=0, pc=0x200, sp=0, stack=new Uint16Array(16);
+let delayTimer=0, soundTimer=0;
+let keys=new Uint8Array(16);
+let drawFlag=true;
+let running=false;
+let ips=500;
+let lastTick=0;
+let frameAcc=0;
+
+const font=[
+0xF0,0x90,0x90,0x90,0xF0,
+0x20,0x60,0x20,0x20,0x70,
+0xF0,0x10,0xF0,0x80,0xF0,
+0xF0,0x10,0xF0,0x10,0xF0,
+0x90,0x90,0xF0,0x10,0x10,
+0xF0,0x80,0xF0,0x10,0xF0,
+0xF0,0x80,0xF0,0x90,0xF0,
+0xF0,0x10,0x20,0x40,0x40,
+0xF0,0x90,0xF0,0x90,0xF0,
+0xF0,0x90,0xF0,0x10,0xF0,
+0xF0,0x90,0xF0,0x90,0x90,
+0xE0,0x90,0xE0,0x90,0xE0,
+0xF0,0x80,0x80,0x80,0xF0,
+0xE0,0x90,0x90,0x90,0xE0,
+0xF0,0x80,0xF0,0x80,0xF0,
+0xF0,0x80,0xF0,0x80,0x80
+];
+for(let i=0;i<font.length;i++) mem[0x50+i]=font[i];
+
+const display=new Uint8Array(32*64);
+function clearScreen(){display.fill(0);drawFlag=true;}
+function drawPixel(x,y){
+ if(x<0||x>=64||y<0||y>=32) return;
+ const idx=y*64+x;
+ const val=display[idx]^1;
+ display[idx]=val;
+ return display[idx]===0;
+}
+function render(){
+ ctx.fillStyle='#000';
+ ctx.fillRect(0,0,64,32);
+ ctx.fillStyle='#0f0';
+ for(let y=0;y<32;y++){
+  for(let x=0;x<64;x++){
+   if(display[y*64+x]) ctx.fillRect(x,y,1,1);
+  }
+ }
+}
+clearScreen();
+
+const keyMap={ '1':0x1,'2':0x2,'3':0x3,'4':0xC,'q':0x4,'w':0x5,'e':0x6,'r':0xD,'a':0x7,'s':0x8,'d':0x9,'f':0xE,'z':0xA,'x':0x0,'c':0xB,'v':0xF };
+const keyDiv=document.getElementById('keys');
+const keyLabels=['1','2','3','4','q','w','e','r','a','s','d','f','z','x','c','v'];
+keyLabels.forEach(k=>{
+ const d=document.createElement('div');d.className='key';d.textContent=k;keyDiv.appendChild(d);
+});
+const keyEls=[...keyDiv.children];
+window.addEventListener('keydown',e=>{
+ const k=e.key.toLowerCase();
+ if(keyMap[k]!==undefined){keys[keyMap[k]]=1;keyEls[keyMap[k]].classList.add('active');}
+});
+window.addEventListener('keyup',e=>{
+ const k=e.key.toLowerCase();
+ if(keyMap[k]!==undefined){keys[keyMap[k]]=0;keyEls[keyMap[k]].classList.remove('active');}
+});
+
+function updateTimers(){
+ if(delayTimer>0) delayTimer--;
+ if(soundTimer>0){soundTimer--; if(soundTimer===0) {/* beep */}}
+}
+
+function fetchOpcode(){
+ return (mem[pc]<<8)|mem[pc+1];
+}
+
+function decode(op){
+ const n=op & 0xF;
+ const x=(op>>8)&0xF;
+ const y=(op>>4)&0xF;
+ const kk=op & 0xFF;
+ const nnn=op & 0xFFF;
+ return {op,x,y,n,kk,nnn};
+}
+
+function step(){
+ const opcode=fetchOpcode();
+ const d=decode(opcode);
+ document.getElementById('instr').textContent='0x'+opcode.toString(16).padStart(4,'0');
+ pc+=2;
+ switch(opcode & 0xF000){
+  case 0x0000:
+   if(opcode===0x00E0){clearScreen();}
+   else if(opcode===0x00EE){sp--;pc=stack[sp];}
+   break;
+  case 0x1000: pc=d.nnn; break;
+  case 0x2000: stack[sp]=pc; sp++; pc=d.nnn; break;
+  case 0x3000: if(V[d.x]===d.kk) pc+=2; break;
+  case 0x4000: if(V[d.x]!==d.kk) pc+=2; break;
+  case 0x5000: if(V[d.x]===V[d.y]) pc+=2; break;
+  case 0x6000: V[d.x]=d.kk; break;
+  case 0x7000: V[d.x]=(V[d.x]+d.kk)&0xFF; break;
+  case 0x8000:
+   switch(d.n){
+    case 0x0: V[d.x]=V[d.y]; break;
+    case 0x1: V[d.x]|=V[d.y]; break;
+    case 0x2: V[d.x]&=V[d.y]; break;
+    case 0x3: V[d.x]^=V[d.y]; break;
+    case 0x4: {const sum=V[d.x]+V[d.y]; V[0xF]=sum>255?1:0; V[d.x]=sum&0xFF; break;}
+    case 0x5: V[0xF]=V[d.x]>=V[d.y]?1:0; V[d.x]=(V[d.x]-V[d.y])&0xFF; break;
+    case 0x6: V[0xF]=V[d.x]&0x1; V[d.x]=(V[d.x]>>1)&0xFF; break;
+    case 0x7: V[0xF]=V[d.y]>=V[d.x]?1:0; V[d.x]=(V[d.y]-V[d.x])&0xFF; break;
+    case 0xE: V[0xF]=(V[d.x]&0x80)?1:0; V[d.x]=(V[d.x]<<1)&0xFF; break;
+   }
+   break;
+  case 0x9000: if(V[d.x]!==V[d.y]) pc+=2; break;
+  case 0xA000: I=d.nnn; break;
+  case 0xB000: pc=V[0]+d.nnn; break;
+  case 0xC000: V[d.x]=Math.floor(Math.random()*256)&d.kk; break;
+  case 0xD000:{
+   const vx=V[d.x]&0x3F, vy=V[d.y]&0x1F;
+   V[0xF]=0;
+   for(let row=0;row<d.n;row++){
+    const sprite=mem[I+row];
+    for(let col=0;col<8;col++){
+     if(sprite&(0x80>>col)){
+      const xpos=(vx+col)&0x3F, ypos=(vy+row)&0x1F;
+      if(drawPixel(xpos,ypos)) V[0xF]=1;
+     }
+    }
+   }
+   drawFlag=true;
+   break;
+  }
+  case 0xE000:
+   if(d.kk===0x9E){ if(keys[V[d.x]]) pc+=2; }
+   else if(d.kk===0xA1){ if(!keys[V[d.x]]) pc+=2; }
+   break;
+  case 0xF000:
+   switch(d.kk){
+    case 0x07: V[d.x]=delayTimer; break;
+    case 0x0A:{ let found=-1; for(let i=0;i<16;i++) if(keys[i]){found=i;break;} if(found===-1){pc-=2;} else V[d.x]=found; } break;
+    case 0x15: delayTimer=V[d.x]; break;
+    case 0x18: soundTimer=V[d.x]; break;
+    case 0x1E: I=(I+V[d.x])&0xFFFF; break;
+    case 0x29: I=0x50+(V[d.x]*5); break;
+    case 0x33:{
+     const val=V[d.x];
+     mem[I]=Math.floor(val/100);
+     mem[I+1]=Math.floor(val/10)%10;
+     mem[I+2]=val%10;
+     break;
+    }
+    case 0x55: for(let i=0;i<=d.x;i++) mem[I+i]=V[i]; break;
+    case 0x65: for(let i=0;i<=d.x;i++) V[i]=mem[I+i]; break;
+   }
+   break;
+ }
+ updateTimers();
+ updateDebug();
+ if(drawFlag){render();drawFlag=false;}
+}
+
+function updateDebug(){
+ document.getElementById('pc').textContent='0x'+pc.toString(16).padStart(3,'0');
+ document.getElementById('i').textContent='0x'+I.toString(16).padStart(3,'0');
+ document.getElementById('sp').textContent=sp;
+ const tbody=document.querySelector('#regs tbody'); tbody.innerHTML='';
+ for(let i=0;i<16;i++){ const tr=document.createElement('tr'); tr.innerHTML=`<td>V${i.toString(16).toUpperCase()}</td><td>0x${V[i].toString(16).padStart(2,'0')}</td>`; tbody.appendChild(tr); }
+ document.getElementById('stack').textContent=Array.from(stack.slice(0,sp)).map(v=>'0x'+v.toString(16).padStart(3,'0')).join(' ');
+}
+
+function reset(){
+ mem.fill(0); for(let i=0;i<font.length;i++) mem[0x50+i]=font[i];
+ V.fill(0); I=0; pc=0x200; sp=0; delayTimer=0; soundTimer=0; clearScreen(); drawFlag=true;
+ updateDebug();
+}
+
+function loadRom(buf){
+ reset();
+ const start=0x200;
+ for(let i=0;i<buf.length && start+i<4096;i++) mem[start+i]=buf[i];
+ pc=0x200;
+}
+
+const demoRom=new Uint8Array([
+0x60,0x00,0x61,0x00,0xD0,0x15,0x12,0x00,0x71,0x01,0x12,0x00
+]);
+document.getElementById('loadDemo').onclick=()=>{loadRom(demoRom);};
+
+document.getElementById('romFile').addEventListener('change',e=>{
+ const f=e.target.files[0]; if(!f) return;
+ const r=new FileReader();
+ r.onload=ev=>loadRom(new Uint8Array(ev.target.result));
+ r.readAsArrayBuffer(f);
+});
+
+document.getElementById('runBtn').onclick=()=>{running=true;lastTick=performance.now();};
+document.getElementById('pauseBtn').onclick=()=>{running=false;};
+document.getElementById('stepBtn').onclick=()=>{step();};
+document.getElementById('resetBtn').onclick=()=>{reset();};
+
+document.getElementById('ips').oninput=e=>{ips=+e.target.value;document.getElementById('ipsVal').textContent=ips;};
+
+function loop(now){
+ requestAnimationFrame(loop);
+ if(running){
+  const elapsed=now-lastTick;
+  const steps=Math.floor(elapsed*ips/1000);
+  for(let i=0;i<steps;i++) step();
+  lastTick=now-lastTick% (1000/ips);
+ }
+}
+requestAnimationFrame(loop);
+reset();
+</script>
+</body>
+</html>

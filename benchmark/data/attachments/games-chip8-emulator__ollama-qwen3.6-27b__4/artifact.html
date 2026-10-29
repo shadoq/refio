@@ -1,0 +1,1032 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CHIP-8 Emulator</title>
+    <style>
+        :root {
+            --bg-color: #1e1e1e;
+            --panel-bg: #252526;
+            --text-color: #d4d4d4;
+            --accent-color: #007acc;
+            --border-color: #3e3e42;
+            --font-mono: 'Consolas', 'Monaco', 'Courier New', monospace;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        .container {
+            display: flex;
+            gap: 20px;
+            padding: 20px;
+            background-color: var(--panel-bg);
+            border-radius: 8px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            max-width: 1200px;
+            width: 100%;
+        }
+
+        .left-panel {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .right-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        canvas {
+            background-color: #000;
+            border: 2px solid var(--border-color);
+            image-rendering: pixelated;
+            width: 512px; /* Scaled up from 64x32 by 8 */
+            height: 256px;
+        }
+
+        .controls {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            justify-content: center;
+            width: 100%;
+        }
+
+        button {
+            background-color: var(--border-color);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: inherit;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background-color: var(--accent-color);
+        }
+
+        button.active {
+            background-color: var(--accent-color);
+        }
+
+        .file-input-wrapper {
+            position: relative;
+            overflow: hidden;
+            display: inline-block;
+        }
+
+        .file-input-wrapper input[type=file] {
+            font-size: 100px;
+            position: absolute;
+            left: 0;
+            top: 0;
+            opacity: 0;
+            cursor: pointer;
+        }
+
+        .debugger {
+            background-color: var(--bg-color);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 10px;
+            font-family: var(--font-mono);
+            font-size: 12px;
+            height: 100%;
+            overflow-y: auto;
+        }
+
+        .debugger h3 {
+            margin-top: 0;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 5px;
+            color: var(--accent-color);
+        }
+
+        .reg-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 5px;
+            margin-bottom: 10px;
+        }
+
+        .reg-item {
+            background: rgba(255,255,255,0.05);
+            padding: 4px;
+            border-radius: 3px;
+        }
+
+        .stack-view {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+            margin-top: 10px;
+        }
+
+        .stack-item {
+            background: rgba(255,255,255,0.05);
+            padding: 2px 6px;
+            border-radius: 3px;
+        }
+
+        .keypad-map {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 5px;
+            margin-top: 10px;
+        }
+
+        .key-btn {
+            background: #333;
+            border: 1px solid #555;
+            color: #fff;
+            padding: 10px 0;
+            text-align: center;
+            font-family: var(--font-mono);
+            user-select: none;
+        }
+
+        .key-btn.pressed {
+            background: var(--accent-color);
+            border-color: #fff;
+        }
+
+        .speed-control {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 14px;
+        }
+
+        input[type=range] {
+            width: 150px;
+        }
+
+        .instruction-info {
+            margin-top: 10px;
+            padding: 10px;
+            background: rgba(0,0,0,0.2);
+            border-radius: 4px;
+        }
+
+        @media (max-width: 900px) {
+            .container {
+                flex-direction: column;
+            }
+            canvas {
+                width: 320px;
+                height: 160px;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="left-panel">
+        <canvas id="screen" width="64" height="32"></canvas>
+        
+        <div class="controls">
+            <button id="btn-run">Run</button>
+            <button id="btn-pause">Pause</button>
+            <button id="btn-step">Step</button>
+            <button id="btn-reset">Reset</button>
+            <div class="file-input-wrapper">
+                <button>Load ROM</button>
+                <input type="file" id="rom-file" accept=".ch8,.bin">
+            </div>
+        </div>
+
+        <div class="speed-control">
+            <label for="speed-slider">Speed:</label>
+            <input type="range" id="speed-slider" min="10" max="60" value="30">
+            <span id="speed-val">30</span> IPS
+        </div>
+
+        <div class="keypad-map" id="keypad-display">
+            <!-- Generated by JS -->
+        </div>
+    </div>
+
+    <div class="right-panel">
+        <div class="debugger">
+            <h3>Registers</h3>
+            <div class="reg-grid" id="reg-v"></div>
+            
+            <div style="display: flex; gap: 10px;">
+                <div class="reg-item"><strong>I:</strong> <span id="reg-i">0x0000</span></div>
+                <div class="reg-item"><strong>PC:</strong> <span id="reg-pc">0x0200</span></div>
+                <div class="reg-item"><strong>SP:</strong> <span id="reg-sp">0x0000</span></div>
+            </div>
+
+            <h3>Stack</h3>
+            <div class="stack-view" id="stack-content"></div>
+
+            <h3>Current Instruction</h3>
+            <div class="instruction-info" id="current-instruction">
+                Waiting...
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+/**
+ * CHIP-8 Emulator Implementation
+ */
+
+// --- Constants ---
+const MEMORY_SIZE = 4096;
+const SCREEN_WIDTH = 64;
+const SCREEN_HEIGHT = 32;
+const STACK_SIZE = 16;
+const FONTSET_START = 0x050;
+const PROGRAM_START = 0x200;
+
+// Key mapping: Keyboard codes to CHIP-8 hex values
+// Standard Mapping:
+// 1 2 3 4 (C)
+// Q W E R (D)
+// A S D F (E)
+// Z X C V (F)
+const KEY_MAP = {
+    'Digit1': 0x1, 'Numpad1': 0x1,
+    'Digit2': 0x2, 'Numpad2': 0x2,
+    'Digit3': 0x3, 'Numpad3': 0x3,
+    'KeyC': 0xC,
+    
+    'Digit4': 0x4, 'Numpad4': 0x4,
+    'Digit5': 0x5, 'Numpad5': 0x5,
+    'Digit6': 0x6, 'Numpad6': 0x6,
+    'KeyD': 0xD,
+    
+    'Digit7': 0x7, 'Numpad7': 0x7,
+    'Digit8': 0x8, 'Numpad8': 0x8,
+    'Digit9': 0x9, 'Numpad9': 0x9,
+    'KeyE': 0xE,
+    
+    'KeyA': 0xA,
+    'Digit0': 0x0, 'Numpad0': 0x0,
+    'KeyB': 0xB,
+    'KeyF': 0xF
+};
+
+// Reverse map for internal state (CHIP-8 hex -> Keyboard code for display)
+const REVERSE_KEY_MAP = {};
+for (let k in KEY_MAP) {
+    // Just store one representative key code per chip8 value for simplicity in reverse lookup if needed, 
+    // but primarily we use KEY_MAP for input handling.
+}
+
+// Fontset data (5 bytes per char, 0-F)
+const FONTSET = [
+    0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
+    0x20, 0x60, 0x20, 0x20, 0x70, // 1
+    0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
+    0xF0, 0x10, 0xF0, 0x10, 0xF0, // 3
+    0x90, 0x90, 0xF0, 0x10, 0x10, // 4
+    0xF0, 0x80, 0xF0, 0x10, 0xF0, // 5
+    0xF0, 0x80, 0xF0, 0x90, 0xF0, // 6
+    0xF0, 0x10, 0x20, 0x40, 0x40, // 7
+    0xF0, 0x90, 0xF0, 0x90, 0xF0, // 8
+    0xF0, 0x90, 0xF0, 0x10, 0xF0, // 9
+    0xF0, 0x90, 0xF0, 0x90, 0x90, // A
+    0xE0, 0x90, 0xE0, 0x90, 0xE0, // B
+    0xF0, 0x80, 0x80, 0x80, 0xF0, // C
+    0xE0, 0x90, 0x90, 0x90, 0xE0, // D
+    0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
+    0xF0, 0x80, 0xF0, 0x80, 0x80  // F
+];
+
+// Demo ROM: Draws a sprite and moves it with keys (1=Up, 2=Down, 4=Left, 6=Right)
+// Addresses calculated carefully based on 2-byte instructions starting at 0x200
+const DEMO_ROM = [
+    // Offset 0  Addr 0x200: LD V0, #32 (Center X)
+    0x60, 0x20,
+    // Offset 2  Addr 0x202: LD V1, #16 (Center Y)
+    0x61, 0x10,
+    
+    // Offset 4  Addr 0x204: LOOP Label - CLS
+    0x00, 0x0E,
+    
+    // Offset 6  Addr 0x206: LD I, #0x050 (Fontset)
+    0xA0, 0x50,
+    
+    // Offset 8  Addr 0x208: DRW V0, V1, 5 (Draw sprite)
+    0xD0, 0x15,
+    
+    // Offset 10 Addr 0x20A: LD VF, KEY (Wait for key press into VF)
+    0xFF, 0x0A,
+    
+    // Offset 12 Addr 0x20C: SE VF, #4 (If key was '4' - Left)
+    0x3F, 0x04,
+    // Offset 14 Addr 0x20E: JP #0x214 (Skip left block if NOT 4)
+    0x10, 0x14,
+    // Offset 16 Addr 0x210: LD VF, #1 (Helper for subtraction)
+    0x6F, 0x01,
+    // Offset 18 Addr 0x212: SUB V0, VF (V0 = V0 - 1, Move Left)
+    0x80, 0x4F,
+    
+    // Offset 20 Addr 0x214: SE VF, #6 (If key was '6' - Right)
+    0x3F, 0x06,
+    // Offset 22 Addr 0x216: JP #0x21C (Skip right block if NOT 6)
+    0x10, 0x1C,
+    // Offset 24 Addr 0x218: LD VF, #1 (Helper for addition)
+    0x6F, 0x01,
+    // Offset 26 Addr 0x21A: ADD V0, VF (V0 = V0 + 1, Move Right)
+    0x80, 0x5F,
+    
+    // Offset 28 Addr 0x21C: SE VF, #1 (If key was '1' - Up)
+    0x3F, 0x01,
+    // Offset 30 Addr 0x21E: JP #0x224 (Skip up block if NOT 1)
+    0x10, 0x24,
+    // Offset 32 Addr 0x220: LD VF, #1 (Helper for subtraction)
+    0x6F, 0x01,
+    // Offset 34 Addr 0x222: SUB V1, VF (V1 = V1 - 1, Move Up)
+    0x81, 0x4F,
+    
+    // Offset 36 Addr 0x224: SE VF, #2 (If key was '2' - Down)
+    0x3F, 0x02,
+    // Offset 38 Addr 0x226: JP #0x22C (Skip down block if NOT 2)
+    0x10, 0x2C,
+    // Offset 40 Addr 0x228: LD VF, #1 (Helper for addition)
+    0x6F, 0x01,
+    // Offset 42 Addr 0x22A: ADD V1, VF (V1 = V1 + 1, Move Down)
+    0x81, 0x5F,
+    
+    // Offset 44 Addr 0x22C: JP #0x204 (Jump back to LOOP)
+    0x10, 0x04
+];
+
+
+class Chip8 {
+    constructor(canvasId) {
+        this.canvas = document.getElementById(canvasId);
+        this.ctx = this.canvas.getContext('2d');
+        
+        // Memory
+        this.memory = new Uint8Array(MEMORY_SIZE);
+        
+        // Registers
+        this.V = new Uint8Array(16);
+        this.I = 0;
+        this.PC = PROGRAM_START;
+        this.SP = 0;
+        this.stack = new Uint16Array(STACK_SIZE);
+        
+        // Timers
+        this.delayTimer = 0;
+        this.soundTimer = 0;
+        
+        // Display
+        this.display = new Uint8Array(SCREEN_WIDTH * SCREEN_HEIGHT);
+        
+        // Input
+        this.keys = {}; // Map of CHIP-8 hex values to boolean
+        
+        // State
+        this.running = false;
+        this.stepMode = false;
+        this.ips = 30;
+        this.lastTime = 0;
+        this.accumulator = 0;
+        
+        // Audio Context (for sound timer beep)
+        this.audioCtx = null;
+
+        this.init();
+    }
+
+    init() {
+        // Load Fontset
+        for (let i = 0; i < FONTSET.length; i++) {
+            this.memory[FONTSET_START + i] = FONTSET[i];
+        }
+        
+        // Reset State
+        this.reset();
+        
+        // Setup Input Listeners
+        window.addEventListener('keydown', (e) => this.handleKey(e, true));
+        window.addEventListener('keyup', (e) => this.handleKey(e, false));
+        
+        // Initial Draw
+        this.draw();
+        this.updateDebugger();
+    }
+
+    reset() {
+        this.V.fill(0);
+        this.I = 0;
+        this.PC = PROGRAM_START;
+        this.SP = 0;
+        this.stack.fill(0);
+        this.delayTimer = 0;
+        this.soundTimer = 0;
+        this.display.fill(0);
+        this.keys = {};
+        
+        // Clear memory except fontset
+        for (let i = PROGRAM_START; i < MEMORY_SIZE; i++) {
+            this.memory[i] = 0;
+        }
+        
+        this.draw();
+        this.updateDebugger();
+    }
+
+    loadRom(data) {
+        this.reset();
+        if (data.length + PROGRAM_START > MEMORY_SIZE) {
+            console.error("ROM too large");
+            return false;
+        }
+        for (let i = 0; i < data.length; i++) {
+            this.memory[PROGRAM_START + i] = data[i];
+        }
+        this.updateDebugger();
+        return true;
+    }
+
+    loadDemo() {
+        this.loadRom(DEMO_ROM);
+    }
+
+    handleKey(e, isDown) {
+        const code = e.code;
+        // Map keyboard keys to CHIP-8 hex values
+        if (KEY_MAP[code] !== undefined) {
+            const chip8Key = KEY_MAP[code];
+            this.keys[chip8Key] = isDown;
+            
+            // Update visual keypad
+            const keyEl = document.getElementById(`key-${chip8Key.toString(16)}`);
+            if (keyEl) {
+                if (isDown) keyEl.classList.add('pressed');
+                else keyEl.classList.remove('pressed');
+            }
+        }
+    }
+
+    // --- CPU Core ---
+
+    fetch() {
+        // Fetch 2 bytes from PC
+        const opcode = (this.memory[this.PC] << 8) | this.memory[this.PC + 1];
+        return opcode;
+    }
+
+    decode(opcode) {
+        const nnn = opcode & 0x0FFF;
+        const x = (opcode & 0x0F00) >> 8;
+        const y = (opcode & 0x00F0) >> 4;
+        const kk = opcode & 0x00FF;
+
+        // Decode for debugger display
+        let mnemonic = "UNKNOWN";
+        
+        switch (opcode & 0xF000) {
+            case 0x0000:
+                if (opcode === 0x00E0) mnemonic = "CLS";
+                else if (opcode === 0x00EE) mnemonic = "RET";
+                else if (opcode === 0x0000) mnemonic = "SYS"; 
+                else mnemonic = `0x${opcode.toString(16).toUpperCase()}`;
+                break;
+            case 0x1000: mnemonic = `JP ${nnn.toString(16).toUpperCase().padStart(3, '0')}`; break;
+            case 0x2000: mnemonic = `CALL ${nnn.toString(16).toUpperCase().padStart(3, '0')}`; break;
+            case 0x3000: mnemonic = `SE V${x}, ${kk.toString(16).toUpperCase().padStart(2, '0')}`; break;
+            case 0x4000: mnemonic = `SNE V${x}, ${kk.toString(16).toUpperCase().padStart(2, '0')}`; break;
+            case 0x5000: mnemonic = `SE V${x}, V${y}`; break;
+            case 0x6000: mnemonic = `LD V${x}, ${kk.toString(16).toUpperCase().padStart(2, '0')}`; break;
+            case 0x7000: mnemonic = `ADD V${x}, ${kk.toString(16).toUpperCase().padStart(2, '0')}`; break;
+            case 0x8000:
+                switch (opcode & 0x000F) {
+                    case 0x0: mnemonic = `LD V${x}, V${y}`; break;
+                    case 0x1: mnemonic = `OR V${x}, V${y}`; break;
+                    case 0x2: mnemonic = `AND V${x}, V${y}`; break;
+                    case 0x3: mnemonic = `XOR V${x}, V${y}`; break;
+                    case 0x4: mnemonic = `ADD V${x}, V${y}`; break;
+                    case 0x5: mnemonic = `SUB V${x}, V${y}`; break;
+                    case 0x6: mnemonic = `SHR V${x}`; break;
+                    case 0x7: mnemonic = `SUBN V${x}, V${y}`; break;
+                    case 0xE: mnemonic = `SHL V${x}`; break;
+                }
+                break;
+            case 0x9000: mnemonic = `SNE V${x}, V${y}`; break;
+            case 0xA000: mnemonic = `LD I, ${nnn.toString(16).toUpperCase().padStart(3, '0')}`; break;
+            case 0xB000: mnemonic = `JP V0, ${nnn.toString(16).toUpperCase().padStart(3, '0')}`; break;
+            case 0xC000: mnemonic = `RND V${x}, ${kk.toString(16).toUpperCase().padStart(2, '0')}`; break;
+            case 0xD000: mnemonic = `DRW V${x}, V${y}, ${kk}`; break;
+            case 0xE000:
+                if ((opcode & 0x00FF) === 0x9E) mnemonic = `SKP V${x}`;
+                else if ((opcode & 0x00FF) === 0xA1) mnemonic = `SKNP V${x}`;
+                break;
+            case 0xF000:
+                switch (opcode & 0x00FF) {
+                    case 0x07: mnemonic = `LD V${x}, DT`; break;
+                    case 0x0A: mnemonic = `LD V${x}, KEY`; break;
+                    case 0x15: mnemonic = `LD DT, V${x}`; break;
+                    case 0x18: mnemonic = `LD ST, V${x}`; break;
+                    case 0x1E: mnemonic = `ADD I, V${x}`; break;
+                    case 0x29: mnemonic = `LD F, V${x}`; break;
+                    case 0x33: mnemonic = `BCD V${x}`; break;
+                    case 0x55: mnemonic = `LD [I], V${x}`; break;
+                    case 0x65: mnemonic = `LD V${x}, [I]`; break;
+                }
+                break;
+        }
+
+        return { opcode, mnemonic };
+    }
+
+    execute(opcode) {
+        const nnn = opcode & 0x0FFF;
+        const x = (opcode & 0x0F00) >> 8;
+        const y = (opcode & 0x00F0) >> 4;
+        const kk = opcode & 0x00FF;
+
+        switch (opcode & 0xF000) {
+            case 0x0000:
+                if (opcode === 0x00E0) {
+                    // CLS
+                    this.display.fill(0);
+                    this.PC += 2;
+                } else if (opcode === 0x00EE) {
+                    // RET
+                    this.SP--;
+                    this.PC = this.stack[this.SP];
+                } else {
+                    // SYS or undefined, skip
+                    this.PC += 2;
+                }
+                break;
+
+            case 0x1000:
+                // JP addr
+                this.PC = nnn;
+                break;
+
+            case 0x2000:
+                // CALL addr
+                this.stack[this.SP] = this.PC;
+                this.SP++;
+                this.PC = nnn;
+                break;
+
+            case 0x3000:
+                // SE Vx, byte
+                if (this.V[x] === kk) {
+                    this.PC += 4;
+                } else {
+                    this.PC += 2;
+                }
+                break;
+
+            case 0x4000:
+                // SNE Vx, byte
+                if (this.V[x] !== kk) {
+                    this.PC += 4;
+                } else {
+                    this.PC += 2;
+                }
+                break;
+
+            case 0x5000:
+                // SE Vx, Vy
+                if (this.V[x] === this.V[y]) {
+                    this.PC += 4;
+                } else {
+                    this.PC += 2;
+                }
+                break;
+
+            case 0x6000:
+                // LD Vx, byte
+                this.V[x] = kk;
+                this.PC += 2;
+                break;
+
+            case 0x7000:
+                // ADD Vx, byte
+                this.V[x] = (this.V[x] + kk) & 0xFF;
+                this.PC += 2;
+                break;
+
+            case 0x8000:
+                switch (opcode & 0x000F) {
+                    case 0x0: // LD Vx, Vy
+                        this.V[x] = this.V[y];
+                        break;
+                    case 0x1: // OR
+                        this.V[x] |= this.V[y];
+                        break;
+                    case 0x2: // AND
+                        this.V[x] &= this.V[y];
+                        break;
+                    case 0x3: // XOR
+                        this.V[x] ^= this.V[y];
+                        break;
+                    case 0x4: // ADD Vx, Vy
+                        const sum = this.V[x] + this.V[y];
+                        this.V[0xF] = (sum > 0xFF) ? 1 : 0;
+                        this.V[x] = sum & 0xFF;
+                        break;
+                    case 0x5: // SUB Vx, Vy
+                        const sub = this.V[x] - this.V[y];
+                        this.V[0xF] = (this.V[x] >= this.V[y]) ? 1 : 0;
+                        this.V[x] = sub & 0xFF;
+                        break;
+                    case 0x6: // SHR Vx
+                        this.V[0xF] = this.V[x] & 0x1;
+                        this.V[x] >>= 1;
+                        break;
+                    case 0x7: // SUBN Vx, Vy
+                        const subn = this.V[y] - this.V[x];
+                        this.V[0xF] = (this.V[y] >= this.V[x]) ? 1 : 0;
+                        this.V[x] = subn & 0xFF;
+                        break;
+                    case 0xE: // SHL Vx
+                        this.V[0xF] = (this.V[x] >> 7) & 0x1;
+                        this.V[x] = (this.V[x] << 1) & 0xFF;
+                        break;
+                }
+                this.PC += 2;
+                break;
+
+            case 0x9000:
+                // SNE Vx, Vy
+                if (this.V[x] !== this.V[y]) {
+                    this.PC += 4;
+                } else {
+                    this.PC += 2;
+                }
+                break;
+
+            case 0xA000:
+                // LD I, addr
+                this.I = nnn;
+                this.PC += 2;
+                break;
+
+            case 0xB000:
+                // JP V0, addr
+                this.PC = nnn + this.V[0];
+                break;
+
+            case 0xC000:
+                // RND Vx, byte
+                this.V[x] = (Math.floor(Math.random() * 256) & kk);
+                this.PC += 2;
+                break;
+
+            case 0xD000:
+                // DRW Vx, Vy, n
+                let collision = false;
+                const xPos = this.V[x] % SCREEN_WIDTH;
+                const yPos = this.V[y] % SCREEN_HEIGHT;
+                
+                for (let row = 0; row < kk; row++) {
+                    if (yPos + row >= SCREEN_HEIGHT) continue; // Out of bounds
+                    
+                    const spriteByte = this.memory[this.I + row];
+                    
+                    for (let col = 0; col < 8; col++) {
+                        if (xPos + col >= SCREEN_WIDTH) continue;
+                        
+                        const pixelBit = (spriteByte >> (7 - col)) & 1;
+                        
+                        if (pixelBit) {
+                            const idx = (yPos + row) * SCREEN_WIDTH + (xPos + col);
+                            if (this.display[idx] === 1) {
+                                collision = true;
+                            }
+                            this.display[idx] ^= 1;
+                        }
+                    }
+                }
+                
+                this.V[0xF] = collision ? 1 : 0;
+                this.PC += 2;
+                this.draw();
+                break;
+
+            case 0xE000:
+                if ((opcode & 0x00FF) === 0x9E) {
+                    // SKP Vx
+                    if (this.keys[this.V[x]]) {
+                        this.PC += 4;
+                    } else {
+                        this.PC += 2;
+                    }
+                } else if ((opcode & 0x00FF) === 0xA1) {
+                    // SKNP Vx
+                    if (!this.keys[this.V[x]]) {
+                        this.PC += 4;
+                    } else {
+                        this.PC += 2;
+                    }
+                } else {
+                    this.PC += 2;
+                }
+                break;
+
+            case 0xF000:
+                switch (opcode & 0x00FF) {
+                    case 0x07: // Set Vx = delay timer value
+                        this.V[x] = this.delayTimer;
+                        this.PC += 2;
+                        break;
+                    case 0x0A: // Wait for key press
+                        let keyPress = false;
+                        for (let k in this.keys) {
+                            if (this.keys[k]) {
+                                this.V[x] = parseInt(k, 16);
+                                keyPress = true;
+                                break;
+                            }
+                        }
+                        if (!keyPress) {
+                            // Do not advance PC, wait for next cycle
+                            return; 
+                        }
+                        this.PC += 2;
+                        break;
+                    case 0x15: // LD DT, Vx
+                        this.delayTimer = this.V[x];
+                        this.PC += 2;
+                        break;
+                    case 0x18: // LD ST, Vx
+                        this.soundTimer = this.V[x];
+                        this.PC += 2;
+                        break;
+                    case 0x1E: // ADD I, Vx
+                        this.I = (this.I + this.V[x]) & 0xFFF;
+                        this.PC += 2;
+                        break;
+                    case 0x29: // LD F, Vx (Font sprite)
+                        this.I = this.V[x] * 5;
+                        this.PC += 2;
+                        break;
+                    case 0x33: // BCD
+                        const hundreds = Math.floor(this.V[x] / 100);
+                        const tens = Math.floor((this.V[x] % 100) / 10);
+                        const ones = this.V[x] % 10;
+                        this.memory[this.I] = hundreds;
+                        this.memory[this.I + 1] = tens;
+                        this.memory[this.I + 2] = ones;
+                        this.PC += 2;
+                        break;
+                    case 0x55: // LD [I], Vx
+                        for (let i = 0; i <= x; i++) {
+                            this.memory[this.I + i] = this.V[i];
+                        }
+                        this.PC += 2;
+                        break;
+                    case 0x65: // LD Vx, [I]
+                        for (let i = 0; i <= x; i++) {
+                            this.V[i] = this.memory[this.I + i];
+                        }
+                        this.PC += 2;
+                        break;
+                    default:
+                        this.PC += 2;
+                }
+                break;
+
+            default:
+                this.PC += 2;
+        }
+    }
+
+    draw() {
+        // Clear canvas
+        this.ctx.fillStyle = '#000';
+        this.ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+        
+        // Draw pixels
+        this.ctx.fillStyle = '#fff';
+        for (let y = 0; y < SCREEN_HEIGHT; y++) {
+            for (let x = 0; x < SCREEN_WIDTH; x++) {
+                if (this.display[y * SCREEN_WIDTH + x]) {
+                    this.ctx.fillRect(x, y, 1, 1);
+                }
+            }
+        }
+    }
+
+    tick() {
+        // Timers
+        if (this.delayTimer > 0) {
+            this.delayTimer--;
+        }
+        if (this.soundTimer > 0) {
+            this.soundTimer--;
+            // Play beep?
+            if (this.soundTimer === 1) {
+                this.beep();
+            }
+        }
+    }
+
+    beep() {
+        // Simple beep using AudioContext if available
+        if (!this.audioCtx) {
+            try {
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                this.audioCtx = new AudioContext();
+            } catch (e) {
+                console.warn("Audio not supported");
+            }
+        }
+        
+        if (this.audioCtx) {
+            const osc = this.audioCtx.createOscillator();
+            const gain = this.audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(this.audioCtx.destination);
+            
+            osc.type = 'square';
+            osc.frequency.value = 440;
+            gain.gain.value = 0.1;
+            
+            osc.start();
+            setTimeout(() => {
+                osc.stop();
+            }, 50); // Short beep
+        }
+    }
+
+    step() {
+        const opcode = this.fetch();
+        const info = this.decode(opcode);
+        this.execute(opcode);
+        this.updateDebugger(info);
+    }
+
+    runLoop(timestamp) {
+        if (!this.running) return;
+
+        if (!this.lastTime) this.lastTime = timestamp;
+        const deltaTime = timestamp - this.lastTime;
+        this.lastTime = timestamp;
+
+        this.accumulator += deltaTime;
+
+        // Target time per instruction based on IPS
+        const targetTime = 1000 / this.ips;
+
+        while (this.accumulator >= targetTime) {
+            this.step();
+            this.tick();
+            this.accumulator -= targetTime;
+        }
+
+        requestAnimationFrame((t) => this.runLoop(t));
+    }
+
+    start() {
+        if (!this.running) {
+            this.running = true;
+            this.lastTime = 0;
+            this.accumulator = 0;
+            requestAnimationFrame((t) => this.runLoop(t));
+        }
+    }
+
+    pause() {
+        this.running = false;
+    }
+
+    updateDebugger(info) {
+        // Update Registers V0-VF
+        const regContainer = document.getElementById('reg-v');
+        regContainer.innerHTML = '';
+        for (let i = 0; i < 16; i++) {
+            const div = document.createElement('div');
+            div.className = 'reg-item';
+            div.textContent = `V${i.toString(16).toUpperCase()}: ${this.V[i].toString(16).toUpperCase().padStart(2, '0')}`;
+            regContainer.appendChild(div);
+        }
+
+        // Update I, PC, SP
+        document.getElementById('reg-i').textContent = `0x${this.I.toString(16).toUpperCase().padStart(4, '0')}`;
+        document.getElementById('reg-pc').textContent = `0x${this.PC.toString(16).toUpperCase().padStart(4, '0')}`;
+        document.getElementById('reg-sp').textContent = this.SP.toString();
+
+        // Update Stack
+        const stackContainer = document.getElementById('stack-content');
+        stackContainer.innerHTML = '';
+        for (let i = 0; i < this.SP; i++) {
+            const div = document.createElement('div');
+            div.className = 'stack-item';
+            div.textContent = `0x${this.stack[i].toString(16).toUpperCase().padStart(4, '0')}`;
+            stackContainer.appendChild(div);
+        }
+
+        // Update Instruction Info
+        if (info) {
+            document.getElementById('current-instruction').innerHTML = 
+                `<strong>Opcode:</strong> 0x${info.opcode.toString(16).toUpperCase().padStart(4, '0')}<br>` +
+                `<strong>Mnemonic:</strong> ${info.mnemonic}`;
+        }
+    }
+}
+
+// --- UI Initialization ---
+
+const chip8 = new Chip8('screen');
+
+// Generate Keypad Display
+const keypadContainer = document.getElementById('keypad-display');
+const keysOrder = [
+    '1', '2', '3', 'c',
+    '4', '5', '6', 'd',
+    '7', '8', '9', 'e',
+    'a', '0', 'b', 'f'
+];
+
+keysOrder.forEach(k => {
+    const div = document.createElement('div');
+    div.className = 'key-btn';
+    div.id = `key-${k}`;
+    div.textContent = k.toUpperCase();
+    keypadContainer.appendChild(div);
+});
+
+// Controls
+document.getElementById('btn-run').addEventListener('click', () => {
+    chip8.start();
+    document.getElementById('btn-run').classList.add('active');
+    document.getElementById('btn-pause').classList.remove('active');
+});
+
+document.getElementById('btn-pause').addEventListener('click', () => {
+    chip8.pause();
+    document.getElementById('btn-pause').classList.add('active');
+    document.getElementById('btn-run').classList.remove('active');
+});
+
+document.getElementById('btn-step').addEventListener('click', () => {
+    chip8.pause();
+    chip8.step();
+    document.getElementById('btn-pause').classList.add('active');
+    document.getElementById('btn-run').classList.remove('active');
+});
+
+document.getElementById('btn-reset').addEventListener('click', () => {
+    chip8.pause();
+    chip8.reset();
+    document.getElementById('btn-pause').classList.add('active');
+    document.getElementById('btn-run').classList.remove('active');
+});
+
+// Speed Slider
+const speedSlider = document.getElementById('speed-slider');
+const speedVal = document.getElementById('speed-val');
+speedSlider.addEventListener('input', (e) => {
+    chip8.ips = parseInt(e.target.value);
+    speedVal.textContent = e.target.value;
+});
+
+// File Loading
+document.getElementById('rom-file').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+        const buffer = evt.target.result;
+        const data = new Uint8Array(buffer);
+        chip8.loadRom(data);
+        // Auto start?
+        chip8.start();
+        document.getElementById('btn-run').classList.add('active');
+        document.getElementById('btn-pause').classList.remove('active');
+    };
+    reader.readAsArrayBuffer(file);
+});
+
+// Load Demo on Start
+chip8.loadDemo();
+chip8.start();
+document.getElementById('btn-run').classList.add('active');
+
+</script>
+</body>
+</html>

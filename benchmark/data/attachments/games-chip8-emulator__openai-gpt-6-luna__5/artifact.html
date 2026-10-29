@@ -1,0 +1,898 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CHIP-8 | Pocket Arcade</title>
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #101414;
+  --panel: #19201e;
+  --panel-light: #202a26;
+  --line: #34423b;
+  --text: #e6eadf;
+  --muted: #9aa99d;
+  --green: #b8f26c;
+  --green-dark: #709c3b;
+  --orange: #ffbd72;
+  --red: #ff7878;
+  font-family: "Courier New", Courier, monospace;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  min-width: 320px;
+  background: radial-gradient(ellipse at 50% -20%, #27352c 0, var(--bg) 58%);
+  color: var(--text);
+}
+button, input { font: inherit; }
+button {
+  color: var(--text);
+  cursor: pointer;
+}
+button:focus-visible, input:focus-visible, label:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 3px;
+}
+.shell { max-width: 1440px; padding: 28px clamp(16px, 4vw, 52px) 48px; margin: auto; }
+header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  padding-bottom: 22px;
+  border-bottom: 1px solid var(--line);
+}
+.eyebrow, .section-kicker {
+  color: var(--green);
+  font-size: 11px;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+}
+h1 { margin: 7px 0 0; font-size: clamp(28px, 4vw, 44px); letter-spacing: -.06em; }
+header p { margin: 8px 0 0; color: var(--muted); font-size: 13px; }
+.chip-mark {
+  border: 1px solid var(--line);
+  padding: 10px 14px;
+  color: var(--green);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(340px, .9fr);
+  gap: 22px;
+  margin-top: 22px;
+  align-items: start;
+}
+.panel {
+  background: linear-gradient(145deg, rgba(32, 42, 38, .96), rgba(22, 29, 27, .98));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 16px 45px #0003;
+}
+.screen-panel { padding: 18px; }
+.panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.panel-heading h2, .debug-title h2 { margin: 0; font-size: 14px; font-weight: 700; letter-spacing: .06em; }
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.status::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #718078;
+  box-shadow: 0 0 8px currentColor;
+}
+.status.running { color: var(--green); }
+.status.running::before { background: var(--green); }
+.status.error { color: var(--red); }
+.status.error::before { background: var(--red); }
+.canvas-wrap {
+  display: grid;
+  place-items: center;
+  padding: clamp(12px, 3vw, 28px);
+  background: #090e0c;
+  border: 1px solid #303d34;
+  border-radius: 5px;
+}
+#screen {
+  display: block;
+  width: min(100%, 768px);
+  height: auto;
+  aspect-ratio: 2 / 1;
+  image-rendering: pixelated;
+  background: #111a13;
+  border: 2px solid #40543a;
+  box-shadow: 0 0 28px #a8ed5c1c, inset 0 0 18px #0008;
+}
+.screen-caption {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.control-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.control-button, .file-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 39px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel-light);
+  font-size: 12px;
+  font-weight: bold;
+  transition: background .15s, border-color .15s, transform .1s;
+}
+.control-button:hover, .file-button:hover { background: #2a3831; border-color: #668052; }
+.control-button:active, .file-button:active { transform: translateY(1px); }
+.control-button.primary { background: #34492c; border-color: #668c43; color: var(--green); }
+.control-button:disabled { opacity: .45; cursor: not-allowed; }
+.file-button input { display: none; }
+.speed-box {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 6px 14px;
+  padding: 13px 0 2px;
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.speed-box label { color: var(--muted); font-size: 11px; }
+.speed-box output { color: var(--green); font-size: 12px; text-align: right; }
+.speed-box input { grid-column: 1 / -1; width: 100%; accent-color: var(--green); }
+.file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11px; }
+.right-column { display: grid; gap: 18px; }
+.keypad-panel, .debug-panel { padding: 18px; }
+.keypad-layout { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(122px, .8fr); gap: 18px; align-items: center; }
+.keypad {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 7px;
+}
+.key {
+  aspect-ratio: 1;
+  padding: 0;
+  border: 1px solid #435347;
+  border-radius: 5px;
+  background: #131a17;
+  color: var(--green);
+  font-size: 17px;
+  font-weight: bold;
+  box-shadow: inset 0 -3px #0005;
+  touch-action: none;
+  user-select: none;
+}
+.key:hover { border-color: var(--green-dark); background: #202c23; }
+.key.is-pressed { color: #152012; background: var(--green); border-color: #d4ff9c; box-shadow: 0 0 14px #b8f26c66, inset 0 -2px #769d42; transform: translateY(2px); }
+.key-legend { color: var(--muted); font-size: 11px; line-height: 1.7; }
+.key-legend strong { display: block; color: var(--text); font-size: 12px; margin-bottom: 5px; }
+.key-legend code { color: var(--green); }
+.debug-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 15px; }
+.debug-title span { color: var(--muted); font-size: 10px; }
+.reg-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.reg {
+  display: flex;
+  justify-content: space-between;
+  gap: 5px;
+  padding: 7px 8px;
+  background: #111815;
+  border: 1px solid #2d3932;
+  border-radius: 3px;
+  font-size: 11px;
+}
+.reg span { color: var(--muted); }
+.reg strong { color: var(--green); font-weight: normal; }
+.debug-meta {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  margin-top: 10px;
+}
+.meta-cell { padding: 8px; background: #111815; border: 1px solid #2d3932; border-radius: 3px; }
+.meta-cell span { display: block; color: var(--muted); font-size: 9px; letter-spacing: .08em; }
+.meta-cell strong { display: block; margin-top: 4px; color: var(--orange); font-size: 12px; }
+.stack-line, .instruction-line {
+  margin-top: 10px;
+  padding: 10px;
+  background: #111815;
+  border: 1px solid #2d3932;
+  border-radius: 3px;
+}
+.stack-line span, .instruction-line span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 9px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+.stack-line strong, .instruction-line strong { color: var(--green); font-size: 11px; font-weight: normal; overflow-wrap: anywhere; }
+.message {
+  min-height: 16px;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+.message.error { color: var(--red); }
+footer { margin-top: 20px; color: #748078; text-align: center; font-size: 10px; line-height: 1.6; }
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  .right-column { grid-template-columns: 1fr 1fr; align-items: start; }
+  .keypad-layout { grid-template-columns: 1fr; }
+  .key-legend { display: none; }
+}
+@media (max-width: 620px) {
+  .shell { padding-top: 18px; }
+  header { align-items: flex-start; }
+  .chip-mark { display: none; }
+  .right-column { grid-template-columns: 1fr; }
+  .keypad-layout { grid-template-columns: minmax(160px, 1fr) minmax(120px, .8fr); }
+  .key-legend { display: block; }
+  .screen-panel, .keypad-panel, .debug-panel { padding: 13px; }
+  .debug-meta { grid-template-columns: repeat(2, 1fr); }
+  .reg-grid { grid-template-columns: repeat(4, 1fr); }
+}
+</style>
+</head>
+<body>
+<div class="shell">
+  <header>
+    <div>
+      <div class="eyebrow">A tiny machine from 1977</div>
+      <h1>CHIP-8 <span style="color:var(--green)">/</span> Pocket Arcade</h1>
+      <p>A little interpreter, a glowing screen, and a handful of keys.</p>
+    </div>
+    <div class="chip-mark" aria-label="64 by 32 monochrome display">64 × 32 &nbsp;·&nbsp; 4 KB RAM</div>
+  </header>
+
+  <main class="layout">
+    <section class="panel screen-panel" aria-labelledby="screen-heading">
+      <div class="panel-heading">
+        <h2 id="screen-heading">DISPLAY</h2>
+        <div id="status" class="status" role="status" aria-live="polite">Paused</div>
+      </div>
+      <div class="canvas-wrap">
+        <canvas id="screen" width="64" height="32" aria-label="CHIP-8 monochrome display"></canvas>
+      </div>
+      <div class="screen-caption"><span>64 × 32 pixels</span><span>Monochrome · XOR sprites</span></div>
+      <div class="control-row">
+        <button id="runButton" class="control-button primary" type="button">▶ Run</button>
+        <button id="pauseButton" class="control-button" type="button">Ⅱ Pause</button>
+        <button id="stepButton" class="control-button" type="button">↦ Step</button>
+        <button id="resetButton" class="control-button" type="button">↻ Reset</button>
+        <label class="file-button" for="romFile">＋ Load ROM
+          <input id="romFile" type="file" accept=".ch8,.rom,.c8,application/octet-stream" aria-label="Load a CHIP-8 ROM from a local file">
+        </label>
+        <span id="fileName" class="file-name" aria-live="polite">DEMO · moving sprite</span>
+      </div>
+      <div class="speed-box">
+        <label for="speed">Instructions per frame</label>
+        <output id="speedValue" for="speed">10</output>
+        <input id="speed" type="range" min="1" max="50" step="1" value="10" aria-label="Instructions executed per animation frame">
+      </div>
+    </section>
+
+    <aside class="right-column">
+      <section class="panel keypad-panel" aria-labelledby="keypad-heading">
+        <div class="panel-heading">
+          <h2 id="keypad-heading">16-KEY KEYPAD</h2>
+          <span class="status">Ready</span>
+        </div>
+        <div class="keypad-layout">
+          <div id="keypad" class="keypad" aria-label="Clickable CHIP-8 keypad"></div>
+          <div class="key-legend">
+            <strong>Keyboard map</strong>
+            <code>1 2 3 4</code><br>
+            <code>Q W E R</code><br>
+            <code>A S D F</code><br>
+            <code>Z X C V</code><br>
+            maps to the keypad, row by row.
+          </div>
+        </div>
+      </section>
+
+      <section class="panel debug-panel" aria-labelledby="debug-heading">
+        <div class="debug-title">
+          <h2 id="debug-heading">DEBUGGER</h2>
+          <span>HEX · LIVE</span>
+        </div>
+        <div id="registers" class="reg-grid" aria-label="V0 through VF registers"></div>
+        <div class="debug-meta">
+          <div class="meta-cell"><span>INDEX I</span><strong id="debugI">0x000</strong></div>
+          <div class="meta-cell"><span>PROGRAM PC</span><strong id="debugPC">0x200</strong></div>
+          <div class="meta-cell"><span>DELAY</span><strong id="debugDT">0</strong></div>
+          <div class="meta-cell"><span>SOUND</span><strong id="debugST">0</strong></div>
+        </div>
+        <div class="stack-line"><span>CALL STACK</span><strong id="debugStack">Empty</strong></div>
+        <div class="instruction-line"><span>NEXT INSTRUCTION</span><strong id="debugInstruction">0x200 · 00E0 · CLS</strong></div>
+        <div id="message" class="message" aria-live="polite">Demo ready. Use the arrow keys on the keypad to move the sprite.</div>
+      </section>
+    </aside>
+  </main>
+  <footer>Keyboard and on-screen keys respond to both press and release. Load only ROM files you trust; files are read locally and never uploaded.</footer>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  const SCREEN_WIDTH = 64;
+  const SCREEN_HEIGHT = 32;
+  const MEMORY_SIZE = 4096;
+  const PROGRAM_START = 0x200;
+  const FONT_START = 0x050;
+  const FONT = [
+    0xF0,0x90,0x90,0x90,0xF0, 0x20,0x60,0x20,0x20,0x70,
+    0xF0,0x10,0xF0,0x80,0xF0, 0xF0,0x10,0xF0,0x10,0xF0,
+    0x90,0x90,0xF0,0x10,0x10, 0xF0,0x80,0xF0,0x10,0xF0,
+    0xF0,0x80,0xF0,0x90,0xF0, 0xF0,0x10,0x20,0x40,0x40,
+    0xF0,0x90,0xF0,0x90,0xF0, 0xF0,0x90,0xF0,0x10,0xF0,
+    0xF0,0x90,0xF0,0x90,0x90, 0xE0,0x90,0xE0,0x90,0xE0,
+    0xF0,0x80,0x80,0x80,0xF0, 0xE0,0x90,0x90,0x90,0xE0,
+    0xF0,0x80,0xF0,0x80,0xF0, 0xF0,0x80,0xF0,0x80,0x80
+  ];
+  // Assembled at 0x200. Use keypad 4/6/8/2 to move the 5-byte sprite.
+  // The old sprite is XOR-erased before the selected coordinate is changed.
+  const DEMO_ROM = new Uint8Array([
+    0x00,0xE0, 0x60,0x1C, 0x61,0x0E, 0xA2,0x36, 0xD0,0x15,
+    0xF2,0x0A, 0xD0,0x15,
+    0x63,0x04, 0x52,0x30, 0x12,0x18, 0x70,0xFF, 0x12,0x08,
+    0x63,0x06, 0x52,0x30, 0x12,0x22, 0x70,0x01, 0x12,0x08,
+    0x63,0x08, 0x52,0x30, 0x12,0x2C, 0x71,0xFF, 0x12,0x08,
+    0x63,0x02, 0x52,0x30, 0x12,0x08, 0x71,0x01, 0x12,0x08,
+    0x3C,0x7E,0xDB,0xFF,0x7E
+  ]);
+  const KEYPAD_KEYS = [0x1,0x2,0x3,0xC,0x4,0x5,0x6,0xD,0x7,0x8,0x9,0xE,0xA,0x0,0xB,0xF];
+  const KEYBOARD_MAP = {
+    "1":0x1, "2":0x2, "3":0x3, "4":0xC,
+    "q":0x4, "w":0x5, "e":0x6, "r":0xD,
+    "a":0x7, "s":0x8, "d":0x9, "f":0xE,
+    "z":0xA, "x":0x0, "c":0xB, "v":0xF
+  };
+  const KEY_LABELS = new Map([
+    [0x1,"1"],[0x2,"2"],[0x3,"3"],[0xC,"C"],
+    [0x4,"4"],[0x5,"5"],[0x6,"6"],[0xD,"D"],
+    [0x7,"7"],[0x8,"8"],[0x9,"9"],[0xE,"E"],
+    [0xA,"A"],[0x0,"0"],[0xB,"B"],[0xF,"F"]
+  ]);
+
+  const canvas = document.getElementById("screen");
+  const ctx = canvas.getContext("2d", { alpha: false });
+  const statusElement = document.getElementById("status");
+  const messageElement = document.getElementById("message");
+  const registersElement = document.getElementById("registers");
+  const keypadElement = document.getElementById("keypad");
+  const speedInput = document.getElementById("speed");
+  const speedValue = document.getElementById("speedValue");
+  const fileNameElement = document.getElementById("fileName");
+
+  let memory = new Uint8Array(MEMORY_SIZE);
+  let V = new Uint8Array(16);
+  let I = 0;
+  let pc = PROGRAM_START;
+  let stack = [];
+  let delayTimer = 0;
+  let soundTimer = 0;
+  let display = new Uint8Array(SCREEN_WIDTH * SCREEN_HEIGHT);
+  let keys = new Uint8Array(16);
+  let running = false;
+  let waitingRegister = null;
+  let loadedRom = DEMO_ROM.slice();
+  let loadedName = "DEMO · moving sprite";
+  let lastTimerTick = performance.now();
+  let lastFrame = performance.now();
+  let rafId = 0;
+  let cyclesPerFrame = Number(speedInput.value);
+  let audioContext = null;
+  let soundWasActive = false;
+
+  function setMessage(text, isError = false) {
+    messageElement.textContent = text;
+    messageElement.classList.toggle("error", isError);
+  }
+
+  function setStatus(state) {
+    statusElement.textContent = state;
+    statusElement.classList.toggle("running", state === "Running");
+    statusElement.classList.toggle("error", state === "Error");
+  }
+
+  function clearDisplay() {
+    display.fill(0);
+    renderDisplay();
+  }
+
+  function renderDisplay() {
+    const image = ctx.createImageData(SCREEN_WIDTH, SCREEN_HEIGHT);
+    for (let p = 0; p < display.length; p++) {
+      const offset = p * 4;
+      if (display[p]) {
+        image.data[offset] = 184;
+        image.data[offset + 1] = 242;
+        image.data[offset + 2] = 108;
+      } else {
+        image.data[offset] = 17;
+        image.data[offset + 1] = 26;
+        image.data[offset + 2] = 19;
+      }
+      image.data[offset + 3] = 255;
+    }
+    ctx.putImageData(image, 0, 0);
+  }
+
+  function resetMachine() {
+    running = false;
+    waitingRegister = null;
+    memory = new Uint8Array(MEMORY_SIZE);
+    memory.set(FONT, FONT_START);
+    memory.set(loadedRom, PROGRAM_START);
+    V = new Uint8Array(16);
+    I = 0;
+    pc = PROGRAM_START;
+    stack = [];
+    delayTimer = 0;
+    soundTimer = 0;
+    keys = new Uint8Array(16);
+    document.querySelectorAll(".key").forEach(button => button.classList.remove("is-pressed"));
+    clearDisplay();
+    lastTimerTick = performance.now();
+    soundWasActive = false;
+    setStatus("Paused");
+    setMessage(`${loadedName} loaded. Press Run to start, or Step to execute one instruction.`);
+    updateDebugger();
+  }
+
+  function fail(message) {
+    running = false;
+    setStatus("Error");
+    setMessage(message, true);
+    updateDebugger();
+  }
+
+  function ensureAddress(address, description) {
+    if (!Number.isInteger(address) || address < 0 || address >= MEMORY_SIZE) {
+      fail(`${description} address 0x${Number(address).toString(16).toUpperCase()} is outside 4 KB memory.`);
+      return false;
+    }
+    return true;
+  }
+
+  function fetchOpcode() {
+    if (!ensureAddress(pc, "Program counter") || !ensureAddress(pc + 1, "Opcode")) return null;
+    return (memory[pc] << 8) | memory[pc + 1];
+  }
+
+  function executeInstruction() {
+    if (waitingRegister !== null) return false;
+    const opcode = fetchOpcode();
+    if (opcode === null) return false;
+
+    const currentPC = pc;
+    const nnn = opcode & 0x0FFF;
+    const nn = opcode & 0x00FF;
+    const n = opcode & 0x000F;
+    const x = (opcode >> 8) & 0x000F;
+    const y = (opcode >> 4) & 0x000F;
+
+    pc = (pc + 2) & 0xFFFF;
+
+    switch (opcode & 0xF000) {
+      case 0x0000:
+        if (opcode === 0x00E0) {
+          display.fill(0);
+          renderDisplay();
+        } else if (opcode === 0x00EE) {
+          if (stack.length === 0) {
+            fail(`Stack underflow at 0x${currentPC.toString(16).toUpperCase()}.`);
+            return false;
+          }
+          pc = stack.pop();
+        }
+        break;
+      case 0x1000:
+        pc = nnn;
+        break;
+      case 0x2000:
+        if (stack.length >= 16) {
+          fail(`Stack overflow at 0x${currentPC.toString(16).toUpperCase()}.`);
+          return false;
+        }
+        stack.push(pc);
+        pc = nnn;
+        break;
+      case 0x3000:
+        if (V[x] === nn) pc = (pc + 2) & 0xFFFF;
+        break;
+      case 0x4000:
+        if (V[x] !== nn) pc = (pc + 2) & 0xFFFF;
+        break;
+      case 0x5000:
+        if (n !== 0) {
+          fail(`Unknown opcode 0x${opcode.toString(16).toUpperCase().padStart(4, "0")} at 0x${currentPC.toString(16).toUpperCase()}.`);
+          return false;
+        }
+        if (V[x] === V[y]) pc = (pc + 2) & 0xFFFF;
+        break;
+      case 0x6000:
+        V[x] = nn;
+        break;
+      case 0x7000:
+        V[x] = (V[x] + nn) & 0xFF;
+        break;
+      case 0x8000: {
+        const vx = V[x];
+        const vy = V[y];
+        switch (n) {
+          case 0x0: V[x] = vy; break;
+          case 0x1: V[x] = vx | vy; break;
+          case 0x2: V[x] = vx & vy; break;
+          case 0x3: V[x] = vx ^ vy; break;
+          case 0x4: {
+            const sum = vx + vy;
+            V[x] = sum & 0xFF;
+            V[0xF] = sum > 0xFF ? 1 : 0;
+            break;
+          }
+          case 0x5:
+            V[x] = (vx - vy) & 0xFF;
+            V[0xF] = vx >= vy ? 1 : 0;
+            break;
+          case 0x6:
+            V[0xF] = vx & 1;
+            V[x] = vx >> 1;
+            break;
+          case 0x7:
+            V[x] = (vy - vx) & 0xFF;
+            V[0xF] = vy >= vx ? 1 : 0;
+            break;
+          case 0xE:
+            V[0xF] = (vx >> 7) & 1;
+            V[x] = (vx << 1) & 0xFF;
+            break;
+          default:
+            fail(`Unknown opcode 0x${opcode.toString(16).toUpperCase().padStart(4, "0")} at 0x${currentPC.toString(16).toUpperCase()}.`);
+            return false;
+        }
+        break;
+      }
+      case 0x9000:
+        if (n !== 0) {
+          fail(`Unknown opcode 0x${opcode.toString(16).toUpperCase().padStart(4, "0")} at 0x${currentPC.toString(16).toUpperCase()}.`);
+          return false;
+        }
+        if (V[x] !== V[y]) pc = (pc + 2) & 0xFFFF;
+        break;
+      case 0xA000:
+        I = nnn;
+        break;
+      case 0xB000:
+        pc = (nnn + V[0]) & 0xFFFF;
+        break;
+      case 0xC000:
+        V[x] = (Math.floor(Math.random() * 256) & nn);
+        break;
+      case 0xD000: {
+        if (!ensureAddress(I + n - (n === 0 ? 0 : 1), "Sprite")) return false;
+        V[0xF] = 0;
+        const startX = V[x] % SCREEN_WIDTH;
+        const startY = V[y] % SCREEN_HEIGHT;
+        for (let row = 0; row < n; row++) {
+          const spriteByte = memory[I + row];
+          for (let col = 0; col < 8; col++) {
+            if ((spriteByte & (0x80 >> col)) === 0) continue;
+            const px = (startX + col) % SCREEN_WIDTH;
+            const py = (startY + row) % SCREEN_HEIGHT;
+            const pixelIndex = py * SCREEN_WIDTH + px;
+            if (display[pixelIndex]) V[0xF] = 1;
+            display[pixelIndex] ^= 1;
+          }
+        }
+        renderDisplay();
+        break;
+      }
+      case 0xE000:
+        if (nn === 0x9E) {
+          if (keys[V[x] & 0xF]) pc = (pc + 2) & 0xFFFF;
+        } else if (nn === 0xA1) {
+          if (!keys[V[x] & 0xF]) pc = (pc + 2) & 0xFFFF;
+        } else {
+          fail(`Unknown opcode 0x${opcode.toString(16).toUpperCase().padStart(4, "0")} at 0x${currentPC.toString(16).toUpperCase()}.`);
+          return false;
+        }
+        break;
+      case 0xF000:
+        switch (nn) {
+          case 0x07: V[x] = delayTimer; break;
+          case 0x0A:
+            waitingRegister = x;
+            break;
+          case 0x15: delayTimer = V[x]; break;
+          case 0x18: soundTimer = V[x]; break;
+          case 0x1E: I = (I + V[x]) & 0xFFFF; break;
+          case 0x29: I = FONT_START + ((V[x] & 0x0F) * 5); break;
+          case 0x33:
+            if (!ensureAddress(I + 2, "BCD")) return false;
+            memory[I] = Math.floor(V[x] / 100);
+            memory[I + 1] = Math.floor((V[x] % 100) / 10);
+            memory[I + 2] = V[x] % 10;
+            break;
+          case 0x55:
+            if (!ensureAddress(I + x, "Register save")) return false;
+            for (let reg = 0; reg <= x; reg++) memory[I + reg] = V[reg];
+            break;
+          case 0x65:
+            if (!ensureAddress(I + x, "Register load")) return false;
+            for (let reg = 0; reg <= x; reg++) V[reg] = memory[I + reg];
+            break;
+          default:
+            fail(`Unknown opcode 0x${opcode.toString(16).toUpperCase().padStart(4, "0")} at 0x${currentPC.toString(16).toUpperCase()}.`);
+            return false;
+        }
+        break;
+      default:
+        fail(`Unknown opcode 0x${opcode.toString(16).toUpperCase().padStart(4, "0")} at 0x${currentPC.toString(16).toUpperCase()}.`);
+        return false;
+    }
+    return true;
+  }
+
+  function tickTimers(now) {
+    const elapsed = now - lastTimerTick;
+    if (elapsed < 1000 / 60) return;
+    const ticks = Math.floor(elapsed / (1000 / 60));
+    lastTimerTick += ticks * (1000 / 60);
+    if (ticks > 0) {
+      delayTimer = Math.max(0, delayTimer - ticks);
+      soundTimer = Math.max(0, soundTimer - ticks);
+      if (soundTimer > 0 && !soundWasActive) startBeep();
+      if (soundTimer === 0 && soundWasActive) stopBeep();
+    }
+  }
+
+  function startBeep() {
+    soundWasActive = true;
+    try {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) return;
+      audioContext = audioContext || new AudioContextClass();
+      if (audioContext.state === "suspended") audioContext.resume();
+      const oscillator = audioContext.createOscillator();
+      const gain = audioContext.createGain();
+      oscillator.frequency.value = 440;
+      gain.gain.value = 0.035;
+      oscillator.connect(gain);
+      gain.connect(audioContext.destination);
+      oscillator.start();
+      oscillator.stop(audioContext.currentTime + 0.07);
+    } catch (_) {
+      soundWasActive = false;
+    }
+  }
+
+  function stopBeep() {
+    soundWasActive = false;
+  }
+
+  function updateDebugger() {
+    registersElement.innerHTML = "";
+    for (let i = 0; i < 16; i++) {
+      const cell = document.createElement("div");
+      cell.className = "reg";
+      const label = document.createElement("span");
+      label.textContent = `V${i.toString(16).toUpperCase()}`;
+      const value = document.createElement("strong");
+      value.textContent = `0x${V[i].toString(16).toUpperCase().padStart(2, "0")}`;
+      cell.append(label, value);
+      registersElement.appendChild(cell);
+    }
+    document.getElementById("debugI").textContent = `0x${I.toString(16).toUpperCase().padStart(3, "0")}`;
+    document.getElementById("debugPC").textContent = `0x${pc.toString(16).toUpperCase().padStart(3, "0")}`;
+    document.getElementById("debugDT").textContent = String(delayTimer);
+    document.getElementById("debugST").textContent = String(soundTimer);
+    document.getElementById("debugStack").textContent = stack.length
+      ? stack.map(address => `0x${address.toString(16).toUpperCase().padStart(3, "0")}`).join(" → ")
+      : "Empty";
+
+    const next = pc >= 0 && pc + 1 < MEMORY_SIZE ? (memory[pc] << 8) | memory[pc + 1] : null;
+    document.getElementById("debugInstruction").textContent = next === null
+      ? `0x${pc.toString(16).toUpperCase().padStart(3, "0")} · OUT OF RANGE`
+      : `0x${pc.toString(16).toUpperCase().padStart(3, "0")} · ${next.toString(16).toUpperCase().padStart(4, "0")} · ${decodeOpcode(next)}`;
+  }
+
+  function decodeOpcode(opcode) {
+    const nnn = opcode & 0x0FFF;
+    const nn = opcode & 0xFF;
+    const n = opcode & 0xF;
+    const x = (opcode >> 8) & 0xF;
+    const y = (opcode >> 4) & 0xF;
+    const hx = `V${x.toString(16).toUpperCase()}`;
+    const hy = `V${y.toString(16).toUpperCase()}`;
+    switch (opcode & 0xF000) {
+      case 0x0000: return opcode === 0x00E0 ? "CLS" : opcode === 0x00EE ? "RET" : `SYS 0x${nnn.toString(16).toUpperCase()}`;
+      case 0x1000: return `JP 0x${nnn.toString(16).toUpperCase()}`;
+      case 0x2000: return `CALL 0x${nnn.toString(16).toUpperCase()}`;
+      case 0x3000: return `SE ${hx}, 0x${nn.toString(16).toUpperCase()}`;
+      case 0x4000: return `SNE ${hx}, 0x${nn.toString(16).toUpperCase()}`;
+      case 0x5000: return `SE ${hx}, ${hy}`;
+      case 0x6000: return `LD ${hx}, 0x${nn.toString(16).toUpperCase()}`;
+      case 0x7000: return `ADD ${hx}, 0x${nn.toString(16).toUpperCase()}`;
+      case 0x8000: {
+        const ops = {0:"LD",1:"OR",2:"AND",3:"XOR",4:"ADD",5:"SUB",6:"SHR",7:"SUBN",14:"SHL"};
+        return ops[n] ? `${ops[n]} ${hx}, ${hy}` : "UNKNOWN";
+      }
+      case 0x9000: return `SNE ${hx}, ${hy}`;
+      case 0xA000: return `LD I, 0x${nnn.toString(16).toUpperCase()}`;
+      case 0xB000: return `JP V0, 0x${nnn.toString(16).toUpperCase()}`;
+      case 0xC000: return `RND ${hx}, 0x${nn.toString(16).toUpperCase()}`;
+      case 0xD000: return `DRW ${hx}, ${hy}, 0x${n.toString(16).toUpperCase()}`;
+      case 0xE000: return nn === 0x9E ? `SKP ${hx}` : nn === 0xA1 ? `SKNP ${hx}` : "UNKNOWN";
+      case 0xF000: {
+        const ops = {0x07:`LD ${hx}, DT`,0x0A:`LD ${hx}, K`,0x15:`LD DT, ${hx}`,0x18:`LD ST, ${hx}`,0x1E:`ADD I, ${hx}`,0x29:`LD F, ${hx}`,0x33:`LD B, ${hx}`,0x55:`LD [I], ${hx}`,0x65:`LD ${hx}, [I]`};
+        return ops[nn] || "UNKNOWN";
+      }
+      default: return "UNKNOWN";
+    }
+  }
+
+  function animationFrame(now) {
+    tickTimers(now);
+    if (running) {
+      const frameDuration = Math.max(0, now - lastFrame);
+      const targetFrames = Math.min(2, frameDuration / (1000 / 60));
+      const count = Math.max(1, Math.floor(cyclesPerFrame * targetFrames));
+      for (let i = 0; i < count && running && waitingRegister === null; i++) {
+        if (!executeInstruction()) break;
+      }
+    }
+    lastFrame = now;
+    updateDebugger();
+    rafId = requestAnimationFrame(animationFrame);
+  }
+
+  function setKey(key, pressed) {
+    if (key < 0 || key > 15) return;
+    keys[key] = pressed ? 1 : 0;
+    const button = keypadElement.querySelector(`[data-key="${key}"]`);
+    if (button) button.classList.toggle("is-pressed", Boolean(pressed));
+    if (pressed && waitingRegister !== null) {
+      V[waitingRegister] = key;
+      waitingRegister = null;
+    }
+  }
+
+  function buildKeypad() {
+    KEYPAD_KEYS.forEach((keyValue, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "key";
+      button.dataset.key = String(keyValue);
+      button.textContent = KEY_LABELS.get(keyValue);
+      button.setAttribute("aria-label", `CHIP-8 key ${KEY_LABELS.get(keyValue)}`);
+      button.addEventListener("pointerdown", event => {
+        event.preventDefault();
+        button.setPointerCapture(event.pointerId);
+        setKey(keyValue, true);
+      });
+      button.addEventListener("pointerup", () => setKey(keyValue, false));
+      button.addEventListener("pointercancel", () => setKey(keyValue, false));
+      button.addEventListener("lostpointercapture", () => setKey(keyValue, false));
+      keypadElement.appendChild(button);
+    });
+  }
+
+  document.addEventListener("keydown", event => {
+    const key = KEYBOARD_MAP[event.key.toLowerCase()];
+    if (key === undefined) return;
+    event.preventDefault();
+    if (event.repeat || keys[key]) return;
+    setKey(key, true);
+  });
+
+  document.addEventListener("keyup", event => {
+    const key = KEYBOARD_MAP[event.key.toLowerCase()];
+    if (key !== undefined) {
+      event.preventDefault();
+      setKey(key, false);
+    }
+  });
+
+  window.addEventListener("blur", () => {
+    keys.fill(0);
+    keypadElement.querySelectorAll(".key").forEach(button => button.classList.remove("is-pressed"));
+  });
+
+  document.getElementById("runButton").addEventListener("click", () => {
+    if (statusElement.classList.contains("error")) resetMachine();
+    running = true;
+    lastFrame = performance.now();
+    lastTimerTick = performance.now();
+    setStatus("Running");
+    setMessage(waitingRegister !== null ? "Waiting for a key press…" : `${loadedName} is running.`);
+  });
+
+  document.getElementById("pauseButton").addEventListener("click", () => {
+    running = false;
+    setStatus("Paused");
+    setMessage("Execution paused.");
+  });
+
+  document.getElementById("stepButton").addEventListener("click", () => {
+    if (statusElement.classList.contains("error")) resetMachine();
+    running = false;
+    setStatus("Paused");
+    if (waitingRegister !== null) {
+      setMessage("Waiting for a key press before continuing.");
+    } else {
+      executeInstruction();
+      if (!statusElement.classList.contains("error")) setMessage("Executed one instruction.");
+    }
+    updateDebugger();
+  });
+
+  document.getElementById("resetButton").addEventListener("click", resetMachine);
+
+  speedInput.addEventListener("input", () => {
+    cyclesPerFrame = Number(speedInput.value);
+    speedValue.value = String(cyclesPerFrame);
+    speedValue.textContent = String(cyclesPerFrame);
+  });
+
+  document.getElementById("romFile").addEventListener("change", async event => {
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+    if (file.size > MEMORY_SIZE - PROGRAM_START) {
+      setMessage(`ROM is too large: ${file.size} bytes. Maximum size is ${MEMORY_SIZE - PROGRAM_START} bytes.`, true);
+      setStatus("Error");
+      event.target.value = "";
+      return;
+    }
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      if (bytes.length > MEMORY_SIZE - PROGRAM_START) {
+        setMessage(`ROM is too large: ${bytes.length} bytes. Maximum size is ${MEMORY_SIZE - PROGRAM_START} bytes.`, true);
+        setStatus("Error");
+        return;
+      }
+      loadedRom = bytes;
+      loadedName = file.name;
+      fileNameElement.textContent = loadedName;
+      fileNameElement.title = loadedName;
+      resetMachine();
+    } catch (_) {
+      setMessage("Could not read that ROM file.", true);
+      setStatus("Error");
+    } finally {
+      event.target.value = "";
+    }
+  });
+
+  buildKeypad();
+  fileNameElement.title = loadedName;
+  speedValue.value = String(cyclesPerFrame);
+  speedValue.textContent = String(cyclesPerFrame);
+  resetMachine();
+  rafId = requestAnimationFrame(animationFrame);
+})();
+</script>
+</body>
+</html>

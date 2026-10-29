@@ -1,0 +1,1049 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CHIP-8 Emulator</title>
+    <style>
+        :root {
+            --bg-color: #1e1e1e;
+            --panel-bg: #252526;
+            --text-color: #d4d4d4;
+            --accent-color: #007acc;
+            --border-color: #3e3e42;
+            --highlight-color: #9cdcfe;
+            --success-color: #4ec9b0;
+            --font-mono: 'Consolas', 'Monaco', 'Courier New', monospace;
+        }
+
+        body {
+            font-family: var(--font-mono);
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        h1 {
+            margin-bottom: 20px;
+            color: var(--accent-color);
+        }
+
+        .main-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            justify-content: center;
+            max-width: 1200px;
+            width: 100%;
+        }
+
+        .display-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }
+
+        canvas {
+            background-color: #000;
+            border: 2px solid var(--border-color);
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+            image-rendering: pixelated;
+        }
+
+        .controls {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            justify-content: center;
+            margin-bottom: 20px;
+            background-color: var(--panel-bg);
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+        }
+
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        button {
+            background-color: var(--accent-color);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: var(--font-mono);
+            font-size: 14px;
+            transition: background-color 0.2s;
+        }
+
+        button:hover {
+            background-color: #005f9e;
+        }
+
+        button:disabled {
+            background-color: #444;
+            cursor: not-allowed;
+        }
+
+        input[type="range"] {
+            width: 100px;
+        }
+
+        label {
+            font-size: 12px;
+        }
+
+        .panel {
+            background-color: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 15px;
+            width: 100%;
+            max-width: 400px;
+        }
+
+        .panel h2 {
+            margin-top: 0;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 10px;
+            font-size: 16px;
+            color: var(--accent-color);
+        }
+
+        .debug-info {
+            font-size: 12px;
+            line-height: 1.6;
+        }
+
+        .debug-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+        }
+
+        .debug-label {
+            color: #888;
+        }
+
+        .debug-value {
+            color: var(--highlight-color);
+        }
+
+        .keypad {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 5px;
+            margin-top: 10px;
+        }
+
+        .key {
+            background-color: #333;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 10px;
+            text-align: center;
+            cursor: pointer;
+            font-size: 12px;
+            transition: background-color 0.1s;
+        }
+
+        .key:hover {
+            background-color: #444;
+        }
+
+        .key.active {
+            background-color: var(--success-color);
+            color: #000;
+        }
+
+        .file-input {
+            margin-top: 10px;
+        }
+
+        .file-input label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 12px;
+        }
+
+        .file-input input[type="file"] {
+            width: 100%;
+        }
+
+        .status-bar {
+            margin-top: 20px;
+            font-size: 12px;
+            color: #888;
+        }
+
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>CHIP-8 Emulator</h1>
+
+    <div class="controls">
+        <div class="control-group">
+            <button id="btnRun" onclick="emulator.run()">Run</button>
+            <button id="btnPause" onclick="emulator.pause()" disabled>Pause</button>
+            <button id="btnStep" onclick="emulator.step()">Step</button>
+            <button id="btnReset" onclick="emulator.reset()">Reset</button>
+        </div>
+        <div class="control-group">
+            <label for="speedRange">Speed:</label>
+            <input type="range" id="speedRange" min="1" max="10" value="5" oninput="emulator.setSpeed(this.value)">
+            <span id="speedValue">5x</span>
+        </div>
+        <div class="control-group">
+            <button onclick="document.getElementById('romInput').click()">Load ROM</button>
+            <input type="file" id="romInput" accept=".ch8,.c8,.rom" class="hidden" onchange="emulator.loadROM(this)">
+        </div>
+    </div>
+
+    <div class="main-container">
+        <div class="display-container">
+            <canvas id="display" width="64" height="32"></canvas>
+            <div class="keypad">
+                <div class="key" data-key="0x1">1</div>
+                <div class="key" data-key="0x2">2</div>
+                <div class="key" data-key="0x3">3</div>
+                <div class="key" data-key="0xC">C</div>
+                <div class="key" data-key="0x4">4</div>
+                <div class="key" data-key="0x5">5</5>
+                <div class="key" data-key="0x6">6</div>
+                <div class="key" data-key="0xD">D</div>
+                <div class="key" data-key="0x7">7</div>
+                <div class="key" data-key="0x8">8</div>
+                <div class="key" data-key="0x9">9</div>
+                <div class="key" data-key="0xE">E</div>
+                <div class="key" data-key="0xA">A</div>
+                <div class="key" data-key="0x0">0</div>
+                <div class="key" data-key="0xB">B</div>
+                <div class="key" data-key="0xF">F</div>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2>Debugger</h2>
+            <div class="debug-info">
+                <div class="debug-row">
+                    <span class="debug-label">PC:</span>
+                    <span class="debug-value" id="debugPC">0x200</span>
+                </div>
+                <div class="debug-row">
+                    <span class="debug-label">I:</span>
+                    <span class="debug-value" id="debugI">0x000</span>
+                </div>
+                <div class="debug-row">
+                    <span class="debug-label">Delay Timer:</span>
+                    <span class="debug-value" id="debugDelay">0</span>
+                </div>
+                <div class="debug-row">
+                    <span class="debug-label">Sound Timer:</span>
+                    <span class="debug-value" id="debugSound">0</span>
+                </div>
+                <div class="debug-row">
+                    <span class="debug-label">Stack:</span>
+                    <span class="debug-value" id="debugStack">[]</span>
+                </div>
+                <div class="debug-row">
+                    <span class="debug-label">V0-VF:</span>
+                    <span class="debug-value" id="debugRegisters">[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]</span>
+                </div>
+                <div class="debug-row">
+                    <span class="debug-label">Current Instruction:</span>
+                    <span class="debug-value" id="debugInstruction">0x0000</span>
+                </div>
+                <div class="debug-row">
+                    <span class="debug-label">Opcode:</span>
+                    <span class="debug-value" id="debugOpcode">0x0000</span>
+                </div>
+                <div class="debug-row">
+                    <span class="debug-label">Drawn:</span>
+                    <span class="debug-value" id="debugDrawn">false</span>
+                </div>
+                <div class="debug-row">
+                    <span class="debug-label">Keypad:</span>
+                    <span class="debug-value" id="debugKeypad">[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="status-bar">
+        <span id="statusText">Ready. Press Run or Load ROM.</span>
+    </div>
+
+    <script>
+        // CHIP-8 Constants
+        const MEMORY_SIZE = 4096;
+        const SCREEN_WIDTH = 64;
+        const SCREEN_HEIGHT = 32;
+        const FONTSET_SIZE = 80;
+        const FONTSET_START = 0x050;
+        const KEY_COUNT = 16;
+        const MAX_STACK_DEPTH = 16;
+
+        // Opcode definitions
+        const OPCODES = {
+            0x0: {
+                0x0: 'CLS',
+                0xE: 'RET'
+            },
+            0x1: 'JP',
+            0x2: 'CALL',
+            0x3: 'SE_Vx_byte',
+            0x4: 'SNE_Vx_byte',
+            0x5: {
+                0: 'SE_Vx_Vy',
+                1: 'SNE_Vx_Vy'
+            },
+            0x6: 'LD_Vx_byte',
+            0x7: 'ADD_Vx_byte',
+            0x8: {
+                0: 'LD_Vx_Vy',
+                1: 'OR_Vx_Vy',
+                2: 'AND_Vx_Vy',
+                3: 'XOR_Vx_Vy',
+                4: 'ADD_Vx_Vy',
+                5: 'SUB_Vx_Vy',
+                6: 'SHR_Vx_Vy',
+                7: 'SUBN_Vx_Vy',
+                8: 'ROR_Vx_Vy'
+            },
+            0x9: {
+                0: 'SNE_Vx_Vy',
+                1: 'LD_I_Vx'
+            },
+            0xA: 'LD_I_addr',
+            0xB: 'JP_V0_addr',
+            0xC: 'RND_Vx_byte',
+            0xD: {
+                0: 'DRW_Vx_Vy_N',
+                1: 'DRW_Vx_Vy_N'
+            },
+            0xE: {
+                0x9E: 'SKP_Vx',
+                0xA1: 'SKNP_Vx'
+            },
+            0xF: {
+                0x07: 'LD_Vx_DT',
+                0x0A: 'LD_Vx_K',
+                0x15: 'LD_DT_Vx',
+                0x18: 'LD_ST_Vx',
+                0x1E: 'ADD_I_Vx',
+                0x29: 'LD_F_Vx',
+                0x33: 'LD_BCD_Vx',
+                0x55: 'LD_I_Vx',
+                0x65: 'LD_Vx_I'
+            }
+        };
+
+        // Fontset (5x8 pixels per character)
+        const FONTSET = [
+            0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
+            0x20, 0x60, 0x20, 0x20, 0x70, // 1
+            0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
+            0xF0, 0x10, 0xF0, 0x10, 0xF0, // 3
+            0x90, 0x90, 0xF0, 0x10, 0x10, // 4
+            0xF0, 0x80, 0xF0, 0x10, 0xF0, // 5
+            0xF0, 0x80, 0xF0, 0x90, 0xF0, // 6
+            0xF0, 0x10, 0x20, 0x40, 0x40, // 7
+            0xF0, 0x90, 0xF0, 0x90, 0xF0, // 8
+            0xF0, 0x90, 0xF0, 0x10, 0xF0, // 9
+            0xF0, 0x90, 0xF0, 0x90, 0x90, // A
+            0xE0, 0x90, 0xE0, 0x90, 0xE0, // B
+            0xF0, 0x80, 0x80, 0x80, 0xF0, // C
+            0xE0, 0x90, 0x90, 0x90, 0xE0, // D
+            0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
+            0xF0, 0x80, 0xF0, 0x80, 0x80  // F
+        ];
+
+        // Demo ROM: Simple sprite drawing and key reaction
+        const DEMO_ROM = new Uint8Array([
+            0x12, 0x00, 0xA2, 0x00, 0x60, 0x01, 0x61, 0x02, 0x62, 0x03, 0x63, 0x04, 0x64, 0x05, 0x65, 0x06,
+            0x66, 0x07, 0x67, 0x08, 0x68, 0x09, 0x69, 0x0A, 0x6A, 0x0B, 0x6B, 0x0C, 0x6C, 0x0D, 0x6D, 0x0E,
+            0x6E, 0x0F, 0x6F, 0x10, 0x70, 0x11, 0x71, 0x12, 0x72, 0x13, 0x73, 0x14, 0x74, 0x15, 0x75, 0x16,
+            0x76, 0x17, 0x77, 0x18, 0x78, 0x19, 0x79, 0x1A, 0x7A, 0x1B, 0x7B, 0x1C, 0x7C, 0x1D, 0x7D, 0x1E,
+            0x7E, 0x1F, 0x7F, 0x20, 0x80, 0x21, 0x81, 0x22, 0x82, 0x23, 0x83, 0x24, 0x84, 0x25, 0x85, 0x26,
+            0x86, 0x27, 0x87, 0x28, 0x88, 0x29, 0x89, 0x2A, 0x8A, 0x2B, 0x8B, 0x2C, 0x8C, 0x2D, 0x8D, 0x2E,
+            0x8E, 0x2F, 0x8F, 0x30, 0x90, 0x31, 0x91, 0x32, 0x92, 0x33, 0x93, 0x34, 0x94, 0x35, 0x95, 0x36,
+            0x96, 0x37, 0x97, 0x38, 0x98, 0x39, 0x99, 0x3A, 0x9A, 0x3B, 0x9B, 0x3C, 0x9C, 0x3D, 0x9D, 0x3E,
+            0x9E, 0x3F, 0x9F, 0x40, 0xA0, 0x41, 0xA1, 0x42, 0xA2, 0x43, 0xA3, 0x44, 0xA4, 0x45, 0xA5, 0x46,
+            0xA6, 0x47, 0xA7, 0x48, 0xA8, 0x49, 0xA9, 0x4A, 0xAA, 0x4B, 0xAB, 0x4C, 0xAC, 0x4D, 0xAD, 0x4E,
+            0xAE, 0x4F, 0xAF, 0x50, 0xB0, 0x51, 0xB1, 0x52, 0xB2, 0x53, 0xB3, 0x54, 0xB4, 0x55, 0xB5, 0x56,
+            0xB6, 0x57, 0xB7, 0x58, 0xB8, 0x59, 0xB9, 0x5A, 0xBA, 0x5B, 0xBB, 0x5C, 0xBC, 0x5D, 0xBD, 0x5E,
+            0xBE, 0x5F, 0xBF, 0x60, 0xC0, 0x61, 0xC1, 0x62, 0xC2, 0x63, 0xC3, 0x64, 0xC4, 0x65, 0xC5, 0x66,
+            0xC6, 0x67, 0xC7, 0x68, 0xC8, 0x69, 0xC9, 0x6A, 0xCA, 0x6B, 0xCB, 0x6C, 0xCC, 0x6D, 0xCD, 0x6E,
+            0xCE, 0x6F, 0xCF, 0x70, 0xD0, 0x71, 0xD1, 0x72, 0xD2, 0x73, 0xD3, 0x74, 0xD4, 0x75, 0xD5, 0x76,
+            0xD6, 0x77, 0xD7, 0x78, 0xD8, 0x79, 0xD9, 0x7A, 0xDA, 0x7B, 0xDB, 0x7C, 0xDC, 0x7D, 0xDD, 0x7E,
+            0xDE, 0x7F, 0xDF, 0xE0, 0xE0, 0x81, 0xE2, 0x83, 0xE4, 0x85, 0xE6, 0x87, 0xE8, 0xE9, 0xEA, 0xEB,
+            0xEC, 0xED, 0xEE, 0xEF, 0xF0, 0xF1, 0xF2, 0xF3, 0xF4, 0xF5, 0xF6, 0xF7, 0xF8, 0xF9, 0xFA, 0xFB,
+            0xFC, 0xFD, 0xFE, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, -rendered
+        ]);
+
+        class CHIP8 {
+            constructor() {
+                this.memory = new Uint8Array(MEMORY_SIZE);
+                this.v = new Uint8Array(16);
+                this.i = 0;
+                this.pc = 0x200;
+                this.stack = [];
+                this.delayTimer = 0;
+                this.soundTimer = 0;
+                this.keypad = new Uint8Array(KEY_COUNT);
+                this.display = new Uint8Array(SCREEN_WIDTH * SCREEN_HEIGHT);
+                this.drawFlag = false;
+                this.running = false;
+                this.speed = 5;
+                this.lastFrameTime = 0;
+                this.instructionsPerFrame = 10;
+                
+                this.init();
+            }
+
+            init() {
+                // Load fontset
+                for (let i = 0; i < FONTSET_SIZE; i++) {
+                    this.memory[FONTSET_START + i] = FONTSET[i];
+                }
+                
+                // Reset registers
+                this.v.fill(0);
+                this.i = 0;
+                this.pc = 0x200;
+                this.stack = [];
+                this.delayTimer = 0;
+                this.soundTimer = 0;
+                this.keypad.fill(0);
+                this.display.fill(0);
+                this.drawFlag = false;
+            }
+
+            loadROM(data) {
+                this.init();
+                const bytesToLoad = Math.min(data.length, MEMORY_SIZE - 0x200);
+                for (let i = 0; i < bytesToLoad; i++) {
+                    this.memory[0x200 + i] = data[i];
+                }
+                this.pc = 0x200;
+                this.updateUI();
+                setStatus("ROM loaded. Press Run.");
+            }
+
+            loadDemoROM() {
+                this.init();
+                const bytesToLoad = Math.min(DEMO_ROM.length, MEMORY_SIZE - 0x200);
+                for (let i = 0; i < bytesToLoad; i++) {
+                    this.memory[0x200 + i] = DEMO_ROM[i];
+                }
+                this.pc = 0x200;
+                this.updateUI();
+                setStatus("Demo ROM loaded. Press Run.");
+            }
+
+            reset() {
+                this.init();
+                this.updateUI();
+                setStatus("Emulator reset.");
+            }
+
+            setSpeed(value) {
+                this.speed = parseInt(value);
+                this.instructionsPerFrame = this.speed * 10;
+                document.getElementById('speedValue').textContent = this.speed + 'x';
+            }
+
+            run() {
+                if (!this.running) {
+                    this.running = true;
+                    this.lastFrameTime = performance.now();
+                    this.loop();
+                    document.getElementById('btnRun').disabled = true;
+                    document.getElementById('btnPause').disabled = false;
+                    setStatus("Running...");
+                }
+            }
+
+            pause() {
+                this.running = false;
+                document.getElementById('btnRun').disabled = false;
+                document.getElementById('btnPause').disabled = true;
+                setStatus("Paused.");
+            }
+
+            step() {
+                this.running = false;
+                this.executeCycle();
+                this.updateUI();
+                setStatus("Stepped.");
+            }
+
+            loop() {
+                if (!this.running) return;
+
+                const now = performance.now();
+                const elapsed = now - this.lastFrameTime;
+
+                if (elapsed >= 1000 / (60 * this.speed)) {
+                    for (let i = 0; i < this.instructionsPerFrame; i++) {
+                        this.executeCycle();
+                    }
+                    this.lastFrameTime = now;
+                }
+
+                this.updateUI();
+                requestAnimationFrame(() => this.loop());
+            }
+
+            executeCycle() {
+                // Fetch opcode
+                const opcode = (this.memory[this.pc] << 8) | this.memory[this.pc + 1];
+                this.pc += 2;
+
+                // Decode and execute
+                this.decodeAndExecute(opcode);
+            }
+
+            decodeAndExecute(opcode) {
+                const nibble1 = (opcode & 0xF000) >> 12;
+                const nibble2 = (opcode & 0x0F00) >> 8;
+                const nibble3 = (opcode & 0x00F0) >> 4;
+                const nibble4 = opcode & 0x000F;
+
+                switch (nibble1) {
+                    case 0x0:
+                        if (opcode === 0x00E0) {
+                            this.cls();
+                        } else if (opcode === 0x00EE) {
+                            this.ret();
+                        }
+                        break;
+                    case 0x1:
+                        this.jp((opcode & 0x0FFF));
+                        break;
+                    case 0x2:
+                        this.call((opcode & 0x0FFF));
+                        break;
+                    case 0x3:
+                        this.seVxByte(nibble2, (opcode & 0x00FF));
+                        break;
+                    case 0x4:
+                        this.sneVxByte(nibble2, (opcode & 0x00FF));
+                        break;
+                    case 0x5:
+                        if (nibble2 === 0x0) {
+                            this.seVxVy(nibble2, nibble3);
+                        }
+                        break;
+                    case 0x6:
+                        this.ldVxByte(nibble2, (opcode & 0x00FF));
+                        break;
+                    case 0x7:
+                        this.addVxByte(nibble2, (opcode & 0x00FF));
+                        break;
+                    case 0x8:
+                        switch (nibble2) {
+                            case 0x0:
+                                this.ldVxVy(nibble2, nibble3);
+                                break;
+                            case 0x1:
+                                this.orVxVy(nibble2, nibble3);
+                                break;
+                            case 0x2:
+                                this.andVxVy(nibble2, nibble3);
+                                break;
+                            case 0x3:
+                                this.xorVxVy(nibble2, nibble3);
+                                break;
+                            case 0x4:
+                                this.addVxVy(nibble2, nibble3);
+                                break;
+                            case 0x5:
+                                this.subVxVy(nibble2, nibble3);
+                                break;
+                            case 0x6:
+                                this.shrVxVy(nibble2, nibble3);
+                                break;
+                            case 0x7:
+                                this.subnVxVy(nibble2, nibble3);
+                                break;
+                            case 0x8:
+                                this.rorVxVy(nibble2, nibble3);
+                                break;
+                        }
+                        break;
+                    case 0x9:
+                        if (nibble2 === 0x0) {
+                            this.sneVxVy(nibble2, nibble3);
+                        } else if (nibble2 === 0x1) {
+                            this.ldIVx(nibble2);
+                        }
+                        break;
+                    case 0xA:
+                        this.ldI((opcode & 0x0FFF));
+                        break;
+                    case 0xB:
+                        this.jpV0((opcode & 0x0FFF));
+                        break;
+                    case 0xC:
+                        this.rndVxByte(nibble2, (opcode & 0x00FF));
+                        break;
+                    case 0xD:
+                        this.drwVxVyNibble4(nibble2, nibble3, nibble4);
+                        break;
+                    case 0xE:
+                        if (nibble2 === 0x9 && nibble3 === 0xE) {
+                            this.skpVx(nibble2);
+                        } else if (nibble2 === 0xA && nibble3 === 0x1) {
+                            this.sknpVx(nibble2);
+                        }
+                        break;
+                    case 0xF:
+                        switch (nibble2) {
+                            case 0x07:
+                                this.ldVxDT(nibble2);
+                                break;
+                            case 0x0A:
+                                this.ldVxK(nibble2);
+                                break;
+                            case 0x15:
+                                this.ldDTVx(nibble2);
+                                break;
+                            case 0x18:
+                                this.ldSTVx(nibble2);
+                                break;
+                            case 0x1E:
+                                this.addIVx(nibble2);
+                                break;
+                            case 0x29:
+                                this.ldFVx(nibble2);
+                                break;
+                            case 0x33:
+                                this.ldBCDVx(nibble2);
+                                break;
+                            case 0x55:
+                                this.ldIVx(nibble2);
+                                break;
+                            case 0x65:
+                                this.ldVxI(nibble2);
+                                break;
+                        }
+                        break;
+                }
+            }
+
+            // --- Instructions ---
+
+            cls() {
+                this.display.fill(0);
+                this.drawFlag = true;
+            }
+
+            ret() {
+                if (this.stack.length === 0) {
+                    this.running = false;
+                    setStatus("Stack underflow!");
+                    return;
+                }
+                this.pc = this.stack.pop();
+            }
+
+            jp(addr) {
+                this.pc = addr;
+            }
+
+            call(addr) {
+                if (this.stack.length >= MAX_STACK_DEPTH) {
+                    setStatus("Stack overflow!");
+                    return;
+                }
+                this.stack.push(this.pc);
+                this.pc = addr;
+            }
+
+            seVxByte(x, byte) {
+                if (this.v[x] === byte) {
+                    this.pc += 2;
+                }
+            }
+
+            sneVxByte(x, byte) {
+                if (this.v[x] !== byte) {
+                    this.pc += 2;
+                }
+            }
+
+            seVxVy(x, y) {
+                if (this.v[x] === this.v[y]) {
+                    this.pc += 2;
+                }
+            }
+
+            sneVxVy(x, y) {
+                if (this.v[x] !== this.v[y]) {
+                    this.pc += 2;
+                }
+            }
+
+            ldVxByte(x, byte) {
+                this.v[x] = byte;
+            }
+
+            addVxByte(x, byte) {
+                const result = this.v[x] + byte;
+                this.v[0xF] = result > 255 ? 1 : 0;
+                this.v[x] = result & 0xFF;
+            }
+
+            ldVxVy(x, y) {
+                this.v[x] = this.v[y];
+            }
+
+            orVxVy(x, y) {
+                this.v[x] |= this.v[y];
+                this.v[0xF] = 0;
+            }
+
+            andVxVy(x, y) {
+                this.v[x] &= this.v[y];
+                this.v[0xF] = 0;
+            }
+
+            xorVxVy(x, y) {
+                this.v[x] ^= this.v[y];
+                this.v[0xF] = 0;
+            }
+
+            addVxVy(x, y) {
+                const result = this.v[x] + this.v[y];
+                this.v[0xF] = result > 255 ? 1 : 0;
+                this.v[x] = result & 0xFF;
+            }
+
+            subVxVy(x, y) {
+                this.v[0xF] = this.v[x] > this.v[y] ? 1 : 0;
+                this.v[x] = (this.v[x] - this.v[y]) & 0xFF;
+            }
+
+            shrVxVy(x, y) {
+                this.v[0xF] = this.v[y] & 0x1;
+                this.v[x] = this.v[y] >> 1;
+            }
+
+            subnVxVy(x, y) {
+                this.v[0xF] = this.v[y] > this.v[x] ? 1 : 0;
+                this.v[x] = (this.v[y] - this.v[x]) & 0xFF;
+            }
+
+            rorVxVy(x, y) {
+                this.v[0xF] = this.v[y] & 0x1;
+                this.v[x] = (this.v[y] >> 1) | (this.v[0xF] << 7);
+            }
+
+            ldIVx(x) {
+                this.i = this.v[x];
+            }
+
+            ldI(addr) {
+                this.i = addr;
+            }
+
+            jpV0(addr) {
+                this.pc = (this.v[0] & 0xFFF) + addr;
+            }
+
+            rndVxByte(x, byte) {
+                this.v[x] = Math.floor(Math.random() * 256) & byte;
+            }
+
+            drwVxVyNibble4(x, y, n) {
+                this.drawFlag = false;
+                for (let row = 0; row < n; row++) {
+                    const spriteByte = this.memory[this.i + row];
+                    for (let col = 0; col < 8; col++) {
+                        const xCoord = (this.v[x] + col) % SCREEN_WIDTH;
+                        const yCoord = (this.v[y] + row) % SCREEN_HEIGHT;
+                        const pixelIndex = yCoord * SCREEN_WIDTH + xCoord;
+                        const spritePixel = (spriteByte >> (7 - col)) & 1;
+                        
+                        if (spritePixel) {
+                            this.drawFlag = true;
+                            this.display[pixelIndex] ^= 1;
+                        }
+                    }
+                }
+                this.v[0xF] = this.drawFlag ? 1 : 0;
+            }
+
+            skpVx(x) {
+                if (this.keypad[x]) {
+                    this.pc += 2;
+                }
+            }
+
+            sknpVx(x) {
+                if (!this.keypad[x]) {
+                    this.pc += 2;
+                }
+            }
+
+            ldVxDT(x) {
+                this.v[x] = this.delayTimer;
+            }
+
+            ldDTVx(x) {
+                this.delayTimer = this.v[x];
+            }
+
+            ldSTVx(x) {
+                this.soundTimer = this.v[x];
+            }
+
+            ldVxK(x) {
+                // Wait for key press
+                for (let i = 0; i < KEY_COUNT; i++) {
+                    if (this.keypad[i]) {
+                        this.v[x] = i;
+                        return;
+                    }
+                }
+                this.pc -= 2; // Don't advance if no key pressed
+            }
+
+            addIVx(x) {
+                this.i += this.v[x];
+            }
+
+            ldFVx(x) {
+                this.i = (this.v[x] & 0xF) * 5;
+            }
+
+            ldBCDVx(x) {
+                const value = this.v[x];
+                this.memory[this.i] = Math.floor(value / 100);
+                this.memory[this.i + 1] = Math.floor((value % 100) / 10);
+                this.memory[this.i + 2] = value % 10;
+            }
+
+            ldIVx(x) {
+                for (let i = 0; i <= x; i++) {
+                    this.memory[this.i + i] = this.v[i];
+                }
+            }
+
+            ldVxI(x) {
+                for (let i = 0; i <= x; i++) {
+                    this.v[i] = this.memory[this.i + i];
+                }
+            }
+
+            // --- Timers ---
+
+            updateTimers() {
+                if (this.delayTimer > 0) this.delayTimer--;
+                if (this.soundTimer > 0) this.soundTimer--;
+            }
+
+            // --- Display ---
+
+            draw() {
+                const canvas = document.getElementById('display');
+                const ctx = canvas.getContext('2d');
+                const imageData = ctx.createImageData(SCREEN_WIDTH, SCREEN_HEIGHT);
+                
+                for (let i = 0; i < this.display.length; i++) {
+                    const pixel = this.display[i];
+                    const byteIndex = i * 4;
+                    imageData.data[byteIndex] = pixel * 255;
+                    imageData.data[byteIndex + 1] = pixel * 255;
+                    imageData.data[byteIndex + 2] = pixel * 255;
+                    imageData.data[byteIndex + 3] = 255;
+                }
+                
+                ctx.putImageData(imageData, 0, 0);
+            }
+
+            // --- Keypad ---
+
+            handleKeyDown(key) {
+                const keyMap = {
+                    '1': 0x1, '2': 0x2, '3': 0x3, '4': 0xC,
+                    'q': 0x4, 'w': 0x5, 'e': 0x6, 'r': 0xD,
+                    'a': 0x7, 's': 0x8, 'd': 0x9, 'f': 0xE,
+                    'z': 0xA, 'x': 0x0, 'c': 0xB, 'v': 0xF
+                };
+                
+                if (keyMap.hasOwnProperty(key)) {
+                    this.keypad[keyMap[key]] = 1;
+                    updateKeyVisual(keyMap[key], true);
+                }
+            }
+
+            handleKeyUp(key) {
+                const keyMap = {
+                    '1': 0x1, '2': 0x2, '3': 0x3, '4': 0xC,
+                    'q': 0x4, 'w': 0x5, 'e': 0x6, 'r': 0xD,
+                    'a': 0x7, 's': 0x8, 'd': 0x9, 'f': 0xE,
+                    'z': 0xA, 'x': 0x0, 'c': 0xB, 'v': 0xF
+                };
+                
+                if (keyMap.hasOwnProperty(key)) {
+                    this.keypad[keyMap[key]] = 0;
+                    updateKeyVisual(keyMap[key], false);
+                }
+            }
+
+            // --- UI Updates ---
+
+            updateUI() {
+                document.getElementById('debugPC').textContent = '0x' + this.pc.toString(16).padStart(4, '0');
+                document.getElementById('debugI').textContent = '0x' + this.i.toString(16).padStart(3, '0');
+                document.getElementById('debugDelay').textContent = this.delayTimer;
+                document.getElementById('debugSound').textContent = this.soundTimer;
+                document.getElementById('debugStack').textContent = JSON.stringify(this.stack);
+                document.getElementById('debugRegisters').textContent = JSON.stringify(Array.from(this.v));
+                document.getElementById('debugKeypad').textContent = JSON.stringify(Array.from(this.keypad));
+                
+                const opcode = (this.memory[this.pc] << 8) | this.memory[this.pc + 1];
+                document.getElementById('debugInstruction').textContent = '0x' + opcode.toString(16).padStart(4, '0');
+                document.getElementById('debugOpcode').textContent = this.getOpcodeName(opcode);
+                document.getElementById('debugDrawn').textContent = this.drawFlag;
+                
+                if (this.drawFlag) {
+                    this.draw();
+                    this.drawFlag = false;
+                }
+            }
+
+            getOpcodeName(opcode) {
+                const nibble1 = (opcode & 0xF000) >> 12;
+                const nibble2 = (opcode & 0x0F00) >> 8;
+                const nibble3 = (opcode & 0x00F0) >> 4;
+                const nibble4 = opcode & 0x000F;
+
+                if (OPCODES[nibble1]) {
+                    if (OPCODES[nibble1][nibble2]) {
+                        if (typeof OPCODES[nibble1][nibble2] === 'object' && OPCODES[nibble1][nibble2][nibble3]) {
+                            return OPCODES[nibble1][nibble2][nibble3];
+                        }
+                        return OPCODES[nibble1][nibble2];
+                    }
+                }
+                return 'UNKNOWN';
+            }
+        }
+
+        // Initialize emulator
+        const emulator = new CHIP8();
+
+        // Event listeners for keyboard
+        document.addEventListener('keydown', (e) => {
+            emulator.handleKeyDown(e.key);
+        });
+
+        document.addEventListener('keyup', (e) => {
+            emulator.handleKeyUp(e.key);
+        });
+
+        // UI helper functions
+        function setStatus(text) {
+            document.getElementById('statusText').textContent = text;
+        }
+
+        function updateKeyVisual(keyIndex, isActive) {
+            const keyElement = document.querySelector(`.key[data-key="0x${keyIndex.toString(16).toUpperCase()}"]`);
+            if (keyElement) {
+                if (isActive) {
+                    keyElement.classList.add('active');
+                } else {
+                    keyElement.classList.remove('active');
+                }
+            }
+        }
+
+        // Load demo ROM on start
+        emulator.loadDemoROM();
+    </script>
+</body>
+</html>

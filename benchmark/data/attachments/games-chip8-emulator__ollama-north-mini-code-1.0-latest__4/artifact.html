@@ -1,0 +1,1680 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>CHIP‑8 Emulator</title>
+    <style>
+        body {
+            font-family: monospace;
+            margin: 0;
+            padding: 10px;
+            background: #111;
+            color: #0f0;
+        }
+        #canvas {
+            border: 2px solid #0f0;
+            image-rendering: pixelated;
+            image-rendering: -moz-crisp-edges;
+            image-rendering: crisp-edges;
+            display: block;
+            margin: 10px auto;
+        }
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        .controls button, .controls input, .controls select {
+            padding: 6px 12px;
+            background: #222;
+            border: 1px solid #0f0;
+            color: #0f0;
+            font-family: monospace;
+            cursor: pointer;
+        }
+        .controls button:hover {
+            background: #0f0;
+            color: #111;
+        }
+        .debugger {
+            margin-top: 10px;
+            border: 1px solid #0f0;
+            padding: 10px;
+            background: #000;
+            font-size: 12px;
+            overflow-x: auto;
+        }
+        .debugger h3 {
+            margin: 0 0 10px 0;
+        }
+        .debugger table {
+            border-collapse: collapse;
+            width: 100%;
+        }
+        .debugger th, .debugger td {
+            border: 1px solid #0f0;
+            padding: 4px;
+            text-align: left;
+        }
+        .debugger th {
+            background: #222;
+        }
+        .debugger .label {
+            font-weight: bold;
+            color: #0ff;
+        }
+        .debugger .value {
+            font-family: monospace;
+        }
+        .debugger .pc-decoded {
+            margin-top: 5px;
+            font-family: monospace;
+            white-space: pre;
+        }
+        .rom-loader {
+            margin-top: 10px;
+        }
+        .rom-loader input[type="file"] {
+            display: none;
+        }
+        .rom-loader label {
+            display: inline-block;
+            padding: 6px 12px;
+            background: #222;
+            border: 1px solid #0f0;
+            color: #0f0;
+            cursor: pointer;
+        }
+        .rom-loader label:hover {
+            background: #0f0;
+            color: #111;
+        }
+        .speed-control {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .speed-control label {
+            margin-right: 5px;
+        }
+        .status {
+            margin-top: 10px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas" width="640" height="320"></canvas>
+
+    <div class="controls">
+        <button id="btn-run">Run</button>
+        <button id="btn-pause">Pause</button>
+        <button id="btn-step">Step</button>
+        <button id="btn-reset">Reset</button>
+        <div class="speed-control">
+            <label for="speed">Speed (inst/frame):</label>
+            <input type="number" id="speed" value="10" min="1" max="1000">
+        </div>
+        <div class="rom-loader">
+            <label for="rom-file">Load ROM</label>
+            <input type="file" id="rom-file" accept=".ch8,.rom">
+        </div>
+    </div>
+
+    <div class="debugger">
+        <h3>Debugger</h3>
+        <table>
+            <tr>
+                <td class="label">PC:</td><td class="value" id="dbg-pc">0x0000</td>
+                <td class="label">I:</td><td class="value" id="dbg-i">0x0000</td>
+                <td class="label">SP:</td><td class="value" id="dbg-sp">0x00</td>
+            </tr>
+            <tr>
+                <td colspan="6" class="pc-decoded" id="dbg-decoded">--</td>
+            </tr>
+        </table>
+        <div style="margin-top:10px;">
+            <strong>Registers V0-VF:</strong>
+            <div id="dbg-regs" style="display:flex;flex-wrap:wrap;gap:5px;"></div>
+        </div>
+        <div style="margin-top:10px;">
+            <strong>Stack:</strong> <span id="dbg-stack">[]</span>
+        </div>
+        <div class="status" id="status">Status: Ready</div>
+    </div>
+
+    <script>
+        // ---------- CHIP‑8 Core ----------
+        const MEMORY_SIZE = 4096;
+        const PROGRAM_START = 0x200;
+        const FONT_START = 0x050;
+        const FONT_DATA = [
+            0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
+            0x20, 0x60, 0x20, 0x20, 0x70, // 1
+            0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
+            0xF0, 0x10, 0xF0, 0x10, 0xF0, // 3
+            0x90, 0x90, 0xF0, 0x10, 0x10, // 4
+            0xF0, 0x80, 0xF0, 0x90, 0xF0, // 5
+            0xF0, 0x80, 0xF0, 0x90, 0x90, // 6
+            0xF0, 0x10, 0x20, 0x40, 0x40, // 7
+            0xF0, 0x90, 0xF0, 0x90, 0xF0, // 8
+            0xF0, 0x90, 0xF0, 0x10, 0xF0, // 9
+            0xF0, 0x90, 0xF0, 0x90, 0x90, // A
+            0xE0, 0x90, 0xE0, 0x90, 0xE0, // B
+            0xF0, 0x80, 0x80, 0x80, 0xF0, // C
+            0xE0, 0x90, 0x90, 0x90, 0xE0, // D
+            0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
+            0xF0, 0x80, 0xF0, 0x80, 0x80  // F
+        ];
+
+        class Chip8 {
+            constructor() {
+                this.memory = new Uint8Array(MEMORY_SIZE);
+                this.V = new Uint8Array(16); // V0-VF
+                this.I = 0;
+                this.PC = PROGRAM_START;
+                this.stack = [];
+                this.SP = 0;
+                this.delayTimer = 0;
+                this.soundTimer = 0;
+                this.display = Array(64 * 32).fill(0);
+                this.key = Array(16).fill(0);
+                this.dt = 0;
+                this.st = 0;
+                this.cycle = 0;
+                this.running = false;
+                this.paused = false;
+                this.speed = 10;
+                this.lastTime = 0;
+                this.audioCtx = null;
+                this.oscillator = null;
+                this.loadFont();
+            }
+
+            loadFont() {
+                for (let i = 0; i < FONT_DATA.length; i++) {
+                    this.memory[FONT_START + i] = FONT_DATA[i];
+                }
+            }
+
+            loadROM(data) {
+                const start = PROGRAM_START;
+                for (let i = 0; i < data.length && (start + i) < MEMORY_SIZE; i++) {
+                    this.memory[start + i] = data[i];
+                }
+                this.PC = PROGRAM_START;
+                this.V.fill(0);
+                this.I = 0;
+                this.stack = [];
+                this.SP = 0;
+                this.delayTimer = 0;
+.                this.soundTimer = 0;
+                this.display.fill(0);
+                this.key.fill(0);
+                this.cycle = 0;
+                this.updateStatus('ROM loaded');
+            }
+
+            updateTimers() {
+                if (this.delayTimer > 0) this.delayTimer--;
+                if (this.soundTimer > 0) {
+                    this.soundTimer--;
+                    if (this.soundTimer === 0 && this.oscillator) {
+                        this.oscillator.stop();
+                        this.oscillator = null;
+                    }
+                }
+            }
+
+            startSound() {
+                if (!this.audioCtx) {
+                    this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+                if (this.oscillator) return;
+                this.oscillator = this.audioCtx.createOscillator();
+                this.oscillator.type = 'square';
+                this.oscillator.frequency.setValueAtTime(440, this.audioCtx.currentTime);
+                this.oscillator.start();
+            }
+
+            keyDown(e) {
+                const k = this.mapKey(e.key);
+                if (k !== -1) this.key[k] = 1;
+            }
+
+            keyUp(e) {
+                const k = this.mapKey(e.key);
+                if (k !== -1) this.key[k] = 0;
+            }
+
+            mapKey(key) {
+                const map = {
+                    '1': 0, '2': 1, '3': 2, '4': 3,
+                    'q': 4, 'w': 5, 'e': 6, 'r': 7,
+                    'a': 8, 's': 9, 'd': 10, 'f': 11,
+                    'z': 12, 'x': 13, 'c': 14, 'v': 15
+                };
+                return map[key.toLowerCase()] ?? -1;
+            }
+
+            draw() {
+                const canvas = document.getElementById('canvas');
+                const ctx = canvas.getContext('2d');
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                const scale = 10;
+                for (let y = 0; y < 32; y++) {
+                    for (let x = 0; x < 64; x++) {
+                        const idx = y * 64 + x;
+                        if (this.display[idx]) {
+                            ctx.fillStyle = '#0f0';
+                            ctx.fillRect(x * scale, y * scale, scale, scale);
+                        }
+                    }
+                }
+            }
+
+            cycleOnce() {
+                if (this.PC >= MEMORY_SIZE) {
+                    this.PC = PROGRAM_START;
+                    return;
+                }
+                const opcode = (this.memory[this.PC] << 8) | this.memory[this.PC + 1];
+                this.PC += 2;
+                this.decodeExecute(opcode);
+                this.cycle++;
+                this.updateDebugger();
+            }
+
+            decodeExecute(opcode) {
+                const nnn = opcode & 0x0FFF;
+                const nn = opcode & 0x00FF;
+                const n = opcode & 0x000F;
+                const x = (opcode & 0x0F00) >> 8;
+                const y = (opcode & 0x00F0) >> 4;
+
+                switch (opcode & 0xF000) {
+                    case 0x0000:
+                        if (opcode === 0x00E0) { // CLS
+                            this.display.fill(0);
+                        } else if (opcode === 0x00EE) { // RET
+                            this.SP--;
+                            this.PC = (this.stack[this.SP] << 8) | (this.stack[this.SP + 1] ?? 0);
+                            this.SP += 2;
+                        }
+                        break;
+                    case 0x1000: // JP nnn
+                        this.PC = nnn;
+                        break;
+                    case 0x2000: // CALL nnn
+                        this.stack[this.SP] = (this.PC >> 8) & 0xFF;
+                        this.SP++;
+                        this.stack[this.SP] = this.PC & 0xFF;
+                        this.SP++;
+                        this.PC = nnn;
+                        break;
+                    case 0x3000: // SE Vx, nn
+                        if (this.V[x] === nn) this.PC += 2;
+                        break;
+                    case 0x4000: // SNE Vx, nn
+                        if (this.V[x] !== nn) this.PC += 2;
+                        break;
+                    case 0x5000: // SE Vx, Vy
+                        if (this.V[x] === this.V[y]) this.PC += 2;
+                        break;
+                    case 0x6000: // LD Vx, nn
+                        this.V[x] = nn;
+                        break;
+                    case 0x7000: // ADD Vx, nn
+                        this.V[x] = (this.V[x] + nn) & 0xFF;
+                        break;
+                    case 0x8000:
+                        switch (opcode & 0x000F) {
+                            case 0x0000: // LD Vx, Vy
+                                this.V[x] = this.V[y];
+                                break;
+                            case 0x0001: // OR Vx, Vy
+                                this.V[x] |= this.V[y];
+                                break;
+                            case 0x0002: // AND Vx, Vy
+                                this.V[x] &= this.V[y];
+                                break;
+                            case 0x0003: // XOR Vx, Vy
+                                this.V[x] ^= this.V[y];
+                                break;
+                            case 0x0004: // ADD Vx, Vy
+                                const sum = this.V[x] + this.V[y];
+                                this.V[0xF] = (sum > 0xFF) ? 1 : 0;
+                                this.V[x] = sum & 0xFF;
+                                break;
+                            case 0x0005: // SUB Vx, Vy
+                                this.V[0xF] = (this.V[x] >= this.V[y]) ? 1 : 0;
+                                this.V[x] = (this.V[x] - this.V[y]) & 0xFF;
+                                break;
+                            case 0x0006: // SHR Vx {, Vy}
+                                this.V[0xF] = this.V[x] & 0x01;
+                                this.V[x] = this.V[x] >> 1;
+                                break;
+                            case 0x0007: // SUBN Vx, Vy
+                                this.V[0xF] = (this.V[y] >= this.V[x]) ? 1 : 0;
+                                this.V[x] = (this.V[y] - this.V[x]) & 0xFF;
+                                break;
+                            case 0x000E: // SHL Vx {, Vy}
+                                this.V[0xF] = (this.V[x] & 0x80) >> 7;
+                                this.V[x] = (this.V[x] << 1) & 0xFF;
+                                break;
+                        }
+                        break;
+                    case 0x9000: // SNE Vx, Vy
+                        if (this.V[x] !== this.V[y]) this.PC += 2;
+                        break;
+                    case 0xA000: // LD I, nnn
+                        this.I = nnn;
+                        break;
+                    case 0xB000: // JP V0, nnn
+                        this.PC = this.V[0] + nnn;
+                        break;
+                    case 0xC000: // RND Vx, nn
+                        this.V[x] = Math.floor(Math.random() * 256) & nn;
+                        break;
+                    case 0xD000: // DRW Vx, Vy, n
+                        const xcoord = this.V[x] % 64;
+                        const ycoord = this.V[y] % 32;
+                        this.V[0xF] = 0;
+                        for (let row = 0; row < n; row++) {
+                            const spriteByte = this.memory[this.I + row];
+                            for (let col = 0; col < 8; col++) {
+                                const pixel = (spriteByte >> (7 - col)) & 1;
+                                const idx = ((ycoord + row) % 32) * 64 + ((xcoord + col) % 64);
+                                if (pixel) {
+                                    if (this.display[idx] === 1) {
+                                        this.display[idx] = 0;
+                                        this.V[0xF] = 1;
+                                    } else {
+                                        this.display[idx] = 1;
+                                    }
+                                }
+                            }
+                        }
+                        break;
+                    case 0xE000:
+                        switch (opcode & 0x00FF) {
+                            case 0x009E: // SKP Vx
+                                if (this.key[this.V[x]]) this.PC += 2;
+                                break;
+                            case 0x00A1: // SKNP Vx
+                                if (!this.key[this.V[x]]) this.PC += 2;
+                                break;
+                        }
+                        break;
+                    case 0xF000:
+                        switch (opcode & 0x00FF) {
+                            case 0x0007: // LD Vx, DT
+                                this.V[x] = this.delayTimer;
+                                break;
+                            case 0x000A: // LD Vx, K
+                                const key = this.key.indexOf(1);
+                                if (key !== -1) this.V[x] = key;
+                                else this.PC -= 2;
+                                break;
+                            case 0x0015: // LD DT, Vx
+                                this.delayTimer = this.V[x];
+                                break;
+                            case 0x0018: // LD ST, Vx
+                                this.soundTimer = this.V[x];
+                                if (this.soundTimer > 0) this.startSound();
+                                break;
+                            case 0x001E: // ADD I, Vx
+                                this.I += this.V[x];
+                                break;
+                            case 0x0029: // LD F, Vx
+                                this.I = FONT_START + this.V[x] * 5;
+                                break;
+                            case 0x0033: // LD B, Vx
+                                const vx = this.V[x];
+                                this.memory[this.I] = (vx / 100) | 0;
+                                this.memory[this.I + 1] = ((vx % 100) / 10) | 0;
+                                this.memory[this.I + 2] = (vx % 10) | 0;
+                                break;
+                            case 0x0055: // LD [I], Vx
+                                for (let i = 0; i <= x; i++) {
+                                    this.memory[this.I + i] = this.V[i];
+                                }
+                                break;
+                            case 0x0065: // LD Vx, [I]
+                                for (let i = 0; i <= x; i++) {
+                                    this.V[i] = this.memory[this.I + i];
+                                }
+                                break;
+                        }
+                        break;
+                }
+            }
+
+            updateDebugger() {
+                document.getElementById('dbg-pc').textContent = '0x' + this.PC.toString(16).padStart(4, '0');
+                document.getElementById('dbg-i').textContent = '0x' + this.I.toString(16).padStart(4, '0');
+                document.getElementById('dbg-sp').textContent = '0x' + this.SP.toString(16).padStart(2, '0');
+                const regsDiv = document.getElementById('dbg-regs');
+                regsDiv.innerHTML = '';
+                for (let i = 0; i < 16; i++) {
+                    const span = document.createElement('span');
+                    span.textContent = `V${i}=0x${this.V[i].toString(16).padStart(2, '0')} `;
+                    regsDiv.appendChild(span);
+                }
+                const stackStr = this.stack.map((v, idx) => `0x${v.toString(16).padStart(2, '0')}`).join(' ');
+                document.getElementById('dbg-stack').textContent = `[${stackStr}]`;
+                const decoded = this.disassemble(this.PC - 2);
+                document.getElementById('dbg-decoded').textContent = decoded;
+            }
+
+            disassemble(addr) {
+                const opcode = (this.memory[addr] << 8) | (this.memory[addr + 1] || 0);
+                const x = (opcode & 0x0F00) >> 8;
+                const y = (opcode & 0x00F0) >> 4;
+                const n = opcode & 0x000F;
+                const nn = opcode & 0x00FF;
+                const nnn = opcode & 0x0FFF;
+                switch (opcode & 0xF000) {
+                    case 0x0000: return `0x${addr.toString(16).padStart(4, '0')}: ${opcode.toString(16).padStart(4, '0')} ${opcode === 0x00E0 ? 'CLS' : opcode === 0x00EE ? 'RET' : ''}`;
+                    case 0x1000: return `0x${addr.toString(16).padStart(4, '0')}: JP 0x${nnn.toString(16).padStart(3, '0')}`;
+                    case 0x2000: return `0x${addr.toString(16).padStart(4, '0')}: CALL 0x${nnn.toString(16).padStart(3, '0')}`;
+                    case 0x3000: return `0x${addr.toString(16).padStart(4, '0')}: SE V${x}, 0x${nn.toString(16).padStart(2, '0')}`;
+                    case 0x4000: return `0x${addr.toString(16).padStart(4, '0')}: SNE V${x}, 0x${nn.toString(16).padStart(2, '0')}`;
+                    case 0x5000: return `0x${addr.toString(16).padStart(4, '0')}: SE V${x}, V${y}`;
+                    case 0x6000: return `0x${addr.toString(16).padStart(4, '0')}: LD V${x}, 0x${nn.toString(16).padStart(2, '0')}`;
+                    case 0x7000: return `0x${addr.toString(16).padStart(4, '0')}: ADD V${x}, 0x${nn.toString(16).padStart(2, '0')}`;
+                    case 0x8000:
+                        switch (opcode & 0x000F) {
+                            case 0x0000: return `0x${addr.toString(16).padStart(4, '0')}: LD V${x}, V${y}`;
+                            case 0x0001: return `0x${addr.toString(16).padStart(4, '0')}: OR V${x}, V${y}`;
+                            case 0x0002: return `0x${addr.toString(16).padStart(4, '0')}: AND V${x}, V${y}`;
+                            case 0x0003: return `0x${addr.toString(16).padStart(4, '0')}: XOR V${x}, V${y}`;
+                            case 0x0004: return `0x${addr.toString(16).padStart(4, '0')}: ADD V${x}, V${y}`;
+                            case 0x0005: return `0x${addr.toString(16).padStart(4, '0')}: SUB V${x}, V${y}`;
+                            case 0x0006: return `0x${addr.toString(16).padStart(4, '0')}: SHR V${x}`;
+                            case 0x0007: return `0x${addr.toString(16).padStart(4, '0')}: SUBN V${x}, V${y}`;
+                            case 0x000E: return `0x${addr.toString(16).padStart(4, '0')}: SHL V${x}`;
+                        }
+                        break;
+                    case 0x9000: return `0x${addr.toString(16).padStart(4, '0')}: SNE V${x}, V${y}`;
+                    case 0xA000: return `0x${addr.toString(16).padStart(4, '0')}: LD I, 0x${nnn.toString(16).padStart(3, '0')}`;
+                    case 0xB000: return `0x${addr.toString(16).padStart(4, '0')}: JP V0, 0x${nnn.toString(16).padStart(3, '0')}`;
+                    case 0xC000: return `0x${addr.toString(16).padStart(4, '0')}: RND V${x}, 0x${nn.toString(16).padStart(2, '0')}`;
+                    case 0xD000: return `0x${addr.toString(16).padStart(4, '0')}: DRW V${x}, V${y}, ${n}`;
+                    case 0xE000: return `0x${addr.toString(16).padStart(4, '0')}: ${opcode & 0x00FF === 0x009E ? 'SKP V' + x : 'SKNP V' + x}`;
+                    case 0xF000:
+                        switch (opcode & 0x00FF) {
+                            case 0x0007: return `0x${addr.toString(16).padStart(4, '0')}: LD V${x}, DT`;
+                            case 0x000A: return `0x${addr.toString(16).padStart(4, '0')}: LD V${x}, K`;
+                            case 0x0015: return `0x${addr.toString(16).padStart(4, '0')}: LD DT, V${x}`;
+                            case 0x0018: return `0x${addr.toString(16).padStart(4, '0')}: LD ST, V${x}`;
+                            case 0x001E: return `0x${addr.toString(16).padStart(4, '0')}: ADD I, V${x}`;
+                            case 0x0029: return `0x${addr.toString(16).padStart(4, '0')}: LD F, V${x}`;
+                            case 0x0033: return `0x${addr.toString(16).padStart(4, '0')}: LD B, V${x}`;
+                            case 0x0055: return `0x${addr.toString(16).padStart(4, '0')}: LD [I], V${x}`;
+                            case 0x0065: return `0x${addr.toString(16).padStart(4, '0')}: LD V${x}, [I]`;
+                        }
+                        break;
+                }
+                return `0x${addr.toString(16).padStart(4, '0')}: ???`;
+            }
+
+            updateStatus(msg) {
+                document.getElementById('status').textContent = 'Status: ' + msg;
+            }
+
+            runFrame() {
+                const cycles = this.speed;
+                for (let i = 0; i < cycles; i++) {
+                    this.cycleOnce();
+                }
+                this.updateTimers();
+                this.draw();
+            }
+
+            start() {
+                if (this.running) return;
+                this.running = true;
+                this.paused = false;
+                this.lastTime = performance.now();
+                this.rafId = requestAnimationFrame(this.mainLoop.bind(this));
+                this.updateStatus('Running');
+            }
+
+            pause() {
+                this.running = false;
+                this.paused = true;
+                if (this.rafId) cancelAnimationFrame(this.rafId);
+                this.updateStatus('Paused');
+            }
+
+            step() {
+                this.paused = true;
+                this.runFrame();
+                this.updateStatus('Stepped');
+            }
+
+            reset() {
+                this.memory.fill(0);
+                this.loadFont();
+                this.V.fill(0);
+                this.I = 0;
+                this.PC = PROGRAM_START;
+                this.stack = [];
+                this.SP = 0;
+                this.delayTimer = 0;
+                this.soundTimer = 0;
+                this.display.fill(0);
+                this.key.fill(0);
+                this.cycle = 0;
+                this.draw();
+                this.updateStatus('Reset');
+            }
+
+            mainLoop(timestamp) {
+                if (!this.running) return;
+                const delta = timestamp - this.lastTime;
+                if (delta >= 16.666) { // ~60Hz
+                    this.runFrame();
+                    this.lastTime = timestamp;
+                }
+                this.rafId = requestAnimationFrame(this.mainLoop.bind(this));
+            }
+        }
+
+        const chip8 = new Chip8();
+
+        // Demo ROM (simple moving sprite)
+        const demoROM = new Uint8Array([
+            0x60, 0x00, // LD V0, 0x00
+            0x70, 0x0A, // LD DT, 0x0A
+            0xD0, 0x60, 0x05, // DRW V0, V0, 5
+            0x80, 0x10, 0x00, // ADD V0, V0
+            0x80, 0x20, 0x00, // ADD V0, V0
+            0x80, 0x40, 0x00, // ADD V0, V0
+            0x80, 0x80, 0x00, // ADD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80, 0x00, 0x00, // LD V0, V0
+            0x80,

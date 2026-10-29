@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>CHIP-8 Emulator</title>
+<style>
+body{background:#111;color:#ddd;font-family:monospace;margin:0;padding:16px;display:flex;gap:16px;flex-wrap:wrap}
+canvas{background:#000;image-rendering:pixelated;border:2px solid #444;width:640px;height:320px}
+button,select,input{font-family:monospace;background:#333;color:#eee;border:1px solid #666;padding:4px 8px;cursor:pointer}
+button:hover{background:#555}.row{margin:8px 0;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+#keypad{display:grid;grid-template-columns:repeat(4,60px);gap:4px}
+#keypad button{height:44px;font-size:14px}#keypad button.on{background:#2a6;color:#000}
+#dbg{background:#1a1a1a;border:1px solid #444;padding:8px;min-width:300px;white-space:pre;font-size:13px}
+h3{margin:4px 0}#status{color:#6c6}
+</style></head><body>
+<div>
+<canvas id="scr" width="64" height="32"></canvas>
+<div class="row">
+<button id="run">Run</button><button id="pause">Pause</button><button id="step">Step</button><button id="reset">Reset</button>
+<button id="demo">Load Demo</button><input type="file" id="file" accept=".ch8,.c8,.rom,*/*">
+</div>
+<div class="row">Speed (instr/frame): <input type="range" id="speed" min="1" max="50" value="10"><span id="speedv">10</span>
+<span id="status">stopped</span></div>
+<div class="row">Demo: use W/A/S/D (CHIP-8 keys 5/7/8/9) to move the sprite.</div>
+<h3>Keypad (keyboard → CHIP-8)</h3>
+<div id="keypad"></div>
+</div>
+<div id="dbg"></div>
+<script>
+"use strict";
+const FONT=[0xF0,0x90,0x90,0x90,0xF0,0x20,0x60,0x20,0x20,0x70,0xF0,0x10,0xF0,0x80,0xF0,0xF0,0x10,0xF0,0x10,0xF0,
+0x90,0x90,0xF0,0x10,0x10,0xF0,0x80,0xF0,0x10,0xF0,0xF0,0x80,0xF0,0x90,0xF0,0xF0,0x10,0x20,0x40,0x40,
+0xF0,0x90,0xF0,0x90,0xF0,0xF0,0x90,0xF0,0x10,0xF0,0xF0,0x90,0xF0,0x90,0x90,0xE0,0x90,0xE0,0x90,0xE0,
+0xF0,0x80,0x80,0x80,0xF0,0xE0,0x90,0x90,0x90,0xE0,0xF0,0x80,0xF0,0x80,0xF0,0xF0,0x80,0xF0,0x80,0x80];
+// Demo ROM (hand-assembled): moves a smiley with keys 5(up) 7(left) 8(down) 9(right), wraps around screen
+const DEMO=[
+0x60,0x14, // 200 LD V0,20
+0x61,0x0C, // 202 LD V1,12
+0xA2,0x38, // 204 LD I,238 (sprite)
+0xD0,0x15, // 206 DRW V0,V1,5
+0x62,0x03, // 208 loop: LD V2,3
+0xF2,0x15, // 20A LD DT,V2
+0xF3,0x07, // 20C wait: LD V3,DT
+0x33,0x00, // 20E SE V3,0
+0x12,0x0C, // 210 JP wait
+0xD0,0x15, // 212 DRW (erase)
+0x64,0x05,0xE4,0xA1,0x71,0xFF, // 214 key5 -> V1-=1
+0x64,0x08,0xE4,0xA1,0x71,0x01, // 21A key8 -> V1+=1
+0x64,0x07,0xE4,0xA1,0x70,0xFF, // 220 key7 -> V0-=1
+0x64,0x09,0xE4,0xA1,0x70,0x01, // 226 key9 -> V0+=1
+0x65,0x3F,0x80,0x52, // 22C V0 &= 63
+0x65,0x1F,0x81,0x52, // 230 V1 &= 31
+0xD0,0x15, // 234 DRW
+0x12,0x08, // 236 JP loop
+0x3C,0x42,0xA5,0x81,0x7E // 238 sprite
+];
+const KEYMAP={'1':1,'2':2,'3':3,'4':0xC,'q':4,'w':5,'e':6,'r':0xD,'a':7,'s':8,'d':9,'f':0xE,'z':0xA,'x':0,'c':0xB,'v':0xF};
+const LAYOUT=['1','2','3','4','q','w','e','r','a','s','d','f','z','x','c','v'];
+const h=(n,w)=>n.toString(16).toUpperCase().padStart(w,'0');
+class Chip8{
+ constructor(){this.rom=DEMO.slice();this.reset();}
+ reset(){this.mem=new Uint8Array(4096);this.V=new Uint8Array(16);this.I=0;this.pc=0x200;this.stack=[];
+  this.dt=0;this.st=0;this.gfx=new Uint8Array(64*32);this.keys=this.keys||new Uint8Array(16);this.waitReg=-1;this.halted=false;
+  this.mem.set(FONT,0x50);this.mem.set(this.rom.slice(0,4096-0x200),0x200);}
+ load(bytes){this.rom=Array.from(bytes);this.reset();}
+ tick(){if(this.dt>0)this.dt--;if(this.st>0)this.st--;}
+ keyDown(k){this.keys[k]=1;}
+ keyUp(k){this.keys[k]=0;if(this.waitReg>=0){this.V[this.waitReg]=k;this.waitReg=-1;}}
+ step(){
+  if(this.waitReg>=0||this.halted)return;
+  const m=this.mem,V=this.V,op=(m[this.pc]<<8)|m[this.pc+1];this.pc=(this.pc+2)&0xFFF;
+  const x=(op>>8)&15,y=(op>>4)&15,n=op&15,nn=op&255,nnn=op&0xFFF;
+  switch(op>>12){
+  case 0:if(op===0x00E0)this.gfx.fill(0);else if(op===0x00EE){if(!this.stack.length)throw Error('Stack underflow');this.pc=this.stack.pop();}
+   /* 0NNN SYS: ignored */ break;
+  case 1:this.pc=nnn;break;
+  case 2:if(this.stack.length>=16)throw Error('Stack overflow');this.stack.push(this.pc);this.pc=nnn;break;
+  case 3:if(V[x]===nn)this.pc+=2;break;
+  case 4:if(V[x]!==nn)this.pc+=2;break;
+  case 5:if(V[x]===V[y])this.pc+=2;break;
+  case 6:V[x]=nn;break;
+  case 7:V[x]=V[x]+nn;break;
+  case 8:{const a=V[x],b=V[y];switch(n){
+   case 0:V[x]=b;break;case 1:V[x]=a|b;V[15]=0;break;case 2:V[x]=a&b;V[15]=0;break;case 3:V[x]=a^b;V[15]=0;break;
+   case 4:V[x]=a+b;V[15]=a+b>255?1:0;break;
+   case 5:V[x]=a-b;V[15]=a>=b?1:0;break;
+   case 6:V[x]=b>>1;V[15]=b&1;break;
+   case 7:V[x]=b-a;V[15]=b>=a?1:0;break;
+   case 0xE:V[x]=b<<1;V[15]=(b>>7)&1;break;
+   default:throw Error('Unknown opcode '+h(op,4));}break;}
+  case 9:if(V[x]!==V[y])this.pc+=2;break;
+  case 0xA:this.I=nnn;break;
+  case 0xB:this.pc=(nnn+V[0])&0xFFF;break;
+  case 0xC:V[x]=(Math.random()*256|0)&nn;break;
+  case 0xD:{const sx=V[x]&63,sy=V[y]&31;V[15]=0;
+   for(let r=0;r<n;r++){const yy=sy+r;if(yy>31)break;const row=m[(this.I+r)&0xFFF];
+    for(let c=0;c<8;c++){const xx=sx+c;if(xx>63)break;if(row&(0x80>>c)){const i=yy*64+xx;if(this.gfx[i])V[15]=1;this.gfx[i]^=1;}}}break;}
+  case 0xE:if(nn===0x9E){if(this.keys[V[x]&15])this.pc+=2;}else if(nn===0xA1){if(!this.keys[V[x]&15])this.pc+=2;}else throw Error('Unknown opcode '+h(op,4));break;
+  case 0xF:switch(nn){
+   case 0x07:V[x]=this.dt;break;case 0x0A:this.waitReg=x;break;
+   case 0x15:this.dt=V[x];break;case 0x18:this.st=V[x];break;
+   case 0x1E:this.I=(this.I+V[x])&0xFFFF;break;
+   case 0x29:this.I=0x50+(V[x]&15)*5;break;
+   case 0x33:m[this.I&0xFFF]=V[x]/100|0;m[(this.I+1)&0xFFF]=(V[x]/10|0)%10;m[(this.I+2)&0xFFF]=V[x]%10;break;
+   case 0x55:for(let i=0;i<=x;i++)m[(this.I+i)&0xFFF]=V[i];this.I=(this.I+x+1)&0xFFFF;break;
+   case 0x65:for(let i=0;i<=x;i++)V[i]=m[(this.I+i)&0xFFF];this.I=(this.I+x+1)&0xFFFF;break;
+   default:throw Error('Unknown opcode '+h(op,4));}break;
+  }}
+}
+function disasm(op){const x=h((op>>8)&15,1),y=h((op>>4)&15,1),n=op&15,nn=h(op&255,2),nnn=h(op&0xFFF,3);
+ switch(op>>12){
+ case 0:return op===0xE0?'CLS':op===0xEE?'RET':'SYS '+nnn;
+ case 1:return 'JP '+nnn;case 2:return 'CALL '+nnn;case 3:return `SE V${x}, ${nn}`;case 4:return `SNE V${x}, ${nn}`;
+ case 5:return `SE V${x}, V${y}`;case 6:return `LD V${x}, ${nn}`;case 7:return `ADD V${x}, ${nn}`;
+ case 8:return ({0:'LD',1:'OR',2:'AND',3:'XOR',4:'ADD',5:'SUB',6:'SHR',7:'SUBN',14:'SHL'}[n]||'???')+` V${x}, V${y}`;
+ case 9:return `SNE V${x}, V${y}`;case 0xA:return 'LD I, '+nnn;case 0xB:return 'JP V0, '+nnn;case 0xC:return `RND V${x}, ${nn}`;
+ case 0xD:return `DRW V${x}, V${y}, ${n}`;
+ case 0xE:return nn==='9E'?`SKP V${x}`:nn==='A1'?`SKNP V${x}`:'???';
+ case 0xF:return ({'07':`LD V${x}, DT`,'0A':`LD V${x}, K`,'15':`LD DT, V${x}`,'18':`LD ST, V${x}`,'1E':`ADD I, V${x}`,
+  '29':`LD F, V${x}`,'33':`LD B, V${x}`,'55':`LD [I], V${x}`,'65':`LD V${x}, [I]`})[nn]||'???';}}
+const cpu=new Chip8(),cv=document.getElementById('scr'),ctx=cv.getContext('2d'),img=ctx.createImageData(64,32);
+let running=false,ipf=10,audio=null,osc=null;
+const $=id=>document.getElementById(id);
+function draw(){for(let i=0;i<2048;i++){const v=cpu.gfx[i]?255:0;img.data[i*4]=v?51:0;img.data[i*4+1]=v?255:0;img.data[i*4+2]=v?102:0;img.data[i*4+3]=255;}ctx.putImageData(img,0,0);}
+function dbg(){const m=cpu.mem,op=(m[cpu.pc]<<8)|m[(cpu.pc+1)&0xFFF];let s='REGISTERS\n';
+ for(let i=0;i<16;i++)s+=`V${h(i,1)}=${h(cpu.V[i],2)}`+(i%4===3?'\n':'  ');
+ s+=`\nI  = ${h(cpu.I,4)}\nPC = ${h(cpu.pc,4)}\nDT = ${h(cpu.dt,2)}   ST = ${h(cpu.st,2)}\n`;
+ s+=`\nCurrent: ${h(op,4)}  ${disasm(op)}`+(cpu.waitReg>=0?'  (waiting for key)':'')+'\n\nSTACK ('+cpu.stack.length+')\n';
+ for(let i=cpu.stack.length-1;i>=0;i--)s+=`  [${i}] ${h(cpu.stack[i],4)}\n`;
+ if(!cpu.stack.length)s+='  (empty)\n';
+ s+='\nNEXT\n';for(let a=cpu.pc,k=0;k<6;k++,a+=2){const o=(m[a&0xFFF]<<8)|m[(a+1)&0xFFF];s+=`${k?'  ':'> '}${h(a&0xFFF,3)}: ${h(o,4)}  ${disasm(o)}\n`;}
+ $('dbg').textContent=s;$('status').textContent=cpu.halted?'error: '+cpu.err:running?'running':'paused';}
+function beep(on){try{if(on&&!osc){audio=audio||new AudioContext();osc=audio.createOscillator();osc.type='square';osc.frequency.value=440;
+ const g=audio.createGain();g.gain.value=0.05;osc.connect(g).connect(audio.destination);osc.start();}else if(!on&&osc){osc.stop();osc=null;}}catch(e){}}
+function safeStep(){try{cpu.step();}catch(e){cpu.halted=true;cpu.err=e.message;running=false;}}
+let last=performance.now(),acc=0;
+function frame(t){acc+=t-last;last=t;if(acc>100)acc=100;
+ while(acc>=1000/60){acc-=1000/60;if(running){for(let i=0;i<ipf&&running;i++)safeStep();cpu.tick();}}
+ beep(running&&cpu.st>0);draw();dbg();requestAnimationFrame(frame);}
+$('run').onclick=()=>{if(!cpu.halted)running=true;};
+$('pause').onclick=()=>{running=false;};
+$('step').onclick=()=>{running=false;safeStep();};
+$('reset').onclick=()=>{running=false;cpu.reset();};
+$('demo').onclick=()=>{running=false;cpu.load(DEMO);running=true;};
+$('speed').oninput=e=>{ipf=+e.target.value;$('speedv').textContent=ipf;};
+$('file').onchange=e=>{const f=e.target.files[0];if(!f)return;f.arrayBuffer().then(b=>{running=false;cpu.load(new Uint8Array(b));running=true;e.target.blur();});};
+const kp=$('keypad'),btn={};
+LAYOUT.forEach(k=>{const b=document.createElement('button'),c=KEYMAP[k];b.textContent=`${k.toUpperCase()} → ${h(c,1)}`;btn[c]=b;
+ const dn=e=>{e.preventDefault();cpu.keyDown(c);b.classList.add('on');},up=e=>{if(!cpu.keys[c])return;cpu.keyUp(c);b.classList.remove('on');};
+ b.addEventListener('pointerdown',dn);b.addEventListener('pointerup',up);b.addEventListener('pointerleave',up);kp.appendChild(b);});
+document.addEventListener('keydown',e=>{const c=KEYMAP[e.key.toLowerCase()];if(c===undefined||e.repeat)return;e.preventDefault();cpu.keyDown(c);btn[c].classList.add('on');});
+document.addEventListener('keyup',e=>{const c=KEYMAP[e.key.toLowerCase()];if(c===undefined)return;e.preventDefault();cpu.keyUp(c);btn[c].classList.remove('on');});
+window.addEventListener('blur',()=>{for(let c=0;c<16;c++){cpu.keys[c]=0;btn[c].classList.remove('on');}});
+running=true;requestAnimationFrame(frame);
+</script></body></html>

@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CHIP-8 Emulator</title>
+    <style>
+        :root {
+            --bg-color: #1a1a1a;
+            --panel-bg: #252525;
+            --text-color: #e0e0e0;
+            --accent-color: #4caf50;
+            --accent-hover: #45a049;
+            --border-color: #333;
+            --screen-bg: #000;
+            --pixel-on: #fff;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        .container {
+            display: flex;
+            gap: 20px;
+            padding: 20px;
+            background-color: var(--panel-bg);
+            border-radius: 8px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+
+        .left-panel {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        canvas {
+            background-color: var(--screen-bg);
+            border: 2px solid var(--border-color);
+            image-rendering: pixelated;
+            margin-bottom: 20px;
+        }
+
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        button {
+            background-color: var(--accent-color);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background-color 0.2s;
+        }
+
+        button:hover {
+            background-color: var(--accent-hover);
+        }
+
+        button:disabled {
+            background-color: #555;
+            cursor: not-allowed;
+        }
+
+        .slider-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        input[type="range"] {
+            width: 150px;
+        }
+
+        .file-input-wrapper {
+            position: relative;
+            overflow: hidden;
+            display: inline-block;
+        }
+
+        .file-input-wrapper input[type=file] {
+            position: absolute;
+            left: 0;
+            top: 0;
+            opacity: 0;
+            width: 100%;
+            height: 100%;
+            cursor: pointer;
+        }
+
+        .right-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            min-width: 300px;
+        }
+
+        .debugger {
+            background-color: #1e1e1e;
+            padding: 15px;
+            border-radius: 4px;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 12px;
+            overflow-y: auto;
+            max-height: 400px;
+        }
+
+        .debugger h3 {
+            margin-top: 0;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 5px;
+        }
+
+        .register-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 5px;
+            margin-bottom: 10px;
+        }
+
+        .reg-item {
+            background-color: #2a2a2a;
+            padding: 5px;
+            border-radius: 3px;
+        }
+
+        .reg-label {
+            color: #888;
+            font-size: 10px;
+        }
+
+        .reg-value {
+            font-weight: bold;
+            color: var(--accent-color);
+        }
+
+        .stack-display {
+            margin-top: 10px;
+        }
+
+        .keypad {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 5px;
+            background-color: #1e1e1e;
+            padding: 15px;
+            border-radius: 4px;
+        }
+
+        .key {
+            aspect-ratio: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #333;
+            border-radius: 4px;
+            font-weight: bold;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .key.active {
+            background-color: var(--accent-color);
+            color: white;
+        }
+
+        .instruction-display {
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #2a2a2a;
+            border-radius: 4px;
+            font-family: 'Courier New', Courier, monospace;
+        }
+
+        @media (max-width: 900px) {
+            .container {
+                flex-direction: column;
+            }
+            
+            .right-panel {
+                min-width: auto;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="left-panel">
+            <canvas id="screen" width="1280" height="640"></canvas>
+            
+            <div class="controls">
+                <button id="btn-run-pause">Run</button>
+                <button id="btn-step">Step</button>
+                <button id="btn-reset">Reset</button>
+                
+                <div class="file-input-wrapper">
+                    <button>Load ROM</button>
+                    <input type="file" id="rom-file" accept=".ch8,.bin,.hex">
+                </div>
+            </div>
+            
+            <div class="slider-container">
+                <label for="speed-slider">Speed:</label>
+                <input type="range" id="speed-slider" min="1" max="200" value="10">
+                <span id="speed-value">10</span> IPs
+            </div>
+            
+            <div class="keypad" id="keypad"></div>
+        </div>
+        
+        <div class="right-panel">
+            <div class="debugger">
+                <h3>Registers</h3>
+                <div class="register-grid" id="registers"></div>
+                
+                <div class="reg-item">
+                    <div class="reg-label">I (Index)</div>
+                    <div class="reg-value" id="reg-i">0x0000</div>
+                </div>
+                
+                <div class="reg-item" style="margin-top: 5px;">
+                    <div class="reg-label">PC (Program Counter)</div>
+                    <div class="reg-value" id="reg-pc">0x0200</div>
+                </div>
+                
+                <div class="reg-item" style="margin-top: 5px;">
+                    <div class="reg-label">Delay Timer</div>
+                    <div class="reg-value" id="reg-delay">0x00</div>
+                </div>
+                
+                <div class="reg-item" style="margin-top: 5px;">
+                    <div class="reg-label">Sound Timer</div>
+                    <div class="reg-value" id="reg-sound">0x00</div>
+                </div>
+                
+                <h3>Stack</h3>
+                <div class="stack-display" id="stack"></div>
+                
+                <h3>Current Instruction</h3>
+                <div class="instruction-display" id="current-instruction">Waiting...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // CHIP-8 Emulator Implementation
+        class Chip8 {
+            constructor() {
+                this.memory = new Uint8Array(4096);
+                this.V = new Uint8Array(16); // V0-VF
+                this.I = 0; // Index register
+                this.PC = 0x200; // Program counter
+                this.stack = [];
+                this.sp = 0; // Stack pointer
+                this.delayTimer = 0;
+                this.soundTimer = 0;
+                this.display = new Uint8Array(64 * 32); // 1-bit display
+                this.keys = new Uint8Array(16); // Key state
+                this.keyMap = {
+                    '1': 0x1, '2': 0x2, '3': 0x3, 'C': 0xC,
+                    '4': 0x4, '5': 0x5, '6': 0x6, 'D': 0xD,
+                    '7': 0x7, '8': 0x8, '9': 0x9, 'E': 0xE,
+                    'A': 0xA, 'S': 0xB, 'F': 0xF, 'Q': 0x0
+                };
+                this.running = false;
+                this.paused = false;
+                this.ipf = 10; // Instructions per frame
+                this.lastInstruction = '';
+                
+                // Load font set at 0x050
+                this.loadFontSet();
+            }
+            
+            loadFontSet() {
+                const fontset = [
+                    0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
+                    0x20, 0x60, 0x20, 0x20, 0x70, // 1
+                    0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
+                    0xF0, 0x10, 0xF0, 0x10, 0xF0, // 3
+                    0x90, 0x90, 0xF0, 0x10, 0x10, // 4
+                    0xF0, 0x80, 0xF0, 0x10, 0xF0, // 5
+                    0xF0, 0x80, 0xF0, 0x90, 0xF0, // 6
+                    0xF0, 0x10, 0x20, 0x40, 0x40, // 7
+                    0xF0, 0x90, 0xF0, 0x90, 0xF0, // 8
+                    0xF0, 0x90, 0xF0, 0x10, 0xF0, // 9
+                    0xF0, 0x90, 0xF0, 0x90, 0x90, // A
+                    0xE0, 0x90, 0xE0, 0x90, 0xE0, // B
+                    0xF0, 0x80, 0x80, 0x80, 0xF0, // C
+                    0xE0, 0x90, 0x90, 0x90, 0xE0, // D
+                    0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
+                    0xF0, 0x80, 0xF0, 0x80, 0x80  // F
+                ];
+                
+                for (let i = 0; i < fontset.length; i++) {
+                    this.memory[0x050 + i] = fontset[i];
+                }
+            }
+        }
+
+        // Initialize emulator
+        const chip8 = new Chip8();
+
+        // Canvas setup
+        const canvas = document.getElementById('screen');
+        const ctx = canvas.getContext('2d');
+        
+        // Scale factor (each pixel is 20x20)
+        const SCALE = 20;
+        canvas.width = 64 * SCALE;
+        canvas.height = 32 * SCALE;
+
+        // Draw initial screen
+        function drawScreen() {
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            ctx.fillStyle = '#fff';
+            
+            for (let y = 0; y < 32; y++) {
+                for (let x = 0; x < 64; x++) {
+                    if (chip8.display[y * 64 + x]) {
+                        ctx.fillRect(x * SCALE, y * SCALE, SCALE, SCALE);
+                    }
+                }
+            }
+        }
+
+        // Update debugger UI
+        function updateDebugger() {
+            // Registers
+            const regContainer = document.getElementById('registers');
+            regContainer.innerHTML = '';
+            
+            for (let i = 0; i < 16; i++) {
+                const regDiv = document.createElement('div');
+                regDiv.className = 'reg-item';
+                regDiv.innerHTML = `
+                    <div class="reg-label">V${i.toString(16).toUpperCase()}</div>
+                    <div class="reg-value">${chip8.V[i].toString(16).toUpperCase().padStart(2, '0')}</div>
+                `;
+                regContainer.appendChild(regDiv);
+            }
+            
+            // I register
+            document.getElementById('reg-i').textContent = 
+                chip8.I.toString(16).toUpperCase().padStart(4, '0');
+            
+            // PC
+            document.getElementById('reg-pc').textContent = 
+                chip8.PC.toString(16).toUpperCase().padStart(4, '0');
+            
+            // Timers
+            document.getElementById('reg-delay').textContent = 
+                chip8.delayTimer.toString(16).toUpperCase().padStart(2, '0');
+            document.getElementById('reg-sound').textContent = 
+                chip8.soundTimer.toString(16).toUpperCase().padStart(2, '0');
+            
+            // Stack
+            const stackContainer = document.getElementById('stack');
+            stackContainer.innerHTML = '';
+            
+            if (chip8.stack.length === 0) {
+                stackContainer.textContent = '(empty)';
+            } else {
+                chip8.stack.forEach((addr, idx) => {
+                    const div = document.createElement('div');
+                    div.textContent = `[${idx}] ${addr.toString(16).toUpperCase().padStart(4, '0')}`;
+                    stackContainer.appendChild(div);
+                });
+            }
+            
+            // Current instruction
+            document.getElementById('current-instruction').textContent = 
+                chip8.lastInstruction || 'Waiting...';
+        }
+
+        // Create keypad UI
+        function createKeypad() {
+            const keypad = document.getElementById('keypad');
+            const keys = ['1', '2', '3', 'C', '4', '5', '6', 'D', '7', '8', '9', 'E', 'A', 'S', 'F', 'Q'];
+            
+            keys.forEach(key => {
+                const keyDiv = document.createElement('div');
+                keyDiv.className = 'key';
+                keyDiv.textContent = key;
+                keyDiv.dataset.key = key;
+                
+                // Mouse events
+                keyDiv.addEventListener('mousedown', () => {
+                    chip8.handleKey(key, true);
+                    keyDiv.classList.add('active');
+                });
+                
+                keyDiv.addEventListener('mouseup', () => {
+                    chip8.handleKey(key, false);
+                    keyDiv.classList.remove('active');
+                });
+                
+                keyDiv.addEventListener('mouseleave', () => {
+                    if (chip8.keys[chip8.keyMap[key.toUpperCase()]]) {
+                        chip8.handleKey(key, false);
+                        keyDiv.classList.remove('active');
+                    }
+                });
+                
+                keypad.appendChild(keyDiv);
+            });
+        }
+
+        // Keyboard event handlers
+        document.addEventListener('keydown', (e) => {
+            const key = e.key;
+            chip8.handleKey(key, true);
+            
+            // Update keypad UI
+            const keyDiv = document.querySelector(`.key[data-key="${key.toUpperCase()}"]`);
+            if (keyDiv) keyDiv.classList.add('active');
+        });
+
+        document.addEventListener('keyup', (e) => {
+            const key = e.key;
+            chip8.handleKey(key, false);
+            
+            // Update keypad UI
+            const keyDiv = document.querySelector(`.key[data-key="${key.toUpperCase()}"]`);
+            if (keyDiv) keyDiv.classList.remove('active');
+        });
+
+        // Control buttons
+        const btnRunPause = document.getElementById('btn-run-pause');
+        const btnStep = document.getElementById('btn-step');
+        const btnReset = document.getElementById('btn-reset');
+        const speedSlider = document.getElementById('speed-slider');
+        const speedValue = document.getElementById('speed-value');
+
+        btnRunPause.addEventListener('click', () => {
+            chip8.running = !chip8.running;
+            chip8.paused = false;
+            btnRunPause.textContent = chip8.running ? 'Pause' : 'Run';
+            
+            if (chip8.running) {
+                gameLoop();
+            }
+        });
+
+        btnStep.addEventListener('click', () => {
+            chip8.running = false;
+            chip8.paused = true;
+            btnRunPause.textContent = 'Run';
+            
+            // Execute one instruction
+            const opcode = chip8.readWord();
+            chip8.PC += 2;
+            chip8.decodeAndExecute(opcode);
+            
+            drawScreen();
+            updateDebugger();
+        });
+
+        btnReset.addEventListener('click', () => {
+            chip8.reset();
+            chip8.loadROM(demoROM);
+            drawScreen();
+            updateDebugger();
+        });
+
+        speedSlider.addEventListener('input', () => {
+            chip8.ipf = parseInt(speedSlider.value);
+            speedValue.textContent = chip8.ipf;
+        });
+
+        // File input handler
+        document.getElementById('rom-file').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                const rom = new Uint8Array(event.target.result);
+                chip8.loadROM(rom);
+                drawScreen();
+                updateDebugger();
+            };
+            reader.readAsArrayBuffer(file);
+        });
+
+        // Game loop
+        let lastTime = 0;
+        const FRAME_TIME = 1000 / 60; // 60 FPS
+
+        function gameLoop(timestamp) {
+            if (!chip8.running) return;
+            
+            const deltaTime = timestamp - lastTime;
+            
+            if (deltaTime >= FRAME_TIME) {
+                chip8.executeCycle();
+                drawScreen();
+                updateDebugger();
+                
+                lastTime = timestamp;
+            }
+            
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Initialize UI
+        createKeypad();
+        drawScreen();
+        updateDebugger();
+    </script>
+</body>
+</html>

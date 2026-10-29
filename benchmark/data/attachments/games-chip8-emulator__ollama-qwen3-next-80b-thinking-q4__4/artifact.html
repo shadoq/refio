@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>CHIP-8 Emulator</title>
+    <style>
+        canvas {
+            width: 640px;
+            height: 320px;
+            image-rendering: pixelated;
+            border: 1px solid black;
+        }
+        .controls {
+            margin: 10px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .debugger {
+            margin: 10px;
+            font-family: monospace;
+            white-space: pre;
+            background: #f0f0f0;
+            padding: 10px;
+            border: 1px solid #ccc;
+        }
+        .keypad {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 5px;
+            margin: 10px;
+        }
+        .key {
+            width: 50px;
+            height: 50px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background-color: #eee;
+            border: 1px solid #ccc;
+            font-weight: bold;
+        }
+        .key.pressed {
+            background-color: #ddd;
+        }
+        input[type="range"] {
+            width: 100px;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="display" width="64" height="32"></canvas>
+    <div class="controls">
+        <button id="run">Run</button>
+        <button id="pause">Pause</button>
+        <button id="step">Step</button>
+        <button id="reset">Reset</button>
+        <label for="speed">Speed: </label>
+        <input type="range" id="speed" min="1" max="100" value="60">
+        <input type="file" id="rom" accept=".ch8,.rom">
+    </div>
+    <div class="keypad">
+        <div class="key" data-key="1">1</div>
+        <div class="key" data-key="2">2</div>
+        <div class="key" data-key="3">3</div>
+        <div class="key" data-key="C">C</div>
+        <div class="key" data-key="4">4</div>
+        <div class="key" data-key="5">5</div>
+        <div class="key" data-key="6">6</div>
+        <div class="key" data-key="D">D</div>
+        <div class="key" data-key="7">7</div>
+        <div class="key" data-key="8">8</div>
+        <div class="key" data-key="9">9</div>
+        <div class="key" data-key="E">E</div>
+        <div class="key" data-key="A">A</div>
+        <div class="key" data-key="0">0</div>
+        <div class="key" data-key="B">B</div>
+        <div class="key" data-key="F">F</div>
+    </div>
+    <div class="debugger" id="debugger"></div>
+    <script>
+        const memory = new Uint8Array(4096);
+        const V = new Uint8Array(16);
+        let I = 0;
+        let PC = 0x200;
+        const stack = [];
+        let delayTimer = 0;
+        let soundTimer = 0;
+        let running = false;
+        let stepMode = false;
+        let speed = 60;
+        const display = new Uint8Array(64 * 32);
+        const displayCanvas = document.getElementById('display');
+        const ctx = displayCanvas.getContext('2d');
+        const keyPressed = new Array(16).fill(false);
+        const keyMap = {
+            '1': 0,
+            '2': 1,
+            '3': 2,
+            '4': 3,
+            'q': 4,
+            'w': 5,
+            'e': 6,
+            'r': 7,
+            'a': 8,
+            's': 9,
+            'd': 10,
+            'f': 11,
+            'z': 12,
+            'x': 13,
+            'c': 14,
+            'v': 15
+        };
+        const font = [
+            0xF0, 0x90, 0x90, 0x90, 0xF0,
+            0x20, 0x60, 0x20, 0x20, 0x70,
+            0xF0, 0x10, 0xF0, 0x80, 0xF0,
+            0xF0, 0x10, 0xF0, 0x10, 0xF0,
+            0x90, 0x90, 0xF0, 0x10, 0x10,
+            0xF0, 0x80, 0xF0, 0x10, 0xF0,
+            0xF0, 0x80, 0xF0, 0x90, 0xF0,
+            0xF0, 0x10, 0x20, 0x40, 0x40,
+            0xF0, 0x90, 0xF0, 0x90, 0xF0,
+            0xF0, 0x90, 0xF0, 0x10, 0xF0,
+            0xF0, 0x90, 0xF0, 0x90, 0x90,
+            0xE0, 0x90, 0xE0, 0x90, 0xE0,
+            0xF0, 0x80, 0x80, 0x80, 0xF0,
+            0xE0, 0x90, 0x90, 0x90, 0xE0,
+            0xF0, 0x80, 0xF0, 0x80, 0xF0,
+            0xF0, 0x80, 0xF0, 0x80, 0x80
+        ];
+        const demoROM = new Uint8Array([
+            0x00, 0xE0, 0x60, 0x00, 0x61, 0x00, 0x62, 0x05, 0xA0, 0x50, 0xD0, 0x15, 0x63, 0x01, 0xE3, 0x9E, 0x12, 0x14, 0x60, 0x01, 0xE3, 0xA1, 0x12, 0x1A, 0x60, 0xFF, 0x12, 0x0C
+        ]);
+
+        for (let i = 0; i < font.length; i++) {
+            memory[0x050 + i] = font[i];
+        }
+
+        function drawDisplay() {
+            const imageData = ctx.getImageData(0, 0, 64, 32);
+            for (let i = 0; i < 64 * 32; i++) {
+                const color = display[i] ? 0xFFFFFF : 0x000000;
+                imageData.data[i * 4] = color;
+                imageData.data[i * 4 + 1] = color;
+                imageData.data[i * 4 + 2] = color;
+                imageData.data[i * 4 + 3] = 255;
+            }
+            ctx.putImageData(imageData, 0, 0);
+        }
+
+        function updateDebugger() {
+            const debuggerDiv = document.getElementById('debugger');
+            let debugText = `PC: ${PC.toString(16).padStart(4, '0')}\n`;
+            debugText += `I: ${I.toString(16).padStart(4, '0')}\n`;
+            debugText += `V0: ${V[0].toString(16).padStart(2, '0')} V1: ${V[1].toString(16).padStart(2, '0')} V2: ${V[2].toString(16).padStart(2, '0')} V3: ${V[3].toString(16).padStart(2, '0')}\n`;
+            debugText += `V4: ${V[4].toString(16).padStart(2, '0')} V5: ${V[5].toString(16).padStart(2, '0')} V6: ${V[6].toString(16).padStart(2, '0')} V7: ${V[7].toString(16).padStart(2, '0')}\n`;
+            debugText += `V8: ${V[8].toString(16).padStart(2, '0')} V9: ${V[9].toString(16).padStart(2, '0')} VA: ${V[10].toString(16).padStart(2, '0')} VB: ${V[11].toString(16).padStart(2, '0')}\n`;
+            debugText += `VC: ${V[12].toString(16).padStart(2, '0')} VD: ${V[13].toString(16).padStart(2, '0')} VE: ${V[14].toString(16).padStart(2, '0')} VF: ${V[15].toString(16).padStart(2, '0')}\n`;
+            debugText += `Stack: ${stack.map(x => x.toString(16).padStart(4, '0')).join(', ')}\n`;
+            const opcode = (memory[PC] << 8) | memory[PC + 1];
+            debugText += `Current: ${opcode.toString(16).padStart(4, '0')}`;
+            debuggerDiv.textContent = debugText;
+        }
+
+        function executeOpcode(opcode) {
+            const x = (opcode & 0x0F00) >> 8;
+            const y = (opcode & 0x00F0) >> 4;
+            const n = opcode & 0x000F;
+            const nn = opcode & 0x00FF;
+            const nnn = opcode & 0x0FFF;
+
+            switch (opcode & 0xF000) {
+                case 0x0000:
+                    if (nn === 0xE0) {
+                        display.fill(0);
+                        break;
+                    } else if (nn === 0xEE) {
+                        PC = stack.pop();
+                        break;
+                    }
+                    break;
+                case 0x1000:
+                    PC = nnn;
+                    break;
+                case 0x2000:
+                    stack.push(PC);
+                    PC = nnn;
+                    break;
+                case 0x3000:
+                    if (V[x] === nn) PC += 2;
+                    break;
+                case 0x4000:
+                    if (V[x] !== nn) PC += 2;
+                    break;
+                case 0x5000:
+                    if (V[x] === V[y]) PC += 2;
+                    break;
+                case 0x6000:
+                    V[x] = nn;
+                    break;
+                case 0x7000:
+                    V[x] = (V[x] + nn) & 0xFF;
+                    break;
+                case 0x8000:
+                    switch (n) {
+                        case 0x0: V[x] = V[y]; break;
+                        case 0x1: V[x] |= V[y]; break;
+                        case 0x2: V[x] &= V[y]; break;
+                        case 0x3: V[x] ^= V[y]; break;
+                        case 0x4: {
+                            const sum = V[x] + V[y];
+                            V[x] = sum & 0xFF;
+                            V[0xF] = sum > 0xFF ? 1 : 0;
+                            break;
+                        }
+                        case 0x5: {
+                            V[0xF] = V[x] > V[y] ? 1 : 0;
+                            V[x] = (V[x] - V[y]) & 0xFF;
+                            break;
+                        }
+                        case 0x6: {
+                            V[0xF] = V[x] & 1;
+                            V[x] >>= 1;
+                            break;
+                        }
+                        case 0x7: {
+                            V[0xF] = V[y] > V[x] ? 1 : 0;
+                            V[x] = (V[y] - V[x]) & 0xFF;
+                            break;
+                        }
+                        case 0xE: {
+                            V[0xF] = (V[x] >> 7) & 1;
+                            V[x] = (V[x] << 1) & 0xFF;
+                            break;
+                        }
+                    }
+                    break;
+                case 0x9000:
+                    if (V[x] !== V[y]) PC += 2;
+                    break;
+                case 0xA000:
+                    I = nnn;
+                    break;
+                case 0xB000:
+                    PC = nnn + V[0];
+                    break;
+                case 0xC000:
+                    V[x] = Math.floor(Math.random() * 256) & nn;
+                    break;
+                case 0xD000:
+                    let collision = false;
+                    for (let row = 0; row < n; row++) {
+                        const spriteByte = memory[I + row];
+                        for (let col = 0; col < 8; col++) {
+                            if (spriteByte & (0x80 >> col)) {
+                                const px = (V[x] + col) % 64;
+                                const py = (V[y] + row) % 32;
+                                const index = py * 64 + px;
+                                if (display[index] === 1) collision = true;
+                                display[index] ^= 1;
+                            }
+                        }
+                    }
+                    V[0xF] = collision ? 1 : 0;
+                    break;
+                case 0xE000:
+                    switch (nn) {
+                        case 0x9E:
+                            if (keyPressed[V[x]]) PC += 2;
+                            break;
+                        case 0xA1:
+                            if (!keyPressed[V[x]]) PC += 2;
+                            break;
+                    }
+                    break;
+                case 0xF000:
+                    switch (nn) {
+                        case 0x07: V[x] = delayTimer; break;
+                        case 0x0A: {
+                            let key = -1;
+                            for (let i = 0; i < 16; i++) {
+                                if (keyPressed[i]) {
+                                    key = i;
+                                    break;
+                                }
+                            }
+                            if (key === -1) PC -= 2;
+                            else V[x] = key;
+                            break;
+                        }
+                        case 0x15: delayTimer = V[x]; break;
+                        case 0x18: soundTimer = V[x]; break;
+                        case 0x1E: I += V[x]; break;
+                        case 0x29: I = 0x050 + (V[x] * 5); break;
+                        case 0x33: {
+                            const vx = V[x];
+                            memory[I] = Math.floor(vx / 100);
+                            memory[I + 1] = Math.floor((vx % 100) / 10);
+                            memory[I + 2] = vx % 10;
+                            break;
+                        }
+                        case 0x55:
+                            for (let i = 0; i <= x; i++) memory[I + i] = V[i];
+                            break;
+                        case 0x65:
+                            for (let i = 0; i <= x; i++) V[i] = memory[I + i];
+                            break;
+                    }
+                    break;
+            }
+        }
+
+        function mainLoop() {
+            if (running || stepMode) {
+                let instructionsToExecute = speed;
+                if (stepMode) {
+                    instructionsToExecute = 1;
+                    stepMode = false;
+                }
+                for (let i = 0; i < instructionsToExecute; i++) {
+                    const opcode = (memory[PC] << 8) | memory[PC + 1];
+                    PC += 2;
+                    executeOpcode(opcode);
+                }
+            }
+            if (delayTimer > 0) delayTimer--;
+            if (soundTimer > 0) soundTimer--;
+            drawDisplay();
+            updateDebugger();
+            requestAnimationFrame(mainLoop);
+        }
+
+        function handleKeyDown(event) {
+            const key = event.key.toLowerCase();
+            const keyCode = keyMap[key];
+            if (keyCode !== undefined) {
+                keyPressed[keyCode] = true;
+                document.querySelector(`.key[data-key="${key}"]`).classList.add('pressed');
+            }
+        }
+
+        function handleKeyUp(event) {
+            const key = event.key.toLowerCase();
+            const keyCode = keyMap[key];
+            if (keyCode !== undefined) {
+                keyPressed[keyCode] = false;
+                document.querySelector(`.key[data-key="${key}"]`).classList.remove('pressed');
+            }
+        }
+
+        document.getElementById('rom').addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const arrayBuffer = e.target.result;
+                    const rom = new Uint8Array(arrayBuffer);
+                    for (let i = 0; i < rom.length; i++) {
+                        memory[0x200 + i] = rom[i];
+                    }
+                    PC = 0x200;
+                    V.fill(0);
+                    I = 0;
+                    stack.length = 0;
+                    delayTimer = 0;
+                    soundTimer = 0;
+                    display.fill(0);
+                    keyPressed.fill(false);
+                    document.querySelectorAll('.key').forEach(key => key.classList.remove('pressed'));
+                };
+                reader.readAsArrayBuffer(file);
+            }
+        });
+
+        document.getElementById('reset').addEventListener('click', () => {
+            memory.fill(0);
+            for (let i = 0; i < font.length; i++) {
+                memory[0x050 + i] = font[i];
+            }
+            V.fill(0);
+            I = 0;
+            PC = 0x200;
+            stack.length = 0;
+            delayTimer = 0;
+            soundTimer = 0;
+            display.fill(0);
+            keyPressed.fill(false);
+            document.querySelectorAll('.key').forEach(key => key.classList.remove('pressed'));
+            for (let i = 0; i < demoROM.length; i++) {
+                memory[0x200 + i] = demoROM[i];
+            }
+        });
+
+        document.getElementById('run').addEventListener('click', () => {
+            running = true;
+            stepMode = false;
+        });
+
+        document.getElementById('pause').addEventListener('click', () => {
+            running = false;
+        });
+
+        document.getElementById('step').addEventListener('click', () => {
+            if (!running) stepMode = true;
+        });
+
+        document.getElementById('speed').addEventListener('input', (event) => {
+            speed = parseInt(event.target.value);
+        });
+
+        document.addEventListener('keydown', handleKeyDown);
+        document.addEventListener('keyup', handleKeyUp);
+
+        for (let i = 0; i < demoROM.length; i++) {
+            memory[0x200 + i] = demoROM[i];
+        }
+
+        requestAnimationFrame(mainLoop);
+    </script>
+</body>
+</html>

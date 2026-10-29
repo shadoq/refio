@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>CHIP-8 Emulator</title>
+<style>
+body{background:#14161c;color:#d8dde6;font:14px/1.4 monospace;margin:0;padding:16px}
+h1{font-size:18px;margin:0 0 10px}
+#wrap{display:flex;flex-wrap:wrap;gap:16px}
+canvas{background:#000;border:2px solid #3a4150;width:640px;height:320px;image-rendering:pixelated;display:block}
+.panel{background:#1d212b;border:1px solid #3a4150;padding:10px;border-radius:4px}
+button,select,input{font:inherit}
+button{background:#2d6cdf;color:#fff;border:0;padding:6px 12px;margin:2px;border-radius:3px;cursor:pointer}
+button:hover{background:#4a85f0}
+#keys{display:grid;grid-template-columns:repeat(4,52px);gap:4px;margin-top:8px}
+.k{background:#2a3040;border:1px solid #4a5268;text-align:center;padding:4px 0;user-select:none;cursor:pointer;border-radius:3px}
+.k.on{background:#e8a500;color:#000}.k small{display:block;color:#8fa0c0;font-size:11px}.k.on small{color:#222}
+#regs{display:grid;grid-template-columns:repeat(4,1fr);gap:2px 12px}
+#dbg div.l{margin:3px 0}
+#cur{color:#7fe08a;font-weight:bold}
+#snd{display:inline-block;width:10px;height:10px;border-radius:50%;background:#444}
+#snd.on{background:#f55}
+</style></head><body>
+<h1>CHIP-8 Emulator</h1>
+<div id="wrap">
+<div>
+<canvas id="scr" width="64" height="32"></canvas>
+<div class="panel" style="margin-top:8px">
+<button id="run">Run</button><button id="pause">Pause</button><button id="step">Step</button><button id="reset">Reset</button>
+<button id="demo">Load demo</button>
+<label>ROM file: <input type="file" id="file"></label><br>
+Instructions/frame: <input type="range" id="ipf" min="1" max="100" value="10"> <b id="ipfv">10</b>
+<label><input type="checkbox" id="qs"> shift uses Vy</label>
+<label><input type="checkbox" id="ql"> Fx55/Fx65 increment I</label>
+<div id="status">Status: paused</div>
+</div>
+</div>
+<div>
+<div class="panel"><b>Keypad</b> (keyboard keys → CHIP-8 keys) <span id="snd" title="sound"></span>
+<div id="keys"></div>
+<div>Demo: 2/8/4/6 on the CHIP-8 pad move the sprite (keyboard W/X/A/D → wait: keys 5=W? see grid)</div></div>
+<div class="panel" id="dbg" style="margin-top:8px"><b>Debugger</b>
+<div class="l">PC: <span id="pc"></span> &nbsp; I: <span id="ir"></span> &nbsp; SP: <span id="sp"></span> &nbsp; DT: <span id="dt"></span> &nbsp; ST: <span id="st"></span></div>
+<div class="l">Opcode: <span id="op"></span> → <span id="cur"></span></div>
+<div id="regs"></div>
+<div class="l">Stack: <span id="stk"></span></div></div>
+</div></div>
+<script>
+"use strict";
+const DEMO=[0x60,0x20,0x61,0x10,0xA2,0x40,0xD0,0x18,
+0xD0,0x18,0x62,0x02,0xE2,0xA1,0x71,0xFF,0x62,0x08,0xE2,0xA1,0x71,0x01,
+0x62,0x04,0xE2,0xA1,0x70,0xFF,0x62,0x06,0xE2,0xA1,0x70,0x01,
+0xD0,0x18,0x63,0x01,0xF3,0x15,0xF4,0x07,0x34,0x00,0x12,0x28,0x12,0x08];
+while(DEMO.length<0x40)DEMO.push(0);
+DEMO.push(0x3C,0x42,0xA5,0x81,0xA5,0x99,0x42,0x3C);
+const FONT=[0xF0,0x90,0x90,0x90,0xF0,0x20,0x60,0x20,0x20,0x70,0xF0,0x10,0xF0,0x80,0xF0,0xF0,0x10,0xF0,0x10,0xF0,
+0x90,0x90,0xF0,0x10,0x10,0xF0,0x80,0xF0,0x10,0xF0,0xF0,0x80,0xF0,0x90,0xF0,0xF0,0x10,0x20,0x40,0x40,
+0xF0,0x90,0xF0,0x90,0xF0,0xF0,0x90,0xF0,0x10,0xF0,0xF0,0x90,0xF0,0x90,0x90,0xE0,0x90,0xE0,0x90,0xE0,
+0xF0,0x80,0x80,0x80,0xF0,0xE0,0x90,0x90,0x90,0xE0,0xF0,0x80,0xF0,0x80,0xF0,0xF0,0x80,0xF0,0x80,0x80];
+const $=id=>document.getElementById(id);
+const hx=(n,w)=>n.toString(16).toUpperCase().padStart(w,"0");
+const cpu={};
+let rom=DEMO,running=false,waitReg=-1;
+const keys=new Array(16).fill(false);
+function reset(){
+ cpu.mem=new Uint8Array(4096);cpu.mem.set(FONT,0x50);cpu.mem.set(rom,0x200);
+ cpu.V=new Uint8Array(16);cpu.I=0;cpu.pc=0x200;cpu.stack=[];cpu.dt=0;cpu.st=0;
+ cpu.fb=new Uint8Array(64*32);waitReg=-1;keys.fill(false);draw();update();
+}
+function exec(){
+ const m=cpu.mem,V=cpu.V;
+ const op=(m[cpu.pc&4095]<<8)|m[(cpu.pc+1)&4095];
+ if(waitReg>=0)return;
+ cpu.pc=(cpu.pc+2)&4095;
+ const x=(op>>8)&15,y=(op>>4)&15,n=op&15,nn=op&255,nnn=op&0xFFF;
+ switch(op>>12){
+ case 0:
+  if(op===0xE0)cpu.fb.fill(0);
+  else if(op===0xEE){if(cpu.stack.length)cpu.pc=cpu.stack.pop();}
+  break;
+ case 1:cpu.pc=nnn;break;
+ case 2:if(cpu.stack.length<16)cpu.stack.push(cpu.pc);cpu.pc=nnn;break;
+ case 3:if(V[x]===nn)cpu.pc+=2;break;
+ case 4:if(V[x]!==nn)cpu.pc+=2;break;
+ case 5:if(V[x]===V[y])cpu.pc+=2;break;
+ case 6:V[x]=nn;break;
+ case 7:V[x]+=nn;break;
+ case 8:{
+  const a=V[x],b=V[y];let f;
+  switch(n){
+  case 0:V[x]=b;break;
+  case 1:V[x]=a|b;break;
+  case 2:V[x]=a&b;break;
+  case 3:V[x]=a^b;break;
+  case 4:{const s=a+b;V[x]=s;V[15]=s>255?1:0;break;}
+  case 5:V[x]=a-b;V[15]=a>=b?1:0;break;
+  case 6:{const s=$("qs").checked?b:a;V[x]=s>>1;V[15]=s&1;break;}
+  case 7:V[x]=b-a;V[15]=b>=a?1:0;break;
+  case 0xE:{const s=$("qs").checked?b:a;V[x]=s<<1;V[15]=(s>>7)&1;break;}
+  }
+  break;}
+ case 9:if(V[x]!==V[y])cpu.pc+=2;break;
+ case 0xA:cpu.I=nnn;break;
+ case 0xB:cpu.pc=(nnn+V[0])&4095;break;
+ case 0xC:V[x]=(Math.random()*256)&nn;break;
+ case 0xD:{
+  const px=V[x]%64,py=V[y]%32;V[15]=0;
+  for(let r=0;r<n;r++){
+   const row=m[(cpu.I+r)&4095],yy=py+r;if(yy>=32)break;
+   for(let c=0;c<8;c++){
+    const xx=px+c;if(xx>=64)break;
+    if(row&(0x80>>c)){const i=yy*64+xx;if(cpu.fb[i])V[15]=1;cpu.fb[i]^=1;}
+   }
+  }
+  break;}
+ case 0xE:
+  if(nn===0x9E){if(keys[V[x]&15])cpu.pc+=2;}
+  else if(nn===0xA1){if(!keys[V[x]&15])cpu.pc+=2;}
+  break;
+ case 0xF:
+  switch(nn){
+  case 0x07:V[x]=cpu.dt;break;
+  case 0x0A:waitReg=x;break;
+  case 0x15:cpu.dt=V[x];break;
+  case 0x18:cpu.st=V[x];break;
+  case 0x1E:cpu.I=(cpu.I+V[x])&0xFFFF;break;
+  case 0x29:cpu.I=0x50+(V[x]&15)*5;break;
+  case 0x33:{const v=V[x];m[cpu.I&4095]=Math.floor(v/100);m[(cpu.I+1)&4095]=Math.floor(v/10)%10;m[(cpu.I+2)&4095]=v%10;break;}
+  case 0x55:for(let i=0;i<=x;i++)m[(cpu.I+i)&4095]=V[i];if($("ql").checked)cpu.I+=x+1;break;
+  case 0x65:for(let i=0;i<=x;i++)V[i]=m[(cpu.I+i)&4095];if($("ql").checked)cpu.I+=x+1;break;
+  }
+  break;
+ }
+ cpu.pc&=4095;
+}
+function disasm(op){
+ const x=(op>>8)&15,y=(op>>4)&15,n=op&15,nn=op&255,nnn=op&0xFFF,X="V"+hx(x,1),Y="V"+hx(y,1);
+ switch(op>>12){
+ case 0:if(op===0xE0)return"CLS";if(op===0xEE)return"RET";return"SYS "+hx(nnn,3);
+ case 1:return"JP "+hx(nnn,3);
+ case 2:return"CALL "+hx(nnn,3);
+ case 3:return`SE ${X}, ${hx(nn,2)}`;
+ case 4:return`SNE ${X}, ${hx(nn,2)}`;
+ case 5:return`SE ${X}, ${Y}`;
+ case 6:return`LD ${X}, ${hx(nn,2)}`;
+ case 7:return`ADD ${X}, ${hx(nn,2)}`;
+ case 8:{const t={0:"LD",1:"OR",2:"AND",3:"XOR",4:"ADD",5:"SUB",6:"SHR",7:"SUBN",0xE:"SHL"}[n];
+  return t?`${t} ${X}, ${Y}`:"???";}
+ case 9:return`SNE ${X}, ${Y}`;
+ case 0xA:return"LD I, "+hx(nnn,3);
+ case 0xB:return"JP V0, "+hx(nnn,3);
+ case 0xC:return`RND ${X}, ${hx(nn,2)}`;
+ case 0xD:return`DRW ${X}, ${Y}, ${n}`;
+ case 0xE:return nn===0x9E?`SKP ${X}`:nn===0xA1?`SKNP ${X}`:"???";
+ case 0xF:{const t={7:`LD ${X}, DT`,0xA:`LD ${X}, K`,0x15:`LD DT, ${X}`,0x18:`LD ST, ${X}`,0x1E:`ADD I, ${X}`,
+  0x29:`LD F, ${X}`,0x33:`LD B, ${X}`,0x55:`LD [I], ${X}`,0x65:`LD ${X}, [I]`}[nn];return t||"???";}
+ }
+}
+const ctx=$("scr").getContext("2d");
+function draw(){
+ ctx.fillStyle="#000";ctx.fillRect(0,0,64,32);ctx.fillStyle="#7dff9a";
+ for(let i=0;i<2048;i++)if(cpu.fb[i])ctx.fillRect(i&63,i>>6,1,1);
+}
+function update(){
+ const op=(cpu.mem[cpu.pc]<<8)|cpu.mem[(cpu.pc+1)&4095];
+ $("pc").textContent=hx(cpu.pc,3);$("ir").textContent=hx(cpu.I,4);$("sp").textContent=cpu.stack.length;
+ $("dt").textContent=hx(cpu.dt,2);$("st").textContent=hx(cpu.st,2);
+ $("op").textContent=hx(op,4);$("cur").textContent=disasm(op)+(waitReg>=0?"  (waiting for key)":"");
+ $("regs").innerHTML=Array.from(cpu.V,(v,i)=>`<div>V${hx(i,1)}: ${hx(v,2)}</div>`).join("");
+ $("stk").textContent=cpu.stack.length?cpu.stack.map(a=>hx(a,3)).join(" "):"(empty)";
+ $("snd").className=cpu.st>0?"on":"";
+ $("status").textContent="Status: "+(running?"running":"paused");
+}
+// audio
+let ac,osc,gain;
+function beep(on){
+ try{
+  if(!ac){ac=new (window.AudioContext||window.webkitAudioContext)();osc=ac.createOscillator();gain=ac.createGain();
+   osc.frequency.value=440;osc.connect(gain);gain.connect(ac.destination);gain.gain.value=0;osc.start();}
+  gain.gain.value=on?0.05:0;
+ }catch(e){}
+}
+function frame(){
+ const n=+$("ipf").value;
+ for(let i=0;i<n;i++)exec();
+ tick();
+}
+function tick(){
+ if(cpu.dt>0)cpu.dt--;
+ if(cpu.st>0)cpu.st--;
+ beep(cpu.st>0);draw();update();
+}
+let last=0,acc=0;
+function loop(t){
+ requestAnimationFrame(loop);
+ const d=Math.min(t-last,200);last=t;
+ if(!running)return;
+ acc+=d;
+ while(acc>=1000/60){acc-=1000/60;frame();}
+}
+requestAnimationFrame(loop);
+$("run").onclick=()=>{running=true;if(ac&&ac.state==="suspended")ac.resume();update();};
+$("pause").onclick=()=>{running=false;beep(false);update();};
+$("step").onclick=()=>{running=false;exec();draw();update();};
+$("reset").onclick=()=>{reset();};
+$("demo").onclick=()=>{rom=DEMO;reset();};
+$("ipf").oninput=()=>{$("ipfv").textContent=$("ipf").value;};
+$("file").onchange=e=>{
+ const f=e.target.files[0];if(!f)return;
+ const r=new FileReader();
+ r.onload=()=>{rom=Array.from(new Uint8Array(r.result).slice(0,4096-0x200));reset();running=true;update();};
+ r.readAsArrayBuffer(f);
+};
+// keypad
+const LAYOUT=[[1,2,3,0xC],[4,5,6,0xD],[7,8,9,0xE],[0xA,0,0xB,0xF]];
+const KB=["1","2","3","4","q","w","e","r","a","s","d","f","z","x","c","v"];
+const kmap={};
+LAYOUT.forEach((row,ri)=>row.forEach((k,ci)=>{kmap[KB[ri*4+ci]]=k;}));
+const kel=[];
+LAYOUT.forEach((row,ri)=>row.forEach((k,ci)=>{
+ const d=document.createElement("div");d.className="k";
+ d.innerHTML=`${hx(k,1)}<small>${KB[ri*4+ci].toUpperCase()}</small>`;
+ const dn=e=>{e.preventDefault();setKey(k,true);},up=e=>{e.preventDefault();setKey(k,false);};
+ d.addEventListener("mousedown",dn);d.addEventListener("mouseup",up);d.addEventListener("mouseleave",()=>{if(keys[k])setKey(k,false);});
+ d.addEventListener("touchstart",dn);d.addEventListener("touchend",up);
+ kel[k]=d;$("keys").appendChild(d);
+}));
+function setKey(k,down){
+ keys[k]=down;kel[k].classList.toggle("on",down);
+ if(down&&waitReg>=0){cpu.V[waitReg]=k;waitReg=-1;update();}
+}
+addEventListener("keydown",e=>{
+ if(e.target.tagName==="INPUT"&&e.target.type!=="range"&&e.target.type!=="checkbox")return;
+ const k=kmap[e.key.toLowerCase()];if(k===undefined)return;
+ e.preventDefault();if(!e.repeat)setKey(k,true);
+});
+addEventListener("keyup",e=>{const k=kmap[e.key.toLowerCase()];if(k===undefined)return;e.preventDefault();setKey(k,false);});
+addEventListener("blur",()=>{for(let k=0;k<16;k++)if(keys[k])setKey(k,false);});
+reset();
+</script></body></html>

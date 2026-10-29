@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>CHIP-8 Emulator</title>
+<style>
+body{background:#14161b;color:#d8dde6;font:14px monospace;margin:0;padding:16px}
+h1{font-size:18px;margin:0 0 10px}
+#wrap{display:flex;flex-wrap:wrap;gap:16px}
+canvas{background:#000;border:2px solid #3a4150;width:640px;height:320px;image-rendering:pixelated}
+button,select,input{background:#262b36;color:#d8dde6;border:1px solid #4a5265;padding:6px 10px;font:inherit;border-radius:3px;cursor:pointer}
+button:hover{background:#343b4a}
+.row{margin:8px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+#pad{display:grid;grid-template-columns:repeat(4,52px);gap:4px}
+#pad button{height:46px;padding:2px;line-height:1.2}
+#pad button.on{background:#2e8b57}
+#pad small{color:#9aa4b5;display:block;font-size:11px}
+#dbg{background:#1b1f27;border:1px solid #3a4150;padding:10px;min-width:280px}
+#regs{display:grid;grid-template-columns:repeat(4,1fr);gap:2px 12px}
+.hl{color:#ffd166}
+#st{color:#8fd694}
+</style></head><body>
+<h1>CHIP-8 Emulator</h1>
+<div id="wrap">
+<div>
+<canvas id="scr" width="64" height="32"></canvas>
+<div class="row">
+<button id="run">Run</button><button id="pause">Pause</button><button id="step">Step</button><button id="reset">Reset</button>
+<button id="demo">Load demo</button>
+<label>ROM file <input type="file" id="file"></label>
+</div>
+<div class="row"><label>Instructions/frame <input type="range" id="ipf" min="1" max="100" value="10"></label><span id="ipfv">10</span>
+<span id="st"></span></div>
+<div class="row"><div id="pad"></div>
+<div>Keypad → keyboard:<br>1 2 3 4 → 1 2 3 C<br>Q W E R → 4 5 6 D<br>A S D F → 7 8 9 E<br>Z X C V → A 0 B F<br><br>Demo: move smiley with<br>Q (left) E (right) W (up) S (down)</div></div>
+</div>
+<div id="dbg"><b>Debugger</b>
+<div>PC <span id="pc" class="hl"></span> &nbsp; I <span id="idx" class="hl"></span> &nbsp; SP <span id="sp"></span></div>
+<div>DT <span id="dt"></span> &nbsp; ST <span id="stm"></span></div>
+<div>Next: <span id="ins" class="hl"></span></div>
+<hr><div id="regs"></div><hr>
+<div>Stack: <span id="stack"></span></div>
+</div></div>
+<script>
+const DEMO=[0x60,0x20,0x61,0x0C,0xA2,0x30,0xD0,0x18,0xD0,0x18,0x63,0x04,0xE3,0xA1,0x70,0xFF,
+0x63,0x06,0xE3,0xA1,0x70,0x01,0x63,0x02,0xE3,0xA1,0x71,0xFF,0x63,0x08,0xE3,0xA1,0x71,0x01,
+0xD0,0x18,0x64,0x03,0xF4,0x15,0xF5,0x07,0x35,0x00,0x12,0x28,0x12,0x08,
+0x3C,0x42,0xA5,0x81,0xA5,0x99,0x42,0x3C];
+const FONT=[0xF0,0x90,0x90,0x90,0xF0,0x20,0x60,0x20,0x20,0x70,0xF0,0x10,0xF0,0x80,0xF0,0xF0,0x10,0xF0,0x10,0xF0,
+0x90,0x90,0xF0,0x10,0x10,0xF0,0x80,0xF0,0x10,0xF0,0xF0,0x80,0xF0,0x90,0xF0,0xF0,0x10,0x20,0x40,0x40,
+0xF0,0x90,0xF0,0x90,0xF0,0xF0,0x90,0xF0,0x10,0xF0,0xF0,0x90,0xF0,0x90,0x90,0xE0,0x90,0xE0,0x90,0xE0,
+0xF0,0x80,0x80,0x80,0xF0,0xE0,0x90,0x90,0x90,0xE0,0xF0,0x80,0xF0,0x80,0xF0,0xF0,0x80,0xF0,0x80,0x80];
+const hex=(n,w)=>n.toString(16).toUpperCase().padStart(w,'0');
+class Chip8{
+ constructor(){this.rom=DEMO;this.reset();}
+ reset(){this.mem=new Uint8Array(4096);this.mem.set(FONT,0x50);this.mem.set(this.rom,0x200);
+  this.V=new Uint8Array(16);this.I=0;this.pc=0x200;this.stack=[];this.dt=0;this.st=0;
+  this.gfx=new Uint8Array(2048);this.keys=new Uint8Array(16);this.waitReg=-1;this.draw=true;}
+ load(b){this.rom=Array.from(b).slice(0,3584);this.reset();}
+ tick(){if(this.dt>0)this.dt--;if(this.st>0)this.st--;}
+ step(){
+  if(this.waitReg>=0){for(let k=0;k<16;k++)if(this.keys[k]){this.V[this.waitReg]=k;this.waitReg=-1;break;}
+   if(this.waitReg>=0)return;}
+  const op=(this.mem[this.pc&4095]<<8)|this.mem[(this.pc+1)&4095];this.pc=(this.pc+2)&4095;
+  const x=(op>>8)&15,y=(op>>4)&15,n=op&15,kk=op&255,nnn=op&0xFFF,V=this.V;
+  switch(op>>12){
+  case 0:if(op==0xE0){this.gfx.fill(0);this.draw=true;}else if(op==0xEE){if(this.stack.length)this.pc=this.stack.pop();}break;
+  case 1:this.pc=nnn;break;
+  case 2:if(this.stack.length<16)this.stack.push(this.pc);this.pc=nnn;break;
+  case 3:if(V[x]==kk)this.pc+=2;break;
+  case 4:if(V[x]!=kk)this.pc+=2;break;
+  case 5:if(V[x]==V[y])this.pc+=2;break;
+  case 6:V[x]=kk;break;
+  case 7:V[x]+=kk;break;
+  case 8:{const a=V[x],b=V[y];let f;
+   switch(n){
+   case 0:V[x]=b;break;case 1:V[x]=a|b;break;case 2:V[x]=a&b;break;case 3:V[x]=a^b;break;
+   case 4:V[x]=a+b;V[15]=a+b>255?1:0;break;
+   case 5:V[x]=a-b;V[15]=a>=b?1:0;break;
+   case 6:V[x]=a>>1;V[15]=a&1;break;
+   case 7:V[x]=b-a;V[15]=b>=a?1:0;break;
+   case 14:V[x]=a<<1;V[15]=a>>7;break;}
+   break;}
+  case 9:if(V[x]!=V[y])this.pc+=2;break;
+  case 10:this.I=nnn;break;
+  case 11:this.pc=(nnn+V[0])&4095;break;
+  case 12:V[x]=(Math.random()*256)&kk;break;
+  case 13:{const px=V[x]%64,py=V[y]%32;V[15]=0;
+   for(let r=0;r<n;r++){const yy=py+r;if(yy>=32)break;const s=this.mem[(this.I+r)&4095];
+    for(let c=0;c<8;c++){const xx=px+c;if(xx>=64)break;
+     if(s&(0x80>>c)){const i=yy*64+xx;if(this.gfx[i])V[15]=1;this.gfx[i]^=1;}}}
+   this.draw=true;break;}
+  case 14:if(kk==0x9E){if(this.keys[V[x]&15])this.pc+=2;}else if(kk==0xA1){if(!this.keys[V[x]&15])this.pc+=2;}break;
+  case 15:switch(kk){
+   case 0x07:V[x]=this.dt;break;
+   case 0x0A:this.waitReg=x;break;
+   case 0x15:this.dt=V[x];break;
+   case 0x18:this.st=V[x];break;
+   case 0x1E:this.I=(this.I+V[x])&0xFFFF;break;
+   case 0x29:this.I=0x50+(V[x]&15)*5;break;
+   case 0x33:{const v=V[x];this.mem[this.I&4095]=Math.floor(v/100);this.mem[(this.I+1)&4095]=Math.floor(v/10)%10;this.mem[(this.I+2)&4095]=v%10;break;}
+   case 0x55:for(let i=0;i<=x;i++)this.mem[(this.I+i)&4095]=V[i];break;
+   case 0x65:for(let i=0;i<=x;i++)V[i]=this.mem[(this.I+i)&4095];break;}
+   break;}
+ }
+ dis(){const op=(this.mem[this.pc&4095]<<8)|this.mem[(this.pc+1)&4095];
+  const x='V'+hex((op>>8)&15,1),y='V'+hex((op>>4)&15,1),n=hex(op&15,1),kk='0x'+hex(op&255,2),a='0x'+hex(op&0xFFF,3);
+  let s='???';const k=op&255;
+  switch(op>>12){
+  case 0:s=op==0xE0?'CLS':op==0xEE?'RET':'SYS '+a;break;
+  case 1:s='JP '+a;break;case 2:s='CALL '+a;break;
+  case 3:s=`SE ${x}, ${kk}`;break;case 4:s=`SNE ${x}, ${kk}`;break;case 5:s=`SE ${x}, ${y}`;break;
+  case 6:s=`LD ${x}, ${kk}`;break;case 7:s=`ADD ${x}, ${kk}`;break;
+  case 8:{const m={0:'LD',1:'OR',2:'AND',3:'XOR',4:'ADD',5:'SUB',6:'SHR',7:'SUBN',14:'SHL'}[op&15];s=m?`${m} ${x}, ${y}`:'???';break;}
+  case 9:s=`SNE ${x}, ${y}`;break;case 10:s='LD I, '+a;break;case 11:s='JP V0, '+a;break;
+  case 12:s=`RND ${x}, ${kk}`;break;case 13:s=`DRW ${x}, ${y}, ${n}`;break;
+  case 14:s=k==0x9E?`SKP ${x}`:k==0xA1?`SKNP ${x}`:'???';break;
+  case 15:s={7:`LD ${x}, DT`,10:`LD ${x}, K`,0x15:`LD DT, ${x}`,0x18:`LD ST, ${x}`,0x1E:`ADD I, ${x}`,0x29:`LD F, ${x}`,0x33:`LD B, ${x}`,0x55:`LD [I], ${x}`,0x65:`LD ${x}, [I]`}[k]||'???';break;}
+  return hex(op,4)+'  '+s;}
+}
+const $=id=>document.getElementById(id),cv=$('scr'),ctx=cv.getContext('2d'),img=ctx.createImageData(64,32);
+const cpu=new Chip8();let running=true,ac=null,osc=null,last=0,acc=0;
+const KEYS=['1','2','3','4','q','w','e','r','a','s','d','f','z','x','c','v'];
+const VAL=[1,2,3,12,4,5,6,13,7,8,9,14,10,0,11,15];
+const kmap={};KEYS.forEach((k,i)=>kmap[k]=VAL[i]);
+const pad=$('pad'),pbtn={};
+KEYS.forEach((k,i)=>{const b=document.createElement('button');b.innerHTML=hex(VAL[i],1)+'<small>'+k.toUpperCase()+'</small>';pad.appendChild(b);pbtn[VAL[i]]=b;
+ const dn=e=>{e.preventDefault();setKey(VAL[i],1)},up=e=>{e.preventDefault();setKey(VAL[i],0)};
+ b.addEventListener('mousedown',dn);b.addEventListener('mouseup',up);b.addEventListener('mouseleave',up);
+ b.addEventListener('touchstart',dn);b.addEventListener('touchend',up);});
+function setKey(k,v){cpu.keys[k]=v;pbtn[k].classList.toggle('on',!!v);}
+addEventListener('keydown',e=>{if(e.target.tagName==='INPUT'&&e.target.type!=='range')return;const k=kmap[e.key.toLowerCase()];if(k!==undefined){setKey(k,1);e.preventDefault();}});
+addEventListener('keyup',e=>{const k=kmap[e.key.toLowerCase()];if(k!==undefined){setKey(k,0);e.preventDefault();}});
+addEventListener('blur',()=>{for(let k=0;k<16;k++)setKey(k,0);});
+function beep(on){try{if(on&&!osc){ac=ac||new AudioContext();osc=ac.createOscillator();const g=ac.createGain();g.gain.value=.05;osc.type='square';osc.frequency.value=440;osc.connect(g);g.connect(ac.destination);osc.start();}
+ else if(!on&&osc){osc.stop();osc=null;}}catch(e){}}
+function render(){if(cpu.draw){for(let i=0;i<2048;i++){const v=cpu.gfx[i]?255:0;img.data[i*4]=v;img.data[i*4+1]=v?230:0;img.data[i*4+2]=v?140:0;img.data[i*4+3]=255;}ctx.putImageData(img,0,0);cpu.draw=false;}}
+function debug(){$('pc').textContent=hex(cpu.pc,3);$('idx').textContent=hex(cpu.I,4);$('sp').textContent=cpu.stack.length;
+ $('dt').textContent=cpu.dt;$('stm').textContent=cpu.st;$('ins').textContent=cpu.waitReg>=0?'waiting for key (LD V'+hex(cpu.waitReg,1)+', K)':cpu.dis();
+ let h='';for(let i=0;i<16;i++)h+=`<div>V${hex(i,1)}=${hex(cpu.V[i],2)}</div>`;$('regs').innerHTML=h;
+ $('stack').textContent=cpu.stack.length?cpu.stack.map(v=>hex(v,3)).join(' '):'(empty)';
+ $('st').textContent=running?'● running':'❚❚ paused';}
+function frame(t){requestAnimationFrame(frame);
+ if(running){const n=+$('ipf').value;for(let i=0;i<n;i++)cpu.step();
+  acc+=t-last;let c=0;while(acc>=1000/60&&c<5){cpu.tick();acc-=1000/60;c++;}if(c==5)acc=0;}
+ last=t;beep(running&&cpu.st>0);render();debug();}
+$('run').onclick=()=>{running=true;if(ac&&ac.state=='suspended')ac.resume();};
+$('pause').onclick=()=>{running=false;};
+$('step').onclick=()=>{running=false;cpu.step();cpu.tick();};
+$('reset').onclick=()=>{cpu.reset();};
+$('demo').onclick=()=>{cpu.load(DEMO);running=true;};
+$('ipf').oninput=e=>{$('ipfv').textContent=e.target.value;};
+$('file').onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{cpu.load(new Uint8Array(r.result));running=true;};r.readAsArrayBuffer(f);e.target.blur();};
+requestAnimationFrame(t=>{last=t;frame(t);});
+</script></body></html>

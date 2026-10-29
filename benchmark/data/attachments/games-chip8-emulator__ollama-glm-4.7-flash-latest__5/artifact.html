@@ -1,0 +1,1447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CHIP-8 Emulator</title>
+    <style>
+        :root {
+            --bg-color: #1e1e1e;
+            --panel-bg: #252526;
+            --text-color: #d4d4d4;
+            --accent-color: #007acc;
+            --accent-hover: #0062a3;
+            --border-color: #3e3e42;
+            --success-color: #4ec9b0;
+            --warning-color: #ce9178;
+            --font-mono: 'Consolas', 'Monaco', 'Courier New', monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            justify-content: center;
+            max-width: 1400px;
+            width: 100%;
+        }
+
+        .display-section {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }
+
+        canvas {
+            background-color: #000;
+            border: 2px solid var(--border-color);
+            border-radius: 4px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+            image-rendering: pixelated;
+        }
+
+        .controls-section {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            background-color: var(--panel-bg);
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .control-group label {
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #888;
+        }
+
+        .button-row {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        button {
+            background-color: var(--accent-color);
+            color: white;
+            border: none;
+            padding: 10px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: background-color 0.2s;
+        }
+
+        button:hover {
+            background-color: var(--accent-hover);
+        }
+
+        button:disabled {
+            background-color: #444;
+            cursor: not-allowed;
+            opacity: 0.7;
+        }
+
+        .file-input-wrapper {
+            position: relative;
+            overflow: hidden;
+            display: inline-block;
+        }
+
+        .file-input-wrapper input[type=file] {
+            font-size: 100px;
+            position: absolute;
+            left: 0;
+            top: 0;
+            opacity: 0;
+            cursor: pointer;
+        }
+
+        .file-input-wrapper button {
+            width: 100%;
+        }
+
+        .speed-control {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .speed-control input[type="range"] {
+            flex: 1;
+            cursor: pointer;
+        }
+
+        .keypad {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .key {
+            background-color: #333;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 12px;
+            text-align: center;
+            font-family: var(--font-mono);
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.1s;
+            user-select: none;
+        }
+
+        .key:hover {
+            background-color: #444;
+        }
+
+        .key.active {
+            background-color: var(--accent-color);
+            border-color: var(--accent-color);
+            transform: scale(0.98);
+        }
+
+        .key.pressed {
+            background-color: var(--success-color);
+            border-color: var(--success-color);
+        }
+
+        .debugger-panel {
+            background-color: var(--panel-bg);
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            width: 100%;
+            max-width: 600px;
+        }
+
+        .debugger-panel h2 {
+            font-size: 16px;
+            margin-bottom: 15px;
+            color: var(--success-color);
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 10px;
+        }
+
+        .debug-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 15px;
+        }
+
+        .debug-item {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .debug-item label {
+            font-size: 11px;
+            color: #888;
+            text-transform: uppercase;
+        }
+
+        .debug-item .value {
+            font-family: var(--font-mono);
+            font-size: 14px;
+            color: var(--text-color);
+            word-break: break-all;
+        }
+
+        .memory-view {
+            margin-top: 20px;
+        }
+
+        .memory-view h3 {
+            font-size: 14px;
+            margin-bottom: 10px;
+            color: var(--warning-color);
+        }
+
+        .memory-grid {
+            display: grid;
+            grid-template-columns: repeat(16, 1fr);
+            gap: 4px;
+        }
+
+        .memory-cell {
+            background-color: #333;
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            padding: 4px 8px;
+            font-family: var(--font-mono);
+            font-size: 12px;
+            text-align: center;
+            color: #aaa;
+        }
+
+        .memory-cell.highlight {
+            background-color: var(--accent-color);
+            color: white;
+        }
+
+        .memory-cell.highlight-pc {
+            background-color: var(--success-color);
+            color: #1e1e1e;
+        }
+
+        .status-bar {
+            margin-top: 15px;
+            padding: 10px;
+            background-color: #333;
+            border-radius: 4px;
+            font-size: 12px;
+            text-align: center;
+        }
+
+        .status-bar .status {
+            color: var(--success-color);
+            font-weight: 600;
+        }
+
+        .status-bar .error {
+            color: var(--warning-color);
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                flex-direction: column;
+            }
+
+            .debugger-panel {
+                max-width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="display-section">
+            <canvas id="display" width="640" height="320"></canvas>
+            <div class="keypad" id="keypad">
+                <div class="key" data-key="0">1</div>
+                <div class="key" data-key="1">2</div>
+                <div class="key" data-key="2">3</div>
+                <div class="key" data-key="3">C</div>
+                <div class="key" data-key="4">4</div>
+                <div class="key" data-key="5">5</div>
+                <div class="key" data-key="6">6</div>
+                <div class="key" data-key="7">D</div>
+                <div class="key" data-key="8">7</div>
+                <div class="key" data-key="9">8</div>
+                <div class="key" data-key="A">9</div>
+                <div class="key" data-key="B">E</div>
+                <div class="key" data-key="C">A</div>
+                <div class="key" data-key="D">B</div>
+                <div class="key" data-key="E">F</div>
+                <div class="key" data-key="F">0</div>
+            </div>
+        </div>
+
+        <div class="controls-section">
+            <div class="control-group">
+                <label>Emulation Controls</label>
+                <div class="button-row">
+                    <button id="runBtn">Run</button>
+                    <button id="pauseBtn" disabled>Pause</button>
+                    <button id="stepBtn">Step</button>
+                    <button id="resetBtn">Reset</button>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label>ROM Loading</label>
+                <div class="file-input-wrapper">
+                    <button>Load ROM File</button>
+                    <input type="file" id="romInput" accept=".ch8,.rom">
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label>Speed (Instructions/Frame)</label>
+                <div class="speed-control">
+                    <input type="range" id="speedSlider" min="1" max="10" value="5">
+                    <span id="speedValue">5</span>
+                </div>
+            </div>
+
+            <div class="status-bar">
+                <span id="statusText" class="status">Ready</span>
+            </div>
+        </div>
+
+        <div class="debugger-panel">
+            <h2>Debugger</h2>
+            <div class="debug-grid">
+                <div class="debug-item">
+                    <label>PC (Program Counter)</label>
+                    <div class="value" id="debugPC">0x200</div>
+                </div>
+                <div class="debug-item">
+                    <label>I (Index Register)</label>
+                    <div class="value" id="debugI">0x000</div>
+                </div>
+                <div class="debug-item">
+                    <label>SP (Stack Pointer)</label>
+                    <div class="value" id="debugSP">0</div>
+                </div>
+                <div class="debug-item">
+                    <label>DT (Delay Timer)</label>
+                    <div class="value" id="debugDT">0</div>
+                </div>
+                <div class="debug-item">
+                    <label>ST (Sound Timer)</label>
+                    <div class="value" id="debugST">0</div>
+                </div>
+                <div class="debug-item">
+                    <label>VF (Carry/Borrow)</label>
+                    <div class="value" id="debugVF">0</div>
+                </div>
+            </div>
+
+            <div class="memory-view">
+                <h3>Current Instruction</h3>
+                <div class="value" id="debugInstruction" style="font-size: 16px; margin-bottom: 10px;">0x0000</div>
+                <div class="memory-grid" id="memoryGrid"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // CHIP-8 Emulator Implementation
+        const DISPLAY_WIDTH = 64;
+        const DISPLAY_HEIGHT = 32;
+        const MEMORY_SIZE = 4096;
+        const FONT_SET_SIZE = 80;
+        const FONT_SET_START = 0x050;
+        const PROGRAM_START = 0x200;
+
+        // Keypad layout (0-F)
+        const KEYPAD_LAYOUT = [
+            '1', '2', '3', 'C',
+            '4', '5', '6', 'D',
+            '7', '8', '9', 'E',
+            'A', 'B', 'F', '0'
+        ];
+
+        // Font set (5x8 pixels per character)
+        const FONT_SET = [
+            0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
+            0x20, 0x60, 0x20, 0x20, 0x70, // 1
+            0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
+            0xF0, 0x10, 0xF0, 0x10, 0xF0, // 3
+            0x90, 0x90, 0xF0, 0x10, 0x10, // 4
+            0xF0, 0x80, 0xF0, 0x10, 0xF0, // 5
+            0xF0, 0x80, 0xF0, 0x90, 0xF0, // 6
+            0xF0, 0x10, 0x20, 0x40, 0x40, // 7
+            0xF0, 0x90, 0xF0, 0x90, 0xF0, // 8
+            0xF0, 0x90, 0xF0, 0x10, 0xF0, // 9
+            0xF0, 0x90, 0xF0, 0x90, 0x90, // A
+            0xE0, 0x90, 0xE0, 0x90, 0xE0, // B
+            0xF0, 0x80, 0x80, 0x80, 0xF0, // C
+            0xE0, 0x90, 0x90, 0x90, 0xE0, // D
+            0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
+            0xF0, 0x80, 0xF0, 0x80, 0x80  // F
+        ];
+
+        // Demo ROM: Simple sprite drawing and key reaction
+        const DEMO_ROM = new Uint8Array([
+            0x60, 0x0A, 0x61, 0x00, 0x62, 0x01, 0x63, 0x00, // V0=10, V1=0, V2=1, V3=0
+            0x72, 0x02, 0x75, 0x02, 0x7A, 0x02, 0x7D, 0x02, // Set V2=2, V5=2, V10=2, V13=2
+            0x6E, 0x01, 0x6F, 0x01, 0x70, 0x01, 0x71, 0x01, // V14=1, V15=1, V16=1, V17=1
+            0xA2, 0x00, // I = 0x200
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x01, // V1 = 1
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x02, // V1 = 2
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x03, // V1 = 3
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x04, // V1 = 4
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x05, // V1 = 5
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x06, // V1 = 6
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x07, // V1 = 7
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x08, // V1 = 8
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x09, // V1 = 9
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x0A, // V1 = 10
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x0B, // V1 = 11
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x0C, // V1 = 12
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x0D, // V1 = 13
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x0E, // V1 = 14
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x0F, // V1 = 15
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x10, // V1 = 16
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x11, // V1 = 17
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x12, // V1 = 18
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x13, // V1 = 19
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x14, // V1 = 20
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x15, // V1 = 21
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x16, // V1 = 22
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x17, // V1 = 23
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x18, // V1 = 24
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x19, // V1 = 25
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x1A, // V1 = 26
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x1B, // V1 = 27
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x1C, // V1 = 28
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x1D, // V1 = 29
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x1E, // V1 = 30
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x1F, // V1 = 31
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x20, // V1 = 32
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x21, // V1 = 33
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x22, // V1 = 34
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x23, // V1 = 35
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x24, // V1 = 36
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x25, // V1 = 37
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x26, // V1 = 38
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x27, // V1 = 39
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x28, // V1 = 40
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x29, // V1 = 41
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x2A, // V1 = 42
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x2B, // V1 = 43
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x2C, // V1 = 44
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x2D, // V1 = 45
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x2E, // V1 = 46
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x2F, // V1 = 47
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x30, // V1 = 48
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x31, // V1 = 49
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x32, // V1 = 50
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x33, // V1 = 51
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x34, // V1 = 52
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x35, // V1 = 53
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x36, // V1 = 54
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x37, // V1 = 55
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x38, // V1 = 56
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x39, // V1 = 57
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x3A, // V1 = 58
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x3B, // V1 = 59
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x3C, // V1 = 60
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x3D, // V1 = 61
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x3E, // V1 = 62
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x3F, // V1 = 63
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x40, // V1 = 64
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x41, // V1 = 65
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x42, // V1 = 66
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x43, // V1 = 67
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x44, // V1 = 68
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x45, // V1 = 69
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x46, // V1 = 70
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x47, // V1 = 71
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x48, // V1 = 72
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x49, // V1 = 73
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x4A, // V1 = 74
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x4B, // V1 = 75
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x4C, // V1 = 76
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x4D, // V1 = 77
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x4E, // V1 = 78
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x4F, // V1 = 79
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x50, // V1 = 80
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x51, // V1 = 81
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x52, // V1 = 82
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x53, // V1 = 83
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x54, // V1 = 84
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x55, // V1 = 85
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x56, // V1 = 86
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x57, // V1 = 87
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x58, // V1 = 88
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x59, // V1 = 89
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x5A, // V1 = 90
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x5B, // V1 = 91
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x5C, // V1 = 92
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x5D, // V1 = 93
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x5E, // V1 = 94
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x5F, // V1 = 95
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x60, // V1 = 96
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x61, // V1 = 97
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x62, // V1 = 98
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x63, // V1 = 99
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x64, // V1 = 100
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x65, // V1 = 101
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x66, // V1 = 102
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x67, // V1 = 103
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x68, // V1 = 104
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x69, // V1 = 105
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x6A, // V1 = 106
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x6B, // V1 = 107
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x6C, // V1 = 108
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x6D, // V1 = 109
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x6E, // V1 = 110
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x6F, // V1 = 111
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x70, // V1 = 112
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x71, // V1 = 113
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x72, // V1 = 114
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x73, // V1 = 115
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x74, // V1 = 116
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x75, // V1 = 117
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x76, // V1 = 118
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x77, // V1 = 119
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x78, // V1 = 120
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x79, // V1 = 121
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x7A, // V1 = 122
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x7B, // V1 = 123
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x7C, // V1 = 124
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x7D, // V1 = 125
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x7E, // V1 = 126
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x7F, // V1 = 127
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x80, // V1 = 128
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x81, // V1 = 129
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x82, // V1 = 130
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x83, // V1 = 131
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x84, // V1 = 132
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x85, // V1 = 133
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x86, // V1 = 134
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x87, // V1 = 135
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x88, // V1 = 136
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x89, // V1 = 137
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x8A, // V1 = 138
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x8B, // V1 = 139
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x8C, // V1 = 140
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x8D, // V1 = 141
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x8E, // V1 = 142
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x8F, // V1 = 143
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x90, // V1 = 144
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x91, // V1 = 145
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x92, // V1 = 146
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x93, // V1 = 147
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x94, // V1 = 148
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x95, // V1 = 149
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x96, // V1 = 150
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x97, // V1 = 151
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x98, // V1 = 152
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x99, // V1 = 153
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x9A, // V1 = 154
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x9B, // V1 = 155
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x9C, // V1 = 156
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x9D, // V1 = 157
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x9E, // V1 = 158
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0x9F, // V1 = 159
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xA0, // V1 = 160
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xA1, // V1 = 161
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xA2, // V1 = 162
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xA3, // V1 = 163
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xA4, // V1 = 164
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xA5, // V1 = 165
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xA6, // V1 = 166
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xA7, // V1 = 167
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xA8, // V1 = 168
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xA9, // V1 = 169
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xAA, // V1 = 170
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xAB, // V1 = 171
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xAC, // V1 = 172
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xAD, // V1 = 173
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xAE, // V1 = 174
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xAF, // V1 = 175
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xB0, // V1 = 176
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xB1, // V1 = 177
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xB2, // V1 = 178
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xB3, // V1 = 179
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xB4, // V1 = 180
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xB5, // V1 = 181
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xB6, // V1 = 182
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xB7, // V1 = 183
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xB8, // V1 = 184
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xB9, // V1 = 185
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xBA, // V1 = 186
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xBB, // V1 = 187
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xBC, // V1 = 188
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xBD, // V1 = 189
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xBE, // V1 = 190
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xBF, // V1 = 191
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xC0, // V1 = 192
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xC1, // V1 = 193
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xC2, // V1 = 194
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xC3, // V1 = 195
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xC4, // V1 = 196
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xC5, // V1 = 197
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xC6, // V1 = 198
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xC7, // V1 = 199
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xC8, // V1 = 200
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xC9, // V1 = 201
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xCA, // V1 = 202
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xCB, // V1 = 203
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xCC, // V1 = 204
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xCD, // V1 = 205
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xCE, // V1 = 206
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xCF, // V1 = 207
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xD0, // V1 = 208
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xD1, // V1 = 209
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xD2, // V1 = 210
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xD3, // V1 = 211
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xD4, // V1 = 212
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xD5, // V1 = 213
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xD6, // V1 = 214
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xD7, // V1 = 215
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xD8, // V1 = 216
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xD9, // V1 = 217
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xDA, // V1 = 218
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xDB, // V1 = 219
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xDC, // V1 = 220
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xDD, // V1 = 221
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xDE, // V1 = 222
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xDF, // V1 = 223
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xE0, // V1 = 224
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xE1, // V1 = 225
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xE2, // V1 = 226
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xE3, // V1 = 227
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xE4, // V1 = 228
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xE5, // V1 = 229
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xE6, // V1 = 230
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xE7, // V1 = 231
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xE8, // V1 = 232
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xE9, // V1 = 233
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xEA, // V1 = 234
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xEB, // V1 = 235
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xEC, // V1 = 236
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xED, // V1 = 237
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xEE, // V1 = 238
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xEF, // V1 = 239
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xF0, // V1 = 240
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xF1, // V1 = 241
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xF2, // V1 = 242
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xF3, // V1 = 243
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xF4, // V1 = 244
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xF5, // V1 = 245
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xF6, // V1 = 246
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xF7, // V1 = 247
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xF8, // V1 = 248
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xF9, // V1 = 249
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xFA, // V1 = 250
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xFB, // V1 = 251
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xFC, // V1 = 252
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xFD, // V1 = 253
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xFE, // V1 = 254
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x61, 0xFF, // V1 = 255
+            0x12, 0x00, // Draw sprite at (V0, V1) with height V2
+            0x00, 0xEE, // Return
+            0x00, 0x00  // End
+        ]);
+
+        class Chip8 {
+            constructor() {
+                this.memory = new Uint8Array(MEMORY_SIZE);
+                this.v = new Uint8Array(16);
+                this.i = 0;
+                this.pc = PROGRAM_START;
+                this.stack = [];
+                this.sp = 0;
+                this.delayTimer = 0;
+                this.soundTimer = 0;
+                this.keypad = new Uint8Array(16);
+                this.display = new Uint8Array(DISPLAY_WIDTH * DISPLAY_HEIGHT);
+                this.drawFlag = false;
+                this.running = false;
+                this.speed = 5;
+                this.lastFrameTime = 0;
+            }
+
+            reset() {
+                this.memory.fill(0);
+                this.v.fill(0);
+                this.i = 0;
+                this.pc = PROGRAM_START;
+                this.stack = [];
+                this.sp = 0;
+                this.delayTimer = 0;
+                this.soundTimer = 0;
+                this.keypad.fill(0);
+                this.display.fill(0);
+                this.drawFlag = false;
+                this.running = false;
+                this.loadFontSet();
+            }
+
+            loadFontSet() {
+                for (let i = 0; i < FONT_SET_SIZE; i++) {
+                    this.memory[FONT_SET_START + i] = FONT_SET[i];
+                }
+            }
+
+            loadROM(data) {
+                this.reset();
+                const bytesToLoad = Math.min(data.length, MEMORY_SIZE - PROGRAM_START);
+                for (let i = 0; i < bytesToLoad; i++) {
+                    this.memory[PROGRAM_START + i] = data[i];
+                }
+                this.pc = PROGRAM_START;
+            }
+
+            loadDemoROM() {
+                this.loadROM(DEMO_ROM);
+            }
+
+            updateTimers() {
+                if (this.delayTimer > 0) this.delayTimer--;
+                if (this.soundTimer > 0) this.soundTimer--;
+            }
+
+            handleInput(key, pressed) {
+                const keyIndex = KEYPAD_LAYOUT.indexOf(key);
+                if (keyIndex !== -1) {
+                    this.keypad[keyIndex] = pressed ? 1 : 0;
+                }
+            }
+
+            cycle() {
+                if (!this.running) return;
+
+                const instructionsPerFrame = this.speed;
+                for (let i = 0; i < instructionsPerFrame; i++) {
+                    this.step();
+                    if (this.pc === 0x00EE) {
+                        this.pc -= 2;
+                    }
+                }
+                this.updateTimers();
+                this.drawFlag = false;
+            }
+
+            step() {
+                const opcode = (this.memory[this.pc] << 8) | this.memory[this.pc + 1];
+                this.pc += 2;
+
+                switch (opcode & 0xF000) {
+                    case 0x0000:
+                        this.handleOp0NNN(opcode);
+                        break;
+                    case 0x1000:
+                        this.pc = opcode & 0x0FFF;
+                        break;
+                    case 0x2000:
+                        this.stack.push(this.pc);
+                        this.sp++;
+                        this.pc = opcode & 0x0FFF;
+                        break;
+                    case 0x3000:
+                        if (this.v[(opcode >> 8) & 0xF] === (opcode & 0x00FF)) {
+                            this.pc += 2;
+                        }
+                        break;
+                    case 0x4000:
+                        if (this.v[(opcode >> 8) & 0xF] !== (opcode & 0x00FF)) {
+                            this.pc += 2;
+                        }
+                        break;
+                    case 0x5000:
+                        if (this.v[(opcode >> 8) & 0xF] === this.v[(opcode >> 4) & 0xF]) {
+                            this.pc += 2;
+                        }
+                        break;
+                    case 0x6000:
+                        this.v[(opcode >> 8) & 0xF] = opcode & 0x00FF;
+                        break;
+                    case 0x7000:
+                        this.v[(opcode >> 8) & 0xF] += opcode & 0x00FF;
+                        break;
+                    case 0x8000:
+                        this.handleOp8NNN(opcode);
+                        break;
+                    case 0x9000:
+                        if (this.v[(opcode >> 8) & 0xF] !== this.v[(opcode >> 4) & 0xF]) {
+                            this.pc += 2;
+                        }
+                        break;
+                    case 0xA000:
+                        this.i = opcode & 0x0FFF;
+                        break;
+                    case 0xB000:
+                        this.pc = (opcode & 0x0FFF) + this.v[0];
+                        break;
+                    case 0xC000:
+                        this.v[(opcode >> 8) & 0xF] = Math.floor(Math.random() * 256) & (opcode & 0x00FF);
+                        break;
+                    case 0xD000:
+                        this.handleOpDNNN(opcode);
+                        break;
+                    case 0xE000:
+                        this.handleOpENNN(opcode);
+                        break;
+                    case 0xF000:
+                        this.handleOpFNNN(opcode);
+                        break;
+                    default:
+                        console.warn(`Unknown opcode: 0x${opcode.toString(16)}`);
+                }
+            }
+
+            handleOp0NNN(opcode) {
+                switch (opcode) {
+                    case 0x00E0:
+                        this.display.fill(0);
+                        this.drawFlag = true;
+                        break;
+                    case 0x00EE:
+                        if (this.sp > 0) {
+                            this.sp--;
+                            this.pc = this.stack.pop();
+                        }
+                        break;
+                    default:
+                        console.warn(`Unknown opcode: 0x${opcode.toString(16)}`);
+                }
+            }
+
+            handleOp8NNN(opcode) {
+                const x = (opcode >> 8) & 0xF;
+                const y = (opcode >> 4) & 0xF;
+                const nibble = opcode & 0xF;
+
+                switch (nibble) {
+                    case 0x0:
+                        this.v[x] = this.v[y];
+                        break;
+                    case 0x1:
+                        this.v[x] |= this.v[y];
+                        break;
+                    case 0x2:
+                        this.v[x] &= this.v[y];
+                        break;
+                    case 0x3:
+                        this.v[x] ^= this.v[y];
+                        break;
+                    case 0x4:
+                        const sum = this.v[x] + this.v[y];
+                        this.v[0xF] = sum > 255 ? 1 : 0;
+                        this.v[x] = sum & 0xFF;
+                        break;
+                    case 0x5:
+                        this.v[0xF] = this.v[x] >= this.v[y] ? 1 : 0;
+                        this.v[x] -= this.v[y];
+                        break;
+                    case 0x6:
+                        this.v[0xF] = this.v[x] & 1;
+                        this.v[x] >>= 1;
+                        break;
+                    case 0x7:
+                        this.v[0xF] = this.v[y] >= this.v[x] ? 1 : 0;
+                        this.v[x] = this.v[y] - this.v[x];
+                        break;
+                    case 0xE:
+                        this.v[0xF] = (this.v[x] >> 7) & 1;
+                        this.v[x] <<= 1;
+                        break;
+                }
+            }
+
+            handleOpDNNN(opcode) {
+                const x = this.v[(opcode >> 8) & 0xF];
+                const y = this.v[(opcode >> 4) & 0xF];
+                const n = opcode & 0xF;
+                const height = n;
+
+                let pixel = 0;
+                let collision = 0;
+
+                for (let row = 0; row < height; row++) {
+                    const spriteByte = this.memory[this.i + row];
+                    for (let col = 0; col < 8; col++) {
+                        if ((spriteByte & (0x80 >> col)) !== 0) {
+                            const px = (x + col) % DISPLAY_WIDTH;
+                            const py = (y + row) % DISPLAY_HEIGHT;
+                            const index = py * DISPLAY_WIDTH + px;
+
+                            if (this.display[index] === 1) {
+                                collision = 1;
+                            }
+                            this.display[index] ^= 1;
+                        }
+                    }
+                }
+
+                this.v[0xF] = collision;
+                this.drawFlag = true;
+            }
+
+            handleOpENNN(opcode) {
+                const x = (opcode >> 8) & 0xF;
+                const nibble = opcode & 0xF;
+
+                switch (nibble) {
+                    case 0x9E:
+                        if (this.keypad[x]) {
+                            this.pc += 2;
+                        }
+                        break;
+                    case 0xA1:
+                        if (!this.keypad[x]) {
+                            this.pc += 2;
+                        }
+                        break;
+                }
+            }
+
+            handleOpFNNN(opcode) {
+                const x = (opcode >> 8) & 0xF;
+                const nibble = opcode & 0xF;
+
+                switch (nibble) {
+                    case 0x07:
+                        this.v[x] = this.delayTimer;
+                        break;
+                    case 0x0A:
+                        this.waitForKey();
+                        break;
+                    case 0x15:
+                        this.delayTimer = this.v[x];
+                        break;
+                    case 0x18:
+                        this.soundTimer = this.v[x];
+                        break;
+                    case 0x1E:
+                        this.i += this.v[x];
+                        break;
+                    case 0x29:
+                        this.i = this.v[x] * 5;
+                        break;
+                    case 0x33:
+                        this.memory[this.i] = Math.floor(this.v[x] / 100);
+                        this.memory[this.i + 1] = Math.floor((this.v[x] % 100) / 10);
+                        this.memory[this.i + 2] = this.v[x] % 10;
+                        break;
+                    case 0x55:
+                        for (let i = 0; i <= x; i++) {
+                            this.memory[this.i + i] = this.v[i];
+                        }
+                        break;
+                    case 0x65:
+                        for (let i = 0; i <= x; i++) {
+                            this.v[i] = this.memory[this.i + i];
+                        }
+                        break;
+                }
+            }
+
+            waitForKey() {
+                for (let i = 0; i < 16; i++) {
+                    if (this.keypad[i]) {
+                        this.v[x] = i;
+                        return;
+                    }
+                }
+                this.pc -= 2;
+            }
+
+            draw() {
+                const canvas = document.getElementById('display');
+                const ctx = canvas.getContext('2d');
+                const imageData = ctx.createImageData(canvas.width, canvas.height);
+                const data = imageData.data;
+
+                for (let i = 0; i < this.display.length; i++) {
+                    const pixel = this.display[i];
+                    const x = i % DISPLAY_WIDTH;
+                    const y = Math.floor(i / DISPLAY_WIDTH);
+                    const canvasX = x * (canvas.width / DISPLAY_WIDTH);
+                    const canvasY = y * (canvas.height / DISPLAY_HEIGHT);
+
+                    const index = (canvasY * canvas.width + canvasX) * 4;
+                    data[index] = pixel ? 255 : 0;
+                    data[index + 1] = pixel ? 255 : 0;
+                    data[index + 2] = pixel ? 255 : 0;
+                    data[index + 3] = 255;
+                }
+
+                ctx.putImageData(imageData, 0, 0);
+            }
+        }
+
+        // UI and Event Handling
+        const emulator = new Chip8();
+        const canvas = document.getElementById('display');
+        const ctx = canvas.getContext('2d');
+        const speedSlider = document.getElementById('speedSlider');
+        const speedValue = document.getElementById('speedValue');
+        const statusText = document.getElementById('statusText');
+        const memoryGrid = document.getElementById('memoryGrid');
+
+        // Initialize memory grid
+        for (let i = 0; i < 256; i++) {
+            const cell = document.createElement('div');
+            cell.className = 'memory-cell';
+            cell.id = `mem-${i}`;
+            cell.textContent = '0x' + i.toString(16).padStart(2, '0');
+            memoryGrid.appendChild(cell);
+        }
+
+        function updateDebugPanel() {
+            document.getElementById('debugPC').textContent = '0x' + emulator.pc.toString(16).padStart(4, '0');
+            document.getElementById('debugI').textContent = '0x' + emulator.i.toString(16).padStart(3, '0');
+            document.getElementById('debugSP').textContent = emulator.sp;
+            document.getElementById('debugDT').textContent = emulator.delayTimer;
+            document.getElementById('debugST').textContent = emulator.soundTimer;
+            document.getElementById('debugVF').textContent = emulator.v[0xF];
+
+            const currentOpcode = (emulator.memory[emulator.pc] << 8) | emulator.memory[emulator.pc + 1];
+            document.getElementById('debugInstruction').textContent = '0x' + currentOpcode.toString(16).padStart(4, '0');
+
+            // Update memory grid highlights
+            for (let i = 0; i < 256; i++) {
+                const cell = document.getElementById(`mem-${i}`);
+                cell.classList.remove('highlight', 'highlight-pc');
+                if (i === emulator.pc) {
+                    cell.classList.add('highlight-pc');
+                } else if (i === emulator.i || i === emulator.i + 1 || i === emulator.i + 2) {
+                    cell.classList.add('highlight');
+                }
+            }
+        }
+
+        function gameLoop() {
+            emulator.cycle();
+            emulator.draw();
+            updateDebugPanel();
+            requestAnimationFrame(gameLoop);
+        }
+
+        document.getElementById('runBtn').addEventListener('click', () => {
+            emulator.running = true;
+            document.getElementById('runBtn').disabled = true;
+            document.getElementById('pauseBtn').disabled = false;
+            statusText.textContent = 'Running';
+            statusText.className = 'status';
+        });
+
+        document.getElementById('pauseBtn').addEventListener('click', () => {
+            emulator.running = false;
+            document.getElementById('runBtn').disabled = false;
+            document.getElementById('pauseBtn').disabled = true;
+            statusText.textContent = 'Paused';
+            statusText.className = 'error';
+        });
+
+        document.getElementById('stepBtn').addEventListener('click', () => {
+            emulator.running = false;
+            document.getElementById('runBtn').disabled = false;
+            document.getElementById('pauseBtn').disabled = true;
+            emulator.step();
+            emulator.draw();
+            updateDebugPanel();
+            statusText.textContent = 'Stepped';
+            statusText.className = 'status';
+        });
+
+        document.getElementById('resetBtn').addEventListener('click', () => {
+            emulator.running = false;
+            document.getElementById('runBtn').disabled = false;
+            document.getElementById('pauseBtn').disabled = true;
+            emulator.reset();
+            emulator.draw();
+            updateDebugPanel();
+            statusText.textContent = 'Reset';
+            statusText.className = 'status';
+        });
+
+        speedSlider.addEventListener('input', (e) => {
+            emulator.speed = parseInt(e.target.value);
+            speedValue.textContent = emulator.speed;
+        });
+
+        document.getElementById('romInput').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    const data = new Uint8Array(event.target.result);
+                    emulator.loadROM(data);
+                    emulator.running = false;
+                    document.getElementById('runBtn').disabled = false;
+                    document.getElementById('pauseBtn').disabled = true;
+                    emulator.draw();
+                    updateDebugPanel();
+                    statusText.textContent = 'ROM Loaded';
+                    statusText.className = 'status';
+                };
+                reader.readAsArrayBuffer(file);
+            }
+        });
+
+        // Keypad handling
+        const keypad = document.getElementById('keypad');
+        const keyElements = keypad.querySelectorAll('.key');
+
+        keyElements.forEach(keyElement => {
+            const key = keyElement.dataset.key;
+            
+            keyElement.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                keyElement.classList.add('pressed');
+                emulator.handleInput(key, true);
+            });
+
+            keyElement.addEventListener('mouseup', (e) => {
+                e.preventDefault();
+                keyElement.classList.remove('pressed');
+                emulator.handleInput(key, false);
+            });
+
+            keyElement.addEventListener('mouseleave', (e) => {
+                keyElement.classList.remove('pressed');
+                emulator.handleInput(key, false);
+            });
+
+            keyElement.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                keyElement.classList.add('pressed');
+                emulator.handleInput(key, true);
+            });
+
+            keyElement.addEventListener('touchend', (e) => {
+                e.preventDefault();
+                keyElement.classList.remove('pressed');
+                emulator.handleInput(key, false);
+            });
+        });
+
+        // Keyboard mapping
+        const keyMap = {
+            '1': '0', '2': '1', '3': '2', '4': '3',
+            'q': '0', 'w': '1', 'e': '2', 'r': '3',
+            'a': '4', 's': '5', 'd': '6', 'f': '7',
+            'z': '8', 'x': '9', 'c': 'A', 'v': 'B',
+            ' ': 'C', 'Enter': 'D',
+            'i': 'E', 'o': 'F', 'p': '0'
+        };
+
+        document.addEventListener('keydown', (e) => {
+            const key = keyMap[e.key] || e.key.toLowerCase();
+            if (KEYPAD_LAYOUT.includes(key)) {
+                emulator.handleInput(key, true);
+                const keyElement = document.querySelector(`.key[data-key="${key}"]`);
+                if (keyElement) keyElement.classList.add('active');
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            const key = keyMap[e.key] || e.key.toLowerCase();
+            if (KEYPAD_LAYOUT.includes(key)) {
+                emulator.handleInput(key, false);
+                const keyElement = document.querySelector(`.key[data-key="${key}"]`);
+                if (keyElement) keyElement.classList.remove('active');
+            }
+        });
+
+        // Initialize
+        emulator.loadDemoROM();
+        emulator.draw();
+        updateDebugPanel();
+        gameLoop();
+    </script>
+</body>
+</html>

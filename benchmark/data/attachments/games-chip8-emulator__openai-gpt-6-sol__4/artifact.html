@@ -1,0 +1,996 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CHIP-8 Arcade &amp; Debugger</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --background: #0b1018;
+      --panel: #151e2b;
+      --panel-light: #1c2837;
+      --border: #304153;
+      --text: #e7f1f4;
+      --muted: #9aafbb;
+      --accent: #9aefb1;
+      --accent-dark: #193b32;
+      --error: #ffaaa7;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: radial-gradient(ellipse at top, #172d35 0, var(--background) 55%);
+      color: var(--text);
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+
+    button, input { font: inherit; }
+
+    button:focus-visible, input:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 3px;
+    }
+
+    .app {
+      width: min(1200px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 30px 0 48px;
+    }
+
+    header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 22px;
+    }
+
+    h1, h2, h3, p { margin-top: 0; }
+
+    h1 {
+      margin-bottom: 3px;
+      font-size: clamp(1.75rem, 4vw, 2.5rem);
+      letter-spacing: -.04em;
+    }
+
+    h2 {
+      margin-bottom: 16px;
+      font-size: 1.15rem;
+    }
+
+    h3 {
+      margin-bottom: 8px;
+      color: var(--muted);
+      font-size: .82rem;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+    }
+
+    .subtitle, .hint { color: var(--muted); }
+
+    .subtitle { margin: 0; }
+
+    .badge {
+      flex: none;
+      padding: 5px 11px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      color: var(--accent);
+      font-size: .8rem;
+      letter-spacing: .08em;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 330px;
+      align-items: start;
+      gap: 18px;
+    }
+
+    .main-column, .side-column {
+      display: grid;
+      gap: 18px;
+      min-width: 0;
+    }
+
+    .panel {
+      min-width: 0;
+      padding: 20px;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      background: var(--panel);
+      box-shadow: 0 14px 32px #0003;
+    }
+
+    .screen-frame {
+      overflow: hidden;
+      padding: 10px;
+      border: 1px solid #3b6657;
+      border-radius: 10px;
+      background: #070e12;
+      box-shadow: inset 0 0 24px #000b, 0 0 22px #73e9a018;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: auto;
+      aspect-ratio: 2 / 1;
+      background: #081510;
+      image-rendering: pixelated;
+    }
+
+    .screen-note {
+      margin: 12px 0 0;
+      font-size: .85rem;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 9px;
+      margin-bottom: 18px;
+    }
+
+    .control {
+      min-height: 39px;
+      padding: 7px 15px;
+      border: 1px solid #526779;
+      border-radius: 8px;
+      background: var(--panel-light);
+      color: var(--text);
+      cursor: pointer;
+    }
+
+    .control:hover { background: #304456; }
+
+    .control.primary {
+      border-color: #76c997;
+      background: var(--accent-dark);
+      color: #c7ffdb;
+    }
+
+    .control.primary:hover { background: #285443; }
+
+    .speed-row {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 17px;
+    }
+
+    .speed-row label { flex: none; }
+
+    .speed-row input {
+      flex: 1;
+      min-width: 60px;
+      accent-color: var(--accent);
+    }
+
+    output {
+      min-width: 94px;
+      color: var(--accent);
+      font-variant-numeric: tabular-nums;
+      text-align: right;
+    }
+
+    .file-row {
+      display: grid;
+      gap: 7px;
+      margin-bottom: 15px;
+    }
+
+    .file-row label { font-weight: 600; }
+
+    .file-row input {
+      width: 100%;
+      color: var(--muted);
+      font-size: .9rem;
+    }
+
+    .file-row input::file-selector-button {
+      padding: 7px 11px;
+      margin-right: 10px;
+      border: 1px solid #526779;
+      border-radius: 7px;
+      background: var(--panel-light);
+      color: var(--text);
+      cursor: pointer;
+    }
+
+    .status {
+      min-height: 42px;
+      padding: 10px 12px;
+      border: 1px solid #366756;
+      border-radius: 8px;
+      background: #142b27;
+      color: #c5f3d4;
+      font-size: .9rem;
+    }
+
+    .status.error {
+      border-color: #8a4547;
+      background: #3a2027;
+      color: var(--error);
+    }
+
+    .keypad {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 9px;
+    }
+
+    .key {
+      min-height: 62px;
+      border: 1px solid #415869;
+      border-radius: 10px;
+      background: var(--panel-light);
+      color: var(--text);
+      cursor: pointer;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    .key:hover { border-color: var(--accent); }
+
+    .key[aria-pressed="true"] {
+      border-color: var(--accent);
+      background: #275943;
+      box-shadow: inset 0 0 13px #96ffba30;
+    }
+
+    .key strong, .key small { display: block; }
+
+    .key strong { font-size: 1.25rem; line-height: 1.2; }
+
+    .key small { color: var(--muted); font-size: .72rem; }
+
+    .key[aria-pressed="true"] small { color: #d0f6da; }
+
+    .key-hint {
+      margin: 13px 0 0;
+      font-size: .85rem;
+    }
+
+    .debug-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin-bottom: 17px;
+    }
+
+    .register, .metric {
+      padding: 8px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: #101923;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    }
+
+    .register span, .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: .75rem;
+    }
+
+    .register strong, .metric strong {
+      color: var(--accent);
+      font-size: .95rem;
+      font-weight: 600;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin-bottom: 17px;
+    }
+
+    .instruction, .stack {
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #101923;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: .87rem;
+      overflow-wrap: anywhere;
+    }
+
+    .instruction { margin-bottom: 15px; }
+
+    .instruction strong { color: var(--accent); }
+
+    .stack { min-height: 42px; color: var(--muted); }
+
+    .hint {
+      margin-bottom: 0;
+      font-size: .88rem;
+    }
+
+    .hint + .hint { margin-top: 10px; }
+
+    @media (max-width: 900px) {
+      .layout { grid-template-columns: 1fr; }
+      .side-column { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .debug-panel { grid-column: 1 / -1; }
+    }
+
+    @media (max-width: 600px) {
+      .app { width: min(100% - 20px, 480px); padding-top: 18px; }
+      .panel { padding: 15px; }
+      .side-column { grid-template-columns: 1fr; }
+      .debug-panel { grid-column: auto; }
+      .badge { display: none; }
+      .speed-row { flex-wrap: wrap; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div>
+        <h1>CHIP-8 Arcade</h1>
+        <p class="subtitle">A tiny computer, ready to explore.</p>
+      </div>
+      <span class="badge">64 × 32 / CLASSIC</span>
+    </header>
+
+    <div class="layout">
+      <main class="main-column">
+        <section class="panel" aria-label="CHIP-8 display">
+          <div class="screen-frame">
+            <canvas id="screen" width="64" height="32" role="img" aria-label="CHIP-8 monochrome display"></canvas>
+          </div>
+          <p class="hint screen-note">Sprites wrap around both edges of the display. Pixels are XOR-drawn.</p>
+        </section>
+
+        <section class="panel" aria-labelledby="controls-heading">
+          <h2 id="controls-heading">Controls</h2>
+          <div class="controls">
+            <button class="control primary" id="run" type="button">Run</button>
+            <button class="control" id="pause" type="button">Pause</button>
+            <button class="control" id="step" type="button">Single step</button>
+            <button class="control" id="reset" type="button">Reset</button>
+          </div>
+          <div class="speed-row">
+            <label for="speed">Speed</label>
+            <input id="speed" type="range" min="1" max="100" value="10">
+            <output id="speed-value" for="speed">10 / frame</output>
+          </div>
+          <div class="file-row">
+            <label for="rom-file">Load a local CHIP-8 ROM</label>
+            <input id="rom-file" type="file" accept=".ch8,.c8,.rom,.bin,application/octet-stream">
+          </div>
+          <div class="status" id="status" role="status" aria-live="polite"></div>
+        </section>
+
+        <section class="panel" aria-labelledby="about-heading">
+          <h2 id="about-heading">Try the built-in demo</h2>
+          <p class="hint">Press <strong>Run</strong>. The box moves with CHIP-8 keys <strong>2</strong> (up), <strong>8</strong> (down), <strong>4</strong> (left), and <strong>6</strong> (right). On your keyboard, those are <strong>2</strong>, <strong>s</strong>, <strong>q</strong>, and <strong>e</strong>; you can also use the on-screen keys.</p>
+          <p class="hint">This uses classic CHIP-8 behavior: shifts read <strong>Vy</strong>, and <strong>Fx55/Fx65</strong> advance I by x + 1. Timers tick at 60 Hz while running, including while waiting for a key; they stop when paused.</p>
+        </section>
+      </main>
+
+      <aside class="side-column">
+        <section class="panel" aria-labelledby="keypad-heading">
+          <h2 id="keypad-heading">Keypad</h2>
+          <div class="keypad" id="keypad" aria-label="CHIP-8 keypad">
+            <button class="key" type="button" data-key="1" aria-label="CHIP-8 key 1, keyboard 1" aria-pressed="false"><strong>1</strong><small>1</small></button>
+            <button class="key" type="button" data-key="2" aria-label="CHIP-8 key 2, keyboard 2" aria-pressed="false"><strong>2</strong><small>2</small></button>
+            <button class="key" type="button" data-key="3" aria-label="CHIP-8 key 3, keyboard 3" aria-pressed="false"><strong>3</strong><small>3</small></button>
+            <button class="key" type="button" data-key="C" aria-label="CHIP-8 key C, keyboard 4" aria-pressed="false"><strong>C</strong><small>4</small></button>
+            <button class="key" type="button" data-key="4" aria-label="CHIP-8 key 4, keyboard q" aria-pressed="false"><strong>4</strong><small>Q</small></button>
+            <button class="key" type="button" data-key="5" aria-label="CHIP-8 key 5, keyboard w" aria-pressed="false"><strong>5</strong><small>W</small></button>
+            <button class="key" type="button" data-key="6" aria-label="CHIP-8 key 6, keyboard e" aria-pressed="false"><strong>6</strong><small>E</small></button>
+            <button class="key" type="button" data-key="D" aria-label="CHIP-8 key D, keyboard r" aria-pressed="false"><strong>D</strong><small>R</small></button>
+            <button class="key" type="button" data-key="7" aria-label="CHIP-8 key 7, keyboard a" aria-pressed="false"><strong>7</strong><small>A</small></button>
+            <button class="key" type="button" data-key="8" aria-label="CHIP-8 key 8, keyboard s" aria-pressed="false"><strong>8</strong><small>S</small></button>
+            <button class="key" type="button" data-key="9" aria-label="CHIP-8 key 9, keyboard d" aria-pressed="false"><strong>9</strong><small>D</small></button>
+            <button class="key" type="button" data-key="E" aria-label="CHIP-8 key E, keyboard f" aria-pressed="false"><strong>E</strong><small>F</small></button>
+            <button class="key" type="button" data-key="A" aria-label="CHIP-8 key A, keyboard z" aria-pressed="false"><strong>A</strong><small>Z</small></button>
+            <button class="key" type="button" data-key="0" aria-label="CHIP-8 key 0, keyboard x" aria-pressed="false"><strong>0</strong><small>X</small></button>
+            <button class="key" type="button" data-key="B" aria-label="CHIP-8 key B, keyboard c" aria-pressed="false"><strong>B</strong><small>C</small></button>
+            <button class="key" type="button" data-key="F" aria-label="CHIP-8 key F, keyboard v" aria-pressed="false"><strong>F</strong><small>V</small></button>
+          </div>
+          <p class="hint key-hint">Keyboard rows: 1 2 3 4 / Q W E R / A S D F / Z X C V. Keys can also be held with a pointer.</p>
+        </section>
+
+        <section class="panel debug-panel" aria-labelledby="debug-heading">
+          <h2 id="debug-heading">Debugger</h2>
+          <h3>Registers</h3>
+          <div class="debug-grid" id="registers"></div>
+          <div class="metrics">
+            <div class="metric"><span>I</span><strong id="debug-i"></strong></div>
+            <div class="metric"><span>PC</span><strong id="debug-pc"></strong></div>
+            <div class="metric"><span>DT</span><strong id="debug-dt"></strong></div>
+            <div class="metric"><span>ST</span><strong id="debug-st"></strong></div>
+          </div>
+          <h3>Next instruction</h3>
+          <div class="instruction"><strong id="debug-opcode"></strong> <span id="debug-mnemonic"></span></div>
+          <h3>Stack · SP <span id="debug-sp"></span></h3>
+          <div class="stack" id="debug-stack"></div>
+        </section>
+      </aside>
+    </div>
+  </div>
+
+  <script>
+    "use strict";
+
+    const FONT = Uint8Array.from([
+      0xF0, 0x90, 0x90, 0x90, 0xF0, 0x20, 0x60, 0x20, 0x20, 0x70,
+      0xF0, 0x10, 0xF0, 0x80, 0xF0, 0xF0, 0x10, 0xF0, 0x10, 0xF0,
+      0x90, 0x90, 0xF0, 0x10, 0x10, 0xF0, 0x80, 0xF0, 0x10, 0xF0,
+      0xF0, 0x80, 0xF0, 0x90, 0xF0, 0xF0, 0x10, 0x20, 0x40, 0x40,
+      0xF0, 0x90, 0xF0, 0x90, 0xF0, 0xF0, 0x90, 0xF0, 0x10, 0xF0,
+      0xF0, 0x90, 0xF0, 0x90, 0x90, 0xE0, 0x90, 0xE0, 0x90, 0xE0,
+      0xF0, 0x80, 0x80, 0x80, 0xF0, 0xE0, 0x90, 0x90, 0x90, 0xE0,
+      0xF0, 0x80, 0xF0, 0x80, 0xF0, 0xF0, 0x80, 0xF0, 0x80, 0x80
+    ]);
+
+    const DEMO_ROM = Uint8Array.from([
+      0x60, 0x0E, 0x61, 0x0C, 0x62, 0x02, 0x63, 0x08,
+      0x64, 0x04, 0x65, 0x06, 0x00, 0xE0, 0xA2, 0x40,
+      0xD0, 0x15, 0xE2, 0x9E, 0x12, 0x18, 0x71, 0xFF,
+      0xE3, 0x9E, 0x12, 0x1E, 0x71, 0x01, 0xE4, 0x9E,
+      0x12, 0x24, 0x70, 0xFF, 0xE5, 0x9E, 0x12, 0x2A,
+      0x70, 0x01, 0x12, 0x0C,
+      0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00,
+      0xF0, 0x90, 0x90, 0x90, 0xF0
+    ]);
+
+    const KEY_MAPPING = {
+      "1": 0x1, "2": 0x2, "3": 0x3, "4": 0xC,
+      "q": 0x4, "w": 0x5, "e": 0x6, "r": 0xD,
+      "a": 0x7, "s": 0x8, "d": 0x9, "f": 0xE,
+      "z": 0xA, "x": 0x0, "c": 0xB, "v": 0xF
+    };
+
+    const memory = new Uint8Array(4096);
+    const V = new Uint8Array(16);
+    const stack = new Uint16Array(16);
+    const pixels = new Uint8Array(64 * 32);
+    const keys = new Uint8Array(16);
+    const keyboardKeys = new Set();
+    const pointerKeys = new Map();
+
+    let I = 0;
+    let pc = 0x200;
+    let sp = 0;
+    let dt = 0;
+    let st = 0;
+    let waitingForKey = null;
+    let running = false;
+    let lastTimestamp = null;
+    let timerRemainder = 0;
+    let frameRequest = null;
+    let activeRom = DEMO_ROM;
+    let romName = "Built-in demo";
+    let audioContext = null;
+    let soundGain = null;
+
+    const canvas = document.getElementById("screen");
+    const context = canvas.getContext("2d", { alpha: false });
+    const registerPanel = document.getElementById("registers");
+    const statusPanel = document.getElementById("status");
+    const speed = document.getElementById("speed");
+    const keypadButtons = [...document.querySelectorAll(".key")];
+
+    for (let index = 0; index < 16; index++) {
+      const register = document.createElement("div");
+      register.className = "register";
+      register.innerHTML = `<span>V${index.toString(16).toUpperCase()}</span><strong id="register-${index}"></strong>`;
+      registerPanel.appendChild(register);
+    }
+
+    function hex(value, digits) {
+      return value.toString(16).toUpperCase().padStart(digits, "0");
+    }
+
+    function setStatus(message, error = false) {
+      statusPanel.textContent = message;
+      statusPanel.classList.toggle("error", error);
+    }
+
+    function checkMemory(address, length = 1) {
+      if (!Number.isInteger(address) || address < 0 || length < 0 || address + length > memory.length) {
+        throw new Error(`Memory access outside 0x000–0xFFF at 0x${hex(address, 4)}.`);
+      }
+    }
+
+    function render() {
+      const image = context.createImageData(64, 32);
+      for (let index = 0; index < pixels.length; index++) {
+        const offset = index * 4;
+        const lit = pixels[index] !== 0;
+        image.data[offset] = lit ? 154 : 8;
+        image.data[offset + 1] = lit ? 239 : 21;
+        image.data[offset + 2] = lit ? 177 : 16;
+        image.data[offset + 3] = 255;
+      }
+      context.putImageData(image, 0, 0);
+    }
+
+    function disassemble(opcode) {
+      const x = (opcode >> 8) & 0xF;
+      const y = (opcode >> 4) & 0xF;
+      const n = opcode & 0xF;
+      const kk = opcode & 0xFF;
+      const nnn = opcode & 0xFFF;
+      const vx = `V${hex(x, 1)}`;
+      const vy = `V${hex(y, 1)}`;
+      const address = `0x${hex(nnn, 3)}`;
+      const byte = `0x${hex(kk, 2)}`;
+
+      switch (opcode >> 12) {
+        case 0x0:
+          if (opcode === 0x00E0) return "CLS";
+          if (opcode === 0x00EE) return "RET";
+          return `SYS ${address} (ignored)`;
+        case 0x1: return `JP ${address}`;
+        case 0x2: return `CALL ${address}`;
+        case 0x3: return `SE ${vx}, ${byte}`;
+        case 0x4: return `SNE ${vx}, ${byte}`;
+        case 0x5: return n === 0 ? `SE ${vx}, ${vy}` : "Invalid opcode";
+        case 0x6: return `LD ${vx}, ${byte}`;
+        case 0x7: return `ADD ${vx}, ${byte}`;
+        case 0x8:
+          switch (n) {
+            case 0x0: return `LD ${vx}, ${vy}`;
+            case 0x1: return `OR ${vx}, ${vy}`;
+            case 0x2: return `AND ${vx}, ${vy}`;
+            case 0x3: return `XOR ${vx}, ${vy}`;
+            case 0x4: return `ADD ${vx}, ${vy}`;
+            case 0x5: return `SUB ${vx}, ${vy}`;
+            case 0x6: return `SHR ${vx}, ${vy}`;
+            case 0x7: return `SUBN ${vx}, ${vy}`;
+            case 0xE: return `SHL ${vx}, ${vy}`;
+            default: return "Invalid opcode";
+          }
+        case 0x9: return n === 0 ? `SNE ${vx}, ${vy}` : "Invalid opcode";
+        case 0xA: return `LD I, ${address}`;
+        case 0xB: return `JP V0, ${address}`;
+        case 0xC: return `RND ${vx}, ${byte}`;
+        case 0xD: return `DRW ${vx}, ${vy}, ${n}`;
+        case 0xE:
+          if (kk === 0x9E) return `SKP ${vx}`;
+          if (kk === 0xA1) return `SKNP ${vx}`;
+          return "Invalid opcode";
+        case 0xF:
+          switch (kk) {
+            case 0x07: return `LD ${vx}, DT`;
+            case 0x0A: return `LD ${vx}, K`;
+            case 0x15: return `LD DT, ${vx}`;
+            case 0x18: return `LD ST, ${vx}`;
+            case 0x1E: return `ADD I, ${vx}`;
+            case 0x29: return `LD F, ${vx}`;
+            case 0x33: return `LD B, ${vx}`;
+            case 0x55: return `LD [I], V0–${vx}`;
+            case 0x65: return `LD V0–${vx}, [I]`;
+            default: return "Invalid opcode";
+          }
+        default: return "Invalid opcode";
+      }
+    }
+
+    function updateDebugger() {
+      for (let index = 0; index < 16; index++) {
+        document.getElementById(`register-${index}`).textContent = hex(V[index], 2);
+      }
+      document.getElementById("debug-i").textContent = hex(I, 4);
+      document.getElementById("debug-pc").textContent = hex(pc, 4);
+      document.getElementById("debug-dt").textContent = hex(dt, 2);
+      document.getElementById("debug-st").textContent = hex(st, 2);
+      document.getElementById("debug-sp").textContent = sp;
+      document.getElementById("debug-stack").textContent = sp
+        ? Array.from(stack.slice(0, sp), (address, index) => `${index}: ${hex(address, 4)}`).join("  ·  ")
+        : "Empty";
+      const inBounds = Number.isInteger(pc) && pc >= 0 && pc <= 4094;
+      const opcode = inBounds ? (memory[pc] << 8) | memory[pc + 1] : null;
+      document.getElementById("debug-opcode").textContent = opcode === null ? "----" : hex(opcode, 4);
+      document.getElementById("debug-mnemonic").textContent = opcode === null
+        ? "PC outside memory"
+        : `${disassemble(opcode)}${waitingForKey !== null ? " · waiting for new keydown" : ""}`;
+    }
+
+    function refreshKeys() {
+      keys.fill(0);
+      for (const key of keyboardKeys) keys[key] = 1;
+      for (const key of pointerKeys.values()) keys[key] = 1;
+      for (const button of keypadButtons) {
+        button.setAttribute("aria-pressed", String(keys[parseInt(button.dataset.key, 16)] !== 0));
+      }
+    }
+
+    function releaseAllKeys() {
+      keyboardKeys.clear();
+      pointerKeys.clear();
+      refreshKeys();
+    }
+
+    function onNewKeydown(key) {
+      if (waitingForKey === null) return;
+      V[waitingForKey] = key;
+      waitingForKey = null;
+      pc += 2;
+      updateDebugger();
+      setStatus(running ? `Running ${romName}.` : `Key received. Paused · ${romName}.`);
+    }
+
+    function updateSound() {
+      if (audioContext && soundGain) {
+        soundGain.gain.setTargetAtTime(running && st > 0 ? 0.025 : 0, audioContext.currentTime, 0.008);
+      }
+    }
+
+    function unlockSound() {
+      const AudioConstructor = window.AudioContext || window.webkitAudioContext;
+      if (!AudioConstructor) return;
+      try {
+        if (!audioContext) {
+          audioContext = new AudioConstructor();
+          const oscillator = audioContext.createOscillator();
+          soundGain = audioContext.createGain();
+          oscillator.type = "square";
+          oscillator.frequency.value = 440;
+          soundGain.gain.value = 0;
+          oscillator.connect(soundGain);
+          soundGain.connect(audioContext.destination);
+          oscillator.start();
+        }
+        if (audioContext.state === "suspended") audioContext.resume().catch(() => {});
+        updateSound();
+      } catch {
+        audioContext = null;
+        soundGain = null;
+      }
+    }
+
+    function pause(silent = false) {
+      running = false;
+      if (frameRequest !== null) cancelAnimationFrame(frameRequest);
+      frameRequest = null;
+      lastTimestamp = null;
+      timerRemainder = 0;
+      updateSound();
+      if (!silent) setStatus(`Paused · ${romName}.`);
+    }
+
+    function reset() {
+      pause(true);
+      memory.fill(0);
+      memory.set(FONT, 0x050);
+      memory.set(activeRom, 0x200);
+      V.fill(0);
+      stack.fill(0);
+      pixels.fill(0);
+      I = 0;
+      pc = 0x200;
+      sp = 0;
+      dt = 0;
+      st = 0;
+      waitingForKey = null;
+      releaseAllKeys();
+      render();
+      updateDebugger();
+      setStatus(`${romName} loaded. Press Run or Single step.`);
+    }
+
+    function drawSprite(xPosition, yPosition, height) {
+      checkMemory(I, height);
+      V[0xF] = 0;
+      for (let row = 0; row < height; row++) {
+        const bits = memory[I + row];
+        for (let column = 0; column < 8; column++) {
+          if (!(bits & (0x80 >> column))) continue;
+          const pixelX = (xPosition + column) % 64;
+          const pixelY = (yPosition + row) % 32;
+          const index = pixelY * 64 + pixelX;
+          if (pixels[index]) V[0xF] = 1;
+          pixels[index] ^= 1;
+        }
+      }
+      render();
+    }
+
+    function execute() {
+      checkMemory(pc, 2);
+      const opcode = (memory[pc] << 8) | memory[pc + 1];
+      const x = (opcode >> 8) & 0xF;
+      const y = (opcode >> 4) & 0xF;
+      const n = opcode & 0xF;
+      const kk = opcode & 0xFF;
+      const nnn = opcode & 0xFFF;
+      const left = V[x];
+      const right = V[y];
+      let nextPc = pc + 2;
+
+      function invalid() {
+        throw new Error(`Invalid opcode ${hex(opcode, 4)} at 0x${hex(pc, 4)}.`);
+      }
+
+      switch (opcode >> 12) {
+        case 0x0:
+          if (opcode === 0x00E0) {
+            pixels.fill(0);
+            render();
+          } else if (opcode === 0x00EE) {
+            if (sp === 0) throw new Error(`Stack underflow at 0x${hex(pc, 4)}.`);
+            nextPc = stack[--sp];
+          }
+          break;
+        case 0x1:
+          nextPc = nnn;
+          break;
+        case 0x2:
+          if (sp >= stack.length) throw new Error(`Stack overflow at 0x${hex(pc, 4)}.`);
+          stack[sp++] = nextPc;
+          nextPc = nnn;
+          break;
+        case 0x3:
+          if (left === kk) nextPc += 2;
+          break;
+        case 0x4:
+          if (left !== kk) nextPc += 2;
+          break;
+        case 0x5:
+          if (n !== 0) invalid();
+          if (left === right) nextPc += 2;
+          break;
+        case 0x6:
+          V[x] = kk;
+          break;
+        case 0x7:
+          V[x] = left + kk;
+          break;
+        case 0x8:
+          switch (n) {
+            case 0x0: V[x] = right; break;
+            case 0x1: V[x] = left | right; break;
+            case 0x2: V[x] = left & right; break;
+            case 0x3: V[x] = left ^ right; break;
+            case 0x4:
+              V[x] = left + right;
+              V[0xF] = left + right > 0xFF ? 1 : 0;
+              break;
+            case 0x5:
+              V[x] = left - right;
+              V[0xF] = left >= right ? 1 : 0;
+              break;
+            case 0x6:
+              V[x] = right >> 1;
+              V[0xF] = right & 1;
+              break;
+            case 0x7:
+              V[x] = right - left;
+              V[0xF] = right >= left ? 1 : 0;
+              break;
+            case 0xE:
+              V[x] = right << 1;
+              V[0xF] = right >> 7;
+              break;
+            default: invalid();
+          }
+          break;
+        case 0x9:
+          if (n !== 0) invalid();
+          if (left !== right) nextPc += 2;
+          break;
+        case 0xA:
+          I = nnn;
+          break;
+        case 0xB:
+          nextPc = nnn + V[0];
+          break;
+        case 0xC:
+          V[x] = (Math.random() * 256 | 0) & kk;
+          break;
+        case 0xD:
+          drawSprite(left, right, n);
+          break;
+        case 0xE:
+          if (kk === 0x9E) {
+            if (left < 16 && keys[left]) nextPc += 2;
+          } else if (kk === 0xA1) {
+            if (left >= 16 || !keys[left]) nextPc += 2;
+          } else {
+            invalid();
+          }
+          break;
+        case 0xF:
+          switch (kk) {
+            case 0x07: V[x] = dt; break;
+            case 0x0A:
+              waitingForKey = x;
+              updateDebugger();
+              return;
+            case 0x15: dt = left; break;
+            case 0x18: st = left; updateSound(); break;
+            case 0x1E: I = (I + left) & 0xFFFF; break;
+            case 0x29: I = 0x050 + (left & 0xF) * 5; break;
+            case 0x33:
+              checkMemory(I, 3);
+              memory[I] = Math.floor(left / 100);
+              memory[I + 1] = Math.floor(left / 10) % 10;
+              memory[I + 2] = left % 10;
+              break;
+            case 0x55:
+              checkMemory(I, x + 1);
+              for (let index = 0; index <= x; index++) memory[I + index] = V[index];
+              I = (I + x + 1) & 0xFFFF;
+              break;
+            case 0x65:
+              checkMemory(I, x + 1);
+              for (let index = 0; index <= x; index++) V[index] = memory[I + index];
+              I = (I + x + 1) & 0xFFFF;
+              break;
+            default: invalid();
+          }
+          break;
+        default:
+          invalid();
+      }
+
+      pc = nextPc;
+      updateDebugger();
+    }
+
+    function handleError(error) {
+      pause(true);
+      updateDebugger();
+      setStatus(error.message || String(error), true);
+    }
+
+    function frame(timestamp) {
+      if (!running) return;
+      if (lastTimestamp !== null) {
+        timerRemainder += Math.max(0, timestamp - lastTimestamp);
+        const ticks = Math.floor(timerRemainder / (1000 / 60));
+        if (ticks > 0) {
+          timerRemainder -= ticks * (1000 / 60);
+          dt = Math.max(0, dt - ticks);
+          st = Math.max(0, st - ticks);
+          updateSound();
+        }
+      }
+      lastTimestamp = timestamp;
+
+      try {
+        if (waitingForKey === null) {
+          for (let count = 0; count < Number(speed.value); count++) {
+            execute();
+            if (waitingForKey !== null) {
+              setStatus(`Waiting for a new key press · ${romName}.`);
+              break;
+            }
+          }
+        }
+        updateDebugger();
+      } catch (error) {
+        handleError(error);
+        return;
+      }
+      frameRequest = requestAnimationFrame(frame);
+    }
+
+    document.getElementById("run").addEventListener("click", () => {
+      unlockSound();
+      if (running) return;
+      running = true;
+      lastTimestamp = null;
+      timerRemainder = 0;
+      updateSound();
+      setStatus(waitingForKey === null
+        ? `Running ${romName}.`
+        : `Waiting for a new key press · ${romName}.`);
+      frameRequest = requestAnimationFrame(frame);
+    });
+
+    document.getElementById("pause").addEventListener("click", () => pause());
+
+    document.getElementById("step").addEventListener("click", () => {
+      unlockSound();
+      pause(true);
+      if (waitingForKey !== null) {
+        setStatus(`Waiting for a new key press · ${romName}.`);
+        return;
+      }
+      try {
+        execute();
+        setStatus(waitingForKey === null
+          ? `Stepped once · ${romName}.`
+          : `Waiting for a new key press · ${romName}.`);
+      } catch (error) {
+        handleError(error);
+      }
+    });
+
+    document.getElementById("reset").addEventListener("click", reset);
+
+    speed.addEventListener("input", () => {
+      document.getElementById("speed-value").textContent = `${speed.value} / frame`;
+    });
+
+    document.getElementById("rom-file").addEventListener("change", async (event) => {
+      const file = event.target.files[0];
+      if (!file) return;
+      try {
+        if (file.size === 0) throw new Error("ROM is empty.");
+        if (file.size > memory.length - 0x200) {
+          throw new Error(`ROM is too large: maximum ${memory.length - 0x200} bytes.`);
+        }
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        if (bytes.length === 0) throw new Error("ROM is empty.");
+        activeRom = bytes;
+        romName = file.name;
+        reset();
+      } catch (error) {
+        setStatus(`Could not load ROM: ${error.message || error}`, true);
+      } finally {
+        event.target.value = "";
+      }
+    });
+
+    function isEnteringInput(target) {
+      return target instanceof Element &&
+        Boolean(target.closest("input, textarea, select, [contenteditable]"));
+    }
+
+    document.addEventListener("keydown", (event) => {
+      if (event.ctrlKey || event.altKey || event.metaKey || isEnteringInput(event.target)) return;
+      const key = KEY_MAPPING[event.key.toLowerCase()];
+      if (key === undefined) return;
+      event.preventDefault();
+      if (event.repeat || keyboardKeys.has(key)) return;
+      unlockSound();
+      keyboardKeys.add(key);
+      refreshKeys();
+      onNewKeydown(key);
+    });
+
+    document.addEventListener("keyup", (event) => {
+      const key = KEY_MAPPING[event.key.toLowerCase()];
+      if (key === undefined) return;
+      if (!isEnteringInput(event.target)) event.preventDefault();
+      keyboardKeys.delete(key);
+      refreshKeys();
+    });
+
+    for (const button of keypadButtons) {
+      const key = parseInt(button.dataset.key, 16);
+      button.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        if (pointerKeys.has(event.pointerId)) return;
+        unlockSound();
+        button.setPointerCapture(event.pointerId);
+        pointerKeys.set(event.pointerId, key);
+        refreshKeys();
+        onNewKeydown(key);
+      });
+
+      function releasePointer(event) {
+        if (!pointerKeys.has(event.pointerId)) return;
+        pointerKeys.delete(event.pointerId);
+        refreshKeys();
+      }
+
+      button.addEventListener("pointerup", releasePointer);
+      button.addEventListener("pointercancel", releasePointer);
+      button.addEventListener("lostpointercapture", releasePointer);
+    }
+
+    window.addEventListener("blur", releaseAllKeys);
+
+    reset();
+  </script>
+</body>
+</html>

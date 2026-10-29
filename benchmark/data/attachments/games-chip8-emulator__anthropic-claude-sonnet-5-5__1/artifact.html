@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>CHIP-8 Emulator</title>
+<style>
+body{background:#14171c;color:#d8dee9;font:14px monospace;margin:0;padding:16px}
+h1{font-size:18px;margin:0 0 10px}
+#wrap{display:flex;flex-wrap:wrap;gap:16px}
+canvas{background:#000;border:2px solid #4c566a;width:640px;height:320px;image-rendering:pixelated}
+button,input{font:inherit}
+button{background:#2e3440;color:#eee;border:1px solid #4c566a;padding:5px 10px;cursor:pointer}
+button:hover{background:#3b4252}
+.panel{background:#1d2129;border:1px solid #3b4252;padding:10px;min-width:260px}
+.panel h2{font-size:14px;margin:0 0 6px;color:#88c0d0}
+#regs{display:grid;grid-template-columns:repeat(4,1fr);gap:2px 10px}
+#keys{display:grid;grid-template-columns:repeat(4,52px);gap:4px}
+#keys div{height:44px;background:#2e3440;border:1px solid #4c566a;text-align:center;user-select:none;font-size:12px;padding-top:4px;box-sizing:border-box}
+#keys div.on{background:#a3be8c;color:#000}
+.row{margin:8px 0}
+</style></head><body>
+<h1>CHIP-8 Emulator</h1>
+<div id="wrap">
+<div>
+<canvas id="scr" width="64" height="32"></canvas>
+<div class="row">
+<button id="run">Run</button> <button id="pause">Pause</button> <button id="step">Step</button> <button id="reset">Reset</button>
+<button id="demo">Load demo</button>
+<input type="file" id="file" title="Load ROM">
+</div>
+<div class="row">Instructions/frame: <input type="range" id="ipf" min="1" max="50" value="10"> <span id="ipfv">10</span>
+&nbsp; Status: <span id="stat">paused</span></div>
+<div class="row">Demo: move the smiley with keys 2/4/6/8 (keyboard: W/A/D/S).</div>
+</div>
+<div class="panel"><h2>Keypad (keyboard mapping)</h2><div id="keys"></div></div>
+<div class="panel"><h2>Debugger</h2>
+<div>PC: <span id="pc"></span> &nbsp; I: <span id="idx"></span></div>
+<div>SP: <span id="sp"></span> &nbsp; DT: <span id="dt"></span> &nbsp; ST: <span id="st"></span></div>
+<div>Opcode: <span id="op"></span></div>
+<div>Instr: <b id="dis"></b></div>
+<h2 style="margin-top:8px">Registers</h2><div id="regs"></div>
+<h2 style="margin-top:8px">Stack</h2><div id="stack"></div>
+</div></div>
+<script>
+const FONT=[0xF0,0x90,0x90,0x90,0xF0,0x20,0x60,0x20,0x20,0x70,0xF0,0x10,0xF0,0x80,0xF0,0xF0,0x10,0xF0,0x10,0xF0,0x90,0x90,0xF0,0x10,0x10,0xF0,0x80,0xF0,0x10,0xF0,0xF0,0x80,0xF0,0x90,0xF0,0xF0,0x10,0x20,0x40,0x40,0xF0,0x90,0xF0,0x90,0xF0,0xF0,0x90,0xF0,0x10,0xF0,0xF0,0x90,0xF0,0x90,0x90,0xE0,0x90,0xE0,0x90,0xE0,0xF0,0x80,0x80,0x80,0xF0,0xE0,0x90,0x90,0x90,0xE0,0xF0,0x80,0xF0,0x80,0xF0,0xF0,0x80,0xF0,0x80,0x80];
+// Demo ROM: smiley sprite moved with 2(up) 8(down) 4(left) 6(right)
+const DEMO=[0x60,0x1C,0x61,0x0C,0xA2,0x30,0xD0,0x18,
+0xD0,0x18,0x62,0x02,0xE2,0xA1,0x71,0xFF,0x62,0x08,0xE2,0xA1,0x71,0x01,
+0x62,0x04,0xE2,0xA1,0x70,0xFF,0x62,0x06,0xE2,0xA1,0x70,0x01,0xD0,0x18,
+0x63,0x02,0xF3,0x15,0xF4,0x07,0x34,0x00,0x12,0x28,0x12,0x08,
+0x3C,0x42,0xA5,0x81,0xA5,0x99,0x42,0x3C];
+// fix: bytes 0x230 onward are sprite; pad so sprite lands at 0x230
+const KEYMAP={'1':1,'2':2,'3':3,'4':0xC,'q':4,'w':5,'e':6,'r':0xD,'a':7,'s':8,'d':9,'f':0xE,'z':0xA,'x':0,'c':0xB,'v':0xF};
+const LAYOUT=[1,2,3,0xC,4,5,6,0xD,7,8,9,0xE,0xA,0,0xB,0xF];
+class Chip8{
+ constructor(){this.keys=new Array(16).fill(false);this.reset();}
+ reset(){this.mem=new Uint8Array(4096);this.mem.set(FONT,0x50);this.V=new Uint8Array(16);this.I=0;this.pc=0x200;
+  this.stack=[];this.dt=0;this.st=0;this.gfx=new Uint8Array(2048);this.waitReg=-1;this.draw=true;
+  if(this.rom)this.mem.set(this.rom,0x200);}
+ load(b){this.rom=b;this.reset();}
+ fetch(){return(this.mem[this.pc&0xFFF]<<8)|this.mem[(this.pc+1)&0xFFF];}
+ tick(){if(this.dt>0)this.dt--;if(this.st>0)this.st--;}
+ static dis(o){const x=(o>>8)&15,y=(o>>4)&15,n=o&15,nn=o&255,nnn=o&0xFFF,h=v=>v.toString(16).toUpperCase();
+  switch(o>>12){
+  case 0:if(o==0xE0)return'CLS';if(o==0xEE)return'RET';return'SYS '+h(nnn);
+  case 1:return'JP '+h(nnn);case 2:return'CALL '+h(nnn);
+  case 3:return`SE V${h(x)}, ${h(nn)}`;case 4:return`SNE V${h(x)}, ${h(nn)}`;case 5:return`SE V${h(x)}, V${h(y)}`;
+  case 6:return`LD V${h(x)}, ${h(nn)}`;case 7:return`ADD V${h(x)}, ${h(nn)}`;
+  case 8:{const m={0:'LD',1:'OR',2:'AND',3:'XOR',4:'ADD',5:'SUB',6:'SHR',7:'SUBN',0xE:'SHL'}[n];return m?`${m} V${h(x)}, V${h(y)}`:'???';}
+  case 9:return`SNE V${h(x)}, V${h(y)}`;case 0xA:return'LD I, '+h(nnn);case 0xB:return'JP V0, '+h(nnn);
+  case 0xC:return`RND V${h(x)}, ${h(nn)}`;case 0xD:return`DRW V${h(x)}, V${h(y)}, ${n}`;
+  case 0xE:if(nn==0x9E)return`SKP V${h(x)}`;if(nn==0xA1)return`SKNP V${h(x)}`;return'???';
+  case 0xF:{const m={7:`LD V${h(x)}, DT`,0xA:`LD V${h(x)}, K`,0x15:`LD DT, V${h(x)}`,0x18:`LD ST, V${h(x)}`,0x1E:`ADD I, V${h(x)}`,0x29:`LD F, V${h(x)}`,0x33:`LD B, V${h(x)}`,0x55:`LD [I], V${h(x)}`,0x65:`LD V${h(x)}, [I]`}[nn];return m||'???';}
+  }return'???';}
+ keyPress(k){this.keys[k]=true;if(this.waitReg>=0){this.V[this.waitReg]=k;this.waitReg=-1;}}
+ step(){
+  if(this.waitReg>=0)return;
+  const o=this.fetch();this.pc=(this.pc+2)&0xFFF;
+  const x=(o>>8)&15,y=(o>>4)&15,n=o&15,nn=o&255,nnn=o&0xFFF,V=this.V;
+  switch(o>>12){
+  case 0:if(o==0xE0){this.gfx.fill(0);this.draw=true;}else if(o==0xEE){if(this.stack.length)this.pc=this.stack.pop();}break;
+  case 1:this.pc=nnn;break;
+  case 2:if(this.stack.length<16)this.stack.push(this.pc);this.pc=nnn;break;
+  case 3:if(V[x]==nn)this.pc+=2;break;
+  case 4:if(V[x]!=nn)this.pc+=2;break;
+  case 5:if(V[x]==V[y])this.pc+=2;break;
+  case 6:V[x]=nn;break;
+  case 7:V[x]=(V[x]+nn)&255;break;
+  case 8:{let r,f;switch(n){
+   case 0:V[x]=V[y];break;
+   case 1:V[x]|=V[y];break;case 2:V[x]&=V[y];break;case 3:V[x]^=V[y];break;
+   case 4:r=V[x]+V[y];V[x]=r&255;V[15]=r>255?1:0;break;
+   case 5:f=V[x]>=V[y]?1:0;V[x]=(V[x]-V[y])&255;V[15]=f;break;
+   case 6:f=V[x]&1;V[x]>>=1;V[15]=f;break;
+   case 7:f=V[y]>=V[x]?1:0;V[x]=(V[y]-V[x])&255;V[15]=f;break;
+   case 0xE:f=V[x]>>7;V[x]=(V[x]<<1)&255;V[15]=f;break;}break;}
+  case 9:if(V[x]!=V[y])this.pc+=2;break;
+  case 0xA:this.I=nnn;break;
+  case 0xB:this.pc=(nnn+V[0])&0xFFF;break;
+  case 0xC:V[x]=(Math.random()*256)&nn;break;
+  case 0xD:{const px=V[x]&63,py=V[y]&31;V[15]=0;
+   for(let r=0;r<n;r++){const b=this.mem[(this.I+r)&0xFFF];
+    for(let c=0;c<8;c++)if(b&(0x80>>c)){const X=(px+c)&63,Y=(py+r)&31,i=Y*64+X;
+     if(this.gfx[i])V[15]=1;this.gfx[i]^=1;}}
+   this.draw=true;break;}
+  case 0xE:if(nn==0x9E){if(this.keys[V[x]&15])this.pc+=2;}else if(nn==0xA1){if(!this.keys[V[x]&15])this.pc+=2;}break;
+  case 0xF:switch(nn){
+   case 7:V[x]=this.dt;break;
+   case 0xA:this.waitReg=x;break;
+   case 0x15:this.dt=V[x];break;case 0x18:this.st=V[x];break;
+   case 0x1E:this.I=(this.I+V[x])&0xFFFF;break;
+   case 0x29:this.I=0x50+(V[x]&15)*5;break;
+   case 0x33:{const v=V[x];this.mem[this.I&0xFFF]=Math.floor(v/100);this.mem[(this.I+1)&0xFFF]=Math.floor(v/10)%10;this.mem[(this.I+2)&0xFFF]=v%10;break;}
+   case 0x55:for(let i=0;i<=x;i++)this.mem[(this.I+i)&0xFFF]=V[i];break;
+   case 0x65:for(let i=0;i<=x;i++)V[i]=this.mem[(this.I+i)&0xFFF];break;}
+   break;}
+ }
+}
+// Build demo ROM with sprite at 0x230
+const demoRom=new Uint8Array(0x38);demoRom.set(DEMO.slice(0,DEMO.length-8),0);demoRom.set(DEMO.slice(-8),0x30);
+const $=id=>document.getElementById(id),cv=$('scr'),ctx=cv.getContext('2d'),img=ctx.createImageData(64,32);
+const cpu=new Chip8();cpu.load(demoRom);
+let running=false,acc=0,last=0,audio=null,osc=null;
+const kdiv=[];
+LAYOUT.forEach(k=>{const d=document.createElement('div');const kb=Object.keys(KEYMAP).find(c=>KEYMAP[c]==k);
+ d.innerHTML=`<b>${k.toString(16).toUpperCase()}</b><br>[${kb.toUpperCase()}]`;
+ const dn=e=>{e.preventDefault();cpu.keyPress(k);upd()},up=e=>{e.preventDefault();cpu.keys[k]=false;upd()};
+ d.onmousedown=dn;d.onmouseup=up;d.onmouseleave=up;d.ontouchstart=dn;d.ontouchend=up;
+ $('keys').appendChild(d);kdiv[k]=d;});
+function hex(v,w){return v.toString(16).toUpperCase().padStart(w,'0');}
+function render(){const d=img.data;for(let i=0;i<2048;i++){const v=cpu.gfx[i]?255:0;d[i*4]=v?120:0;d[i*4+1]=v;d[i*4+2]=v?150:0;d[i*4+3]=255;}
+ ctx.putImageData(img,0,0);cpu.draw=false;}
+function upd(){
+ $('pc').textContent=hex(cpu.pc,3);$('idx').textContent=hex(cpu.I,4);$('sp').textContent=cpu.stack.length;
+ $('dt').textContent=cpu.dt;$('st').textContent=cpu.st;
+ const o=cpu.fetch();$('op').textContent=hex(o,4);$('dis').textContent=Chip8.dis(o)+(cpu.waitReg>=0?'  (waiting for key)':'');
+ $('regs').innerHTML=Array.from(cpu.V,(v,i)=>`<span>V${i.toString(16).toUpperCase()}=${hex(v,2)}</span>`).join('');
+ $('stack').textContent=cpu.stack.length?cpu.stack.map(a=>hex(a,3)).join(' '):'(empty)';
+ kdiv.forEach((d,i)=>d.classList.toggle('on',cpu.keys[i]));
+ $('stat').textContent=running?'running':'paused';
+ if(cpu.draw)render();}
+function beep(on){try{if(!audio)audio=new (window.AudioContext||window.webkitAudioContext)();
+ if(on&&!osc){osc=audio.createOscillator();osc.frequency.value=440;const g=audio.createGain();g.gain.value=.05;osc.connect(g);g.connect(audio.destination);osc.start();}
+ else if(!on&&osc){osc.stop();osc=null;}}catch(e){}}
+function frame(t){
+ if(running){acc+=Math.min(t-last,100);const n=+$('ipf').value;
+  while(acc>=1000/60){acc-=1000/60;for(let i=0;i<n;i++)cpu.step();cpu.tick();}
+  beep(cpu.st>0);}
+ last=t;upd();requestAnimationFrame(frame);}
+$('ipf').oninput=()=>$('ipfv').textContent=$('ipf').value;
+$('run').onclick=()=>{running=true;if(audio&&audio.state=='suspended')audio.resume();};
+$('pause').onclick=()=>{running=false;beep(false);};
+$('step').onclick=()=>{running=false;cpu.step();upd();};
+$('reset').onclick=()=>{cpu.reset();upd();};
+$('demo').onclick=()=>{cpu.load(demoRom);upd();};
+$('file').onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();
+ r.onload=()=>{cpu.load(new Uint8Array(r.result).slice(0,3584));running=true;upd();};r.readAsArrayBuffer(f);e.target.blur();};
+const mk=e=>{let c=e.key.toLowerCase();if(!(c in KEYMAP))return null;if(e.target.tagName=='INPUT'&&e.target.type=='file')return null;return KEYMAP[c];};
+const WASD={};
+addEventListener('keydown',e=>{const k=mk(e);if(k===null||e.repeat)return;e.preventDefault();cpu.keyPress(k);});
+addEventListener('keyup',e=>{const k=mk(e);if(k===null)return;cpu.keys[k]=false;});
+requestAnimationFrame(frame);
+</script></body></html>

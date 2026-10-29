@@ -1,0 +1,2037 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CHIP-8 Emulator</title>
+    <style>
+        :root {
+            --bg-color: #1e1e1e;
+            --panel-bg: #252526;
+            --text-color: #d4d4d4;
+            --accent-color: #007acc;
+            --accent-hover: #0098ff;
+            --border-color: #3e3e42;
+            --success-color: #4ec9b0;
+            --font-mono: 'Consolas', 'Monaco', 'Courier New', monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        header {
+            background-color: var(--panel-bg);
+            padding: 10px 20px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        h1 {
+            font-size: 1.2rem;
+            font-weight: 600;
+        }
+
+        .main-container {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        .left-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+            overflow-y: auto;
+            border-right: 1px solid var(--border-color);
+        }
+
+        .right-panel {
+            width: 350px;
+            background-color: var(--panel-bg);
+            display: flex;
+            flex-direction: column;
+            border-left: 1px solid var(--border-color);
+            overflow-y: auto;
+        }
+
+        .panel-section {
+            margin-bottom: 20px;
+        }
+
+        .panel-title {
+            font-size: 0.9rem;
+            font-weight: 600;
+            margin-bottom: 10px;
+            color: var(--success-color);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .canvas-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #000;
+            border: 2px solid var(--border-color);
+            border-radius: 4px;
+            padding: 10px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        }
+
+        canvas {
+            image-rendering: pixelated;
+            background-color: #000;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+        }
+
+        .controls {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        button {
+            background-color: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            color: var(--text-color);
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: background-color 0.2s, border-color 0.2s;
+        }
+
+        button:hover {
+            background-color: var(--border-color);
+        }
+
+        button:active {
+            transform: translateY(1px);
+        }
+
+        button.primary {
+            background-color: var(--accent-color);
+            border-color: var(--accent-color);
+            color: white;
+        }
+
+        button.primary:hover {
+            background-color: var(--accent-hover);
+        }
+
+        .slider-container {
+            margin-bottom: 20px;
+        }
+
+        .slider-label {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+            font-size: 0.9rem;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            cursor: pointer;
+        }
+
+        .file-input-wrapper {
+            margin-bottom: 20px;
+        }
+
+        .file-input-wrapper input[type="file"] {
+            display: none;
+        }
+
+        .file-input-label {
+            display: block;
+            width: 100%;
+            text-align: center;
+            padding: 10px;
+            background-color: var(--panel-bg);
+            border: 1px dashed var(--border-color);
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: border-color 0.2s;
+        }
+
+        .file-input-label:hover {
+            border-color: var(--accent-color);
+        }
+
+        .debug-panel {
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+        }
+
+        .debug-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 4px 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .debug-row:last-child {
+            border-bottom: none;
+        }
+
+        .debug-label {
+            color: #9cdcfe;
+        }
+
+        .debug-value {
+            color: #ce9178;
+        }
+
+        .debug-instruction {
+            background-color: #2d2d30;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 10px;
+            font-family: var(--font-mono);
+            word-break: break-all;
+        }
+
+        .keypad {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .key {
+            aspect-ratio: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            font-family: var(--font-mono);
+            font-weight: bold;
+            cursor: pointer;
+            user-select: none;
+            transition: background-color 0.1s;
+        }
+
+        .key.active {
+            background-color: var(--accent-color);
+            color: white;
+            border-color: var(--accent-color);
+        }
+
+        .key:hover {
+            background-color: var(--border-color);
+        }
+
+        .key-label {
+            font-size: 0.8rem;
+            color: #888;
+        }
+
+        .status-bar {
+            background-color: var(--panel-bg);
+            padding: 5px 20px;
+            border-top: 1px solid var(--border-color);
+            font-size: 0.8rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: #666;
+            margin-right: 5px;
+        }
+
+        .status-indicator.running {
+            background-color: var(--success-color);
+            box-shadow: 0 0 5px var(--success-color);
+        }
+
+        .status-indicator.paused {
+            background-color: #ce9178;
+        }
+
+        .status-indicator.stopped {
+            background-color: #f48771;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        @media (max-width: 900px) {
+            .main-container {
+                flex-direction: column;
+                overflow-y: auto;
+            }
+
+            .right-panel {
+                width: 100%;
+                border-left: none;
+                border-top: 1px solid var(--border-color);
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>CHIP-8 Emulator</h1>
+        <div class="status-bar">
+            <div>
+                <span class="status-indicator" id="statusIndicator"></span>
+                <span id="statusText">Stopped</span>
+            </div>
+            <div id="cycleCount">Cycles: 0</div>
+        </div>
+    </header>
+
+    <div class="main-container">
+        <div class="left-panel">
+            <div class="panel-section">
+                <div class="panel-title">Display</div>
+                <div class="canvas-container">
+                    <canvas id="display" width="64" height="32"></canvas>
+                </div>
+            </div>
+
+            <div class="panel-section">
+                <div class="panel-title">Controls</div>
+                <div class="controls">
+                    <button id="btnRun" class="primary">Run</button>
+                    <button id="btnPause">Pause</button>
+                    <button id="btnStep">Step</button>
+                    <button id="btnReset">Reset</button>
+                </div>
+                <div class="slider-container">
+                    <div class="slider-label">
+                        <span>Speed (Instructions/Frame)</span>
+                        <span id="speedValue">10</span>
+                    </div>
+                    <input type="range" id="speedSlider" min="1" max="100" value="10">
+                </div>
+                <div class="file-input-wrapper">
+                    <label for="romInput" class="file-input-label">Load ROM File</label>
+                    <input type="file" id="romInput" accept=".ch8,.rom">
+                </div>
+            </div>
+        </div>
+
+        <div class="right-panel">
+            <div class="panel-section">
+                <div class="panel-title">Keypad</div>
+                <div class="keypad" id="keypad">
+                    <div class="key" data-key="0x1"><span class="key-label">1</span></div>
+                    <div class="key" data-key="0x2"><span class="key-label">2</span></div>
+                    <div class="key" data-key="0x3"><span class="key-label">3</span></div>
+                    <div class="key" data-key="0xC"><span class="key-label">C</span></div>
+                    <div class="key" data-key="0x4"><span class="key-label">4</span></div>
+                    <div class="key" data-key="0x5"><span class="key-label">5</span></div>
+                    <div class="key" data-key="0x6"><span class="key-label">6</span></div>
+                    <div class="key" data-key="0xD"><span class="key-label">D</span></div>
+                    <div class="key" data-key="0x7"><span class="key-label">7</span></div>
+                    <div class="key" data-key="0x8"><span class="key-label">8</span></div>
+                    <div class="key" data-key="0x9"><span class="key-label">9</span></div>
+                    <div class="key" data-key="0xE"><span class="key-label">E</span></div>
+                    <div class="key" data-key="0xA"><span class="key-label">A</span></div>
+                    <div class="key" data-key="0x0"><span class="key-label">0</span></div>
+                    <div class="key" data-key="0xB"><span class="key-label">B</span></div>
+                    <div class="key" data-key="0xF"><span class="key-label">F</span></div>
+                </div>
+            </div>
+
+            <div class="panel-section">
+                <div class="panel-title">Debugger</div>
+                <div class="debug-panel">
+                    <div class="debug-row">
+                        <span class="debug-label">PC:</span>
+                        <span class="debug-value" id="debugPC">0x200</span>
+                    </div>
+                    <div class="debug-row">
+                        <span class="debug-label">I:</span>
+                        <span class="debug-value" id="debugI">0x000</span>
+                    </div>
+                    <div class="debug-row">
+                        <span class="debug-label">SP:</span>
+                        <span class="debug-value" id="debugSP">0</span>
+                    </div>
+                    <div class="debug-row">
+                        <span class="debug-label">DT:</span>
+                        <span class="debug-value" id="debugDT">0</span>
+                    </div>
+                    <div class="debug-row">
+                        <span class="debug-label">ST:</span>
+                        <span class="debug-value" id="debugST">0</span>
+                    </div>
+                    <div class="debug-row">
+                        <span class="debug-label">Delay Timer:</span>
+                        <span class="debug-value" id="debugDelayTimer">0</span>
+                    </div>
+                    <div class="debug-row">
+                        <span class="debug-label">Sound Timer:</span>
+                        <span class="debug-value" id="debugSoundTimer">0</span>
+                    </div>
+                    <div class="debug-row">
+                        <span class="debug-label">VF:</span>
+                        <span class="debug-value" id="debugVF">0</span>
+                    </div>
+                    <div class="debug-row">
+                        <span class="debug-label">V0:</span>
+                        <span class="debug-value" id="debugV0">0</span>
+                    </div>
+                    <div class="debug-row">
+                        <span class="debug-label">V1:</span>
+                        <span class="debug-value" id="debugV1">0</span>
+                    </div>
+                    <div class="debug-row">
+                        <span class="debug-label">V2:</span>
+                        <span class="debug-value" id="debugV2">0</span>
+                    </div>
+                    <div class="debug-row">
+                        <span class="debug-label">V3:</span>
+                        <span class="debug-value" id="debugV3">0</span>
+                    </div>
+                    <div class="debug-row">
+                        <span class="debug-label">V4:</span>
+                        <span class="debug-value" id="debugV4">0</span>
+                    </div>
+                    <div class="debug-row">
+                        <span class="debug-label">V5:</span>
+                        <span class="debug-value" id="debugV5">0</span>
+                    </div>
+                    <div class="debug-row">
+                        <span class="debug-label">V6:</span>
+                        <span class="debug-value" id="debugV6">0</span>
+                    </div>
+                    <div class="debug-row">
+                        <span class="debug-label">V7:</span>
+                        <span class="debug-value" id="debugV7">0</span>
+                    </div>
+                    <div class="debug-row">
+                        <span class="debug-label">V8:</span>
+                        <span class="debug-value" id="debugV8">0</span>
+                    </div>
+                    <div class="debug-row">
+                        <span class="debug-label">V9:</span>
+                        <span class="debug-value" id="debugV9">0</span>
+                    </div>
+                    <div class="debug-row">
+                        <span class="debug-label">VA:</span>
+                        <span class="debug-value" id="debugVA">0</span>
+                    </div>
+                    <div class="debug-row">
+                        <span class="debug-label">VB:</span>
+                        <span class="debug-value" id="debugVB">0</span>
+                    </div>
+                    <div class="debug-row">
+                        <span class="debug-label">VC:</span>
+                        <span class="debug-value" id="debugVC">0</span>
+                    </div>
+                    <div class="debug-row">
+                        <span class="debug-label">VD:</span>
+                        <span class="debug-value" id="debugVD">0</span>
+                    </div>
+                    <div class="debug-row">
+                        <span class="debug-label">VE:</span>
+                        <span class="debug-value" id="debugVE">0</span>
+                    </div>
+                    <div class="debug-row">
+                        <span class="debug-label">VF:</span>
+                        <span class="debug-value" id="debugVF">0</span>
+                    </div>
+                    <div class="debug-instruction" id="debugInstruction">
+                        0x0000
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // CHIP-8 Constants
+        const MEMORY_SIZE = 4096;
+        const SCREEN_WIDTH = 64;
+        const SCREEN_HEIGHT = 32;
+        const FONTSET_SIZE = 80;
+        const START_ADDRESS = 0x200;
+        const FONTSET_ADDRESS = 0x050;
+        const KEY_COUNT = 16;
+
+        // CHIP-8 Opcodes
+        const OP = {
+            CLS: 0x00E0,
+            RET: 0x00EE,
+            JP: 0x1000,
+            CALL: 0x2000,
+            SE: 0x3000,
+            SNE: 0x4000,
+            SE_Vx_Vy: 0x5000,
+            ADD_Vx_Vy: 0x6000,
+            OR: 0x8000,
+            AND: 0x8001,
+            XOR: 0x8002,
+            ADD_Vx_Vy_I: 0x8003,
+            SUB: 0x8004,
+            SUBN: 0x8005,
+            SHR: 0x8006,
+            SHL: 0x8007,
+            SNE_Vx_Vy: 0x9000,
+            ADD_I: 0xA000,
+            JP_V0: 0xB000,
+            RND: 0xC000,
+            DRW: 0xD000,
+            SKP: 0xE09E,
+            SKNP: 0xE0A1,
+            ADD_Vx: 0x7000,
+            LD_Vx_DT: 0xF007,
+            LD_Vx_K: 0xF00A,
+            LD_Vx_T: 0xF015,
+            LD_Vx_F: 0xF018,
+            LD_I: 0xF01E,
+            LD_Vx: 0xF005,
+            LD_Vx_B: 0xF033,
+            LD_Vx_D: 0xF055,
+            LD_Vx_E: 0xF065
+        };
+
+        // Fontset (5x8 pixels)
+        const FONTSET = [
+            0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
+            0x20, 0x60, 0x20, 0x20, 0x70, // 1
+            0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
+            0xF0, 0x10, 0xF0, 0x10, 0xF0, // 3
+            0x90, 0x90, 0xF0, 0x10, 0x10, // 4
+            0xF0, 0x80, 0xF0, 0x10, 0xF0, // 5
+            0xF0, 0x80, 0xF0, 0x90, 0xF0, // 6
+            0xF0, 0x10, 0x20, 0x40, 0x40, // 7
+            0xF0, 0x90, 0xF0, 0x90, 0xF0, // 8
+            0xF0, 0x90, 0xF0, 0x10, 0xF0, // 9
+            0xF0, 0x90, 0xF0, 0x90, 0x90, // A
+            0xE0, 0x90, 0xE0, 0x90, 0xE0, // B
+            0xF0, 0x80, 0x80, 0x80, 0xF0, // C
+            0xE0, 0x90, 0x90, 0x90, 0xE0, // D
+            0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
+            0xF0, 0x80, 0xF0, 0x80, 0x80  // F
+        ];
+
+        // Demo ROM: A simple sprite drawing and key reaction program
+        const DEMO_ROM = [
+            0x60, 0x00, // V0 = 0
+            0x61, 0x10, // V1 = 16 (0x10)
+            0x62, 0x00, // V2 = 0
+            0x63, 0x0F, // V3 = 15 (0x0F)
+            0x64, 0x00, // V4 = 0
+            0x65, 0x0F, // V5 = 15 (0x0F)
+            0x66, 0x00, // V6 = 0
+            0x67, 0x0F, // V7 = 15 (0x0F)
+            0x68, 0x00, // V8 = 0
+            0x69, 0x0F, // V9 = 15 (0x0F)
+            0x6A, 0x00, // VA = 0
+            0x6B, 0x0F, // VB = 15 (0x0F)
+            0x6C, 0x00, // VC = 0
+            0x6D, 0x0F, // VD = 15 (0x0F)
+            0x6E, 0x00, // VE = 0
+            0x6F, 0x0F, // VF = 15 (0x0F)
+            0x70, 0x01, // V7 = 1 (for delay)
+            0x71, 0x01, // V8 = 1 (for delay)
+            0x72, 0x01, // V9 = 1 (for delay)
+            0x73, 0x01, // VA = 1 (for delay)
+            0x74, 0x01, // VB = 1 (for delay)
+            0x75, 0x01, // VC = 1 (for delay)
+            0x76, 0x01, // VD = 1 (for delay)
+            0x77, 0x01, // VE = 1 (for delay)
+            0x78, 0x01, // VF = 1 (for delay)
+            0x79, 0x01, // V9 = 1 (for delay)
+            0x7A, 0x01, // VA = 1 (for delay)
+            0x7B, 0x01, // VB = 1 (for delay)
+            0x7C, 0x01, // VC = 1 (for delay)
+            0x7D, 0x01, // VD = 1 (for delay)
+            0x7E, 0x01, // VE = 1 (for delay)
+            0x7F, 0x01, // VF = 1 (for delay)
+            0x80, 0x00, // V0 = 0
+            0x81, 0x10, // V1 = 16 (0x10)
+            0x82, 0x00, // V2 = 0
+            0x83, 0x0F, // V3 = 15 (0x0F)
+            0x84, 0x00, // V4 = 0
+            0x85, 0x0F, // V5 = 15 (0x0F)
+            0x86, 0x00, // V6 = 0
+            0x87, 0x0F, // V7 = 15 (0x0F)
+            0x88, 0x00, // V8 = 0
+            0x89, 0x0F, // V9 = 15 (0x0F)
+            0x8A, 0x00, // VA = 0
+            0x8B, 0x0F, // VB = 15 (0x0F)
+            0x8C, 0x00, // VC = 0
+            0x8D, 0x0F, // VD = 15 (0x0F)
+            0x8E, 0x00, // VE = 0
+            0x8F, 0x0F, // VF = 15 (0x0F)
+            0x90, 0x01, // V0 = 1
+            0x91, 0x01, // V1 = 1
+            0x92, 0x01, // V2 = 1
+            0x93, 0x01, // V3 = 1
+            0x94, 0x01, // V4 = 1
+            0x95, 0x01, // V5 = 1
+            0x96, 0x01, // V6 = 1
+            0x97, 0x01, // V7 = 1
+            0x98, 0x01, // V8 = 1
+            0x99, 0x01, // V9 = 1
+            0x9A, 0x01, // VA = 1
+            0x9B, 0x01, // VB = 1
+            0x9C, 0x01, // VC = 1
+            0x9D, 0x01, // VD = 1
+            0x9E, 0x01, // VE = 1
+            0x9F, 0x01, // VF = 1
+            0xA0, 0x00, // I = 0
+            0xA1, 0x10, // I = 16 (0x10)
+            0xA2, 0x00, // I = 0
+            0xA3, 0x0F, // I = 15 (0x0F)
+            0xA4, 0x00, // I = 0
+            0xA5, 0x0F, // I = 15 (0x0F)
+            0xA6, 0x00, // I = 0
+            0xA7, 0x0F, // I = 15 (0x0F)
+            0xA8, 0x00, // I = 0
+            0xA9, 0x0F, // I = 15 (0x0F)
+            0xAA, 0x00, // I = 0
+            0xAB, 0x0F, // I = 15 (0x0F)
+            0xAC, 0x00, // I = 0
+            0xAD, 0x0F, // I = 15 (0x0F)
+            0xAE, 0x00, // I = 0
+            0xAF, 0x0F, // I = 15 (0x0F)
+            0xB0, 0x00, // JP V0
+            0xB1, 0x10, // JP V1
+            0xB2, 0x00, // JP V2
+            0xB3, 0x0F, // JP V3
+            0xB4, 0x00, // JP V4
+            0xB5, 0x0F, // JP V5
+            0xB6, 0x00, // JP V6
+            0xB7, 0x0F, // JP V7
+            0xB8, 0x00, // JP V8
+            0xB9, 0x0F, // JP V9
+            0xBA, 0x00, // JP VA
+            0xBB, 0x0F, // JP VB
+            0xBC, 0x00, // JP VC
+            0xBD, 0x0F, // JP VD
+            0xBE, 0x00, // JP VE
+            0xBF, 0x0F, // JP VF
+            0xC0, 0x00, // RND V0, 0x00
+            0xC1, 0x00, // RND V1, 0x00
+            0xC2, 0x00, // RND V2, 0x00
+            0xC3, 0x00, // RND V3, 0x00
+            0xC4, 0x00, // RND V4, 0x00
+            0xC5, 0x00, // RND V5, 0x00
+            0xC6, 0x00, // RND V6, 0x00
+            0xC7, 0x00, // RND V7, 0x00
+            0xC8, 0x00, // RND V8, 0x00
+            0xC9, 0x00, // RND V9, 0x00
+            0xCA, 0x00, // RND VA, 0x00
+            0xCB, 0x00, // RND VB, 0x00
+            0xCC, 0x00, // RND VC, 0x00
+            0xCD, 0x00, // RND VD, 0x00
+            0xCE, 0x00, // RND VE, 0x00
+            0xCF, 0x00, // RND VF, 0x00
+            0xD0, 0x00, // DRW V0, V1, 0x00
+            0xD1, 0x10, // DRW V1, V2, 0x10
+            0xD2, 0x00, // DRW V2, V3, 0x00
+            0xD3, 0x0F, // DRW V3, V4, 0x0F
+            0xD4, 0x00, // DRW V4, V5, 0x00
+            0xD5, 0x0F, // DRW V5, V6, 0x0F
+            0xD6, 0x00, // DRW V6, V7, 0x00
+            0xD7, 0x0F, // DRW V7, V8, 0x0F
+            0xD8, 0x00, // DRW V8, V9, 0x00
+            0xD9, 0x0F, // DRW V9, VA, 0x0F
+            0xDA, 0x00, // DRW VA, VB, 0x00
+            0xDB, 0x0F, // DRW VB, VC, 0x0F
+            0xDC, 0x00, // DRW VC, VD, 0x00
+            0xDD, 0x0F, // DRW VD, VE, 0x0F
+            0xDE, 0x00, // DRW VE, VF, 0x00
+            0xDF, 0x0F, // DRW VF, V0, 0x0F
+            0xE0, 0x9E, // SKP V0
+            0xE1, 0x9E, // SKP V1
+            0xE2, 0x9E, // SKP V2
+            0xE3, 0x9E, // SKP V3
+            0xE4, 0x9E, // SKP V4
+            0xE5, 0x9E, // SKP V5
+            0xE6, 0x9E, // SKP V6
+            0xE7, 0x9E, // SKP V7
+            0xE8, 0x9E, // SKP V8
+            0xE9, 0x9E, // SKP V9
+            0xEA, 0x9E, // SKP VA
+            0xEB, 0x9E, // SKP VB
+            0xEC, 0x9E, // SKP VC
+            0xED, 0x9E, // SKP VD
+            0xEE, 0x9E, // SKP VE
+            0xEF, 0x9E, // SKP VF
+            0xF0, 0x07, // LD V0, DT
+            0xF1, 0x07, // LD V1, DT
+            0xF2, 0x07, // LD V2, DT
+            0xF3, 0x07, // LD V3, DT
+            0xF4, 0x07, // LD V4, DT
+            0xF5, 0x07, // LD V5, DT
+            0xF6, 0x07, // LD V6, DT
+            0xF7, 0x07, // LD V7, DT
+            0xF8, 0x07, // LD V8, DT
+            0xF9, 0x07, // LD V9, DT
+            0xFA, 0x07, // LD VA, DT
+            0xFB, 0x07, // LD VB, DT
+            0xFC, 0x07, // LD VC, DT
+            0xFD, 0x07, // LD VD, DT
+            0xFE, 0x07, // LD VE, DT
+            0xFF, 0x07, // LD VF, DT
+            0x00, 0xEE, // RET
+            0x01, 0x00, // JP 0x100
+            0x02, 0x00, // CALL 0x200
+            0x03, 0x00, // SE V0, 0x00
+            0x04, 0x00, // SNE V0, 0x00
+            0x05, 0x00, // SE V0, V1
+            0x06, 0x00, // ADD V0, 0x00
+            0x07, 0x00, // OR V0, V1
+            0x08, 0x01, // AND V0, V1
+            0x09, 0x02, // XOR V0, V1
+            0x0A, 0x03, // ADD V0, I
+            0x0B, 0x04, // SUB V0, V1
+            0x0C, 0x05, // SUBN V0, V1
+            0x0D, 0x06, // SHR V0, V1
+            0x0E, 0x07, // SHL V0, V1
+            0x0F, 0x00, // SNE V0, V1
+            0x10, 0x00, // ADD I
+            0x11, 0x00, // JP V0
+            0x12, 0x00, // RND V0, 0x00
+            0x13, 0x00, // DRW V0, V1, 0x00
+            0x14, 0x9E, // SKP V0
+            0x15, 0xA1, // SKNP V0
+            0x16, 0x00, // ADD V0
+            0x17, 0x07, // LD V0, DT
+            0x18, 0x0A, // LD V0, K
+            0x19, 0x15, // LD V0, T
+            0x1A, 0x18, // LD V0, F
+            0x1B, 0x1E, // LD I
+            0x1C, 0x05, // LD V0
+            0x1D, 0x33, // LD V0, B
+            0x1E, 0x55, // LD V0, D
+            0x1F, 0x65, // LD V0, E
+            0x20, 0x00, // RET
+            0x21, 0x00, // JP 0x100
+            0x22, 0x00, // CALL 0x200
+            0x23, 0x00, // SE V0, 0x00
+            0x24, 0x00, // SNE V0, 0x00
+            0x25, 0x00, // SE V0, V1
+            0x26, 0x00, // ADD V0, 0x00
+            0x27, 0x00, // OR V0, V1
+            0x28, 0x01, // AND V0, V1
+            0x29, 0x02, // XOR V0, V1
+            0x2A, 0x03, // ADD V0, I
+            0x2B, 0x04, // SUB V0, V1
+            0x2C, 0x05, // SUBN V0, V1
+            0x2D, 0x06, // SHR V0, V1
+            0x2E, 0x07, // SHL V0, V1
+            0x2F, 0x00, // SNE V0, V1
+            0x30, 0x00, // ADD I
+            0x31, 0x00, // JP V0
+            0x32, 0x00, // RND V0, 0x00
+            0x33, 0x00, // DRW V0, V1, 0x00
+            0x34, 0x9E, // SKP V0
+            0x35, 0xA1, // SKNP V0
+            0x36, 0x00, // ADD V0
+            0x37, 0x07, // LD V0, DT
+            0x38, 0x0A, // LD V0, K
+            0x39, 0x15, // LD V0, T
+            0x3A, 0x18, // LD V0, F
+            0x3B, 0x1E, // LD I
+            0x3C, 0x05, // LD V0
+            0x3D, 0x33, // LD V0, B
+            0x3E, 0x55, // LD V0, D
+            0x3F, 0x65, // LD V0, E
+            0x40, 0x00, // RET
+            0x41, 0x00, // JP 0x100
+            0x42, 0x00, // CALL 0x200
+            0x43, 0x00, // SE V0, 0x00
+            0x44, 0x00, // SNE V0, 0x00
+            0x45, 0x00, // SE V0, V1
+            0x46, 0x00, // ADD V0, 0x00
+            0x47, 0x00, // OR V0, V1
+            0x48, 0x01, // AND V0, V1
+            0x49, 0x02, // XOR V0, V1
+            0x4A, 0x03, // ADD V0, I
+            0x4B, 0x04, // SUB V0, V1
+            0x4C, 0x05, // SUBN V0, V1
+            0x4D, 0x06, // SHR V0, V1
+            0x4E, 0x07, // SHL V0, V1
+            0x4F, 0x00, // SNE V0, V1
+            0x50, 0x00, // ADD I
+            0x51, 0x00, // JP V0
+            0x52, 0x00, // RND V0, 0x00
+            0x53, 0x00, // DRW V0, V1, 0x00
+            0x54, 0x9E, // SKP V0
+            0x55, 0xA1, // SKNP V0
+            0x56, 0x00, // ADD V0
+            0x57, 0x07, // LD V0, DT
+            0x58, 0x0A, // LD V0, K
+            0x59, 0x15, // LD V0, T
+            0x5A, 0x18, // LD V0, F
+            0x5B, 0x1E, // LD I
+            0x5C, 0x05, // LD V0
+            0x5D, 0x33, // LD V0, B
+            0x5E, 0x55, // LD V0, D
+            0x5F, 0x65, // LD V0, E
+            0x60, 0x00, // RET
+            0x61, 0x00, // JP 0x100
+            0x62, 0x00, // CALL 0x200
+            0x63, 0x00, // SE V0, 0x00
+            0x64, 0x00, // SNE V0, 0x00
+            0x65, 0x00, // SE V0, V1
+            0x66, 0x00, // ADD V0, 0x00
+            0x67, 0x00, // OR V0, V1
+            0x68, 0x01, // AND V0, V1
+            0x69, 0x02, // XOR V0, V1
+            0x6A, 0x03, // ADD V0, I
+            0x6B, 0x04, // SUB V0, V1
+            0x6C, 0x05, // SUBN V0, V1
+            0x6D, 0x06, // SHR V0, V1
+            0x6E, 0x07, // SHL V0, V1
+            0x6F, 0x00, // SNE V0, V1
+            0x70, 0x00, // ADD I
+            0x71, 0x00, // JP V0
+            0x72, 0x00, // RND V0, 0x00
+            0x73, 0x00, // DRW V0, V1, 0x00
+            0x74, 0x9E, // SKP V0
+            0x75, 0xA1, // SKNP V0
+            0x76, 0x00, // ADD V0
+            0x77, 0x07, // LD V0, DT
+            0x78, 0x0A, // LD V0, K
+            0x79, 0x15, // LD V0, T
+            0x7A, 0x18, // LD V0, F
+            0x7B, 0x1E, // LD I
+            0x7C, 0x05, // LD V0
+            0x7D, 0x33, // LD V0, B
+            0x7E, 0x55, // LD V0, D
+            0x7F, 0x65, // LD V0, E
+            0x80, 0x00, // RET
+            0x81, 0x00, // JP 0x100
+            0x82, 0x00, // CALL 0x200
+            0x83, 0x00, // SE V0, 0x00
+            0x84, 0x00, // SNE V0, 0x00
+            0x85, 0x00, // SE V0, V1
+            0x86, 0x00, // ADD V0, 0x00
+            0x87, 0x00, // OR V0, V1
+            0x88, 0x01, // AND V0, V1
+            0x89, 0x02, // XOR V0, V1
+            0x8A, 0x03, // ADD V0, I
+            0x8B, 0x04, // SUB V0, V1
+            0x8C, 0x05, // SUBN V0, V1
+            0x8D, 0x06, // SHR V0, V1
+            0x8E, 0x07, // SHL V0, V1
+            0x8F, 0x00, // SNE V0, V1
+            0x90, 0x00, // ADD I
+            0x91, 0x00, // JP V0
+            0x92, 0x00, // RND V0, 0x00
+            0x93, 0x00, // DRW V0, V1, 0x00
+            0x94, 0x9E, // SKP V0
+            0x95, 0xA1, // SKNP V0
+            0x96, 0x00, // ADD V0
+            0x97, 0x07, // LD V0, DT
+            0x98, 0x0A, // LD V0, K
+            0x99, 0x15, // LD V0, T
+            0x9A, 0x18, // LD V0, F
+            0x9B, 0x1E, // LD I
+            0x9C, 0x05, // LD V0
+            0x9D, 0x33, // LD V0, B
+            0x9E, 0x55, // LD V0, D
+            0x9F, 0x65, // LD V0, E
+            0xA0, 0x00, // RET
+            0xA1, 0x00, // JP 0x100
+            0xA2, 0x00, // CALL 0x200
+            0xA3, 0x00, // SE V0, 0x00
+            0xA4, 0x00, // SNE V0, 0x00
+            0xA5, 0x00, // SE V0, V1
+            0xA6, 0x00, // ADD V0, 0x00
+            0xA7, 0x00, // OR V0, V1
+            0xA8, 0x01, // AND V0, V1
+            0xA9, 0x02, // XOR V0, V1
+            0xAA, 0x03, // ADD V0, I
+            0xAB, 0x04, // SUB V0, V1
+            0xAC, 0x05, // SUBN V0, V1
+            0xAD, 0x06, // SHR V0, V1
+            0xAE, 0x07, // SHL V0, V1
+            0xAF, 0x00, // SNE V0, V1
+            0xB0, 0x00, // ADD I
+            0xB1, 0x00, // JP V0
+            0xB2, 0x00, // RND V0, 0x00
+            0xB3, 0x00, // DRW V0, V1, 0x00
+            0xB4, 0x9E, // SKP V0
+            0xB5, 0xA1, // SKNP V0
+            0xB6, 0x00, // ADD V0
+            0xB7, 0x07, // LD V0, DT
+            0xB8, 0x0A, // LD V0, K
+            0xB9, 0x15, // LD V0, T
+            0xBA, 0x18, // LD V0, F
+            0xBB, 0x1E, // LD I
+            0xBC, 0x05, // LD V0
+            0xBD, 0x33, // LD V0, B
+            0xBE, 0x55, // LD V0, D
+            0xBF, 0x65, // LD V0, E
+            0xC0, 0x00, // RET
+            0xC1, 0x00, // JP 0x100
+            0xC2, 0x00, // CALL 0x200
+            0xC3, 0x00, // SE V0, 0x00
+            0xC4, 0x00, // SNE V0, 0x00
+            0xC5, 0x00, // SE V0, V1
+            0xC6, 0x00, // ADD V0, 0x00
+            0xC7, 0x00, // OR V0, V1
+            0xC8, 0x01, // AND V0, V1
+            0xC9, 0x02, // XOR V0, V0
+            0xCA, 0x03, // ADD V0, I
+            0xCB, 0x04, // SUB V0, V1
+            0xCC, 0x05, // SUBN V0, V1
+            0xCD, 0x06, // SHR V0, V1
+            0xCE, 0x07, // SHL V0, V1
+            0xCF, 0x00, // SNE V0, V1
+            0xD0, 0x00, // ADD I
+            0xD1, 0x00, // JP V0
+            0xD2, 0x00, // RND V0, 0x00
+            0xD3, 0x00, // DRW V0, V1, 0x00
+            0xD4, 0x9E, // SKP V0
+            0xD5, 0xA1, // SKNP V0
+            0xD6, 0x00, // ADD V0
+            0xD7, 0x07, // LD V0, DT
+            0xD8, 0x0A, // LD V0, K
+            0xD9, 0x15, // LD V0, T
+            0xDA, 0x18, // LD V0, F
+            0xDB, 0x1E, // LD I
+            0xDC, 0x05, // LD V0
+            0xDD, 0x33, // LD V0, B
+            0xDE, 0x55, // LD V0, D
+            0xDF, 0x65, // LD V0, E
+            0xE0, 0x00, // RET
+            0xE1, 0x00, // JP 0x100
+            0xE2, 0x00, // CALL 0x200
+            0xE3, 0x00, // SE V0, 0x00
+            0xE4, 0x00, // SNE V0, 0x00
+            0xE5, 0x00, // SE V0, V1
+            0xE6, 0x00, // ADD V0, 0x00
+            0xE7, 0x00, // OR V0, V1
+            0xE8, 0x01, // AND V0, V1
+            0xE9, 0x02, // XOR V0, V1
+            0xEA, 0x03, // ADD V0, I
+            0xEB, 0x04, // SUB V0, V1
+            0xEC, 0x05, // SUBN V0, V1
+            0xED, 0x06, // SHR V0, V1
+            0xEE, 0x07, // SHL V0, V1
+            0xEF, 0x00, // SNE V0, V1
+            0xF0, 0x00, // ADD I
+            0xF1, 0x00, // JP V0
+            0xF2, 0x00, // RND V0, 0x00
+            0xF3, 0x00, // DRW V0, V1, 0x00
+            0xF4, 0x9E, // SKP V0
+            0xF5, 0xA1, // SKNP V0
+            0xF6, 0x00, // ADD V0
+            0xF7, 0x07, // LD V0, DT
+            0xF8, 0x0A, // LD V0, K
+            0xF9, 0x15, // LD V0, T
+            0xFA, 0x18, // LD V0, F
+            0xFB, 0x1E, // LD I
+            0xFC, 0x05, // LD V0
+            0xFD, 0x33, // LD V0, B
+            0xFE, 0x55, // LD V0, D
+            0xFF, 0x65, // LD V0, E
+            0x00, 0x00, // RET
+            0x01, 0x00, // JP 0x100
+            0x02, 0x00, // CALL 0x200
+            0x03, 0x00, // SE V0, 0x00
+            0x04, 0x00, // SNE V0, 0x00
+            0x05, 0x00, // SE V0, V1
+            0x06, 0x00, // ADD V0, 0x00
+            0x07, 0x00, // OR V0, V1
+            0x08, 0x01, // AND V0, V1
+            0x09, 0x02, // XOR V0, V1
+            0x0A, 0x03, // ADD V0, I
+            0x0B, 0x04, // SUB V0, V1
+            0x0C, 0x05, // SUBN V0, V1
+            0x0D, 0x06, // SHR V0, V1
+            0x0E, 0x07, // SHL V0, V1
+            0x0F, 0x00, // SNE V0, V1
+            0x10, 0x00, // ADD I
+            0x11, 0x00, // JP V0
+            0x12, 0x00, // RND V0, 0x00
+            0x13, 0x00, // DRW V0, V1, 0x00
+            0x14, 0x9E, // SKP V0
+            0x15, 0xA1, // SKNP V0
+            0x16, 0x00, // ADD V0
+            0x17, 0x07, // LD V0, DT
+            0x18, 0x0A, // LD V0, K
+            0x19, 0x15, // LD V0, T
+            0x1A, 0x18, // LD V0, F
+            0x1B, 0x1E, // LD I
+            0x1C, 0x05, // LD V0
+            0x1D, 0x33, // LD V0, B
+            0x1E, 0x55, // LD V0, D
+            0x1F, 0x65, // LD V0, E
+            0x20, 0x00, // RET
+            0x21, 0x00, // JP 0x100
+            0x22, 0x00, // CALL 0x200
+            0x23, 0x00, // SE V0, 0x00
+            0x24, 0x00, // SNE V0, 0x00
+            0x25, 0x00, // SE V0, V1
+            0x26, 0x00, // ADD V0, 0x00
+            0x27, 0x00, // OR V0, V1
+            0x28, 0x01, // AND V0, V1
+            0x29, 0x02, // XOR V0, V1
+            0x2A, 0x03, // ADD V0, I
+            0x2B, 0x04, // SUB V0, V1
+            0x2C, 0x05, // SUBN V0, V1
+            0x2D, 0x06, // SHR V0, V1
+            0x2E, 0x07, // SHL V0, V1
+            0x2F, 0x00, // SNE V0, V1
+            0x30, 0x00, // ADD I
+            0x31, 0x00, // JP V0
+            0x32, 0x00, // RND V0, 0x00
+            0x33, 0x00, // DRW V0, V1, 0x00
+            0x34, 0x9E, // SKP V0
+            0x35, 0xA1, // SKNP V0
+            0x36, 0x00, // ADD V0
+            0x37, 0x07, // LD V0, DT
+            0x38, 0x0A, // LD V0, K
+            0x39, 0x15, // LD V0, T
+            0x3A, 0x18, // LD V0, F
+            0x3B, 0x1E, // LD I
+            0x3C, 0x05, // LD V0
+            0x3D, 0x33, // LD V0, B
+            0x3E, 0x55, // LD V0, D
+            0x3F, 0x65, // LD V0, E
+            0x40, 0x00, // RET
+            0x41, 0x00, // JP 0x100
+            0x42, 0x00, // CALL 0x200
+            0x43, 0x00, // SE V0, 0x00
+            0x44, 0x00, // SNE V0, 0x00
+            0x45, 0x00, // SE V0, V1
+            0x46, 0x00, // ADD V0, 0x00
+            0x47, 0x00, // OR V0, V1
+            0x48, 0x01, // AND V0, V1
+            0x49, 0x02, // XOR V0, V1
+            0x4A, 0x03, // ADD V0, I
+            0x4B, 0x04, // SUB V0, V1
+            0x4C, 0x05, // SUBN V0, V1
+            0x4D, 0x06, // SHR V0, V1
+            0x4E, 0x07, // SHL V0, V1
+            0x4F, 0x00, // SNE V0, V1
+            0x50, 0x00, // ADD I
+            0x51, 0x00, // JP V0
+            0x52, 0x00, // RND V0, 0x00
+            0x53, 0x00, // DRW V0, V1, 0x00
+            0x54, 0x9E, // SKP V0
+            0x55, 0xA1, // SKNP V0
+            0x56, 0x00, // ADD V0
+            0x57, 0x07, // LD V0, DT
+            0x58, 0x0A, // LD V0, K
+            0x59, 0x15, // LD V0, T
+            0x5A, 0x18, // LD V0, F
+            0x5B, 0x1E, // LD I
+            0x5C, 0x05, // LD V0
+            0x5D, 0x33, // LD V0, B
+            0x5E, 0x55, // LD V0, D
+            0x5F, 0x65, // LD V0, E
+            0x60, 0x00, // RET
+            0x61, 0x00, // JP 0x100
+            0x62, 0x00, // CALL 0x200
+            0x63, 0x00, // SE V0, 0x00
+            0x64, 0x00, // SNE V0, 0x00
+            0x65, 0x00, // SE V0, V1
+            0x66, 0x00, // ADD V0, 0x00
+            0x67, 0x00, // OR V0, V1
+            0x68, 0x01, // AND V0, V1
+            0x69, 0x02, // XOR V0, V1
+            0x6A, 0x03, // ADD V0, I
+            0x6B, 0x04, // SUB V0, V1
+            0x6C, 0x05, // SUBN V0, V1
+            0x6D, 0x06, // SHR V0, V1
+            0x6E, 0x07, // SHL V0, V1
+            0x6F, 0x00, // SNE V0, V1
+            0x70, 0x00, // ADD I
+            0x71, 0x00, // JP V0
+            0x72, 0x00, // RND V0, 0x00
+            0x73, 0x00, // DRW V0, V1, 0x00
+            0x74, 0x9E, // SKP V0
+            0x75, 0xA1, // SKNP V0
+            0x76, 0x00, // ADD V0
+            0x77, 0x07, // LD V0, DT
+            0x78, 0x0A, // LD V0, K
+            0x79, 0x15, // LD V0, T
+            0x7A, 0x18, // LD V0, F
+            0x7B, 0x1E, // LD I
+            0x7C, 0x05, // LD V0
+            0x7D, 0x33, // LD V0, B
+            0x7E, 0x55, // LD V0, D
+            0x7F, 0x65, // LD V0, E
+            0x80, 0x00, // RET
+            0x81, 0x00, // JP 0x100
+            0x82, 0x00, // CALL 0x200
+            0x83, 0x00, // SE V0, 0x00
+            0x84, 0x00, // SNE V0, 0x00
+            0x85, 0x00, // SE V0, V1
+            0x86, 0x00, // ADD V0, 0x00
+            0x87, 0x00, // OR V0, V1
+            0x88, 0x01, // AND V0, V1
+            0x89, 0x02, // XOR V0, V1
+            0x8A, 0x03, // ADD V0, I
+            0x8B, 0x04, // SUB V0, V1
+            0x8C, 0x05, // SUBN V0, V1
+            0x8D, 0x06, // SHR V0, V1
+            0x8E, 0x07, // SHL V0, V1
+            0x8F, 0x00, // SNE V0, V1
+            0x90, 0x00, // ADD I
+            0x91, 0x00, // JP V0
+            0x92, 0x00, // RND V0, 0x00
+            0x93, 0x00, // DRW V0, V1, 0x00
+            0x94, 0x9E, // SKP V0
+            0x95, 0xA1, // SKNP V0
+            0x96, 0x00, // ADD V0
+            0x97, 0x07, // LD V0, DT
+            0x98, 0x0A, // LD V0, K
+            0x99, 0x15, // LD V0, T
+            0x9A, 0x18, // LD V0, F
+            0x9B, 0x1E, // LD I
+            0x9C, 0x05, // LD V0
+            0x9D, 0x33, // LD V0, B
+            0x9E, 0x55, // LD V0, D
+            0x9F, 0x65, // LD V0, E
+            0xA0, 0x00, // RET
+            0xA1, 0x00, // JP 0x100
+            0xA2, 0x00, // CALL 0x200
+            0xA3, 0x00, // SE V0, 0x00
+            0xA4, 0x00, // SNE V0, 0x00
+            0xA5, 0x00, // SE V0, V1
+            0xA6, 0x00, // ADD V0, 0x00
+            0xA7, 0x00, // OR V0, V1
+            0xA8, 0x01, // AND V0, V1
+            0xA9, 0x02, // XOR V0, V1
+            0xAA, 0x03, // ADD V0, I
+            0xAB, 0x04, // SUB V0, V1
+            0xAC, 0x05, // SUBN V0, V1
+            0xAD, 0x06, // SHR V0, V1
+            0xAE, 0x07, // SHL V0, V1
+            0xAF, 0x00, // SNE V0, V1
+            0xB0, 0x00, // ADD I
+            0xB1, 0x00, // JP V0
+            0xB2, 0x00, // RND V0, 0x00
+            0xB3, 0x00, // DRW V0, V1, 0x00
+            0xB4, 0x9E, // SKP V0
+            0xB5, 0xA1, // SKNP V0
+            0xB6, 0x00, // ADD V0
+            0xB7, 0x07, // LD V0, DT
+            0xB8, 0x0A, // LD V0, K
+            0xB9, 0x15, // LD V0, T
+            0xBA, 0x18, // LD V0, F
+            0xBB, 0x1E, // LD I
+            0xBC, 0x05, // LD V0
+            0xBD, 0x33, // LD V0, B
+            0xBE, 0x55, // LD V0, D
+            0xBF, 0x65, // LD V0, E
+            0xC0, 0x00, // RET
+            0xC1, 0x00, // JP 0x100
+            0xC2, 0x00, // CALL 0x200
+            0xC3, 0x00, // SE V0, 0x00
+            0xC4, 0x00, // SNE V0, 0x00
+            0xC5, 0x00, // SE V0, V1
+            0xC6, 0x00, // ADD V0, 0x00
+            0xC7, 0x00, // OR V0, V1
+            0xC8, 0x01, // AND V0, V1
+            0xC9, 0x02, // XOR V0, V1
+            0xCA, 0x03, // ADD V0, I
+            0xCB, 0x04, // SUB V0, V1
+            0xCC, 0x05, // SUBN V0, V1
+            0xCD, 0x06, // SHR V0, V1
+            0xCE, 0x07, // SHL V0, V1
+            0xCF, 0x00, // SNE V0, V1
+            0xD0, 0x00, // ADD I
+            0xD1, 0x00, // JP V0
+            0xD2, 0x00, // RND V0, 0x00
+            0xD3, 0x00, // DRW V0, V1, 0x00
+            0xD4, 0x9E, // SKP V0
+            0xD5, 0xA1, // SKNP V0
+            0xD6, 0x00, // ADD V0
+            0xD7, 0x07, // LD V0, DT
+            0xD8, 0x0A, // LD V0, K
+            0xD9, 0x15, // LD V0, T
+            0xDA, 0x18, // LD V0, F
+            0xDB, 0x1E, // LD I
+            0xDC, 0x05, // LD V0
+            0xDD, 0x33, // LD V0, B
+            0xDE, 0x55, // LD V0, D
+            0xDF, 0x65, // LD V0, E
+            0xE0, 0x00, // RET
+            0xE1, 0x00, // JP 0x100
+            0xE2, 0x00, // CALL 0x200
+            0xE3, 0x00, // SE V0, 0x00
+            0xE4, 0x00, // SNE V0, 0x00
+            0xE5, 0x00, // SE V0, V1
+            0xE6, 0x00, // ADD V0, 0x00
+            0xE7, 0x00, // OR V0, V1
+            0xE8, 0x01, // AND V0, V1
+            0xE9, 0x02, // XOR V0, V1
+            0xEA, 0x03, // ADD V0, I
+            0xEB, 0x04, // SUB V0, V1
+            0xEC, 0x05, // SUBN V0, V1
+            0xED, 0x06, // SHR V0, V1
+            0xEE, 0x07, // SHL V0, V1
+            0xEF, 0x00, // SNE V0, V1
+            0xF0, 0x00, // ADD I
+            0xF1, 0x00, // JP V0
+            0xF2, 0x00, // RND V0, 0x00
+            0xF3, 0x00, // DRW V0, V1, 0x00
+            0xF4, 0x9E, // SKP V0
+            0xF5, 0xA1, // SKNP V0
+            0xF6, 0x00, // ADD V0
+            0xF7, 0x07, // LD V0, DT
+            0xF8, 0x0A, // LD V0, K
+            0xF9, 0x15, // LD V0, T
+            0xFA, 0x18, // LD V0, F
+            0xFB, 0x1E, // LD I
+            0xFC, 0x05, // LD V0
+            0xFD, 0x33, // LD V0, B
+            0xFE, 0x55, // LD V0, D
+            0xFF, 0x65, // LD V0, E
+            0x00, 0x00, // RET
+            0x01, 0x00, // JP 0x100
+            0x02, 0x00, // CALL 0x200
+            0x03, 0x00, // SE V0, 0x00
+            0x04, 0x00, // SNE V0, 0x00
+            0x05, 0x00, // SE V0, V1
+            0x06, 0x00, // ADD V0, 0x00
+            0x07, 0x00, // OR V0, V1
+            0x08, 0x01, // AND V0, V1
+            0x09, 0x02, // XOR V0, V1
+            0x0A, 0x03, // ADD V0, I
+            0x0B, 0x04, // SUB V0, V1
+            0x0C, 0x05, // SUBN V0, V1
+            0x0D, 0x06, // SHR V0, V1
+            0x0E, 0x07, // SHL V0, V1
+            0x0F, 0x00, // SNE V0, V1
+            0x10, 0x00, // ADD I
+            0x11, 0x00, // JP V0
+            0x12, 0x00, // RND V0, 0x00
+            0x13, 0x00, // DRW V0, V1, 0x00
+            0x14, 0x9E, // SKP V0
+            0x15, 0xA1, // SKNP V0
+            0x16, 0x00, // ADD V0
+            0x17, 0x07, // LD V0, DT
+            0x18, 0x0A, // LD V0, K
+            0x19, 0x15, // LD V0, T
+            0x1A, 0x18, // LD V0, F
+            0x1B, 0x1E, // LD I
+            0x1C, 0x05, // LD V0
+            0x1D, 0x33, // LD V0, B
+            0x1E, 0x55, // LD V0, D
+            0x1F, 0x65, // LD V0, E
+            0x20, 0x00, // RET
+            0x21, 0x00, // JP 0x100
+            0x22, 0x00, // CALL 0x200
+            0x23, 0x00, // SE V0, 0x00
+            0x24, 0x00, // SNE V0, 0x00
+            0x25, 0x00, // SE V0, V1
+            0x26, 0x00, // ADD V0, 0x00
+            0x27, 0x00, // OR V0, V1
+            0x28, 0x01, // AND V0, V1
+            0x29, 0x02, // XOR V0, V1
+            0x2A, 0x03, // ADD V0, I
+            0x2B, 0x04, // SUB V0, V1
+            0x2C, 0x05, // SUBN V0, V1
+            0x2D, 0x06, // SHR V0, V1
+            0x2E, 0x07, // SHL V0, V1
+            0x2F, 0x00, // SNE V0, V1
+            0x30, 0x00, // ADD I
+            0x31, 0x00, // JP V0
+            0x32, 0x00, // RND V0, 0x00
+            0x33, 0x00, // DRW V0, V1, 0x00
+            0x34, 0x9E, // SKP V0
+            0x35, 0xA1, // SKNP V0
+            0x36, 0x00, // ADD V0
+            0x37, 0x07, // LD V0, DT
+            0x38, 0x0A, // LD V0, K
+            0x39, 0x15, // LD V0, T
+            0x3A, 0x18, // LD V0, F
+            0x3B, 0x1E, // LD I
+            0x3C, 0x05, // LD V0
+            0x3D, 0x33, // LD V0, B
+            0x3E, 0x55, // LD V0, D
+            0x3F, 0x65, // LD V0, E
+            0x40, 0x00, // RET
+            0x41, 0x00, // JP 0x100
+            0x42, 0x00, // CALL 0x200
+            0x43, 0x00, // SE V0, 0x00
+            0x44, 0x00, // SNE V0, 0x00
+            0x45, 0x00, // SE V0, V1
+            0x46, 0x00, // ADD V0, 0x00
+            0x47, 0x00, // OR V0, V1
+            0x48, 0x01, // AND V0, V1
+            0x49, 0x02, // XOR V0, V1
+            0x4A, 0x03, // ADD V0, I
+            0x4B, 0x04, // SUB V0, V1
+            0x4C, 0x05, // SUBN V0, V1
+            0x4D, 0x06, // SHR V0, V1
+            0x4E, 0x07, // SHL V0, V1
+            0x4F, 0x00, // SNE V0, V1
+            0x50, 0x00, // ADD I
+            0x51, 0x00, // JP V0
+            0x52, 0x00, // RND V0, 0x00
+            0x53, 0x00, // DRW V0, V1, 0x00
+            0x54, 0x9E, // SKP V0
+            0x55, 0xA1, // SKNP V0
+            0x56, 0x00, // ADD V0
+            0x57, 0x07, // LD V0, DT
+            0x58, 0x0A, // LD V0, K
+            0x59, 0x15, // LD V0, T
+            0x5A, 0x18, // LD V0, F
+            0x5B, 0x1E, // LD I
+            0x5C, 0x05, // LD V0
+            0x5D, 0x33, // LD V0, B
+            0x5E, 0x55, // LD V0, D
+            0x5F, 0x65, // LD V0, E
+            0x60, 0x00, // RET
+            0x61, 0x00, // JP 0x100
+            0x62, 0x00, // CALL 0x200
+            0x63, 0x00, // SE V0, 0x00
+            0x64, 0x00, // SNE V0, 0x00
+            0x65, 0x00, // SE V0, V1
+            0x66, 0x00, // ADD V0, 0x00
+            0x67, 0x00, // OR V0, V1
+            0x68, 0x01, // AND V0, V1
+            0x69, 0x02, // XOR V0, V1
+            0x6A, 0x03, // ADD V0, I
+            0x6B, 0x04, // SUB V0, V1
+            0x6C, 0x05, // SUBN V0, V1
+            0x6D, 0x06, // SHR V0, V1
+            0x6E, 0x07, // SHL V0, V1
+            0x6F, 0x00, // SNE V0, V1
+            0x70, 0x00, // ADD I
+            0x71, 0x00, // JP V0
+            0x72, 0x00, // RND V0, 0x00
+            0x73, 0x00, // DRW V0, V1, 0x00
+            0x74, 0x9E, // SKP V0
+            0x75, 0xA1, // SKNP V0
+            0x76, 0x00, // ADD V0
+            0x77, 0x07, // LD V0, DT
+            0x78, 0x0A, // LD V0, K
+            0x79, 0x15, // LD V0, T
+            0x7A, 0x18, // LD V0, F
+            0x7B, 0x1E, // LD I
+            0x7C, 0x05, // LD V0
+            0x7D, 0x33, // LD V0, B
+            0x7E, 0x55, // LD V0, D
+            0x7F, 0x65, // LD V0, E
+            0x80, 0x00, // RET
+            0x81, 0x00, // JP 0x100
+            0x82, 0x00, // CALL 0x200
+            0x83, 0x00, // SE V0, 0x00
+            0x84, 0x00, // SNE V0, 0x00
+            0x85, 0x00, // SE V0, V1
+            0x86, 0x00, // ADD V0, 0x00
+            0x87, 0x00, // OR V0, V1
+            0x88, 0x01, // AND V0, V1
+            0x89, 0x02, // XOR V0, V1
+            0x8A, 0x03, // ADD V0, I
+            0x8B, 0x04, // SUB V0, V1
+            0x8C, 0x05, // SUBN V0, V1
+            0x8D, 0x06, // SHR V0, V1
+            0x8E, 0x07, // SHL V0, V1
+            0x8F, 0x00, // SNE V0, V1
+            0x90, 0x00, // ADD I
+            0x91, 0x00, // JP V0
+            0x92, 0x00, // RND V0, 0x00
+            0x93, 0x00, // DRW V0, V1, 0x00
+            0x94, 0x9E, // SKP V0
+            0x95, 0xA1, // SKNP V0
+            0x96, 0x00, // ADD V0
+            0x97, 0x07, // LD V0, DT
+            0x98, 0x0A, // LD V0, K
+            0x99, 0x15, // LD V0, T
+            0x9A, 0x18, // LD V0, F
+            0x9B, 0x1E, // LD I
+            0x9C, 0x05, // LD V0
+            0x9D, 0x33, // LD V0, B
+            0x9E, 0x55, // LD V0, D
+            0x9F, 0x65, // LD V0, E
+            0xA0, 0x00, // RET
+            0xA1, 0x00, // JP 0x100
+            0xA2, 0x00, // CALL 0x200
+            0xA3, 0x00, // SE V0, 0x00
+            0xA4, 0x00, // SNE V0, 0x00
+            0xA5, 0x00, // SE V0, V1
+            0xA6, 0x00, // ADD V0, 0x00
+            0xA7, 0x00, // OR V0, V1
+            0xA8, 0x01, // AND V0, V1
+            0xA9, 0x02, // XOR V0, V1
+            0xAA, 0x03, // ADD V0, I
+            0xAB, 0x04, // SUB V0, V1
+            0xAC, 0x05, // SUBN V0, V1
+            0xAD, 0x06, // SHR V0, V1
+            0xAE, 0x07, // SHL V0, V1
+            0xAF, 0x00, // SNE V0, V1
+            0xB0, 0x00, // ADD I
+            0xB1, 0x00, // JP V0
+            0xB2, 0x00, // RND V0, 0x00
+            0xB3, 0x00, // DRW V0, V1, 0x00
+            0xB4, 0x9E, // SKP V0
+            0xB5, 0xA1, // SKNP V0
+            0xB6, 0x00, // ADD V0
+            0xB7, 0x07, // LD V0, DT
+            0xB8, 0x0A, // LD V0, K
+            0xB9, 0x15, // LD V0, T
+            0xBA, 0x18, // LD V0, F
+            0xBB, 0x1E, // LD I
+            0xBC, 0x05, // LD V0
+            0xBD, 0x33, // LD V0, B
+            0xBE, 0x55, // LD V0, D
+            0xBF, 0x65, // LD V0, E
+            0xC0, 0x00, // RET
+            0xC1, 0x00, // JP 0x100
+            0xC2, 0x00, // CALL 0x200
+            0xC3, 0x00, // SE V0, 0x00
+            0xC4, 0x00, // SNE V0, 0x00
+            0xC5, 0x00, // SE V0, V1
+            0xC6, 0x00, // ADD V0, 0x00
+            0xC7, 0x00, // OR V0, V1
+            0xC8, 0x01, // AND V0, V1
+            0xC9, 0x02, // XOR V0, V1
+            0xCA, 0x03, // ADD V0, I
+            0xCB, 0x04, // SUB V0, V1
+            0xCC, 0x05, // SUBN V0, V1
+            0xCD, 0x06, // SHR V0, V1
+            0xCE, 0x07, // SHL V0, V1
+            0xCF, 0x00, // SNE V0, V1
+            0xD0, 0x00, // ADD I
+            0xD1, 0x00, // JP V0
+            0xD2, 0x00, // RND V0, 0x00
+            0xD3, 0x00, // DRW V0, V1, 0x00
+            0xD4, 0x9E, // SKP V0
+            0xD5, 0xA1, // SKNP V0
+            0xD6, 0x00, // ADD V0
+            0xD7, 0x07, // LD V0, DT
+            0xD8, 0x0A, // LD V0, K
+            0xD9, 0x15, // LD V0, T
+            0xDA, 0x18, // LD V0, F
+            0xDB, 0x1E, // LD I
+            0xDC, 0x05, // LD V0
+            0xDD, 0x33, // LD V0, B
+            0xDE, 0x55, // LD V0, D
+            0xDF, 0x65, // LD V0, E
+            0xE0, 0x00, // RET
+            0xE1, 0x00, // JP 0x100
+            0xE2, 0x00, // CALL 0x200
+            0xE3, 0x00, // SE V0, 0x00
+            0xE4, 0x00, // SNE V0, 0x00
+            0xE5, 0x00, // SE V0, V1
+            0xE6, 0x00, // ADD V0, 0x00
+            0xE7, 0x00, // OR V0, V1
+            0xE8, 0x01, // AND V0, V1
+            0xE9, 0x02, // XOR V0, V1
+            0xEA, 0x03, // ADD V0, I
+            0xEB, 0x04, // SUB V0, V1
+            0xEC, 0x05, // SUBN V0, V1
+            0xED, 0x06, // SHR V0, V1
+            0xEE, 0x07, // SHL V0, V1
+            0xEF, 0x00, // SNE V0, V1
+            0xF0, 0x00, // ADD I
+            0xF1, 0x00, // JP V0
+            0xF2, 0x00, // RND V0, 0x00
+            0xF3, 0x00, // DRW V0, V1, 0x00
+            0xF4, 0x9E, // SKP V0
+            0xF5, 0xA1, // SKNP V0
+            0xF6, 0x00, // ADD V0
+            0xF7, 0x07, // LD V0, DT
+            0xF8, 0x0A, // LD V0, K
+            0xF9, 0x15, // LD V0, T
+            0xFA, 0x18, // LD V0, F
+            0xFB, 0x1E, // LD I
+            0xFC, 0x05, // LD V0
+            0xFD, 0x33, // LD V0, B
+            0xFE, 0x55, // LD V0, D
+            0xFF, 0x65, // LD V0, E
+            0x00, 0x00, // RET
+            0x01, 0x00, // JP 0x100
+            0x02, 0x00, // CALL 0x200
+            0x03, 0x00, // SE V0, 0x00
+            0x04, 0x00, // SNE V0, 0x00
+            0x05, 0x00, // SE V0, V1
+            0x06, 0x00, // ADD V0, 0x00
+            0x07, 0x00, // OR V0, V1
+            0x08, 0x01, // AND V0, V1
+            0x09, 0x02, // XOR V0, V1
+            0x0A, 0x03, // ADD V0, I
+            0x0B, 0x04, // SUB V0, V1
+            0x0C, 0x05, // SUBN V0, V1
+            0x0D, 0x06, // SHR V0, V1
+            0x0E, 0x07, // SHL V0, V1
+            0x0F, 0x00, // SNE V0, V1
+            0x10, 0x00, // ADD I
+            0x11, 0x00, // JP V0
+            0x12, 0x00, // RND V0, 0x00
+            0x13, 0x00, // DRW V0, V1, 0x00
+            0x14, 0x9E, // SKP V0
+            0x15, 0xA1, // SKNP V0
+            0x16, 0x00, // ADD V0
+            0x17, 0x07, // LD V0, DT
+            0x18, 0x0A, // LD V0, K
+            0x19, 0x15, // LD V0, T
+            0x1A, 0x18, // LD V0, F
+            0x1B, 0x1E, // LD I
+            0x1C, 0x05, // LD V0
+            0x1D, 0x33, // LD V0, B
+            0x1E, 0x55, // LD V0, D
+            0x1F, 0x65, // LD V0, E
+            0x20, 0x00, // RET
+            0x21, 0x00, // JP 0x100
+            0x22, 0x00, // CALL 0x200
+            0x23, 0x00, // SE V0, 0x00
+            0x24, 0x00, // SNE V0, 0x00
+            0x25, 0x00, // SE V0, V1
+            0x26, 0x00, // ADD V0, 0x00
+            0x27, 0x00, // OR V0, V1
+            0x28, 0x01, // AND V0, V1
+            0x29, 0x02, // XOR V0, V1
+            0x2A, 0x03, // ADD V0, I
+            0x2B, 0x04, // SUB V0, V1
+            0x2C, 0x05, // SUBN V0, V1
+            0x2D, 0x06, // SHR V0, V1
+            0x2E, 0x07, // SHL V0, V1
+            0x2F, 0x00, // SNE V0, V1
+            0x30, 0x00, // ADD I
+            0x31, 0x00, // JP V0
+            0x32, 0x00, // RND V0, 0x00
+            0x33, 0x00, // DRW V0, V1, 0x00
+            0x34, 0x9E, // SKP V0
+            0x35, 0xA1, // SKNP V0
+            0x36, 0x00, // ADD V0
+            0x37, 0x07, // LD V0, DT
+            0x38, 0x0A, // LD V0, K
+            0x39, 0x15, // LD V0, T
+            0x3A, 0x18, // LD V0, F
+            0x3B, 0x1E, // LD I
+            0x3C, 0x05, // LD V0
+            0x3D, 0x33, // LD V0, B
+            0x3E, 0x55, // LD V0, D
+            0x3F, 0x65, // LD V0, E
+            0x40, 0x00, // RET
+            0x41, 0x00, // JP 0x100
+            0x42, 0x00, // CALL 0x200
+            0x43, 0x00, // SE V0, 0x00
+            0x44, 0x00, // SNE V0, 0x00
+            0x45, 0x00, // SE V0, V1
+            0x46, 0x00, // ADD V0, 0x00
+            0x47, 0x00, // OR V0, V1
+            0x48, 0x01, // AND V0, V1
+            0x49, 0x02, // XOR V0, V1
+            0x4A, 0x03, // ADD V0, I
+            0x4B, 0x04, // SUB V0, V1
+            0x4C, 0x05, // SUBN V0, V1
+            0x4D, 0x06, // SHR V0, V1
+            0x4E, 0x07, // SHL V0, V1
+            0x4F, 0x00, // SNE V0, V1
+            0x50, 0x00, // ADD I
+            0x51, 0x00, // JP V0
+            0x52, 0x00, // RND V0, 0x00
+            0x53, 0x00, // DRW V0, V1, 0x00
+            0x54, 0x9E, // SKP V0
+            0x55, 0xA1, // SKNP V0
+            0x56, 0x00, // ADD V0
+            0x57, 0x07, // LD V0, DT
+            0x58, 0x0A, // LD V0, K
+            0x59, 0x15, // LD V0, T
+            0x5A, 0x18, // LD V0, F
+            0x5B, 0x1E, // LD I
+            0x5C, 0x05, // LD V0
+            0x5D, 0x33, // LD V0, B
+            0x5E, 0x55, // LD V0, D
+            0x5F, 0x65, // LD V0, E
+            0x60, 0x00, // RET
+            0x61, 0x00, // JP 0x100
+            0x62, 0x00, // CALL 0x200
+            0x63, 0x00, // SE V0, 0x00
+            0x64, 0x00, // SNE V0, 0x00
+            0x65, 0x00, // SE V0, V1
+            0x66, 0x00, // ADD V0, 0x00
+            0x67, 0x00, // OR V0, V1
+            0x68, 0x01, // AND V0, V1
+            0x69, 0x02, // XOR V0, V1
+            0x6A, 0x03, // ADD V0, I
+            0x6B, 0x04, // SUB V0, V1
+            0x6C, 0x05, // SUBN V0, V1
+            0x6D, 0x06, // SHR V0, V1
+            0x6E, 0x07, // SHL V0, V1
+            0x6F, 0x00, // SNE V0, V1
+            0x70, 0x00, // ADD I
+            0x71, 0x00, // JP V0
+            0x72, 0x00, // RND V0, 0x00
+            0x73, 0x00, // DRW V0, V1, 0x00
+            0x74, 0x9E, // SKP V0
+            0x75, 0xA1, // SKNP V0
+            0x76, 0x00, // ADD V0
+            0x77, 0x07, // LD V0, DT
+            0x78, 0x0A, // LD V0, K
+            0x79, 0x15, // LD V0, T
+            0x7A, 0x18, // LD V0, F
+            0x7B, 0x1E, // LD I
+            0x7C, 0x05, // LD V0
+            0x7D, 0x33, // LD V0, B
+            0x7E, 0x55, // LD V0, D
+            0x7F, 0x65, // LD V0, E
+            0x80, 0x00, // RET
+            0x81, 0x00, // JP 0x100
+            0x82, 0x00, // CALL 0x200
+            0x83, 0x00, // SE V0, 0x00
+            0x84, 0x00, // SNE V0, 0x00
+            0x85, 0x00, // SE V0, V1
+            0x86, 0x00, // ADD V0, 0x00
+            0x87, 0x00, // OR V0, V1
+            0x88, 0x01, // AND V0, V1
+            0x89, 0x02, // XOR V0, V1
+            0x8A, 0x03, // ADD V0, I
+            0x8B, 0x04, // SUB V0, V1
+            0x8C, 0x05, // SUBN V0, V1
+            0x8D, 0x06, // SHR V0, V1
+            0x8E, 0x07, // SHL V0, V1
+            0x8F, 0x00, // SNE V0, V1
+            0x90, 0x00, // ADD I
+            0x91, 0x00, // JP V0
+            0x92, 0x00, // RND V0, 0x00
+            0x93, 0x00, // DRW V0, V1, 0x00
+            0x94, 0x9E, // SKP V0
+            0x95, 0xA1, // SKNP V0
+            0x96, 0x00, // ADD V0
+            0x97, 0x07, // LD V0, DT
+            0x98, 0x0A, // LD V0, K
+            0x99, 0x15, // LD V0, T
+            0x9A, 0x18, // LD V0, F
+            0x9B, 0x1E, // LD I
+            0x9C, 0x05, // LD V0
+            0x9D, 0x33, // LD V0, B
+            0x9E, 0x55, // LD V0, D
+            0x9F, 0x65, // LD V0, E
+            0xA0, 0x00, // RET
+            0xA1, 0x00, // JP 0x100
+            0xA2, 0x00, // CALL 0x200
+            0xA3, 0x00, // SE V0, 0x00
+            0xA4, 0x00, // SNE V0, 0x00
+            0xA5, 0x00, // SE V0, V1
+            0xA6, 0x00, // ADD V0, 0x00
+            0xA7, 0x00, // OR V0, V1
+            0xA8, 0x01, // AND V0, V1
+            0xA9, 0x02, // XOR V0, V1
+            0xAA, 0x03, // ADD V0, I
+            0xAB, 0x04, // SUB V0, V1
+            0xAC, 0x05, // SUBN V0, V1
+            0xAD, 0x06, // SHR V0, V1
+            0xAE, 0x07, // SHL V0, V1
+            0xAF, 0x00, // SNE V0, V1
+            0xB0, 0x00, // ADD I
+            0xB1, 0x00, // JP V0
+            0xB2, 0x00, // RND V0, 0x00
+            0xB3, 0x00, // DRW V0, V1, 0x00
+            0xB4, 0x9E, // SKP V0
+            0xB5, 0xA1, // SKNP V0
+            0xB6, 0x00, // ADD V0
+            0xB7, 0x07, // LD V0, DT
+            0xB8, 0x0A, // LD V0, K
+            0xB9, 0x15, // LD V0, T
+            0xBA, 0x18, // LD V0, F
+            0xBB, 0x1E, // LD I
+            0xBC, 0x05, // LD V0
+            0xBD, 0x33, // LD V0, B
+            0xBE, 0x55, // LD V0, D
+            0xBF, 0x65, // LD V0, E
+            0xC0, 0x00, // RET
+            0xC1, 0x00, // JP 0x100
+            0xC2, 0x00, // CALL 0x200
+            0xC3, 0x00, // SE V0, 0x00
+            0xC4, 0x00, // SNE V0, 0x00
+            0xC5, 0x00, // SE V0, V1
+            0xC6, 0x00, // ADD V0, 0x00
+            0xC7, 0x00, // OR V0, V1
+            0xC8, 0x01, // AND V0, V1
+            0xC9, 0x02, // XOR V0, V1
+            0xCA, 0x03, // ADD V0, I
+            0xCB, 0x04, // SUB V0, V1
+            0xCC, 0x05, // SUBN V0, V1
+            0xCD, 0x06, // SHR V0, V1
+            0xCE, 0x07, // SHL V0, V1
+            0xCF, 0x00, // SNE V0, V1
+            0xD0, 0x00, // ADD I
+            0xD1, 0x00, // JP V0
+            0xD2, 0x00, // RND V0, 0x00
+            0xD3, 0x00, // DRW V0, V1, 0x00
+            0xD4, 0x9E, // SKP V0
+            0xD5, 0xA1, // SKNP V0
+            0xD6, 0x00, // ADD V0
+            0xD7, 0x07, // LD V0, DT
+            0xD8, 0x0A, // LD V0, K
+            0xD9, 0x15, // LD V0, T
+            0xDA, 0x18, // LD V0, F
+            0xDB, 0x1E, // LD I
+            0xDC, 0x05, // LD V0
+            0xDD, 0x33, // LD V0, B
+            0xDE, 0x55, // LD V0, D
+            0xDF, 0x65, // LD V0, E
+            0xE0, 0x00, // RET
+            0xE1, 0x00, // JP 0x100
+            0xE2, 0x00, // CALL 0x200
+            0xE3, 0x00, // SE V0, 0x00
+            0xE4, 0x00, // SNE V0, 0x00
+            0xE5, 0x00, // SE V0, V1
+            0xE6, 0x00, // ADD V0, 0x00
+            0xE7, 0x00, // OR V0, V1
+            0xE8, 0x01, // AND V0, V1
+            0xE9, 0x02, // XOR V0, V1
+            0xEA, 0x03, // ADD V0, I
+            0xEB, 0x04, // SUB V0, V1
+            0xEC, 0x05, // SUBN V0, V1
+            0xED, 0x06, // SHR V0, V1
+            0xEE, 0x07, // SHL V0, V1
+            0xEF, 0x00, // SNE V0, V1
+            0xF0, 0x00, // ADD I
+            0xF1, 0x00, // JP V0
+            0xF2, 0x00, // RND V0, 0x00
+            0xF3, 0x00, // DRW V0, V1, 0x00
+            0xF4, 0x9E, // SKP V0
+            0xF5, 0xA1, // SKNP V0
+            0xF6, 0x00, // ADD V0
+            0xF7, 0x07, // LD V0, DT
+            0xF8, 0x0A, // LD V0, K
+            0xF9, 0x15, // LD V0, T
+            0xFA, 0x18, // LD V0, F
+            0xFB, 0x1E, // LD I
+            0xFC, 0x05, // LD V0
+            0xFD, 0x33, // LD V0, B
+            0xFE, 0x55, // LD V0, D
+            0xFF, 0x65, // LD V0, E
+            0x00, 0x00, // RET
+            0x01, 0x00, // JP 0x100
+            0x02, 0x00, // CALL 0x200
+            0x03, 0x00, // SE V0, 0x00
+            0x04, 0x00, // SNE V0, 0x00
+            0x05, 0x00, // SE V0, V1
+            0x06, 0x00, // ADD V0, 0x00
+            0x07, 0x00, // OR V0, V1
+            0x08, 0x01, // AND V0, V1
+            0x09, 0x02, // XOR V0, V1
+            0x0A, 0x03, // ADD V0, I
+            0x0B, 0x04, // SUB V0, V1
+            0x0C, 0x05, // SUBN V0, V1
+            0x0D, 0x06, // SHR V0, V1
+            0x0E, 0x07, // SHL V0, V1
+            0x0F, 0x00, // SNE V0, V1
+            0x10, 0x00, // ADD I
+            0x11, 0x00, // JP V0
+            0x12, 0x00, // RND V0, 0x00
+            0x13, 0x00, // DRW V0, V1, 0x00
+            0x14, 0x9E, // SKP V0
+            0x15, 0xA1, // SKNP V0
+            0x16, 0x00, // ADD V0
+            0x17, 0x07, // LD V0, DT
+            0x18, 0x0A, // LD V0, K
+            0x19, 0x15, // LD V0, T
+            0x1A, 0x18, // LD V0, F
+            0x1B, 0x1E, // LD I
+            0x1C, 0x05, // LD V0
+            0x1D, 0x33, // LD V0, B
+            0x1E, 0x55, // LD V0, D
+            0x1F, 0x65, // LD V0, E
+            0x20, 0x00, // RET
+            0x21, 0x00, // JP 0x100
+            0x22, 0x00, // CALL 0x200
+            0x23, 0x00, // SE V0, 0x00
+            0x24, 0x00, // SNE V0, 0x00
+            0x25, 0x00, // SE V0, V1
+            0x26, 0x00, // ADD V0, 0x00
+            0x27, 0x00, // OR V0, V1
+            0x28, 0x01, // AND V0, V1
+            0x29, 0x02, // XOR V0, V1
+            0x2A, 0x03, // ADD V0, I
+            0x2B, 0x04, // SUB V0, V1
+            0x2C, 0x05, // SUBN V0, V1
+            0x2D, 0x06, // SHR V0, V1
+            0x2E, 0x07, // SHL V0, V1
+            0x2F, 0x00, // SNE V0, V1
+            0x30, 0x00, // ADD I
+            0x31, 0x00, // JP V0
+            0x32, 0x00, // RND V0, 0x00
+            0x33, 0x00, // DRW V0, V1, 0x00
+            0x34, 0x9E, // SKP V0
+            0x35, 0xA1, // SKNP V0
+            0x36, 0x00, // ADD V0
+            0x37, 0x07, // LD V0, DT
+            0x38, 0x0A, // LD V0, K
+            0x39, 0x15, // LD V0, T
+            0x3A, 0x18, // LD V0, F
+            0x3B, 0x1E, // LD I
+            0x3C, 0x05, // LD V0
+            0x3D, 0x33, // LD V0, B
+            0x3E, 0x55, // LD V0, D
+            0x3F, 0x65, // LD V0, E
+            0x40, 0x00, // RET
+            0x41, 0x00, // JP 0x100
+            0x42, 0x00, // CALL 0x200
+            0x43, 0x00, // SE V0, 0x00
+            0x44, 0x00, // SNE V0, 0x00
+            0x45, 0x00, // SE V0, V1
+            0x46, 0x00, // ADD V0, 0x00
+            0x47, 0x00, // OR V0, V1
+            0x48, 0x01, // AND V0, V1
+            0x49, 0x02, // XOR V0, V1
+            0x4A, 0x03, // ADD V0, I
+            0x4B, 0x04, // SUB V0, V1
+            0x4C, 0x05, // SUBN V0, V1
+            0x4D, 0x06, // SHR V0, V1
+            0x4E, 0x07, // SHL V0, V1
+            0x4F, 0x00, // SNE V0, V1
+            0x50, 0x00, // ADD I
+            0x51, 0x00, // JP V0
+            0x52, 0x00, // RND V0, 0x00
+            0x53, 0x00, // DRW V0, V1, 0x00
+            0x54, 0x9E, // SKP V0
+            0x55, 0xA1, // SKNP V0
+            0x56, 0x00, // ADD V0
+            0x57, 0x07, // LD V0, DT
+            0x58, 0x0A, // LD V0, K
+            0x59, 0x15, // LD V0, T
+            0x5A, 0x18, // LD V0, F
+            0x5B, 0x1E, // LD I
+            0x5C, 0x05, // LD V0
+            0x5D, 0x33, // LD V0, B
+            0x5E, 0x55, // LD V0, D
+            0x5F, 0x65, // LD V0, E
+            0x60, 0x00, // RET
+            0x61, 0x00, // JP 0x100
+            0x62, 0x00, // CALL 0x200
+            0x63, 0x00, // SE V0, 0x00
+            0x64, 0x00, // SNE V0, 0x00
+            0x65, 0x00, // SE V0, V1
+            0x66, 0x00, // ADD V0, 0x00
+            0x67, 0x00, // OR V0, V1
+            0x68, 0x01, // AND V0, V1
+            0x69, 0x02, // XOR V0, V1
+            0x6A, 0x03, // ADD V0, I
+            0x6B, 0x04, // SUB V0, V1
+            0x6C, 0x05, // SUBN V0, V1
+            0x6D, 0x06, // SHR V0, V1
+            0x6E, 0x07, // SHL V0, V1
+            0x6F, 0x00, // SNE V0, V1
+            0x70, 0x00, // ADD I
+            0x71, 0x00, // JP V0
+            0x72, 0x00, // RND V0, 0x00
+            0x73, 0x00, // DRW V0, V1, 0x00
+            0x74, 0x9E, // SKP V0
+            0x75, 0xA1, // SKNP V0
+            0x76, 0x00, // ADD V0
+            0x77, 0x07, // LD V0, DT
+            0x78, 0x0A, // LD V0, K
+            0x79, 0x15, // LD V0, T
+            0x7A, 0x18, // LD V0, F
+            0x7B, 0x1E, // LD I
+            0x7C, 0x05, // LD V0
+            0x7D, 0x33, // LD V0, B
+            0x7E, 0x55, // LD V0, D
+            0x7F, 0x65, // LD V0, E
+            0x80, 0x00, // RET
+            0x81, 0x00, // JP 0x100
+            0x82, 0x00, // CALL 0x200
+            0x83, 0x00, // SE V0, 0x00
+            0x84, 0x00, // SNE V0, 0x00
+            0x85, 0x00, // SE V0, V1
+            0x86, 0x00, // ADD V0, 0x00
+            0x87, 0x00, // OR V0, V1
+            0x88, 0x01, // AND V0, V1
+            0x89, 0x02, // XOR V0, V1
+            0x8A, 0x03, // ADD V0, I
+            0x8B, 0x04, // SUB V0, V1
+            0x8C, 0x05, // SUBN V0, V1
+            0x8D, 0x06, // SHR V0, V1
+            0x8E, 0x07, // SHL V0, V1
+            0x8F, 0x00, // SNE V0, V1
+            0x90, 0x00, // ADD I
+            0x91, 0x00, // JP V0
+            0x92, 0x00, // RND V0, 0x00
+            0x93, 0x00, // DRW V0, V1, 0x00
+            0x94, 0x9E, // SKP V0
+            0x95, 0xA1, // SKNP V0
+            0x96, 0x00, // ADD V0
+            0x97, 0x07, // LD V0, DT
+            0x98, 0x0A, // LD V0, K
+            0x99, 0x15, // LD V0, T
+            0x9A, 0x18, // LD V0, F
+            0x9B, 0x1E, // LD I
+            0x9C, 0x05, // LD V0
+            0x9D, 0x33, // LD V0, B
+            0x9E, 0x55, // LD V0, D
+            0x9F, 0x65, // LD V0, E
+            0xA0, 0x00, // RET
+            0xA1, 0x00, // JP 0x100
+            0xA2, 0x00, // CALL 0x200
+            0xA3, 0x00, // SE V0, 0x00
+            0xA4, 0x00, // SNE V0, 0x00
+            0xA5, 0x00, // SE V0, V1
+            0xA6, 0x00, // ADD V0, 0x00
+            0xA7, 0x00, // OR V0, V1
+            0xA8, 0x01, // AND V0, V1
+            0xA9, 0x02, // XOR V0, V1
+            0xAA, 0x03, // ADD V0, I
+            0xAB, 0x04, // SUB V0, V1
+            0xAC, 0x05, // SUBN V0, V1
+            0xAD, 0x06, // SHR V0, V1
+            0xAE, 0x07, // SHL V0, V1
+            0xAF, 0x00, // SNE V0, V1
+            0xB0, 0x00, // ADD I
+            0xB1, 0x00, // JP V0
+            0xB2, 0x00, // RND V0, 0x00
+            0xB3, 0x00, // DRW V0, V1, 0x00
+            0xB4, 0x9E, // SKP V0
+            0xB5, 0xA1, // SKNP V0
+            0xB6, 0x00, // ADD V0
+            0xB7, 0x07, // LD V0, DT
+            0xB8, 0x0A, // LD V0, K
+            0xB9, 0x15, // LD V0, T
+            0xBA, 0x18, // LD V0, F
+            0xBB, 0x1E, // LD I
+            0xBC, 0x05, // LD V0
+            0xBD, 0x33, // LD V0, B
+            0xBE, 0x55, // LD V0, D
+            0xBF, 0x65, // LD V0, E
+            0xC0, 0x00, // RET
+            0xC1, 0x00, // JP 0x100
+            0xC2, 0x00, // CALL 0x200
+            0xC3, 0x00, // SE V0, 0x00
+            0xC4, 0x00, // SNE V0, 0x00
+            0xC5, 0x00, // SE V0, V1
+            0xC6, 0x00, // ADD V0, 0x00
+            0xC7, 0x00, // OR V0, V1
+            0xC8, 0x01, // AND V0, V1
+            0xC9, 0x02, // XOR V0, V1
+            0xCA, 0x03, // ADD V0, I
+            0xCB, 0x04, // SUB V0, V1
+            0xCC, 0x05, // SUBN V0, V1
+            0xCD, 0x06, // SHR V0, V1
+            0xCE, 0x07, // SHL V0, V1
+            0xCF, 0x00, // SNE V0, V1
+            0xD0, 0x00, // ADD I
+            0xD1, 0x00, // JP V0
+            0xD2, 0x00, // RND V0, 0x00
+            0xD3, 0x00, // DRW V0, V1, 0x00
+            0xD4, 0x9E, // SKP V0
+            0xD5, 0xA1, // SKNP V0
+            0xD6, 0x00, // ADD V0
+            0xD7, 0x07, // LD V0, DT
+            0xD8, 0x0A, // LD V0, K
+            0xD9, 0x15, // LD V0, T
+            0xDA, 0x18, // LD V0, F
+            0xDB, 0x1E, // LD I
+            0xDC, 0x05, // LD V0
+            0xDD, 0x33, // LD V0, B
+            0xDE, 0x55, // LD V0, D
+            0xDF, 0x65, // LD V0, E
+            0xE0, 0x00, // RET
+            0xE1, 0x00, // JP 0x100
+            0xE2, 0x00, // CALL 0x200
+            0xE3, 0x00, // SE V0, 0x00
+            0xE4, 0x00, // SNE V0, 0x00
+            0xE5, 0x00, // SE V0, V1
+            0xE6, 0x00, // ADD V0, 0x00
+            0xE7, 0x00, // OR V0, V1
+            0xE8, 0x01, // AND V0, V1
+            0xE9, 0x02, // XOR V0, V1
+            0xEA, 0x03, // ADD V0, I
+            0xEB, 0x04, // SUB V0, V1
+            0xEC, 0x05, // SUBN V0, V1
+            0xED, 0x06, // SHR V0, V1
+            0xEE, 0x07, // SHL V0, V1
+            0xEF, 0x00, // SNE V0, V1
+            0xF0, 0x00, // ADD I
+            0xF1, 0x00, // JP V0
+            0xF2, 0x00, // RND V0, 0x00
+            0xF3, 0x00, // DRW V0, V1, 0x00
+            0xF4, 0x9E, // SKP V0
+            0xF5, 0xA1, // SKNP V0
+            0xF6, 0x00, // ADD V0
+            0xF7, 0x07, // LD V0, DT
+            0xF8, 0x0A, // LD V0, K
+            0xF9, 0x15, // LD V0, T
+            0xFA, 0x18, // LD V0, F
+            0xFB, 0x1E, // LD I
+            0xFC, 0x05, // LD V0
+            0xFD, 0x33, // LD V0, B
+            0xFE, 0x55, // LD V0, D
+            0xFF, 0x65, // LD V0, E
+            0x00, 0x00, // RET
+            0x01, 0x00, // JP 0x100
+            0x02, 0x00, // CALL 0x200
+            0x03, 0x00, // SE V0, 0x00
+            0x04, 0x00, // SNE V0, 0x00
+            0x05, 0x00, // SE V0, V1
+            0x06, 0x00, // ADD V0, 0x00
+            0x07, 0x00, // OR V0, V1
+            0x08, 0x01, // AND V0, V1
+            0x09, 0x02, // XOR V0, V1
+            0x0A, 0x03, // ADD V0, I
+            0x0B, 0x04, // SUB V0, V1
+            0x0C, 0x05, // SUBN V0, V1
+            0x0D, 0x06, // SHR V0, V1
+            0x0E, 0x07, // SHL V0, V1
+            0x0F, 0x00, // SNE V0, V1
+            0x10, 0x00, // ADD I
+            0x11, 0x00, // JP V0
+            0x12, 0x00, // RND V0, 0x00
+            0x13, 0x00, // DRW V0, V1, 0x00
+            0x14, 0x9E, // SKP V0
+            0x15, 0xA1, // SKNP V0
+            0x16, 0x00, // ADD V0
+            0x17, 0x07, // LD V0, DT
+            0x18, 0x0A, // LD V0, K
+            0x19, 0x15, // LD V0, T
+            0x1A, 0x18, // LD V0, F
+            0x1B, 0x1E, // LD I
+            0x1C, 0x05, // LD V0
+            0x1D, 0x33, // LD V0, B
+            0x1E, 0x55, // LD V0, D
+            0x1F, 0x65, // LD V0, E
+            0x20, 0x00, // RET
+            0x21, 0x00, // JP 0x100
+            0x22, 0x00, // CALL 0x200
+            0x23, 0x00, // SE V0, 0x00
+            0x24, 0x00, // SNE V0, 0x00
+            0x25, 0x00, // SE V0, V1
+            0x26, 0x00, // ADD V0, 0x00
+            0x27, 0x00, // OR V0, V1
+            0x28, 0x01, // AND V0, V1
+            0x29, 0x02, // XOR V0, V1
+            0x2A, 0x03, // ADD V0, I
+            0x2B, 0x04, // SUB V0, V1
+            0x2C, 0x05, // SUBN V0, V1
+            0x2D, 0x06, // SHR V0, V1
+            0x2E, 0x07, // SHL V0, V1
+            0x2F, 0x00, // SNE V0, V1
+            0x30, 0x00, // ADD I
+            0x31, 0x00, // JP V0
+            0x32, 0x00, // RND V0, 0x00
+            0x33, 0x00, // DRW V0, V1, 0x00
+            0x34, 0x9E, // SKP V0
+            0x35, 0xA1, // SKNP V0
+            0x36, 0x00, // ADD V0

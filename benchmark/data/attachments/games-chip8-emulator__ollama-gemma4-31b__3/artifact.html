@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CHIP-8 Emulator</title>
+    <style>
+        body {
+            background-color: #1a1a1a;
+            color: #00ff41;
+            font-family: 'Courier New', Courier, monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        #screen-container {
+            position: relative;
+            border: 4px solid #333;
+            background-color: #000;
+        }
+        canvas {
+            image-rendering: pixelated;
+            display: block;
+        }
+        .panel {
+            background-color: #2a2a2a;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #444;
+            min-width: 300px;
+        }
+        .controls {
+            margin-bottom: 20px;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            justify-content: center;
+            align-items: center;
+        }
+        button {
+            background: #444;
+            color: #00ff41;
+            border: 1px solid #00ff41;
+            padding: 5px 15px;
+            cursor: pointer;
+            font-family: inherit;
+        }
+        button:hover {
+            background: #00ff41;
+            color: #000;
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .keypad {
+            display: grid;
+            grid-template-columns: repeat(4, 40px);
+            gap: 5px;
+            margin-top: 10px;
+        }
+        .key {
+            width: 40px;
+            height: 40px;
+            border: 1px solid #00ff41;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            user-select: none;
+        }
+        .key.active {
+            background-color: #00ff41;
+            color: #000;
+        }
+        .debug-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 5px;
+            font-size: 12px;
+            margin-top: 10px;
+        }
+        .debug-item {
+            border-bottom: 1px solid #444;
+            padding: 2px 0;
+        }
+        .slider-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        input[type="file"] {
+            color: #00ff41;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>CHIP-8 EMULATOR</h1>
+
+    <div class="controls">
+        <button id="btnRun">Run</button>
+        <button id="btnPause">Pause</button>
+        <button id="btnStep">Step</button>
+        <button id="btnReset">Reset</button>
+        <div class="slider-container">
+            <label>Speed:</label>
+            <input type="range" id="speedRange" min="10" max="1000" value="500">
+            <span id="speedVal">500</span> Hz
+        </div>
+        <input type="file" id="fileInput" accept=".ch8,.rom">
+    </div>
+
+    <div class="container">
+        <div id="screen-container">
+            <canvas id="chip8Canvas" width="64" height="32" style="width: 640px; height: 320px;"></canvas>
+        </div>
+
+        <div class="panel">
+            <h3>Debugger</h3>
+            <div>PC: <span id="debugPC">0x000</span> | I: <span id="debugI">0x000</span></div>
+            <div id="debugInstr" style="margin: 10px 0; color: #ffcc00; font-weight: bold;">Instr: -</div>
+            <div class="debug-grid" id="debugRegs">
+                <!-- V0-VF generated here -->
+            </div>
+            <div style="margin-top: 10px;">
+                Stack: <span id="debugStack">[]</span>
+            </div>
+            <div style="margin-top: 10px;">
+                Timers: D:<span id="debugDT">0</span> S:<span id="debugST">0</span>
+            </div>
+
+            <div class="keypad" id="visualKeypad">
+                <!-- 16 keys -->
+            </div>
+            <div style="font-size: 10px; margin-top: 5px; text-align: center;">
+                Keys: 1-4, Q-R, A-F, Z-V
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const FONT_SET = new Uint8Array([
+            0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
+            0x20, 0x60, 0x20, 0x20, 0x70, // 1
+            0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
+            0xF0, 0x10, 0xF0, 0x10, 0xF0, // 3
+            0x90, 0x90, 0xF0, 0x10, 0x10, // 4
+            0xF0, 0x80, 0xF0, 0x10, 0xF0, // 5
+            0xF0, 0x80, 0xF0, 0x90, 0xF0, // 6
+            0x20, 0x60, 0x20, 0x20, 0x70, // 7
+            0xF0, 0x90, 0xF0, 0x90, 0xF0, // 8
+            0xF0, 0x90, 0xF0, 0x10, 0xF0, // 9
+            0xF0, 0x90, 0xF0, 0x10, 0x90, // A
+            0xFF, 0x80, 0x70, 0x90, 0x80, // B
+            0xF0, 0x10, 0x20, 0x40, 0xF0, // C
+            0xF0, 0x90, 0xF0, 0x90, 0x10, // D
+            0xF0, 0x90, 0xF0, 0x90, 0xF0, // E
+            0xF0, 0x80, 0xF0, 0x80, 0x30  // F
+        ]);
+
+        // Demo ROM: Draws a square and moves it with keys
+        // 0x200: 
+        // 6X1E (Draw sprite at V0, V1)
+        // EX9E (Skip if key 0x9 is pressed)
+        // 7001 (Add 1 to V0)
+        // 1200 (Jump to 0x200)
+        const DEMO_ROM = new Uint8Array([
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw sprite at (0,0) size 5px
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw sprite at (0,5) size 5px
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw sprite at (5,0) size 5px
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw sprite at (5,5) size 5px
+            0xA2, 0x20, 0x00, // Set I to 0x200
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x60, 0x00, 0x1E, // V0=0, V1=0, Draw
+            0x60, 0x05, 0x1E, // V0=0, V1=5, Draw
+            0x65, 0x00, 0x1E, // V0=5, V1=0, Draw
+            0x65, 0x05, 0x1E, // V0=5, V1=5, Draw
+            0x6
