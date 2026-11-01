@@ -2,7 +2,6 @@ package pl.jclab.refio.core.tools.implementations
 
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.BeforeEach
-import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -697,7 +696,6 @@ class GrepSearchToolTest {
         }
 
         @Test
-        @Disabled("declaration can fall outside the collected pool when hits exceed the limit; fix pending a measured run")
         fun `a declaration survives when usages exceed the result limit`() = runBlocking {
             // A widely used symbol can have more call sites than the result limit. Ranking only
             // helps if the declaration is in the pool at all. The declaration file itself holds a

@@ -91,7 +91,7 @@ class GrepSearchTool(
                 Regex(pattern, RegexOption.IGNORE_CASE)
             }
 
-            val results = mutableListOf<GrepResult>()
+            val results = HitCollector(maxResults)
             var filesSearched = 0
             var filesSkipped = 0
             var longLinesSkipped = 0
@@ -103,7 +103,7 @@ class GrepSearchTool(
                 if (limits.shouldExcludeFile(fileName)) {
                     return ToolResult.error("File extension excluded by safety limits: $fileName")
                 }
-                val outcome = searchInFile(path, contentRegex, results, maxResults)
+                val outcome = searchInFile(path, contentRegex, results)
                 if (outcome.fileSkipped) filesSkipped++
                 longLinesSkipped += outcome.longLinesSkipped
                 filesSearched = 1
@@ -149,10 +149,10 @@ class GrepSearchTool(
                         }
 
                         filesSearched++
-                        val outcome = searchInFile(file, contentRegex, results, maxResults)
+                        val outcome = searchInFile(file, contentRegex, results)
                         if (outcome.fileSkipped) filesSkipped++
                         longLinesSkipped += outcome.longLinesSkipped
-                        if (results.size >= maxResults) limitReached = true
+                        if (results.isSaturated()) limitReached = true
                     }
                 }
             } else {
@@ -161,17 +161,12 @@ class GrepSearchTool(
             }
 
             // Check result limit
-            if (results.size >= maxResults) {
-                logger.warn { "Grep search hit limit: ${results.size} >= $maxResults" }
-            }
-
-            // Rank declaration hits above plain usages. Stable sort, so within
-            // a tier the original file-walk order is preserved. Only collected results are ranked —
-            // a maxResults truncation during the walk can still drop a later declaration.
-            val ranked = if (results.size > 1) {
-                results.sortedByDescending { isDeclaration(it.line) }
-            } else {
-                results
+            // Declarations and usages are collected in separate pools, each capped at maxResults,
+            // so a declaration is never crowded out by usages that happen to be walked first.
+            // Within a tier the file-walk order is preserved.
+            val ranked = results.ranked()
+            if (results.truncated()) {
+                logger.warn { "Grep search hit limit: more than $maxResults matches" }
             }
 
             // Format output (verbosity controlled by `detail`)
@@ -191,10 +186,10 @@ class GrepSearchTool(
 
             val duration = (System.currentTimeMillis() - startTime).toInt()
 
-            logger.info { "Grep search completed: ${results.size} matches in $filesSearched files (skipped $filesSkipped large files), ${duration}ms, detail=$detail" }
+            logger.info { "Grep search completed: ${ranked.size} matches in $filesSearched files (skipped $filesSkipped large files), ${duration}ms, detail=$detail" }
 
             // Empty-result hints (lesson 03E04: tools should suggest next steps).
-            val hints: List<String>? = if (results.isEmpty()) {
+            val hints: List<String>? = if (ranked.isEmpty()) {
                 buildList {
                     add("Try a less specific pattern or remove anchors")
                     if (caseSensitive) add("Retry with case_sensitive=false")
@@ -210,7 +205,7 @@ class GrepSearchTool(
                 durationMs = duration,
                 nextActionHints = hints,
                 metadata = mapOf(
-                    "match_count" to results.size,
+                    "match_count" to ranked.size,
                     "files_searched" to filesSearched,
                     "long_lines_skipped" to longLinesSkipped,
                     "pattern" to pattern,
@@ -242,8 +237,7 @@ class GrepSearchTool(
     private suspend fun searchInFile(
         file: java.nio.file.Path,
         contentRegex: Regex,
-        results: MutableList<GrepResult>,
-        maxResults: Int
+        results: HitCollector
     ): FileScanOutcome {
         // Stop promptly when the turn is cancelled or the call ran out of its time budget.
         currentCoroutineContext().ensureActive()
@@ -269,8 +263,9 @@ class GrepSearchTool(
                     continue
                 }
                 if (contentRegex.containsMatchIn(line)) {
-                    results.add(GrepResult(file = relativePath, lineNumber = index + 1, line = line.trim()))
-                    if (results.size >= maxResults) return FileScanOutcome(longLinesSkipped = longLinesSkipped)
+                    val hit = GrepResult(file = relativePath, lineNumber = index + 1, line = line.trim())
+                    results.add(hit, isDeclaration(hit.line))
+                    if (results.isSaturated()) return FileScanOutcome(longLinesSkipped = longLinesSkipped)
                 }
             }
         } catch (e: StackOverflowError) {
@@ -354,6 +349,28 @@ class GrepSearchTool(
     }
 
     private fun isDeclaration(line: String): Boolean = DECLARATION_REGEX.containsMatchIn(line)
+
+    /**
+     * Two capped pools. A usage is dropped once the usage pool is full, but the walk goes on until
+     * the declaration pool is full too, so a definition in a late file still reaches the output.
+     */
+    private class HitCollector(private val limit: Int) {
+        private val declarations = mutableListOf<GrepResult>()
+        private val usages = mutableListOf<GrepResult>()
+        private var overflowed = false
+
+        fun add(hit: GrepResult, isDeclaration: Boolean) {
+            val pool = if (isDeclaration) declarations else usages
+            if (pool.size < limit) pool.add(hit) else overflowed = true
+        }
+
+        /** Nothing more can change the output: the declaration pool is full (usages rank below it). */
+        fun isSaturated(): Boolean = declarations.size >= limit
+
+        fun truncated(): Boolean = overflowed || declarations.size + usages.size > limit
+
+        fun ranked(): List<GrepResult> = (declarations + usages).take(limit)
+    }
 
     private data class GrepResult(
         val file: String,
