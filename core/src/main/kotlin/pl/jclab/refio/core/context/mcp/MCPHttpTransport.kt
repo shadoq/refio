@@ -84,7 +84,8 @@ class MCPHttpTransport(
     private val onMessage: (String) -> Unit,
     private val onError: (Exception) -> Unit,
     private val engine: HttpClientEngine? = null,
-    private val endpointWaitMs: Long = DEFAULT_ENDPOINT_WAIT_MS
+    private val endpointWaitMs: Long = DEFAULT_ENDPOINT_WAIT_MS,
+    private val endpointGraceMs: Long = DEFAULT_ENDPOINT_GRACE_MS
 ) {
     private val client = buildClient {
         expectSuccess = false
@@ -124,6 +125,10 @@ class MCPHttpTransport(
     @Volatile
     private var endpointSettled = CompletableDeferred<Unit>()
 
+    /** Completes once the SSE stream is open (or has failed), which is when an endpoint event is due. */
+    @Volatile
+    private var streamOpened = CompletableDeferred<Unit>()
+
     companion object {
         /**
          * Cap on one response body. A remote MCP server is a trust boundary and a broken local one
@@ -139,6 +144,13 @@ class MCPHttpTransport(
          */
         const val DEFAULT_ENDPOINT_WAIT_MS = 2_000L
 
+        /**
+         * Once the stream is open, a compliant server sends `endpoint` as its first event, so a
+         * short grace is enough to tell it from a server in Refio's dialect that never sends one.
+         * The overall wait above still bounds a slow connection.
+         */
+        const val DEFAULT_ENDPOINT_GRACE_MS = 500L
+
         private const val SESSION_HEADER = "Mcp-Session-Id"
     }
 
@@ -150,9 +162,18 @@ class MCPHttpTransport(
             sseJob?.cancel()
             scope?.cancel()
             endpointSettled = CompletableDeferred()
+            streamOpened = CompletableDeferred()
             startSse()
-            withTimeoutOrNull(endpointWaitMs) { endpointSettled.await() }
+            withTimeoutOrNull(endpointWaitMs) {
+                streamOpened.await()
+                withTimeoutOrNull(endpointGraceMs) { endpointSettled.await() }
+            }
         }
+    }
+
+    /** Forgets the server-side session, so the next initialize starts a new one. */
+    internal fun forgetSession() {
+        sessionId = null
     }
 
     /** Sends [payload] and returns the raw body, for callers that only need the body. */
@@ -199,7 +220,10 @@ class MCPHttpTransport(
                 httpLogger.debug { "[${config.id}] HTTP ${response.status.value} response: $body" }
 
                 if (response.status.value >= 400) {
-                    val error = MCPTransportException("HTTP error ${response.status.value}: $body")
+                    val error = MCPTransportException(
+                        "HTTP error ${response.status.value}: $body",
+                        httpStatus = response.status.value
+                    )
                     val latencyMs = (System.currentTimeMillis() - startTime).toInt()
                     loggedError = true
                     httpLogger.apiError(
@@ -274,7 +298,9 @@ class MCPHttpTransport(
 
     private fun startSse() {
         val settled = endpointSettled
+        val opened = streamOpened
         val url = config.url ?: run {
+            opened.complete(Unit)
             settled.complete(Unit)
             return
         }
@@ -296,6 +322,7 @@ class MCPHttpTransport(
                         httpLogger.warn { "[${config.id}] SSE stream refused with HTTP ${response.status.value}" }
                         return@execute
                     }
+                    opened.complete(Unit)
                     val channel = response.bodyAsChannel()
                     val reader = SseEventReader()
                     while (true) {
@@ -314,6 +341,7 @@ class MCPHttpTransport(
                 httpLogger.warn(e) { "SSE closed for MCP server ${config.id}" }
                 onError(MCPTransportException("SSE error for MCP server ${config.id}", e))
             } finally {
+                opened.complete(Unit)
                 settled.complete(Unit)
             }
         }

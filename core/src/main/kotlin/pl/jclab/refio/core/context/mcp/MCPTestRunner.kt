@@ -1,6 +1,7 @@
 package pl.jclab.refio.core.context.mcp
 
 import com.google.gson.JsonObject
+import io.ktor.client.engine.HttpClientEngine
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
@@ -16,7 +17,7 @@ object MCPTestRunner {
 
     private val gson = GsonInstance.gson
 
-    suspend fun test(config: MCPServerConfig): MCPTestResult {
+    suspend fun test(config: MCPServerConfig, engine: HttpClientEngine? = null): MCPTestResult {
         val requestId = 1L
         val request = MCPRequest(
             id = requestId,
@@ -28,7 +29,7 @@ object MCPTestRunner {
 
         return when (config.type) {
             MCPServerType.STDIO -> testStdio(config, requestId, requestJson, requestDetails)
-            MCPServerType.HTTP_SSE, MCPServerType.HTTP_STREAMABLE -> testHttp(config, requestJson, requestDetails)
+            MCPServerType.HTTP_SSE, MCPServerType.HTTP_STREAMABLE -> testHttp(config, requestId, requestJson, requestDetails, engine)
         }
     }
 
@@ -90,18 +91,38 @@ object MCPTestRunner {
 
     private suspend fun testHttp(
         config: MCPServerConfig,
+        requestId: Long,
         requestJson: String,
-        requestDetails: String
+        requestDetails: String,
+        engine: HttpClientEngine?
     ): MCPTestResult {
+        // An SSE server may only acknowledge the POST and answer over its stream.
+        val streamed = CompletableDeferred<String>()
         val transport = MCPHttpTransport(
             config = config,
-            onMessage = {},
-            onError = {}
+            onMessage = { raw ->
+                val id = runCatching { gson.fromJson(raw, JsonObject::class.java)?.get("id")?.asLong }.getOrNull()
+                if (id == requestId && !streamed.isCompleted) streamed.complete(raw)
+            },
+            onError = {},
+            engine = engine
         )
 
         return try {
             transport.connect()
-            val response = transport.request(requestJson)
+            val answer = transport.exchange(requestJson, isInitialize = true)
+            val response = when {
+                answer.body.isBlank() -> try {
+                    withTimeout(config.timeout) { streamed.await() }
+                } catch (e: TimeoutCancellationException) {
+                    throw MCPTransportException("MCP request timed out: initialize", e)
+                }
+                MCPSseFraming.isEventStream(answer.contentType, answer.body) ->
+                    MCPSseFraming.selectResponse(answer.body, requestId)?.toString()
+                        ?: throw MCPTransportException("Event stream without a JSON-RPC response")
+                else -> answer.body
+            }
+            transport.request(gson.toJson(MCPNotification(method = MCPMethods.INITIALIZED)))
             MCPTestResult(
                 requestDetails = requestDetails,
                 responseDetails = response,

@@ -238,4 +238,9 @@ data class MCPConnectionInfo(
 )
 
 class MCPAccessDeniedException(message: String) : Exception(message)
-class MCPTransportException(message: String, cause: Throwable? = null) : Exception(message, cause)
+class MCPTransportException(
+    message: String,
+    cause: Throwable? = null,
+    /** HTTP status when the failure was an error answer from the server, otherwise null. */
+    val httpStatus: Int? = null
+) : Exception(message, cause)

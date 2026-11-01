@@ -10,6 +10,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import pl.jclab.refio.core.utils.GsonInstance
 import pl.jclab.refio.core.logging.dualLogger
@@ -53,6 +55,7 @@ class MCPConnection(
     @Volatile private var cachedToolsAt: Long = 0L
     @Volatile private var cachedPromptsAt: Long = 0L
     private var capabilities: MCPServerCapabilities? = null
+    private val sessionRenewal = Mutex()
 
     var lastConnectedAt: java.time.Instant? = null
         private set
@@ -374,7 +377,17 @@ class MCPConnection(
                 val deferred = CompletableDeferred<MCPSuccessResponse>()
                 pendingRequests[id] = deferred
                 try {
-                    val response = http.exchange(json, isInitialize = method == MCPMethods.INITIALIZE)
+                    val isInitialize = method == MCPMethods.INITIALIZE
+                    val response = try {
+                        http.exchange(json, isInitialize = isInitialize)
+                    } catch (e: MCPTransportException) {
+                        // A server that dropped our session answers 404 to everything but a new
+                        // initialize. Start one session and repeat this request once.
+                        val expired = http.sessionId
+                        if (e.httpStatus != 404 || isInitialize || expired == null) throw e
+                        renewSession(http, expired)
+                        http.exchange(json)
+                    }
                     if (response.body.isNotBlank()) {
                         parseDirectResponse(response.body, response.contentType, id)
                     } else if (config.type == MCPServerType.HTTP_SSE) {
@@ -391,6 +404,19 @@ class MCPConnection(
                     pendingRequests.remove(id)
                 }
             }
+        }
+    }
+
+    /**
+     * Replaces a session the server no longer knows. Concurrent callers that failed on the same
+     * session renew it once: whoever comes second finds a different session already in place.
+     */
+    private suspend fun renewSession(http: MCPHttpTransport, expiredSession: String) {
+        sessionRenewal.withLock {
+            if (http.sessionId != expiredSession) return
+            logger.info { "MCP session expired on $serverId, initializing a new one" }
+            http.forgetSession()
+            initialize()
         }
     }
 
