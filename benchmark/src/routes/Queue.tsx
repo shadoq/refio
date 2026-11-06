@@ -5,6 +5,7 @@ import {
   Space,
   Tag,
   Select,
+  Radio,
   Button,
   Popconfirm,
   Pagination,
@@ -159,17 +160,23 @@ function QueueCard({
             {criteria.map((c) => (
               <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <Text style={{ width: 150 }}>{c.name}</Text>
-                <Select
+                <Radio.Group
                   size="small"
-                  style={{ width: 160 }}
-                  placeholder={t("queue.scorePlaceholder")}
+                  optionType="button"
+                  buttonStyle="solid"
                   value={picked[c.id]}
-                  onChange={(v) => setPicked((p) => ({ ...p, [c.id]: v }))}
+                  onChange={(e) => setPicked((p) => ({ ...p, [c.id]: e.target.value }))}
                   options={c.scale.values.map((v) => ({
                     value: v,
-                    label: c.scale.labels?.[String(v)] ? `${v} - ${c.scale.labels[String(v)]}` : `${v}`,
+                    label: String(v),
+                    title: c.scale.labels?.[String(v)],
                   }))}
                 />
+                {picked[c.id] !== undefined && c.scale.labels?.[String(picked[c.id])] && (
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    {c.scale.labels[String(picked[c.id])]}
+                  </Text>
+                )}
               </div>
             ))}
           </div>
