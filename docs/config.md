@@ -181,6 +181,8 @@ The Ollama endpoint is shared by chat/completions and embeddings and can be conf
 
 Two concurrency limits have no YAML mapping and are set as store keys (for example `--config providers.max_concurrent=2`): `providers.max_concurrent` (default `4`) caps simultaneous requests to one cloud provider, and `providers.ollama_max_concurrent` (default `1`) caps simultaneous requests per Ollama endpoint.
 
+`providers.ollama_max_concurrent` also decides whether subagents asked for in one reply run together. With the default `1` an Ollama server answers one request at a time, so parallel subagents would only wait for each other while each one's context sits in memory; Refio runs them one after another. Raise it only together with `OLLAMA_NUM_PARALLEL` on the server (set to the same number before `ollama serve`). Measured on an M4 Pro with `qwen3.5:9b`: four requests on a 4-slot server generated 2.2 times more tokens per second in total than on one slot, while every slot reserves its own context, so memory for context grows 4 times. Reading long prompts, which dominates subagent work, speeds up much less than generation. Subagents that can write files run one after another in AGENT mode regardless of this setting, on any provider.
+
 #### Embeddings on your own server
 
 RAG embeddings can come from any server speaking the OpenAI `/embeddings` shape - llama.cpp,
@@ -259,6 +261,7 @@ models:
     coding: "ollama/qwen3.5:9b"   # Coding/agent tasks (agent turn + file edits)
     weak: "ollama/qwen3.5:4b"           # Auxiliary operations (summaries)
     embedding: "ollama/nomic-embed-text" # RAG embeddings
+    decision: "ollama/nimble:9b"        # Optional: decision model for the completion judge (see below)
 
   # Control which models appear in the dropdown
   visibility:
@@ -377,7 +380,39 @@ These keys have no YAML mapping. Set them as store keys, for example `--config a
 - `agent.max_consecutive_tool_errors` (default `5`) - identical failing tool calls (same tool and arguments) before the turn aborts
 - `general.next_speaker_judge_enabled` (default `true`) - AGENT-only check that a tool-free answer really means the task is done
 - `general.judge_extended_reentry_enabled` (default `true`) - allows more than one judge re-entry early in a turn that delivered nothing
+- `general.judge_backend` (default `llm`; `llm` / `decision` / `hybrid`) - what answers the completion judge's question. `llm`: the weak chat model reads the reply against a rule prompt. `decision`: the model in `default_model.decision` answers three yes/no questions (a deliverable is missing, the reply only announces the next step, the reply claims a result no tool produced) and returns probabilities in about a second; the largest one is the probability that the agent should continue. `hybrid`: the decision model first, the weak model only when that probability falls inside the band below. The weak model still judges when no decision model is set, when its call fails (wrong model, provider down, no-egress) and whenever a `/goal` condition is active. Settings -> Models in the IDE and the Models tab in the CLI
+- `general.judge_decision_threshold` (default `0.5`, range `0.0`-`1.0`) - with `decision`, the agent continues when the probability is at or above this value. Decision models are calibrated differently: a model that puts finished turns around 0.5 needs a higher value
+- `general.judge_hybrid_band_low` / `general.judge_hybrid_band_high` (defaults `0.15` / `0.85`) - with `hybrid`, a probability inside this band (edges included) is handed to the weak model
 - `general.execution_isolation` (default `auto`; `auto` / `required` / `off`) - how much isolation a spawned process must have
+
+### Long Tasks
+
+A long task runs one message in rounds. Each round is a normal AGENT turn with the turn limits above; after it Refio checks the end condition and starts another round while the condition does not hold. The condition is either a command that must exit with `0` (`/until <command>` in the TUI and the IDE, `--until "<command>"` in a headless run) or a `/goal` condition that the completion judge must find met (`/goal <condition>` plus `/long on`, `--goal "<condition>"` headless). `/long rounds N` and `/long hours H` set the limits of the current task, `/long` and `/until` alone show what the next message will do, `/long off` turns the mode off and `/until off` removes the command. Typed while a loop is running, these commands apply from its next round: `/until` and `/goal` change what is checked after the current round, `/long rounds` and `/long hours` change the limits, `/long off` ends the loop once the current round is over. The end command runs in the same shell as the agent's terminal tool: `sh` on macOS and Linux, PowerShell on Windows. The limits are checked before each round, so a round that has started runs to its own turn limit (`agent.max_turn_minutes`) and its check even when that takes the task past `long_task.max_minutes`. The state of a run is kept in the database, so a headless run continues a stopped task with `--resume <taskId>`, where `--max-rounds` and `--max-hours` raise its limits. A task that ended on its round or time limit gets the same allowance again when it is resumed: a task stopped after 12 of 12 rounds may run 12 more.
+
+The first round asks the agent to plan small steps with the `tasks` tool, each one checkable with a command. Every later round starts with the request, the end of the last check's output and the open plan steps, and points the agent at the first open step.
+
+These keys have no YAML mapping. Set them as store keys, for example `--config long_task.max_rounds=20` in the CLI.
+
+- `long_task.max_rounds` (default `12`, range `1`-`1000`) - rounds before the task ends as incomplete
+- `long_task.max_minutes` (default `240`, `0` disables) - working time before the task ends as incomplete; only time spent in rounds counts, not time with the application closed
+- `long_task.max_no_progress_rounds` (default `3`) - the task ends after this many rounds in a row with no file written, no plan step done and no fewer error lines in the check's output
+- `long_task.check_timeout_seconds` (default `600`) - how long the end command may run after a round before it is stopped and the round counts as failed
+- `long_task.progress_file` (default `true`) - write `.refio/progress.md` in the project after every round: the goal and the end command, the status and the limits used so far, for every round its iterations, minutes, files written and check result, and the open plan steps with the next one marked and the command that checks it
+
+When a turn stops on its time or iteration limit or on a guardrail, the agent writes a handoff note: one more model call without tools that says what is done, what is left, the next step, the files and the problems. It is stored with the task, so the next turn, a later round or the user's next message, starts from it. A turn stopped by the cost limit ends without the note, because the note is one more paid model call.
+
+- `agent.handoff_note` (default `true`) - write the handoff note
+- `agent.handoff_note_timeout_seconds` (default `120`) - how long the note may take before the turn ends without it
+
+`llm.retry_max_seconds` (default `300`, `0` disables) sets how long, in seconds counted from the first failure (the failed attempts included), the agent's model call is retried after a passing failure (connection refused, 5xx, 429), with pauses of 2, 4, 8, 16 and then 30 seconds. With `0` the call retries `limits.max_retries` times starting from `limits.retry_delay_ms`.
+
+### Log Retention
+
+`logs.retention_days` (default `7`, `0` keeps everything) has no YAML mapping; set it as a store key, for example `--config logs.retention_days=30` in the CLI. It sets how long Refio keeps the full request and answer of every model call (`api_logs`), the agent events and the CLI's rolled log files (`~/.refio/refio-cli.<date>.<n>.log`). Older ones are deleted when the IDE or the CLI starts and then every 12 hours. The file the CLI is writing to, `refio-cli.log`, is never deleted.
+
+- The token and cost statistics in the Debug panel are computed from these logs, so they cover the retention period only.
+- Deleting rows does not make the database file smaller: SQLite reuses the freed space for new rows. To give the space back to the disk, close the IDE and every CLI, then run `sqlite3 ~/.refio/data/database.sqlite "VACUUM"`.
+- Only the database in the Refio home (`~/.refio`, or the directory given with `--refio-home`) is swept, and rolled log files are looked for in that same directory.
 
 ### RAG Configuration
 
@@ -561,6 +596,10 @@ mcp:
 | - | `general.execution_isolation` | `auto` (`auto` / `required` / `off`) |
 | - | `general.next_speaker_judge_enabled` | `true` |
 | - | `general.judge_extended_reentry_enabled` | `true` |
+| - | `general.judge_backend` | `llm` (`llm` / `decision` / `hybrid`) |
+| - | `general.judge_decision_threshold` | `0.5` |
+| - | `general.judge_hybrid_band_low` | `0.15` |
+| - | `general.judge_hybrid_band_high` | `0.85` |
 | `providers.ollama.endpoint` | `providers.ollama.ollama_endpoint` | `http://localhost:11434` |
 | `providers.ollama.contextSize` | `providers.ollama.ollama_context_size` | `32768` |
 | `providers.ollama.keepAlive` | `providers.ollama.ollama_keep_alive` | `1800` |
@@ -588,6 +627,7 @@ mcp:
 | `models.defaults.weak` | `default_model.weak` | `qwen3.5:9b` |
 | `models.defaults.embedding` | `models.embedding_model` | `ollama/nomic-embed-text` |
 | `models.defaults.strong` | `default_model.strong` | - (optional, no fallback) |
+| `models.defaults.decision` | `default_model.decision` | - (optional, no fallback; never takes the chat model; `--config default_model.decision=ollama/nimble:9b` works) |
 | `limits.apiCallTimeout` | `limits.api_call_timeout` | `360` |
 | `limits.toolExecutionTimeout` | `limits.tool_execution_timeout` | `360` |
 | `limits.streamingReadTimeout` | `limits.streaming_read_timeout_sec` | `360` (not read by any code path) |
@@ -638,6 +678,15 @@ mcp:
 | - | `agent.prompt_layout` | `trailing` |
 | - | `agent.max_consecutive_tool_errors` | `5` |
 | - | `agent.task_verification_enabled` | `false` |
+| - | `agent.handoff_note` | `true` |
+| - | `agent.handoff_note_timeout_seconds` | `120` |
+| - | `long_task.max_rounds` | `12` |
+| - | `long_task.max_minutes` | `240` (`0` disables) |
+| - | `long_task.max_no_progress_rounds` | `3` |
+| - | `long_task.check_timeout_seconds` | `600` |
+| - | `long_task.progress_file` | `true` |
+| - | `llm.retry_max_seconds` | `300` (`0` disables) |
+| - | `logs.retention_days` | `7` (`0` keeps everything) |
 
 ---
 

@@ -48,7 +48,7 @@ The CLI runs the exact same loop as the IDE, but scriptable:
   --prompt-file task.md --output json --output-file run.json
 ```
 
-Useful headless flags: `--prompt` / `--prompt-file` (the instruction), `--model <provider/model>`, `--output json` + `--output-file` (write `run.json`), `--debug-level minimal|standard|full|judge`, `--config key=value` / `--config-file` (run-scope config overrides, also in the TUI), `--print-config` (print the resolved config and exit, no LLM call), `--max-cost <usd>` (hard cost ceiling per session), `--auto-approve "<regex>"` (approve only matching tool calls, reject the rest), `--no-egress` (block all cloud traffic), `--refio-home <dir>` (use a separate database and user config instead of `~/.refio`), `--mcp-server <json>` / `--mcp-probe` (declare MCP servers for one run / list what they expose), `--context-ref @file:...` (attach context like the chat input), `--multi-agent <yaml>` and `-v` (stream live tokens to stderr). Progress goes to stderr, the full trace to `~/.refio/refio-cli.log`, and the exit code is 0 only when the run status is `SUCCESS`.
+Useful headless flags: `--prompt` / `--prompt-file` (the instruction), `--model <provider/model>`, `--output json` + `--output-file` (write `run.json`), `--debug-level minimal|standard|full|judge`, `--config key=value` / `--config-file` (run-scope config overrides, also in the TUI), `--print-config` (print the resolved config and exit, no LLM call), `--max-cost <usd>` (hard cost ceiling per session), `--auto-approve "<regex>"` (approve only matching tool calls, reject the rest), `--no-egress` (block all cloud traffic), `--refio-home <dir>` (use a separate database and user config instead of `~/.refio`), `--mcp-server <json>` / `--mcp-probe` (declare MCP servers for one run / list what they expose), `--context-ref @file:...` (attach context like the chat input), `--multi-agent <yaml>`, `--until "<cmd>"` / `--goal "<condition>"` with `--max-rounds` / `--max-hours` (run the task in rounds until the command exits 0 or the goal is met), `--resume <taskId>` (continue a stopped long task) and `-v` (stream live tokens to stderr). Progress goes to stderr, the full trace to `~/.refio/refio-cli.log`, and the exit code is 0 only when the run status is `SUCCESS`.
 
 `run.json` carries the full record - status, tokens, cost, every tool call, errors, warnings. That turns an agent run into something you can **test**, not just watch. The e2e harness (`tools/e2e/e2e-run.*` + `test_data/e2e/`) is exactly this: scenarios that drop an agent into a throwaway project and assert on the **final state** (right file changed, build green, files it must not touch left intact) rather than on the path it took. `e2e-run.sh --list` shows the scenarios, `--self-test` checks the assertion engine without any LLM call, `--model <provider/model>` compares models on the same task (all at a 64k Ollama context window by default), and `E2E_OUT_DIR=<dir>` keeps every `run.json` plus a `results.jsonl` verdict record. The benchmark harness, which runs the same prompt across many models to compare how they behave, lives on the `benchmark` branch: it extends this one with the result data and the review viewer.
 
@@ -114,6 +114,10 @@ Same core engine, full-screen terminal interface.
 **Execution modes** - Chat goes straight to `ChatService`; Plan and Agent run through the `AgentTurnLoop` with iteration limits, output-hash repetition tracking, error-rate circuit breaker, and **content-chanting detection** (Gemini CLI's loop-detection pattern - aborts when the model repeats the same word phrase 10+ times consecutively).
 
 **`/goal`** - set an explicit completion condition for the active task (`/goal all tests in src/test pass`). A `NextSpeakerJudgeGuardian` (Gemini CLI's `checkNextSpeaker` pattern) runs after each terminal-of-turn moment in AGENT mode: a cheap weak-model call confirms whether the goal is *demonstrably* met against transcript evidence, or pushes the loop back into another iteration with a nudge re-injecting the goal text. Closes the failure mode where weak models stop mid-task ("Done.") after a single step. Works in both TUI and IntelliJ; condition persisted on the task row across restarts.
+
+**`/until` and `/long`** - tasks that outlast one turn. `/until npm test` makes the next message run in rounds: each round is a normal AGENT turn, after it Refio runs the command in the project and, while it fails, starts another round with the end of the command's output and the open plan steps. `/goal <condition>` plus `/long on` does the same with the completion judge instead of a command. `/long rounds N` and `/long hours H` set the limits (by default 12 rounds and 4 hours of work), and a task also stops after 3 rounds in a row without progress. Typed while the loop runs, these commands apply from its next round, and `/long off` ends it after the current one. The run's state lives in the database, so `--resume <taskId>` continues it after a crash, Ctrl+C or a used-up limit (with the same allowance again), and `.refio/progress.md` in the project shows the rounds, the plan and the next step. A turn that stops on its time or step limit or on a guardrail leaves a handoff note (done, left, next step, files) that the next turn starts from.
+
+**Multi-agent workflows** - `--multi-agent <yaml>` runs agents with `depends_on`; a dependent agent's task gets each dependency's status, changed files and report. Run limits: `on_failure` (`skip` the dependents of an agent that did not complete, the default; `stop` everything not started yet; `continue`), `max_minutes`, `max_cost`, `max_parallel`; per agent `profile` (a subagent definition: its prompt, tools and step limit), `max_iterations` and `max_minutes`.
 
 **Tool system** - file ops, grep, terminal, HTTP, code runner, subagent invocation, snapshots. Per-mode permissions via `ToolPermissionsService`. Session-scoped approval via `ToolApprovalService`.
 
@@ -191,11 +195,13 @@ RefIo ships a standalone CLI with a full-screen TUI that mirrors the IntelliJ pl
 
 ### Features
 
-- **Split-pane layout** - Chat on the left (55%), active tab on the right (45%)
-- **8 tabs + 2 screens** - F1 Help, F2-F7 tabs (Steps, Context, RAG, Logs, Debug, API), F8 Files, F9 Settings
+- **Layout that follows the terminal** - from 180 columns a sidebar, the chat and a right column (STEPS over CONTEXT); from 120 the chat and the right column; from 80 one pane at a time. Below 80x24 Refio says how much room it needs
+- **Panels and screens** - F1 Help, F2-F8 panels (Steps, Context, RAG, Logs, Debug, API, Files), F9 Settings
+- **Approval inside the conversation** - a tool set to ASK shows its diff at the end of the chat with the choices `y` once, `a` allow this tool in this folder for the session, `d` full diff, `n` say what to change
+- **Plain terminals** - `NO_COLOR=1` turns colours off (focus and selection stay visible in bold and reverse video), `REFIO_ASCII=1` draws frames and status marks in plain ASCII
 - **Two input modes** - raw TTY (real terminal) and line mode (IDE terminal, pipes)
 - **`@context` autocomplete** - typing `@` opens a popup with context prefixes
-- **Settings screen** - 11 sub-tabs covering providers, models, prompts, context/RAG, MCP, tools, subagents
+- **Settings screen** - 11 sections covering providers, models, prompts, context/RAG, MCP, tools (grouped by what they do), subagents; every change is saved at once
 - **Resize-responsive** - UI adapts to terminal window size changes in real time
 
 ### Keyboard shortcuts (selection)
@@ -215,8 +221,13 @@ RefIo ships a standalone CLI with a full-screen TUI that mirrors the IntelliJ pl
 | Ctrl+L | Continue conversation |
 | Ctrl+D | Summarize conversation |
 | Ctrl+Y | Copy selected (or last) message |
-| `@` / `!` / `/` | Context / subagent / prompt autocomplete |
+| Ctrl+P / Ctrl+B | Select the previous / next message or tool call; Space expands a tool's output, `o` opens all of it, `v` shows a whole message |
+| `@` / `!` / `/` | Context / subagent / command and template suggestions |
+| `/continue` `/summarize` `/context` `/plan` `/model` `/new` `/effort` `/help` | Same as Ctrl+L, Ctrl+D, F3, PLAN mode, Ctrl+O, Ctrl+W, Ctrl+T, F1 (a prompt template with the same name wins) |
+| `c` / `s` / `l` / `m` | When an answer was cut off at the output limit (prompt empty): continue / split into steps / raise the limit and continue / switch model |
 | `/goal <condition>` | Set completion condition (AGENT mode); `/goal` shows status, `/goal clear` removes |
+| `/until <command>` | Long task: the next message runs in rounds until the command exits 0; `/until` shows status, `/until off` removes the command |
+| `/long on\|off\|rounds N\|hours H` | Long task with the `/goal` condition, or the task's limits; `/long` shows status |
 | Ctrl+Q | Quit |
 
 ### Architecture

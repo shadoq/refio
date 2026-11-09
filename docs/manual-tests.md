@@ -426,7 +426,7 @@ agents:
     depends_on: [analyst, security]
 ```
 
-`MultiAgentTaskParser` requires a top-level `name` and uses `profile` (subagent persona) and `task` per agent; optional `mode` (default agent) and `model`. The older `role` / `prompt` keys are not recognized.
+`MultiAgentTaskParser` requires a top-level `name` and uses `profile` (subagent persona) and `task` per agent; optional `mode` (default agent) and `model`. The older `role` / `prompt` keys are not recognized. Optional run limits: `on_failure` (`skip`, the default, `stop` or `continue`), `max_minutes`, `max_cost`, `max_parallel`; per agent `max_iterations` and `max_minutes`. An unknown or disabled `profile` stops the run before any agent starts. The writer's task gets the analyst's and the security agent's status, changed files and report.
 
 **Run:**
 

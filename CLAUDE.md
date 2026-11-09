@@ -215,7 +215,12 @@ refio.bat -p <throwaway-project> --headless --model ollama/qwen3.6:35b \
 | `--debug-level minimal\|standard\|full\|judge` | Detail in the JSON output. |
 | `--config k=v` (repeatable) / `--config-file <f>` | Run-scope config overrides (headless **and** interactive TUI). E.g. `--config agent.max_turn_minutes=20` or retarget a provider: `--config providers.ollama.ollama_endpoint=http://127.0.0.1:11434` / `--config providers.lmstudio.lmstudio_base_url=...`. |
 | `--print-config` | Print resolved config (overrides applied) and exit - **no LLM call, writes nothing**. |
+| `--until "<cmd>"` / `--goal "<condition>"` | Run the task as a long task: rounds of AGENT turns until the command exits 0 in the project after a round, or until the completion judge finds the goal met. |
+| `--max-rounds N` / `--max-hours H` | Limits of a long task (defaults `long_task.max_rounds` 12 and `long_task.max_minutes` 240). |
+| `--resume <taskId>` | Continue a stopped long task with its next round; it keeps its own request and end condition, `--max-rounds` / `--max-hours` raise its limits, and a task that ended on its round or time limit gets the same allowance again. |
 | `-v, --verbose` | Stream live LLM tokens to stderr (on top of always-on turn/tool progress) - tells producing-vs-hanging apart. |
+
+Interactively (TUI and IDE) the same long-task mode is `/until <cmd>`, or `/goal <condition>` plus `/long on`; `/long rounds N`, `/long hours H`, `/long off`, `/until off`. Typed while a loop runs, they apply from its next round (`/long off` ends it after the current one); the limits are checked before each round, so a started round runs to its own turn limit and check. Each round rewrites `.refio/progress.md` in the project. A `--multi-agent` YAML takes run limits `on_failure` (`skip` by default, `stop`, `continue`), `max_minutes`, `max_cost`, `max_parallel`, and per agent `profile`, `max_iterations`, `max_minutes`; a dependent agent's task gets its dependencies' status, changed files and report.
 
 ### Safety rails (prefer these for self-tests)
 
@@ -227,7 +232,7 @@ refio.bat -p <throwaway-project> --headless --model ollama/qwen3.6:35b \
 
 - **stderr** - always-on concise progress from `HeadlessTurnListener` (`cli/HeadlessTurnListener.kt`): `▶ turn started`, `→ tool args`, `✓/✗ tool`, `■ turn complete: success/iterations/tokens/cost`. stdout stays reserved for the `run.json` document.
 - **`~/.refio/refio-cli.log`** - full DEBUG trace (`[HEADLESS] …`, `TurnLLMCaller`, `OllamaAdapter`, `ToolExecutor`, context budget). The post-mortem source of truth.
-- **`run.json`** (`--output json --output-file`) - machine-readable metrics for comparing runs/models.
+- **`run.json`** (`--output json --output-file`) - machine-readable metrics for comparing runs/models; `longTask` lists each round of a long task, `agents` each subagent (iterations, stop reason, files), and a multi-agent run carries each agent's status, files and conversation.
 
 ### Multi-scenario / multi-model harness
 
