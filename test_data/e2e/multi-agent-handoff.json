@@ -1,0 +1,30 @@
+{
+  "id": "multi-agent-handoff",
+  "mode": "AGENT",
+  "description": "A measurer agent runs the load test and reports the p95 latency; an editor agent that cannot run commands sets TIMEOUT_MS to twice that value using only the measurer's report.",
+  "category": "orchestration",
+  "max_iterations": 35,
+  "fixture": "fixtures/multi-agent-handoff",
+  "multi_agent": "multi-agent/handoff.yaml",
+  "assert": {
+    "agent_order": [
+      "measurer",
+      "editor"
+    ],
+    "needle_in_file": {
+      "path": "src/config.js",
+      "regex": "TIMEOUT_MS:[[:space:]]*948[[:space:]]*,"
+    },
+    "file_unchanged": [
+      "tools/measure.js",
+      "check.js"
+    ],
+    "build_cmd": "node check.js",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The measurer ran the load test and reported its p95; the editor, which could not run commands, set TIMEOUT_MS in src/config.js to twice that number from the report and left the other settings unchanged."
+    ]
+  }
+}

@@ -1,0 +1,20 @@
+name: "Timeout from a measurement"
+description: "A measurer runs the load test and reports the p95 latency; an editor that cannot run commands sets the timeout from that report alone."
+on_failure: stop
+max_minutes: 30
+agents:
+  - name: measurer
+    profile: measurer
+    mode: agent
+    max_iterations: 15
+    task: >
+      Run `node tools/measure.js` in the project and report the p95 latency it prints, in
+      milliseconds. Do not edit any files.
+  - name: editor
+    profile: config-editor
+    mode: agent
+    depends_on: [measurer]
+    max_iterations: 20
+    task: >
+      Set TIMEOUT_MS in src/config.js to twice the p95 latency the measurer reported. Keep the
+      other settings in that file as they are.

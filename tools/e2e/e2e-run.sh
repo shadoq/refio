@@ -62,6 +62,14 @@
 # best effort and never fails a run. results.jsonl records carry the same `batch` id
 # (E2E_BATCH_ID, generated when unset). run.json is not changed.
 #
+# Long tasks and part-way scores: a scenario with `until` runs as a long task (--until <cmd>, plus
+# --max-rounds from `max_rounds`): rounds of AGENT turns until the command exits 0 in the project
+# after a round. Cap its time with the scenario's own config, e.g. "long_task.max_minutes=30". An
+# optional `score` {cmd, regex} runs in the project after the run, also when the run failed, and the
+# first capture group of `regex` (POSIX ERE) is printed as score=... and written to results.jsonl as
+# `score`, next to the long task's `rounds` - e.g. "9/12" from "SUMMARY passed 9/12". The score never
+# changes the verdict. `until` cannot be combined with `multi_agent`.
+#
 # LLM judge (SOFT tier): set JUDGE_MODEL=<provider/model> to run an external judge after each
 # scenario. The judge is the headless CLI itself in CHAT mode; it gets the task text, the diff of
 # the fixture project after the run, the build/test output, and the scenario's optional
@@ -684,7 +692,7 @@ run_judge() {
 # record. Never aborts the caller (all failure paths swallowed) - the gate is observ-only.
 emit_result_record() {
     [[ -n "${E2E_OUT_DIR:-}" ]] || return 0
-    local id="$1" verdict="$2" run_json="$3" judge="${4:-}" build_cmd="${5:-}"
+    local id="$1" verdict="$2" run_json="$3" judge="${4:-}" build_cmd="${5:-}" score="${6:-}"
     # Judge object is optional and SOFT; a missing/invalid value serializes as null.
     jq -e . >/dev/null 2>&1 <<<"$judge" || judge="null"
     [[ -n "$judge" ]] || judge="null"
@@ -697,7 +705,7 @@ emit_result_record() {
     # Additive: the Kotlin gate parser (GateRunRecord via Gson) ignores unknown fields, so enriching
     # the record never breaks `cli --gate`; the aggregator (e2e-stats.sh) reads these back.
     local mode="" provider="" tokens_in="0" iters="0" apicalls="0" duration="0"
-    local tools_json="{}" apierr_json="{}" subtasks=0 ran_build="null"
+    local tools_json="{}" apierr_json="{}" subtasks=0 ran_build="null" rounds="null"
     if [[ -f "$run_json" ]]; then
         status="$(jq -r '.session.status // "UNKNOWN"' "$run_json" 2>/dev/null || echo UNKNOWN)"
         cost="$(jq -r '.metrics.costUsd // 0' "$run_json" 2>/dev/null || echo 0)"
@@ -712,6 +720,9 @@ emit_result_record() {
         subtasks="$(jq -r '.metrics.toolCallCount // 0' "$run_json" 2>/dev/null || echo 0)"
         apicalls="$(jq -r '.metrics.apiCallCount // 0' "$run_json" 2>/dev/null || echo 0)"
         duration="$(jq -r '.metrics.durationMs // (.run.durationMs // 0)' "$run_json" 2>/dev/null || echo 0)"
+        # Rounds of a long task; null for a single turn.
+        rounds="$(jq '.longTask.roundsDone // null' "$run_json" 2>/dev/null || echo null)"
+        [[ -n "$rounds" ]] || rounds="null"
         # Tool-use histogram (tool name -> call count) across every message in the run.
         tools_json="$(jq -c '[.conversation[]?.toolCalls[]?] | reduce .[] as $t ({}; .[$t] = ((.[$t]//0)+1))' "$run_json" 2>/dev/null || echo '{}')"
         [[ -n "$tools_json" && "$tools_json" != "null" ]] || tools_json="{}"
@@ -751,15 +762,27 @@ emit_result_record() {
         --argjson apiCalls "$apicalls" --argjson durationMs "$duration" \
         --argjson tools "$tools_json" --argjson apiErrors "$apierr_json" \
         --argjson judge "$judge" --arg batch "${E2E_BATCH_ID:-}" --argjson ranBuild "$ran_build" \
+        --arg score "$score" --argjson rounds "$rounds" \
         '{scenario:$scenario, model:$model, run:$run, verdict:$verdict, failure_mode:$fmode,
           status:$status, costUsd:$cost, tokensOut:$tokens,
           mode:$mode, provider:$provider, tokensIn:$tokensIn, iterations:$iterations,
           subtasks:$subtasks,
           apiCalls:$apiCalls, durationMs:$durationMs, tools:$tools, apiErrors:$apiErrors,
           judge:$judge, modelRanBuildCmd:$ranBuild,
+          score: (if $score == "" then null else $score end), rounds:$rounds,
           batch: (if $batch == "" then null else $batch end),
           reasons: ($reasons | if . == "" then [] else split("; ") end)}' \
         >>"$E2E_OUT_DIR/results.jsonl" 2>/dev/null || true
+}
+
+# How far a run got, from the output of the scenario's score command: the first capture group of the
+# POSIX ERE pattern, or the whole match; nothing when it does not match. E.g. "9/12" from
+# "SUMMARY passed 9/12".
+scenario_score() {
+    local out="$1" regex="$2"
+    if [[ -n "$regex" && "$out" =~ $regex ]]; then
+        echo "${BASH_REMATCH[1]:-${BASH_REMATCH[0]}}"
+    fi
 }
 
 # Append the batch manifest line (see the header). No-op unless E2E_OUT_DIR is set. Best effort:
@@ -829,6 +852,11 @@ run_scenario() {
     else
         [[ -f "$prompt_file" ]] || die "prompt_file not found: $prompt_file"
     fi
+    # A long task: rounds of AGENT turns until this command exits 0 in the project after a round.
+    local until_cmd max_rounds
+    until_cmd="$(jq -r '.until // empty' "$scenario")"
+    max_rounds="$(jq -r '.max_rounds // empty' "$scenario")"
+    [[ -n "$until_cmd" && -n "$multi_agent_file" ]] && die "until cannot be combined with multi_agent: $scenario"
     [[ -d "$fixture" ]] || die "fixture dir not found: $fixture"
     [[ -x "$CLI" ]] || die "CLI not found/executable: $CLI (build it: ./gradlew :cli:installDist)"
 
@@ -953,6 +981,12 @@ run_scenario() {
     else
         cli_args+=(--prompt-file "$effective_prompt")
     fi
+    if [[ -n "$until_cmd" ]]; then
+        cli_args+=(--until "$until_cmd")
+        if [[ -n "$max_rounds" ]]; then
+            cli_args+=(--max-rounds "$max_rounds")
+        fi
+    fi
     [[ -n "$fs_dir" && -n "$fs_port" ]] && cli_args+=(--config "security.allow_loopback=true")
     [[ -n "$mcp_rendered" ]] && cli_args+=(--mcp-server "$mcp_rendered")
     # Context references the scenario attaches to the turn (@file:..., @<mcp-server>:<query>).
@@ -1000,6 +1034,16 @@ run_scenario() {
         return 1
     fi
 
+    # How far the run got, for a scenario that can end part-way (a long task at its round or time
+    # limit). Read before the exit-code gate below, because "9 of 12 when the limit hit" is what such
+    # a scenario measures. Never changes the verdict.
+    local score="" score_cmd score_regex
+    score_cmd="$(jq -r '.score.cmd // empty' "$scenario")"
+    score_regex="$(jq -r '.score.regex // empty' "$scenario")"
+    if [[ -n "$score_cmd" ]]; then
+        score="$(scenario_score "$( (cd "$work" && eval "$score_cmd") 2>&1 || true)" "$score_regex")"
+    fi
+
     # A non-zero CLI exit is a HARD failure: the headless turn aborted (e.g. cost ceiling, crash). It
     # must never be papered over by deterministic assertions that the starting fixture happens to
     # satisfy (docs/0061). The status gate in assert_run is the in-run.json equivalent; this catches
@@ -1008,8 +1052,8 @@ run_scenario() {
         local st co
         st="$(jq -r '.session.status // "?"' "$run_json")"
         co="$(jq -r '.metrics.costUsd // 0' "$run_json")"
-        echo "| $id | FAIL (headless CLI exit=$cli_exit) | status=$st cli_exit=$cli_exit cost=\$$co |"
-        emit_result_record "$id" "FAIL (headless CLI exit=$cli_exit)" "$run_json"
+        echo "| $id | FAIL (headless CLI exit=$cli_exit) | status=$st cli_exit=$cli_exit cost=\$$co${score:+ score=$score} |"
+        emit_result_record "$id" "FAIL (headless CLI exit=$cli_exit)" "$run_json" "" "" "$score"
         [[ $KEEP -eq 1 ]] || rm -rf "$work"
         return 1
     fi
@@ -1035,7 +1079,7 @@ run_scenario() {
     verdict="$(assert_run "$scenario" "$run_json" "$work" "$build_exit" "$smoke_exit" || true)"
     status="$(jq -r '.session.status // "?"' "$run_json")"
     cost="$(jq -r '.metrics.costUsd // 0' "$run_json")"
-    echo "| $id | $verdict | status=$status build_exit=$build_exit cost=\$$cost |"
+    echo "| $id | $verdict | status=$status build_exit=$build_exit cost=\$$cost${score:+ score=$score} |"
 
     # SOFT judge tier: runs only when JUDGE_MODEL is set; never changes the HARD verdict.
     local judge_json=""
@@ -1050,7 +1094,7 @@ run_scenario() {
         fi
     fi
 
-    emit_result_record "$id" "$verdict" "$run_json" "$judge_json" "$build_cmd"
+    emit_result_record "$id" "$verdict" "$run_json" "$judge_json" "$build_cmd" "$score"
     [[ $KEEP -eq 1 ]] || rm -rf "$work"
     [[ "$verdict" == PASS* ]]
 }
@@ -1537,6 +1581,14 @@ JSON
     else
         echo "  case batch-manifest  -> skipped: node not found on PATH" >&2
     fi
+
+    # Case: score - how far a part-way run got, read from its score command's output.
+    v="$(scenario_score $'PASS rle\nFAIL chunk: not implemented\nSUMMARY passed 9/12' 'SUMMARY passed ([0-9]+/[0-9]+)')"
+    echo "  case score          -> ${v:-none}" >&2
+    [[ "$v" == "9/12" ]] || { echo "  !! expected score 9/12" >&2; fails=1; }
+    v="$(scenario_score 'Error: Cannot find module' 'SUMMARY passed ([0-9]+/[0-9]+)')"
+    echo "  case score-missing  -> ${v:-none}" >&2
+    [[ -z "$v" ]] || { echo "  !! output without the summary line must give no score" >&2; fails=1; }
 
     rm -rf "$proj" "$empty"
     if [[ $fails -eq 0 ]]; then echo "self-test OK" >&2; else die "self-test FAILED"; fi

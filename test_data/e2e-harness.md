@@ -164,8 +164,10 @@ A scenario can drive the turn with a **`multi_agent`** YAML (CLI `--multi-agent`
 |---|---|---|---|
 | `pipeline-2-agents` | (per-agent) | `analyst` (PLAN) -> `coder` (AGENT, `depends_on: analyst`) implement a stub | `agent_order [analyst, coder]` + needle on the impl + **compile & run** |
 | `dependency-ordering` | (per-agent) | 3-agent chain `analyze -> implement -> document` | `agent_order [analyze, implement, document]` + needle on the impl |
+| `multi-agent-handoff` | (per-agent) | `measurer` (profile without editing tools) runs `node tools/measure.js`; `editor` (profile without a terminal, `depends_on: measurer`) sets `TIMEOUT_MS` to twice the reported p95, so the number can only reach it through the dependency report | `agent_order [measurer, editor]` + `node check.js` + measurement and check files unchanged |
 
 Each agent's mode comes from the YAML (`mode: plan|agent`), so the scenario-level `mode` is ignored.
+The handoff scenario's profiles live in the fixture's `.refio/agents/`, so they apply only to that run.
 Cycle detection (a `depends_on` loop) is rejected up front by `MultiAgentRunner.validateDependencies`
 (covered by its unit test), so it is not a separate e2e scenario. These need a model that drives the
 multi-agent loop and may legitimately fail on a weak one.
@@ -398,6 +400,10 @@ standard multi-agent definition (`name`, `agents[]` with `name`/`task`/`mode`/`d
 multi-agent run now emits a `run.json` carrying `session.status` (SUCCESS iff every agent succeeded)
 and `multiAgent.agents[]` in execution order, so the usual gates (status, needles, `build_cmd`) plus
 `agent_order` all apply. A scenario sets **either** `prompt_file` **or** `multi_agent`, not both.
+
+**`until`** (shell command, optional) runs the scenario as a long task (CLI `--until <cmd>`): rounds of AGENT turns until the command exits 0 in the project after a round. **`max_rounds`** (integer, optional) passes `--max-rounds`. Cap the time with the scenario's own `config`, e.g. `"long_task.max_minutes=30"`; an operator `--config` still overrides it, e.g. `long_task.max_minutes=180` for the three-hour run. `until` cannot be combined with `multi_agent`. Example: `long-12-stubs` (twelve helper stubs, `node run-tests.js` after every round).
+
+**`score`** (`{ cmd, regex }`, optional) says how far a run got when it can end part-way: after the run, also a failed one, the harness runs `cmd` in the project and takes the first capture group of `regex` (POSIX ERE), e.g. `9/12` from `SUMMARY passed 9/12`. It is printed as `score=...` in the result line and written to `results.jsonl` as `score`, next to `rounds` (the long task's rounds, null for a single turn). It never changes the verdict.
 
 **`smoke`** (`{ entry, no_js_errors?, dom_present[], interactions[] }`, optional) runs a headless-Chromium
 runtime check on a generated browser artifact after the turn (HARD, exit-gated like `build_cmd`).
