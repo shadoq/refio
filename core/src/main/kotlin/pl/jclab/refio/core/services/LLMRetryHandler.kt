@@ -7,6 +7,7 @@ import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.llm.LLMResponse
 import pl.jclab.refio.core.logging.dualLogger
+import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import java.nio.channels.UnresolvedAddressException
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
@@ -29,7 +30,9 @@ private val logger = dualLogger("LLMRetryHandler")
  * - Invalid requests
  */
 class LLMRetryHandler(
-    private val llmClient: LLMClient
+    private val llmClient: LLMClient,
+    /** Milliseconds on a clock that only moves forward; measures how long a server has been failing. */
+    private val nowMs: () -> Long = { System.nanoTime() / 1_000_000 },
 ) {
     // Track retry statistics (thread-safe)
     private val totalRetries = AtomicInteger(0)
@@ -50,6 +53,9 @@ class LLMRetryHandler(
      * @param responseFormat Optional response format (e.g., JSON mode)
      * @param stream Whether to stream response
      * @param onChunk Optional streaming callback
+     * @param retryBudgetMs When above 0, replaces [maxRetries] and [baseDelayMs]: retries go on with
+     *   pauses of 2, 4, 8, 16 and then 30 seconds (or what the server asked for in a rate-limit answer)
+     *   for as long as the server has been failing for less than this many milliseconds
      * @return LLM response
      */
     suspend fun callWithRetry(
@@ -68,7 +74,8 @@ class LLMRetryHandler(
         noEgressEnabled: Boolean = false,
         stream: Boolean = false,
         onChunk: StreamCallback? = null,
-        kwargs: Map<String, Any> = emptyMap()
+        kwargs: Map<String, Any> = emptyMap(),
+        retryBudgetMs: Long? = null,
     ): LLMResponse {
         var lastException: Exception? = null
 
@@ -84,6 +91,29 @@ class LLMRetryHandler(
             }
         }
 
+        val call: suspend () -> LLMResponse = {
+            llmClient.complete(
+                provider = provider,
+                model = model,
+                messages = messages,
+                systemPrompt = systemPrompt,
+                taskId = taskId,
+                source = source,
+                temperature = temperature,
+                responseFormat = responseFormat,
+                thinking = thinking,
+                reasoningEffort = reasoningEffort,
+                noEgressEnabled = noEgressEnabled,
+                stream = stream,
+                onChunk = guardedOnChunk,
+                kwargs = kwargs
+            )
+        }
+
+        if (retryBudgetMs != null && retryBudgetMs > 0) {
+            return callWithinBudget(call, retryBudgetMs, stream, streamedToUi)
+        }
+
         // "No retries" still owes the caller one call. Guarding here keeps a configured
         // limits.max_retries=0 from short-circuiting into a synthetic failure that never
         // reached the provider.
@@ -91,41 +121,11 @@ class LLMRetryHandler(
 
         repeat(maxAttempts) { attempt ->
             try {
-                return llmClient.complete(
-                    provider = provider,
-                    model = model,
-                    messages = messages,
-                    systemPrompt = systemPrompt,
-                    taskId = taskId,
-                    source = source,
-                    temperature = temperature,
-                    responseFormat = responseFormat,
-                    thinking = thinking,
-                    reasoningEffort = reasoningEffort,
-                    noEgressEnabled = noEgressEnabled,
-                    stream = stream,
-                    onChunk = guardedOnChunk,
-                    kwargs = kwargs
-                )
+                return call()
             } catch (e: Exception) {
                 lastException = e
 
-                val shouldRetry = shouldRetryException(e)
-
-                if (!shouldRetry) {
-                    logger.error(e) { "[RETRY] Non-retryable error, giving up: ${e.message}" }
-                    totalFailures.incrementAndGet()
-                    throw e
-                }
-
-                if (stream && streamedToUi.get()) {
-                    logger.error(e) {
-                        "[RETRY] Streamed call already emitted chunks to the UI; not retrying " +
-                        "to avoid duplicated output: ${e.message}"
-                    }
-                    totalFailures.incrementAndGet()
-                    throw e
-                }
+                giveUpUnlessRetryable(e, stream, streamedToUi)
 
                 if (attempt < maxAttempts - 1) {
                     val delayMs = baseDelayMs * (1 shl attempt)  // Exponential: 1s, 2s, 4s
@@ -145,6 +145,88 @@ class LLMRetryHandler(
         }
 
         throw lastException ?: RuntimeException("LLM call failed after $maxAttempts attempts")
+    }
+
+    /**
+     * Retries for as long as the server has been failing for less than [budgetMs], so a model
+     * server that restarts or reloads a model during a long task costs a pause instead of the
+     * round. The clock starts at the first failure, not at the first call: a long answer cut off
+     * at the end still gets the whole window. Failed attempts count too, so a server that hangs
+     * until each call times out is given up on after a few attempts, not after dozens.
+     */
+    private suspend fun callWithinBudget(
+        call: suspend () -> LLMResponse,
+        budgetMs: Long,
+        stream: Boolean,
+        streamedToUi: AtomicBoolean,
+    ): LLMResponse {
+        var firstFailureAt: Long? = null
+        var retries = 0
+        while (true) {
+            try {
+                return call()
+            } catch (e: Exception) {
+                giveUpUnlessRetryable(e, stream, streamedToUi)
+
+                val now = nowMs()
+                val failingForMs = now - (firstFailureAt ?: now.also { firstFailureAt = it })
+                val pauseMs = (e as? RefioError.LLMRateLimit)?.retryAfterMs?.takeIf { it > 0 }
+                    ?: BUDGET_PAUSES_MS.getOrElse(retries) { BUDGET_PAUSES_MS.last() }
+                if (failingForMs + pauseMs > budgetMs) {
+                    totalFailures.incrementAndGet()
+                    logger.error(e) {
+                        "[RETRY] Giving up after ${retries + 1} attempts: the server has been failing for " +
+                            "${failingForMs / 1000}s and the next try would be past the ${budgetMs / 1000}s limit"
+                    }
+                    throw e
+                }
+
+                retries++
+                totalRetries.incrementAndGet()
+                logger.warn {
+                    "[RETRY] Attempt $retries failed: ${e.message}. Retrying in ${pauseMs}ms " +
+                        "(failing for ${failingForMs}ms of ${budgetMs}ms)"
+                }
+                pauseUnlessStopped(pauseMs)
+            }
+        }
+    }
+
+    /**
+     * Waits in short slices so that Stop, which may only raise the shared cancel flag instead of
+     * cancelling this coroutine, does not have to sit out a pause of up to half a minute.
+     */
+    private suspend fun pauseUnlessStopped(pauseMs: Long) {
+        var leftMs = pauseMs
+        while (leftMs > 0) {
+            if (GlobalMetrics.isCancelled()) {
+                throw CancellationException(CANCELLED_MESSAGE)
+            }
+            val sliceMs = minOf(leftMs, STOP_CHECK_MS)
+            delay(sliceMs)
+            leftMs -= sliceMs
+        }
+        if (GlobalMetrics.isCancelled()) {
+            throw CancellationException(CANCELLED_MESSAGE)
+        }
+    }
+
+    /** Throws [e] when another attempt cannot help. */
+    private fun giveUpUnlessRetryable(e: Exception, stream: Boolean, streamedToUi: AtomicBoolean) {
+        if (!shouldRetryException(e)) {
+            logger.error(e) { "[RETRY] Non-retryable error, giving up: ${e.message}" }
+            totalFailures.incrementAndGet()
+            throw e
+        }
+
+        if (stream && streamedToUi.get()) {
+            logger.error(e) {
+                "[RETRY] Streamed call already emitted chunks to the UI; not retrying " +
+                "to avoid duplicated output: ${e.message}"
+            }
+            totalFailures.incrementAndGet()
+            throw e
+        }
     }
 
     /**
@@ -253,3 +335,11 @@ data class RetryStats(
     val totalRetries: Int,
     val totalFailures: Int
 )
+
+/** Pauses between attempts in time-limited mode; the last one repeats. */
+private val BUDGET_PAUSES_MS = listOf(2_000L, 4_000L, 8_000L, 16_000L, 30_000L)
+
+/** How often a pause looks at the Stop flag. */
+private const val STOP_CHECK_MS = 1_000L
+
+private const val CANCELLED_MESSAGE = "Operation cancelled by user"
