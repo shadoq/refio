@@ -55,7 +55,12 @@ data class TuiState(
     val executionStatus: String = "Idle",
     val coreConnected: Boolean = true,
     val contextUsedTokens: Int = 0,
-    val contextMaxTokens: Int = 128000,
+    /** Context window the engine uses for the selected model; 0 = not known yet. */
+    val contextMaxTokens: Int = 0,
+    /** Where [contextMaxTokens] came from (explicit provider size, provider default, model table, ...). */
+    val contextWindowSource: pl.jclab.refio.core.llm.ContextWindowSource? = null,
+    /** Output token limit from `limits.max_output_size` (the default when not set). */
+    val maxOutputTokens: Int = pl.jclab.refio.core.config.ConfigKeys.MAX_OUTPUT_SIZE.default,
     val sessionTokensIn: Long = 0,
     val sessionTokensOut: Long = 0,
     val sessionCachedTokens: Long = 0,
@@ -66,11 +71,18 @@ data class TuiState(
     val modelSelectorCandidates: List<String> = emptyList(),
     val modelSelectorIndex: Int = 0,
     val pendingQuestionId: String? = null,
+    /** State of a running long task (`/until`, `/long`), shown under the prompt; null for single turns. */
+    val longTaskLine: String? = null,
     val pendingQuestionOptions: List<String> = emptyList(),
     val settingsSelectedField: Int = 0,
     val settingsEditingField: String? = null,
     val settingsEditBuffer: String = "",
     val settingsResetArmed: Boolean = false,
+    val settingsNotice: SettingsNotice? = null,
+    /** `rag.enabled` from the config; null until the settings snapshot is loaded. */
+    val ragEnabled: Boolean? = null,
+    /** `c` was pressed once in the RAG panel: the next `c` clears the index, any other key cancels. */
+    val ragClearArmed: Boolean = false,
     val ragIndexedFiles: List<TuiRagFile> = emptyList(),
     val apiLogsFilter: String? = null, // null = show all, or provider name
     val selectedApiLogIndex: Int = 0,
@@ -78,11 +90,20 @@ data class TuiState(
     val ragSelectedFileIndex: Int = 0,
     val ragSearchQuery: String = "",
     val ragSearchResults: List<String> = emptyList(),
-    val selectedMessageIndex: Int = -1, // -1 = none selected (copies last), >=0 = specific message
+    /** -1 = nothing selected (copy takes the last answer); >= 0 = index into the transcript's messages and tool rows. */
+    val selectedMessageIndex: Int = -1,
+    /** Tool rows whose output is expanded, by row key. */
+    val expandedToolRows: Set<String> = emptySet(),
+    /** Highlighted row of the approval choice list. */
+    val approvalChoice: Int = 0,
+    /** Session rules allowed with `a` (tool, optional argument pattern), as the core keeps them. */
+    val trustRules: List<pl.jclab.refio.core.services.turn.ToolApprovalService.TrustRuleView> = emptyList(),
     val selectedContextIndex: Int = 0,
     val pastedContent: String? = null, // non-null when large paste detected, shows marker
     // File browser state
     val helpScrollOffset: Int = 0,
+    /** Text typed after `/` on the help screen; null when not filtering. */
+    val helpFilter: String? = null,
     val fileBrowserPath: String = "",
     val fileBrowserEntries: List<TuiFileEntry> = emptyList(),
     val fileBrowserSelectedIndex: Int = 0,
@@ -110,6 +131,9 @@ data class TuiState(
     // Debug panel scroll
     val debugScrollOffset: Int = 0
 )
+
+/** Outcome of the last settings change: "saved HH:mm" or what was not saved and why. */
+data class SettingsNotice(val text: String, val error: Boolean)
 
 data class TuiRagFile(
     val filePath: String,
@@ -146,7 +170,9 @@ data class TuiChatMessage(
     val tokensOut: Int = 0,
     val costUsd: Double = 0.0,
     val toolName: String? = null,
-    val metadata: Map<String, Any?> = emptyMap()
+    val metadata: Map<String, Any?> = emptyMap(),
+    /** For tool messages: the call id that pairs a call with its result. */
+    val toolCallId: String? = null
 )
 
 enum class TuiMessageType {

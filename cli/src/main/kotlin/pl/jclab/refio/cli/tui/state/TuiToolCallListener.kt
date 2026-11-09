@@ -10,36 +10,31 @@ import pl.jclab.refio.core.session.AbstractToolCallLifecycleListener
  * [AbstractToolCallLifecycleListener] variant that renders tool-call lifecycle
  * as [TuiChatMessage] entries in the TUI chat stream.
  *
- * Keeps TUI-specific concerns (role="tool" messages, `TOOL_CALL` message type,
- * `Running ...` placeholder copy, success/failure metadata) out of the
- * shared base class.
+ * Each call is one message in the shape [TranscriptBuilder.toolCallMessage] defines (the same shape the
+ * database reload builds), updated in place when the result arrives. How long each call took is recorded
+ * in [toolDurations] by call id, so the times survive the reload at the end of the turn.
  */
 class TuiToolCallListener(
     scope: CoroutineScope,
     private val messagesState: MutableStateFlow<List<TuiChatMessage>>,
     private val onToolStarted: (String) -> Unit,
     private val onReloadSubtasks: suspend () -> Unit,
+    private val toolDurations: MutableMap<String, Long> = mutableMapOf(),
+    private val clock: () -> Long = System::currentTimeMillis,
 ) : AbstractToolCallLifecycleListener(scope) {
 
     override fun onCreateTempMessage(taskId: String, toolCall: ToolCallData): String {
         onToolStarted(toolCall.name)
 
         val tempId = "temp-${toolCall.id}"
-        val argsSummary = try {
-            val args = toolCall.arguments
-            if (args.length <= 120) args else "${args.take(120)}..."
-        } catch (_: Exception) { "" }
-
         messagesState.update { messages ->
-            messages + TuiChatMessage(
+            messages + TranscriptBuilder.toolCallMessage(
                 id = tempId,
-                timestamp = System.currentTimeMillis(),
-                role = "tool",
-                content = "Running ${toolCall.name}...",
-                messageType = TuiMessageType.TOOL_CALL,
+                toolCallId = toolCall.id,
                 toolName = toolCall.name,
-                isStreaming = true,
-                metadata = mapOf("args" to argsSummary),
+                argumentsJson = toolCall.arguments,
+                timestamp = clock(),
+                running = true,
             )
         }
         return tempId
@@ -66,19 +61,20 @@ class TuiToolCallListener(
         result: String,
         success: Boolean,
     ) {
-        val resultSummary = if (result.isNotBlank()) {
-            val trimmed = result.trim()
-            if (trimmed.length <= 200) trimmed else "${trimmed.take(200)}..."
-        } else if (success) "Done" else "Failed"
-
+        val now = clock()
         messagesState.update { messages ->
             messages.map { msg ->
                 if (msg.id == messageId) {
+                    val durationMs = (now - msg.timestamp).coerceAtLeast(0)
+                    toolDurations[toolCall.id] = durationMs
                     msg.copy(
-                        content = resultSummary,
+                        content = result.trim(),
                         isStreaming = false,
                         isToolStreaming = false,
-                        metadata = msg.metadata + ("success" to success),
+                        metadata = msg.metadata + mapOf(
+                            TranscriptBuilder.META_SUCCESS to success,
+                            TranscriptBuilder.META_DURATION_MS to durationMs,
+                        ),
                     )
                 } else msg
             }

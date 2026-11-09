@@ -48,7 +48,8 @@ class TuiSettingsScreenInteractiveTest {
         every { viewModel.isSettingsResetArmed() } returns true
         handler.dispatchAction(TuiAction.TypeChar('R'), viewModel)
         verify { viewModel.resetAllSettings() }
-        verify { viewModel.addSystemMessage(match { it.contains("reset") }) }
+        // The result is reported by the reset itself in the Settings status bar, not as a chat message nobody sees there.
+        verify(exactly = 0) { viewModel.addSystemMessage(any()) }
     }
 
     @Test
@@ -85,7 +86,7 @@ class TuiSettingsScreenInteractiveTest {
         every { viewModel.getConfigSection(any()) } returns emptyMap()
         val lines = TuiSettingsScreen.renderToLines(state, 100, 20)
         val output = lines.joinToString("\n")
-        assertTrue(output.contains("Settings"), "Should show Settings header")
+        assertTrue(output.contains("1 General"), "Should show the section list")
         assertTrue(output.contains("General"), "Should show General tab")
     }
 
@@ -96,7 +97,7 @@ class TuiSettingsScreenInteractiveTest {
         every { viewModel.getConfigSection(any()) } returns emptyMap()
         val lines = TuiSettingsScreen.renderToLines(state, 100, 20)
         val output = lines.joinToString("\n")
-        assertTrue(output.contains("[r]eset") || output.contains("Reset"),
+        assertTrue(output.contains("r reset"),
             "Should show Reset hint, got: ${output.takeLast(200)}")
     }
 }

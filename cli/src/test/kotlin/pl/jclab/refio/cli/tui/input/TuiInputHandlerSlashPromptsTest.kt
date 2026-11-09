@@ -47,10 +47,10 @@ class TuiInputHandlerSlashPromptsTest {
     }
 
     @Test
-    fun `handleCommand always returns false - system commands removed`() {
-        // All system commands have been removed — operations are accessed via GUI
+    fun `only slash actions are handled, old system commands go to the model as text`() {
+        // /help is a slash action now (same as F1); the old system commands stay removed.
+        assert(handler.handleCommand("/help", viewModel))
         assert(!handler.handleCommand("/quit", viewModel))
-        assert(!handler.handleCommand("/help", viewModel))
         assert(!handler.handleCommand("/clear", viewModel))
         assert(!handler.handleCommand("/resend", viewModel))
         assert(!handler.handleCommand("/export /tmp/chat.md", viewModel))

@@ -1,7 +1,6 @@
 package pl.jclab.refio.cli.tui.components
 
 import com.github.ajalt.mordant.terminal.Terminal
-import pl.jclab.refio.api.StreamProgressFormat
 import pl.jclab.refio.cli.tui.rendering.TuiColors
 import pl.jclab.refio.cli.tui.rendering.TuiContentParser
 import pl.jclab.refio.cli.tui.rendering.TuiContentSegment
@@ -35,7 +34,6 @@ object TuiMessageBubble {
     fun renderToLines(terminal: Terminal, msg: TuiChatMessage): List<String> {
         // Special message types get dedicated rendering
         return when (msg.messageType) {
-            TuiMessageType.TOOL_CALL -> renderToolCallMessage(msg)
             TuiMessageType.EXECUTION_SUMMARY -> renderExecutionSummary(msg)
             TuiMessageType.ORCHESTRATOR_QUESTION -> renderOrchestratorQuestion(msg)
             TuiMessageType.PLAN -> renderPlanMessage(msg)
@@ -71,17 +69,7 @@ object TuiMessageBubble {
             TuiColors.assistant
         }
         result.add(roleColor("[$name] $time"))
-
-        // Parse content into segments (thinking, code, markdown)
-        val segments = TuiContentParser.parse(msg.content, isStreaming = msg.isStreaming)
-
-        if (segments.isEmpty()) {
-            result.addAll(msg.content.lines())
-        } else {
-            for (segment in segments) {
-                result.addAll(renderSegment(terminal, segment))
-            }
-        }
+        result.addAll(assistantBody(terminal, msg))
 
         if (msg.isStreaming) {
             result.add(TuiColors.streaming("  ... streaming ..."))
@@ -96,6 +84,12 @@ object TuiMessageBubble {
         }
 
         return result
+    }
+
+    /** An answer's text without header or metrics: thinking, code and Markdown segments. */
+    fun assistantBody(terminal: Terminal, msg: TuiChatMessage): List<String> {
+        val segments = TuiContentParser.parse(msg.content, isStreaming = msg.isStreaming)
+        return if (segments.isEmpty()) msg.content.lines() else segments.flatMap { renderSegment(terminal, it) }
     }
 
     private fun renderSegment(terminal: Terminal, segment: TuiContentSegment): List<String> {
@@ -247,47 +241,6 @@ object TuiMessageBubble {
                 TuiColors.statusFailed("[n]") + TuiColors.muted("o  ") +
                 TuiColors.statusSuccess("[t]") + TuiColors.muted("rust agent"))
 
-        return result
-    }
-
-    // --- Tool call messages ---
-
-    private fun renderToolCallMessage(msg: TuiChatMessage): List<String> {
-        val result = mutableListOf<String>()
-        val time = timeFormat.format(Date(msg.timestamp))
-        val toolLabel = msg.toolName ?: "tool"
-        val statusIcon = when {
-            msg.isStreaming -> "⟳"
-            msg.metadata["success"] == true -> "✓"
-            msg.metadata["success"] == false -> "✗"
-            else -> "⚙"
-        }
-        val headerStyle = when {
-            msg.isStreaming -> TuiColors.tool
-            msg.metadata["success"] == false -> TuiColors.statusFailed
-            msg.metadata["success"] == true -> TuiColors.statusSuccess
-            else -> TuiColors.tool
-        }
-        // While a code-editing tool actively streams generated content, show a live character counter
-        // (the signal that tokens are arriving) and hide the growing body to avoid a noisy preview that
-        // re-wraps on every chunk. The result is shown once the tool completes.
-        val label = if (msg.isToolStreaming) {
-            StreamProgressFormat.withCharCount("[$toolLabel]", msg.content.length)
-        } else {
-            "[$toolLabel]"
-        }
-        result.add(headerStyle("  $statusIcon $label ") + TuiColors.muted(time))
-
-        if (!msg.isToolStreaming) {
-            val content = msg.content.trim()
-            if (content.isNotEmpty()) {
-                val lines = content.lines()
-                val displayLines = if (lines.size > 5) lines.take(5) + listOf("... (${lines.size - 5} more lines)") else lines
-                for (line in displayLines) {
-                    result.add(TuiColors.muted("    $line"))
-                }
-            }
-        }
         return result
     }
 

@@ -1,6 +1,10 @@
 package pl.jclab.refio.cli.tui.rendering
 
 import com.github.ajalt.mordant.terminal.Terminal
+import pl.jclab.refio.cli.tui.components.ApprovalFrame
+import pl.jclab.refio.cli.tui.components.CommandPopup
+import pl.jclab.refio.cli.tui.components.Sidebar
+import pl.jclab.refio.cli.tui.components.StatusBar
 import pl.jclab.refio.cli.tui.components.TuiPromptInput
 import pl.jclab.refio.cli.tui.screens.TuiHelpScreen
 import pl.jclab.refio.cli.tui.screens.TuiHistoryScreen
@@ -8,8 +12,13 @@ import pl.jclab.refio.cli.tui.screens.TuiSettingsScreen
 import pl.jclab.refio.cli.tui.state.TuiScreen
 import pl.jclab.refio.cli.tui.state.TuiState
 import pl.jclab.refio.cli.tui.state.TuiTab
+import pl.jclab.refio.cli.tui.theme.ColorDepth
+import pl.jclab.refio.cli.tui.theme.Glyphs
+import pl.jclab.refio.cli.tui.theme.Theme
+import pl.jclab.refio.cli.tui.theme.ThemeColor
 import pl.jclab.refio.cli.tui.views.*
 import java.io.Writer
+import java.nio.charset.Charset
 
 /**
  * Main rendering engine for split-pane TUI.
@@ -23,27 +32,33 @@ import java.io.Writer
  * sequences are sent through the same channel as the terminal's input handling.
  * Mordant Terminal is kept only for text styling (render Markdown widgets).
  *
- * Layout:
+ * Layout (columns depend on the terminal width, see [LayoutMode]):
  * ```
- * ┌─F1:Chat│F2:Steps│...│F8:Set  [CHAT|default] streaming... $0.02│5K tok [Ctrl+Q]─┐
- * ├────────────────────────────────────────────────────────────────────────────────────┤
- * │ Chat messages              │ Right panel (active tab)                              │
- * │ (scrollable)               │ Steps / Context / RAG / ...                           │
- * ├────────────────────────────┤                                                       │
- * │ [CHAT] [model]             │                                                       │
- * │ > input here_              │                                                       │
- * └────────────────────────────┴───────────────────────────────────────────────────────┘
+ * ╭─ REFIO ─╮ ╭─ CHAT ──────────── meta ─╮ ╭─ STEPS ───╮
+ * │ nav     │ │ messages                 │ │           │
+ * ╭─ ...  ──╮ ╰──────────────────────────╯ ╭─ CONTEXT ─╮
+ * │         │ ╭─ PROMPT ─────────────────╮ │           │
+ * ╰─────────╯ ╰──────────────────────────╯ ╰───────────╯
+ *  MODE  model │ state │ ctx ... │ cost                 keys
  * ```
  */
 class TuiRenderer(
     val terminal: Terminal,
-    private val jlineTerminal: org.jline.terminal.Terminal
+    private val jlineTerminal: org.jline.terminal.Terminal,
+    theme: Theme? = null,
+    glyphs: Glyphs? = null
 ) {
 
     companion object {
-        /** Max unified-diff lines shown inline in the tool approval box. */
-        private const val APPROVAL_DIFF_MAX_LINES = 15
+        /** The chat frame gets wider side margins than other frames. */
+        private const val CHAT_PADDING = 2
+
+        private const val PROMPT_META = "Enter send · @ file · / command · ! agent"
     }
+
+    private val theme: Theme = theme ?: Theme(ColorDepth.fromAnsiLevel(terminal.terminalInfo.ansiLevel))
+    private val glyphs: Glyphs = glyphs ?: Glyphs.forEnvironment(System.getenv(), jlineTerminal.encoding() ?: Charset.defaultCharset())
+    private val frame = Frame(this.theme, this.glyphs)
 
     /** Single output channel — all ANSI goes through JLine's writer. */
     private val output: Writer = jlineTerminal.writer()
@@ -109,122 +124,180 @@ class TuiRenderer(
         if (hash == lastRenderedHash && !resized) return
         lastRenderedHash = hash
 
-        val isSplit = state.screen == TuiScreen.MAIN && state.activeTab != TuiTab.CHAT
-        val effectiveHeight = height.coerceAtLeast(TuiLayoutRegions.MIN_HEIGHT)
-        val layout = TuiLayoutRegions.fromTerminal(width, effectiveHeight, isSplitMode = isSplit)
+        val composed = compose(state, width, height)
 
-        // === 1. Build framebuffer ===
-        val screen = TuiScreenBuffer(layout.width, layout.height)
-
-        // Row 0: tab bar
-        screen.setRow(0, buildTabBarLine(state, layout))
-        // Row 1: separator
-        screen.setRow(1, TuiColors.border("─".repeat(layout.width)))
-
-        // Rows 2..height-1: content area (exactly contentHeight lines)
-        val contentStartRow = layout.tabBarHeight + layout.separatorHeight
-        val contentLines = when (state.screen) {
-            TuiScreen.MAIN -> buildMainScreenLines(state, layout)
-            TuiScreen.HISTORY -> TuiHistoryScreen.renderToLines(state, layout.width, layout.contentHeight)
-            TuiScreen.SETTINGS -> TuiSettingsScreen.renderToLines(state, layout.width, layout.contentHeight)
-            TuiScreen.HELP -> TuiHelpScreen.renderToLines(state, layout.width, layout.contentHeight)
+        // Flush to terminal (through JLine writer), then park the cursor in the prompt when it has focus
+        composed.screen.flush(output, clearScreen = resized)
+        val cursor = composed.cursor
+        if (cursor != null) {
+            composed.screen.positionCursorAndShow(output, cursor.first, cursor.second)
+        } else {
+            composed.screen.showCursor(output)
         }
-        screen.setRows(contentStartRow, contentLines)
+    }
 
-        // === 2. Apply overlays ===
+    /** Builds the whole frame for [state] at the given terminal size without writing anything to the terminal. */
+    fun composeFrame(state: TuiState, width: Int, height: Int): TuiScreenBuffer = compose(state, width, height).screen
+
+    /** A composed screen plus where the terminal cursor goes (1-based row and column), if anywhere. */
+    private class ComposedFrame(val screen: TuiScreenBuffer, val cursor: Pair<Int, Int>?)
+
+    /** Rows of one screen area plus the prompt cursor inside it (1-based), if the prompt has focus. */
+    private class Area(val rows: List<String>, val cursor: Pair<Int, Int>?)
+
+    private fun compose(state: TuiState, width: Int, height: Int): ComposedFrame {
+        // Views that style through the shared palette draw with this renderer's colour depth.
+        TuiColors.theme = theme
+        // Some terminals report 0x0 until the first resize; draw at the minimum size meanwhile.
+        val w = if (width > 0) width else LayoutMode.MIN_WIDTH
+        val h = if (height > 0) height else LayoutMode.MIN_HEIGHT
+        val mode = LayoutMode.of(w, h)
+        val screen = TuiScreenBuffer(w, h)
+
+        if (mode == LayoutMode.TooSmall) {
+            val message = TextFit.truncateEnd("Refio needs at least ${LayoutMode.MIN_WIDTH}×${LayoutMode.MIN_HEIGHT} (now ${w}×$h)", w)
+            val pad = ((w - TuiRenderBuffer.visibleLength(message)) / 2).coerceAtLeast(0)
+            screen.setRow(h / 2, " ".repeat(pad) + theme.style(message, fg = ThemeColor.WARN))
+            return ComposedFrame(screen, null)
+        }
+
+        val bodyHeight = h - 1
+        // Overlays position themselves in the area above the status bar.
+        val layout = TuiLayoutRegions(width = w, height = bodyHeight, tabBarHeight = 0, separatorHeight = 0, isSplitMode = false)
+        var cursor: Pair<Int, Int>? = null
+        when (state.screen) {
+            TuiScreen.MAIN -> {
+                val main = composeMain(state, mode, w, bodyHeight)
+                screen.setRows(0, main.rows)
+                cursor = main.cursor
+            }
+            TuiScreen.HISTORY -> screen.setRows(0, TuiHistoryScreen.renderToLines(state, w, bodyHeight))
+            TuiScreen.SETTINGS -> screen.setRows(0, TuiSettingsScreen.renderToLines(state, w, bodyHeight, theme, glyphs))
+            TuiScreen.HELP -> screen.setRows(0, TuiHelpScreen.renderToLines(state, w, bodyHeight, theme, glyphs))
+        }
+        screen.setRow(h - 1, StatusBar.render(state, w, theme, glyphs))
+
         if (state.screen == TuiScreen.MAIN && state.autocompleteVisible && state.autocompleteCandidates.isNotEmpty()) {
-            applyAutocompleteOverlay(screen, state, layout)
+            applyCommandPopup(screen, state, mode, w, bodyHeight)
         }
-
-        // Model selector overlay
         if (state.modelSelectorVisible && state.modelSelectorCandidates.isNotEmpty()) {
             applyModelSelectorOverlay(screen, state, layout)
         }
-
         // File viewer overlay (full-screen, takes priority over autocomplete)
         if (state.fileViewerVisible) {
             applyFileViewerOverlay(screen, state, layout)
+            cursor = null
         }
-
-        // Approval dialog overlay (takes priority over autocomplete)
-        if (state.pendingApprovals.isNotEmpty()) {
-            applyApprovalOverlay(screen, state, layout)
-        }
-
-        // Tool approval overlay (PermissionLevel.ASK)
-        if (state.pendingToolApproval != null && state.pendingApprovals.isEmpty()) {
-            applyToolApprovalOverlay(screen, state, layout)
-        }
-
-        // === 3. Flush to terminal (through JLine writer) ===
-        screen.flush(output, clearScreen = resized)
-
-        // === 4. Position cursor ===
-        if (state.screen == TuiScreen.MAIN && !state.fileViewerVisible) {
-            // Calculate cursor position within multi-line input
-            val prefixLen = 2 // "> "
-            val editableWidth = (if (layout.isSplitMode) layout.leftPanelWidth else layout.contentWidth) - prefixLen
-            val (cursorRow, cursorCol) = TuiPromptInput.getCursorRowCol(
-                state.inputBuffer, state.cursorPosition, editableWidth.coerceAtLeast(10)
-            )
-            // The input lines start at (contentHeight - promptLines + status/separator lines)
-            // The last N lines of contentHeight are the prompt, and input starts after separator+status
-            val promptLines = TuiPromptInput.renderToLines(state, editableWidth + prefixLen)
-            val inputStartLine = promptLines.size - // total prompt lines
-                (promptLines.size - 2).coerceAtLeast(1) // lines that are input (subtract separator+status)
-            val inputRow = layout.tabBarHeight + layout.separatorHeight + layout.contentHeight -
-                promptLines.size + 2 + cursorRow + inputStartLine
-            val inputCol = (if (cursorRow == 0) prefixLen + 1 else 2 + 1) + cursorCol // prefix width + col
-            screen.positionCursorAndShow(output, inputRow, inputCol)
-        } else {
-            screen.showCursor(output)
-        }
+        return ComposedFrame(screen, cursor)
     }
 
-    // === Content builders ===
-
-    private fun buildMainScreenLines(state: TuiState, layout: TuiLayoutRegions): List<String> {
-        return if (!layout.isSplitMode) {
-            buildFullWidthChatLines(state, layout)
-        } else {
-            buildSplitPaneLines(state, layout)
+    /**
+     * Main screen: wide = sidebar | chat + prompt | right column; medium = chat + prompt | right column;
+     * narrow = chat + prompt, or the open panel on its own. Columns are separated by one blank column.
+     * Without an open panel or a waiting approval there is no right column and the chat takes its width.
+     */
+    private fun composeMain(state: TuiState, mode: LayoutMode, width: Int, height: Int): Area {
+        val panelOpen = state.activeTab != TuiTab.CHAT
+        if (mode == LayoutMode.Narrow && panelOpen) {
+            return Area(panelFrame(state, width, height, alone = true), null)
         }
+        val cols = LayoutMode.columns(mode, width, rightColumnOpen(state))
+        val columns = mutableListOf<List<String>>()
+        var chatStart = 0
+        if (cols.sidebar > 0) {
+            columns += Sidebar.render(state, cols.sidebar, height, theme, glyphs)
+            chatStart = cols.sidebar + 1
+        }
+        val chat = chatColumn(state, mode, cols.chat, height)
+        columns += chat.rows
+        if (cols.right > 0) columns += rightColumn(state, cols.right, height)
+        val rows = (0 until height).map { r -> columns.joinToString(" ") { it.getOrElse(r) { "" } } }
+        return Area(rows, chat.cursor?.let { (row, col) -> row to col + chatStart })
     }
 
-    private fun buildFullWidthChatLines(state: TuiState, layout: TuiLayoutRegions): List<String> {
-        val promptBuf = TuiChatView.renderPrompt(state, layout.contentWidth)
-        val actualPromptHeight = promptBuf.lineCount
-        val chatHeight = (layout.contentHeight - actualPromptHeight).coerceAtLeast(3)
-        val chatBuf = TuiChatView.renderMessages(terminal, state, layout.contentWidth, chatHeight)
-        return chatBuf.getVisibleLines() + promptBuf.getLines()
-    }
+    private fun promptHeight(state: TuiState, width: Int, height: Int): Int =
+        (TuiPromptInput.renderToLines(state, frame.innerSize(width, 3).first).size + 2).coerceIn(3, (height / 2).coerceAtLeast(3))
 
-    private fun buildSplitPaneLines(state: TuiState, layout: TuiLayoutRegions): List<String> {
-        val leftW = layout.leftPanelWidth
-        val rightW = layout.rightPanelWidth
+    private fun chatColumn(state: TuiState, mode: LayoutMode, width: Int, height: Int): Area {
+        val promptInner = frame.innerSize(width, 3).first
+        val promptBody = TuiPromptInput.renderToLines(state, promptInner)
+        val promptHeight = promptHeight(state, width, height)
+        val chatHeight = height - promptHeight
+        val (chatInnerWidth, chatInnerHeight) = frame.innerSize(width, chatHeight, padding = CHAT_PADDING)
+        val messages = TuiChatView.renderMessages(terminal, state, chatInnerWidth, chatInnerHeight, theme, glyphs, compact = mode == LayoutMode.Narrow).getVisibleLines()
 
-        val promptBuf = TuiChatView.renderPrompt(state, leftW)
-        val actualPromptHeight = promptBuf.lineCount
-        val chatHeight = (layout.contentHeight - actualPromptHeight).coerceAtLeast(3)
-        val chatBuf = TuiChatView.renderMessages(terminal, state, leftW, chatHeight)
-        val leftLines = chatBuf.getVisibleLines() + promptBuf.getLines()
+        val panelHasFocus = state.panelFocused && state.activeTab != TuiTab.CHAT
+        val chatHasFocus = !panelHasFocus && state.selectedMessageIndex >= 0
+        val promptHasFocus = !panelHasFocus && !chatHasFocus
+        val rows = frame.render(width, chatHeight, "chat", chatMeta(state, mode), if (chatHasFocus) FrameState.FOCUSED else FrameState.INACTIVE, messages, padding = CHAT_PADDING) +
+            frame.render(width, promptHeight, "prompt", PROMPT_META, if (promptHasFocus) FrameState.FOCUSED else FrameState.INACTIVE, promptBody)
+        if (!promptHasFocus || state.fileViewerVisible) return Area(rows, null)
 
-        val rightBuf = renderRightPanel(state, rightW, layout.contentHeight)
-        val rightLines = rightBuf.getVisibleLines()
-
-        return TuiRenderBuffer.mergeSideBySide(
-            left = leftLines, leftWidth = leftW,
-            right = rightLines, rightWidth = rightW,
-            separator = TuiColors.border("│")
+        val prefixLen = 2 // "> "
+        val (cursorRow, cursorCol) = TuiPromptInput.getCursorRowCol(
+            state.inputBuffer, state.cursorPosition, (promptInner - prefixLen).coerceAtLeast(10)
         )
+        val lastInputRow = chatHeight + promptHeight - 2
+        val row = (chatHeight + 1 + TuiPromptInput.inputLineOffset(state) + cursorRow).coerceAtMost(lastInputRow)
+        val col = 2 + prefixLen + cursorCol // left border + padding + "> "
+        return Area(rows, (row + 1) to (col + 1))
+    }
+
+    private fun chatMeta(state: TuiState, mode: LayoutMode): String {
+        val activity = when {
+            state.pendingToolApproval != null || state.pendingApprovals.isNotEmpty() -> "waiting for approval"
+            state.isStreaming -> "streaming"
+            else -> "idle"
+        }
+        val agent = state.agentFilter?.let { " · agent $it" } ?: ""
+        return when (mode) {
+            LayoutMode.Wide -> "${state.model ?: "default model"} · $activity$agent"
+            LayoutMode.Medium -> listOfNotNull(
+                Sidebar.stepsBadge(state).takeIf { it.isNotEmpty() }?.let { "steps $it" },
+                "ctx ${Sidebar.contextBadge(state)}",
+                activity
+            ).joinToString(" · ") + agent
+            else -> "F2 steps · F3 ctx · F4 rag · F5 logs · F9 settings"
+        }
+    }
+
+    private fun rightColumnOpen(state: TuiState): Boolean = state.activeTab != TuiTab.CHAT || ApprovalFrame.isPending(state)
+
+    /** Right column: the panel opened with F2-F8, or what an approval needs while it waits. */
+    private fun rightColumn(state: TuiState, width: Int, height: Int): List<String> =
+        if (state.activeTab != TuiTab.CHAT) panelFrame(state, width, height, alone = false) else approvalColumn(state, width, height)
+
+    /** While an approval waits: what this turn has done so far over what is already allowed for the session. */
+    private fun approvalColumn(state: TuiState, width: Int, height: Int): List<String> {
+        val turnHeight = (height * 3 / 5).coerceAtLeast(3)
+        val allowedHeight = height - turnHeight
+        val turnInner = frame.innerSize(width, turnHeight)
+        val allowedInner = frame.innerSize(width, allowedHeight)
+        val turn = ApprovalFrame.thisTurnLines(state, turnInner.first, theme, glyphs).takeLast(turnInner.second)
+        val allowed = ApprovalFrame.allowedLines(state, allowedInner.first, theme, glyphs).take(allowedInner.second)
+        return frame.render(width, turnHeight, "this turn", null, FrameState.INACTIVE, turn) +
+            frame.render(width, allowedHeight, "allowed this session", null, FrameState.INACTIVE, allowed)
+    }
+
+    /** One frame holding the panel picked with F2-F8; [alone] = it fills the screen (narrow layout). */
+    private fun panelFrame(state: TuiState, width: Int, height: Int, alone: Boolean): List<String> {
+        val (innerWidth, innerHeight) = frame.innerSize(width, height)
+        val body = renderRightPanel(state, innerWidth, innerHeight).getVisibleLines()
+        val focused = alone || state.panelFocused
+        val meta = when {
+            alone -> "Esc chat · F2-F8 panels"
+            state.panelFocused -> "Tab prompt"
+            else -> "Tab focus"
+        }
+        return frame.render(width, height, state.activeTab.label, meta, if (focused) FrameState.FOCUSED else FrameState.INACTIVE, body)
     }
 
     private fun renderRightPanel(state: TuiState, width: Int, height: Int): TuiRenderBuffer {
         return when (state.activeTab) {
             TuiTab.CHAT -> TuiRenderBuffer(width, height)
-            TuiTab.STEPS -> TuiStepsView.renderToBuffer(state, width, height)
-            TuiTab.CONTEXT -> TuiContextView.renderToBuffer(state, width, height)
-            TuiTab.RAG -> TuiRagView.renderToBuffer(state, width, height)
+            TuiTab.STEPS -> TuiStepsView.renderToBuffer(state, width, height, theme, glyphs)
+            TuiTab.CONTEXT -> TuiContextView.renderToBuffer(state, width, height, theme, glyphs)
+            TuiTab.RAG -> TuiRagView.renderToBuffer(state, width, height, theme, glyphs)
             TuiTab.LOGS -> TuiLogsView.renderToBuffer(state, width, height)
             TuiTab.DEBUG -> TuiDebugView.renderToBuffer(state, width, height)
             TuiTab.API_LOGS -> TuiApiLogsView.renderToBuffer(state, width, height)
@@ -232,196 +305,16 @@ class TuiRenderer(
         }
     }
 
-    // === Tab bar ===
-
-    private fun buildTabBarLine(state: TuiState, layout: TuiLayoutRegions): String {
-        val sep = TuiColors.border("\u2502")
-        val helpLabel = if (state.screen == TuiScreen.HELP) TuiColors.tabActive(" F1:Help ") else TuiColors.tabInactive(" F1:Help ")
-        val tabLabels = TuiTab.entries.filter { it != TuiTab.CHAT }.map { tab ->
-            val fKeyNum = tab.fKey ?: (tab.ordinal + 1)
-            val label = " F${fKeyNum}:${tab.label} "
-            if (tab == state.activeTab && state.screen == TuiScreen.MAIN) {
-                if (state.panelFocused) TuiColors.tabFocused(label) else TuiColors.tabActive(label)
-            } else {
-                TuiColors.tabInactive(label)
-            }
-        }
-        val settingsLabel = if (state.screen == TuiScreen.SETTINGS) TuiColors.tabActive(" F9:Set ") else TuiColors.tabInactive(" F9:Set ")
-        val focusHint = if (state.activeTab != TuiTab.CHAT && state.screen == TuiScreen.MAIN) {
-            if (state.panelFocused) {
-                "  " + TuiColors.statusRunning("◆ PANEL") + TuiColors.muted(" [Tab]→input")
-            } else {
-                "  " + TuiColors.statusSuccess("◆ INPUT") + TuiColors.muted(" [Tab]→panel")
-            }
-        } else ""
-        val tabsPart = helpLabel + sep + tabLabels.joinToString(sep) + sep + settingsLabel + focusHint
-        return tabsPart
-    }
-
     // === Overlays ===
 
-    /**
-     * Render autocomplete popup into the screen buffer as an overlay.
-     * Paints a bordered popup with candidates above the prompt area.
-     */
-    private fun applyAutocompleteOverlay(screen: TuiScreenBuffer, state: TuiState, layout: TuiLayoutRegions) {
-        val candidates = state.autocompleteCandidates
-        val selected = state.autocompleteSelectedIndex
-        val maxVisible = 8.coerceAtMost(candidates.size)
-        val popupWidth = candidates.maxOf { it.length + 4 }.coerceAtMost(40)
-
-        val popupBottom = layout.height - 2 // above prompt line
-        val popupTop = popupBottom - maxVisible - 1
-        val col = 3 // after "> " prompt (0-based)
-
-        val overlayLines = mutableListOf<String>()
-
-        // Top border
-        overlayLines.add(TuiColors.border("┌${"─".repeat(popupWidth - 2)}┐"))
-
-        // Candidates
-        val startIdx = if (selected >= maxVisible) selected - maxVisible + 1 else 0
-        for (i in 0 until maxVisible) {
-            val idx = startIdx + i
-            if (idx >= candidates.size) break
-            val candidate = candidates[idx]
-            val line = candidate.padEnd(popupWidth - 4)
-            if (idx == selected) {
-                overlayLines.add(TuiColors.border("│") + TuiColors.tabActive(" $line ") + TuiColors.border("│"))
-            } else {
-                overlayLines.add(TuiColors.border("│") + " $line " + TuiColors.border("│"))
-            }
-        }
-
-        // Bottom border
-        overlayLines.add(TuiColors.border("└${"─".repeat(popupWidth - 2)}┘"))
-
-        screen.overlay(popupTop, col, overlayLines)
-    }
-
-    /**
-     * Render plan approval dialog as a centered overlay.
-     * Shows action, risk level, and y/n prompt.
-     */
-    private fun applyApprovalOverlay(screen: TuiScreenBuffer, state: TuiState, layout: TuiLayoutRegions) {
-        val approval = state.pendingApprovals.first()
-        val boxWidth = 60.coerceAtMost(layout.width - 4)
-        val innerWidth = boxWidth - 4
-
-        val lines = mutableListOf<String>()
-
-        // Title
-        lines.add(TuiColors.border("┌") + TuiColors.border("─".repeat(boxWidth - 2)) + TuiColors.border("┐"))
-        lines.add(TuiColors.border("│") + TuiColors.highlight(" Approval Required".padEnd(boxWidth - 2)) + TuiColors.border("│"))
-        lines.add(TuiColors.border("├") + TuiColors.border("─".repeat(boxWidth - 2)) + TuiColors.border("┤"))
-
-        // Agent
-        val agentLine = " Agent: ${approval.agentName}".take(innerWidth).padEnd(innerWidth)
-        lines.add(TuiColors.border("│") + " $agentLine " + TuiColors.border("│"))
-
-        // Action
-        val actionLine = " Action: ${approval.action}".take(innerWidth).padEnd(innerWidth)
-        lines.add(TuiColors.border("│") + " $actionLine " + TuiColors.border("│"))
-
-        // Risk
-        val riskColor = when (approval.risk.lowercase()) {
-            "high" -> TuiColors.statusFailed
-            "medium" -> TuiColors.statusPending
-            else -> TuiColors.statusSuccess
-        }
-        val riskText = riskColor("Risk: ${approval.risk}")
-        val riskPadded = " $riskText".padEnd(innerWidth + (riskText.length - approval.risk.length - 6))
-        lines.add(TuiColors.border("│") + " $riskPadded " + TuiColors.border("│"))
-
-        // Details (if any)
-        for ((key, value) in approval.details.entries.take(3)) {
-            val detailLine = " $key: $value".take(innerWidth).padEnd(innerWidth)
-            lines.add(TuiColors.border("│") + " $detailLine " + TuiColors.border("│"))
-        }
-
-        // Separator + prompt
-        lines.add(TuiColors.border("├") + TuiColors.border("─".repeat(boxWidth - 2)) + TuiColors.border("┤"))
-        val promptText = " [y] Approve  [n] Reject  [t] Trust  [Esc] Skip"
-        lines.add(TuiColors.border("│") + TuiColors.accent(promptText.padEnd(boxWidth - 2)) + TuiColors.border("│"))
-        lines.add(TuiColors.border("└") + TuiColors.border("─".repeat(boxWidth - 2)) + TuiColors.border("┘"))
-
-        // Center the dialog
-        val startRow = ((layout.height - lines.size) / 2).coerceAtLeast(2)
-        val startCol = ((layout.width - boxWidth) / 2).coerceAtLeast(0)
-
-        screen.overlay(startRow, startCol, lines)
-    }
-
-    /**
-     * Render tool approval dialog for PermissionLevel.ASK.
-     */
-    private fun applyToolApprovalOverlay(screen: TuiScreenBuffer, state: TuiState, layout: TuiLayoutRegions) {
-        val req = state.pendingToolApproval ?: return
-        val change = req.proposedChange
-        val baseWidth = if (change != null) 90 else 60
-        val boxWidth = baseWidth.coerceAtMost(layout.width - 4)
-        val innerWidth = boxWidth - 4
-
-        val lines = mutableListOf<String>()
-
-        lines.add(TuiColors.border("┌") + TuiColors.border("─".repeat(boxWidth - 2)) + TuiColors.border("┐"))
-        lines.add(TuiColors.border("│") + TuiColors.highlight(" Tool Approval Required".padEnd(boxWidth - 2)) + TuiColors.border("│"))
-        lines.add(TuiColors.border("├") + TuiColors.border("─".repeat(boxWidth - 2)) + TuiColors.border("┤"))
-
-        val toolLine = " Tool: ${req.toolName}".take(innerWidth).padEnd(innerWidth)
-        lines.add(TuiColors.border("│") + " $toolLine " + TuiColors.border("│"))
-
-        val descLine = " ${req.description}".take(innerWidth).padEnd(innerWidth)
-        lines.add(TuiColors.border("│") + " $descLine " + TuiColors.border("│"))
-
-        if (change != null) {
-            lines.add(TuiColors.border("├") + TuiColors.border("─".repeat(boxWidth - 2)) + TuiColors.border("┤"))
-            for (diffLine in buildApprovalDiffLines(change, innerWidth)) {
-                lines.add(TuiColors.border("│") + " $diffLine " + TuiColors.border("│"))
-            }
-        }
-
-        lines.add(TuiColors.border("├") + TuiColors.border("─".repeat(boxWidth - 2)) + TuiColors.border("┤"))
-        val promptText = " [y] Approve  [t] Trust  [n] Reject"
-        lines.add(TuiColors.border("│") + TuiColors.accent(promptText.padEnd(boxWidth - 2)) + TuiColors.border("│"))
-        lines.add(TuiColors.border("└") + TuiColors.border("─".repeat(boxWidth - 2)) + TuiColors.border("┘"))
-
-        val startRow = ((layout.height - lines.size) / 2).coerceAtLeast(2)
-        val startCol = ((layout.width - boxWidth) / 2).coerceAtLeast(0)
-
-        screen.overlay(startRow, startCol, lines)
-    }
-
-    /**
-     * Colored unified-diff preview for the approval box: file header highlighted,
-     * added lines green, removed lines red. Long diffs show the first
-     * [APPROVAL_DIFF_MAX_LINES] lines plus a "(+N more lines)" hint.
-     */
-    private fun buildApprovalDiffLines(
-        change: pl.jclab.refio.core.services.turn.ProposedChange,
-        innerWidth: Int
-    ): List<String> {
-        val out = mutableListOf<String>()
-        out.add(TuiColors.highlight(" ${change.filePath}".take(innerWidth).padEnd(innerWidth)))
-
-        val diffLines = change.unifiedDiff.lines().filter { it.isNotEmpty() }
-        val visible = diffLines.take(APPROVAL_DIFF_MAX_LINES)
-        for (line in visible) {
-            val text = " $line".take(innerWidth).padEnd(innerWidth)
-            val styled = when {
-                line.startsWith("+") -> TuiColors.statusSuccess(text)
-                line.startsWith("-") -> TuiColors.statusFailed(text)
-                line.startsWith("@@") || line.startsWith("---") || line.startsWith("+++") -> TuiColors.muted(text)
-                else -> text
-            }
-            out.add(styled)
-        }
-
-        val hidden = diffLines.size - visible.size
-        if (hidden > 0) {
-            out.add(TuiColors.muted(" (+$hidden more lines)".take(innerWidth).padEnd(innerWidth)))
-        }
-        return out
+    /** Suggestions for `/ @ !` in a frame right above the prompt, as wide as the chat column. */
+    private fun applyCommandPopup(screen: TuiScreenBuffer, state: TuiState, mode: LayoutMode, width: Int, height: Int) {
+        if (mode == LayoutMode.Narrow && state.activeTab != TuiTab.CHAT) return
+        val cols = LayoutMode.columns(mode, width, rightColumnOpen(state))
+        val chatStart = if (cols.sidebar > 0) cols.sidebar + 1 else 0
+        val lines = CommandPopup.render(state, cols.chat, theme, glyphs)
+        val top = (height - promptHeight(state, cols.chat, height) - lines.size).coerceAtLeast(0)
+        screen.overlay(top, chatStart, lines)
     }
 
     /**

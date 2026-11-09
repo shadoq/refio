@@ -1,178 +1,143 @@
 package pl.jclab.refio.cli.tui.views
 
-import com.github.ajalt.mordant.terminal.Terminal
+import pl.jclab.refio.cli.tui.components.StatusBar
+import pl.jclab.refio.cli.tui.rendering.TextFit
 import pl.jclab.refio.cli.tui.rendering.TuiColors
 import pl.jclab.refio.cli.tui.rendering.TuiRenderBuffer
 import pl.jclab.refio.cli.tui.state.TuiContextSection
 import pl.jclab.refio.cli.tui.state.TuiState
-import com.github.ajalt.mordant.rendering.TextColors.*
-import com.github.ajalt.mordant.rendering.TextStyle
+import pl.jclab.refio.cli.tui.theme.Glyphs
+import pl.jclab.refio.cli.tui.theme.Theme
+import pl.jclab.refio.cli.tui.theme.ThemeColor
+import pl.jclab.refio.core.llm.ContextWindowSource
 
 /**
- * Context tab view — token usage visualization + sections list.
- * Adapted from plugin's ContextPanel with colored token usage bar.
+ * How full the context window is: used / window, a gauge split into three groups (conversation,
+ * project analysis, overhead), one row per group, a warning while the window is only the provider's
+ * default, then the sections with the selected one's preview. The window is the one the core resolves.
  */
 object TuiContextView {
 
-    /** Color palette for context sections (matches plugin's ContextSectionColorPalette) */
-    private val sectionColors: List<TextStyle> = listOf(
-        brightCyan,      // 0: project overview / semantic summary
-        brightBlue,      // 1: instructions / project structure
-        magenta,         // 2: technologies / dependencies
-        brightMagenta,   // 3: code analysis / framework analysis
-        brightRed,       // 4: current task / subtasks
-        brightYellow,    // 5: conversation / recent work
-        yellow,          // 6: RAG fragments
-        brightGreen,     // 7: user context / user requirements
-        cyan,            // 8: key components / domain analysis
-        green,           // 9: working memory / mcp resources
-        blue,            // 10: system prompt / system messages
-        red,             // 11: assistant messages
-        white,           // 12: navigation map / patterns
-        brightWhite,     // 13: html/css/ts analysis
-        gray,            // 14: context overhead / free space
-    )
+    /** The three groups the gauge shows, built from the section categories. */
+    enum class Group(val label: String, val colour: ThemeColor, val categories: Set<String>) {
+        CONVERSATION("conversation", ThemeColor.INFO, setOf("conversation", "user")),
+        PROJECT("project analysis", ThemeColor.VIOLET, setOf("project", "rag")),
+        OVERHEAD("overhead", ThemeColor.DIM, emptySet());
 
-    fun renderToBuffer(state: TuiState, width: Int, height: Int): TuiRenderBuffer {
-        val buf = TuiRenderBuffer(width, height)
-
-        if (state.contextSections.isEmpty()) {
-            buf.addLine(TuiColors.muted("No context loaded."))
-            buf.addLine(TuiColors.muted("Send a message to populate context."))
-            return buf
+        companion object {
+            fun of(section: TuiContextSection): Group = entries.firstOrNull { section.category in it.categories } ?: OVERHEAD
         }
+    }
 
-        // Detail view for selected context section
-        if (state.contextDetailVisible) {
+    private const val GAUGE_MAX = 50
+
+    fun renderToBuffer(
+        state: TuiState,
+        width: Int,
+        height: Int,
+        theme: Theme = TuiColors.theme,
+        glyphs: Glyphs = Glyphs.UNICODE,
+    ): TuiRenderBuffer {
+        val buf = TuiRenderBuffer(width, height)
+        if (state.contextDetailVisible && state.contextSections.isNotEmpty()) {
             renderDetailView(buf, state, width, height)
             return buf
         }
 
-        buf.addLine(TuiColors.highlight("Project Context"))
-        buf.addLine()
-
-        // === Token usage bar (colored segments like plugin's TokenUsageVisualizationPanel) ===
-        val totalTokens = state.contextSections.sumOf { it.tokensUsed }
-        val contextLimit = state.contextSections.firstOrNull()?.tokensMax?.coerceAtLeast(1) ?: 128_000
-        val usedPercent = ((totalTokens.toDouble() / contextLimit) * 100).toInt().coerceIn(0, 100)
-        val barWidth = (width - 4).coerceIn(20, 60)
-
-        // Header: "Total: 45,230 / 128,000 tokens (35%)"
-        buf.addLine(TuiColors.highlight("Total: ${formatTokens(totalTokens)} / ${formatTokens(contextLimit)} tokens ($usedPercent%)"))
-
-        // Build the colored bar
-        val usedBarWidth = ((totalTokens.toDouble() / contextLimit) * barWidth).toInt().coerceIn(0, barWidth)
-        val emptyBarWidth = barWidth - usedBarWidth
-
-        if (usedBarWidth > 0 && state.contextSections.isNotEmpty()) {
-            // Colored segments proportional to each section's share
-            val sb = StringBuilder()
-            sb.append(TuiColors.border("["))
-            var consumed = 0
-            for (section in state.contextSections) {
-                if (consumed >= usedBarWidth) break
-                val sectionWidth = if (totalTokens > 0)
-                    ((section.tokensUsed.toDouble() / totalTokens) * usedBarWidth).toInt().coerceAtLeast(if (section.tokensUsed > 0) 1 else 0)
-                else 0
-                val actual = sectionWidth.coerceAtMost(usedBarWidth - consumed)
-                if (actual > 0) {
-                    val color = sectionColors[section.colorIndex % sectionColors.size]
-                    sb.append(color("█".repeat(actual)))
-                    consumed += actual
-                }
-            }
-            // Fill remaining used area
-            if (consumed < usedBarWidth) {
-                sb.append(TuiColors.progressFilled("█".repeat(usedBarWidth - consumed)))
-            }
-            sb.append(TuiColors.progressEmpty("░".repeat(emptyBarWidth)))
-            sb.append(TuiColors.border("]"))
-            buf.addLine(sb.toString())
+        val sections = state.contextSections
+        val used = if (state.contextUsedTokens > 0) state.contextUsedTokens else sections.sumOf { it.tokensUsed }
+        val window = state.contextMaxTokens
+        val headline = if (window > 0) {
+            "${StatusBar.formatTokens(used.toLong())} / ${StatusBar.formatTokens(window.toLong())} tokens (${(used.toLong() * 100 / window).coerceIn(0, 100)}%)"
         } else {
-            buf.addLine(TuiColors.border("[") + TuiColors.progressEmpty("░".repeat(barWidth)) + TuiColors.border("]"))
+            "${StatusBar.formatTokens(used.toLong())} tokens · window not known yet"
+        }
+        buf.addLine(theme.style(TextFit.truncateEnd(headline, width), fg = ThemeColor.TEXT, bold = true))
+
+        val totals = Group.entries.associateWith { group -> sections.filter { Group.of(it) == group }.sumOf { it.tokensUsed } }
+        buf.addLine(gauge(totals, used, window, width, theme, glyphs))
+        for (group in Group.entries) {
+            val tokens = totals.getValue(group)
+            val share = if (window > 0) "%.1f%%".format(java.util.Locale.US, tokens * 100.0 / window) else "-"
+            val label = theme.style(glyphs.dot, fg = group.colour) + " " + theme.style(group.label.padEnd(17), fg = ThemeColor.TEXT)
+            buf.addLine(TuiRenderBuffer.fitToWidth(label + theme.style(StatusBar.formatTokens(tokens.toLong()).padStart(7) + "  " + share.padStart(6), fg = ThemeColor.DIM), width))
+        }
+        windowWarning(state)?.let { warning ->
+            wrapWords(warning, width).forEach { buf.addLine(theme.style(it, fg = ThemeColor.WARN)) }
         }
 
+        if (sections.isEmpty()) {
+            if (buf.lineCount < height) buf.addLine(theme.style("Sections appear after the first message.", fg = ThemeColor.DIM))
+            return buf
+        }
+        if (buf.lineCount + 3 > height) return buf
         buf.addLine()
-
-        // === Legend (all non-zero sections with color indicators) ===
-        // Two columns only when both fit inside the real panel width; otherwise
-        // one entry per line, truncated with an ellipsis instead of mid-word cuts.
-        val legendSections = state.contextSections.filter { it.tokensUsed > 0 }
-        val legendEntries = legendSections.map { section ->
-            val color = sectionColors[section.colorIndex % sectionColors.size]
-            val percent = if (section.percentage > 0) String.format(java.util.Locale.US, "(%.1f%%)", section.percentage) else ""
-            val tokens = formatTokens(section.tokensUsed)
-            val entry = "${color("██")} ${section.name}: $tokens $percent"
-            entry to TuiRenderBuffer.visibleLength(entry)
+        val footer = theme.style(TextFit.truncateEnd("↑↓ section · Enter detail · i inspect", width), fg = ThemeColor.DIM)
+        val listSpace = height - buf.lineCount - 1
+        val selected = state.selectedContextIndex.coerceIn(0, sections.lastIndex)
+        val first = (selected - listSpace + 1).coerceIn(0, (sections.size - listSpace).coerceAtLeast(0))
+        for ((index, section) in sections.withIndex().drop(first)) {
+            if (buf.lineCount >= height - 1) break
+            val marker = if (index == selected) theme.style(glyphs.selectionBar, fg = ThemeColor.ACCENT) else " "
+            val tokens = StatusBar.formatTokens(section.tokensUsed.toLong()).padStart(7)
+            val nameWidth = (width - 2 - 2 - 7).coerceAtLeast(1)
+            val name = TuiRenderBuffer.fitToWidth(TextFit.truncateEnd(section.name, nameWidth, glyphs.ellipsis), nameWidth)
+            val nameColour = if (index == selected) ThemeColor.ACCENT else ThemeColor.TEXT
+            buf.addLine(marker + theme.style(glyphs.dot, fg = Group.of(section).colour) + " " + theme.style(name, fg = nameColour) + "  " + theme.style(tokens, fg = ThemeColor.DIM))
         }
-        val maxEntryLen = legendEntries.maxOfOrNull { it.second } ?: 0
-        val twoColumns = legendEntries.size > 1 && width - 4 >= 2 * (maxEntryLen + 2)
-        if (twoColumns) {
-            val colWidth = (width - 4) / 2
-            for (pair in legendEntries.chunked(2)) {
-                if (buf.lineCount >= height - 2) break
-                val sb = StringBuilder()
-                for ((i, entryPair) in pair.withIndex()) {
-                    val (entry, visibleLen) = entryPair
-                    if (i == 0 && pair.size > 1) {
-                        val pad = (colWidth - visibleLen).coerceAtLeast(1)
-                        sb.append("  $entry${" ".repeat(pad)}")
-                    } else {
-                        sb.append("  $entry")
-                    }
-                }
-                buf.addLine(sb.toString())
-            }
-        } else {
-            for ((entry, _) in legendEntries) {
-                if (buf.lineCount >= height - 2) break
-                buf.addLine("  ${TuiRenderBuffer.fitToWidth(entry, (width - 4).coerceAtLeast(10))}")
-            }
-        }
-        val zeroSections = state.contextSections.count { it.tokensUsed == 0 }
-        if (zeroSections > 0) {
-            buf.addLine(TuiColors.muted("  ... +$zeroSections empty sections"))
-        }
-
-        buf.addLine()
-
-        // === Section detail list ===
-        buf.addLine(TuiColors.border("─".repeat((width - 2).coerceAtLeast(10))))
-        val selectedCtxIdx = state.selectedContextIndex
-        for ((idx, section) in state.contextSections.withIndex()) {
-            if (buf.lineCount >= height - 3) break
-            val color = sectionColors[section.colorIndex % sectionColors.size]
-            val categoryColor = when (section.category) {
-                "project" -> TuiColors.contextProject
-                "user" -> TuiColors.contextUser
-                "rag" -> TuiColors.contextRag
-                "conversation" -> TuiColors.contextConversation
-                "tools" -> TuiColors.contextTools
-                else -> TuiColors.muted
-            }
-
-            val marker = if (idx == selectedCtxIdx) ">" else " "
-            val tokens = formatTokens(section.tokensUsed)
-            val percent = if (section.percentage > 0) " (${String.format(java.util.Locale.US, "%.1f", section.percentage)}%)" else ""
-            buf.addLine("$marker${color("●")} ${categoryColor(section.name)} ${TuiColors.muted("$tokens$percent")}")
-
-            // Show content preview for selected section
-            if (idx == selectedCtxIdx && section.content != null) {
-                val preview = section.content.take(200).lines().take(4)
-                for (line in preview) {
-                    if (buf.lineCount >= height - 3) break
-                    buf.addLine(TuiColors.muted("    $line"))
-                }
-                if (section.content.length > 200) {
-                    buf.addLine(TuiColors.muted("    ... (${section.content.length} chars total)"))
-                }
-            }
-        }
-
-        buf.addLine()
-        buf.addLine(TuiColors.muted("  [↑↓] Navigate  [Enter] Detail view  [i] Inspect content"))
-
+        if (buf.lineCount < height) buf.addLine(footer)
         return buf
+    }
+
+    /** Shown while the window is the provider's built-in default rather than a size someone set. */
+    fun windowWarning(state: TuiState): String? {
+        if (state.contextWindowSource != ContextWindowSource.PROVIDER_DEFAULT) return null
+        val provider = state.model?.substringBefore('/', missingDelimiterValue = "")?.takeIf { it.isNotBlank() } ?: "provider"
+        val size = windowSize(state.contextMaxTokens)
+        return if (provider.equals("ollama", ignoreCase = true)) {
+            "num_ctx not set: Ollama default $size in use. Set the context size in Settings, Providers."
+        } else {
+            "Context size not set: $provider default $size in use. Set it in Settings, Providers."
+        }
+    }
+
+    /** Window sizes are powers of two in practice: 32768 reads as `32K`, anything else as usual. */
+    fun windowSize(tokens: Int): String =
+        if (tokens >= 1024 && tokens % 1024 == 0) "${tokens / 1024}K" else StatusBar.formatTokens(tokens.toLong())
+
+    /** [width] cells (at most 50): the three groups in their colours, then the free part. */
+    private fun gauge(totals: Map<Group, Int>, used: Int, window: Int, width: Int, theme: Theme, glyphs: Glyphs): String {
+        val cells = width.coerceAtMost(GAUGE_MAX).coerceAtLeast(1)
+        val capacity = if (window > 0) window else maxOf(used, 1)
+        val sb = StringBuilder()
+        var filled = 0
+        for (group in Group.entries) {
+            val n = (totals.getValue(group).toLong() * cells / capacity).toInt().coerceIn(0, cells - filled)
+            if (n > 0) sb.append(theme.style(glyphs.gaugeFull.repeat(n), fg = group.colour))
+            filled += n
+        }
+        // Tokens the sections do not account for (prompt framing) still use the window.
+        val unaccounted = ((used.toLong() * cells / capacity).toInt() - filled).coerceIn(0, cells - filled)
+        if (unaccounted > 0) sb.append(theme.style(glyphs.gaugeFull.repeat(unaccounted), fg = Group.OVERHEAD.colour))
+        filled += unaccounted
+        sb.append(theme.style(glyphs.gaugeEmpty.repeat(cells - filled), fg = ThemeColor.FRAME))
+        return sb.toString()
+    }
+
+    private fun wrapWords(text: String, width: Int): List<String> {
+        val lines = mutableListOf<String>()
+        var line = ""
+        for (word in text.split(' ')) {
+            val candidate = if (line.isEmpty()) word else "$line $word"
+            if (candidate.length > width && line.isNotEmpty()) {
+                lines += line
+                line = word
+            } else {
+                line = candidate
+            }
+        }
+        if (line.isNotEmpty()) lines += line
+        return lines.map { TextFit.truncateEnd(it, width) }
     }
 
     private fun renderDetailView(buf: TuiRenderBuffer, state: TuiState, width: Int, height: Int) {
@@ -181,15 +146,9 @@ object TuiContextView {
             return
         }
 
-        val color = sectionColors[section.colorIndex % sectionColors.size]
-        val categoryColor = when (section.category) {
-            "project" -> TuiColors.contextProject
-            "user" -> TuiColors.contextUser
-            "rag" -> TuiColors.contextRag
-            "conversation" -> TuiColors.contextConversation
-            "tools" -> TuiColors.contextTools
-            else -> TuiColors.muted
-        }
+        val group = Group.of(section)
+        val color = { text: String -> TuiColors.theme.style(text, fg = group.colour) }
+        val categoryColor = TuiColors.highlight
 
         // Header
         buf.addLine(TuiColors.highlight("Context Detail"))
@@ -228,16 +187,5 @@ object TuiContextView {
         buf.addLine(TuiColors.muted("[Enter/Esc] Back  [\u2191\u2193] Scroll"))
     }
 
-    fun render(terminal: Terminal, state: TuiState, contentHeight: Int) {
-        val buf = renderToBuffer(state, 200, contentHeight)
-        for (line in buf.getLines()) {
-            terminal.println(line)
-        }
-    }
-
-    private fun formatTokens(tokens: Int): String = when {
-        tokens >= 1_000_000 -> String.format(java.util.Locale.US, "%.1fM", tokens / 1_000_000.0)
-        tokens >= 1_000 -> String.format(java.util.Locale.US, "%.1fK", tokens / 1_000.0)
-        else -> tokens.toString()
-    }
+    private fun formatTokens(tokens: Int): String = StatusBar.formatTokens(tokens.toLong())
 }

@@ -21,7 +21,12 @@ import pl.jclab.refio.core.models.api.LLMParams
 import pl.jclab.refio.core.db.ToolCallData
 import pl.jclab.refio.core.services.AgentTurnLoop
 import pl.jclab.refio.core.services.TurnResult
+import pl.jclab.refio.core.services.longtask.LongTaskListener
+import pl.jclab.refio.core.services.longtask.LongTaskState
+import pl.jclab.refio.core.services.longtask.LongTaskStatusLine
+import pl.jclab.refio.core.services.longtask.RoundRecord
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
+import kotlin.coroutines.cancellation.CancellationException
 import java.nio.file.Path
 import java.time.Instant
 import java.time.ZoneId
@@ -53,8 +58,15 @@ class TuiChatViewModel(
     val _cursorPosition = MutableStateFlow(0)
     val _scrollOffset = MutableStateFlow(0)
     val _selectedMessageIndex = MutableStateFlow(-1)
+    val _expandedToolRows = MutableStateFlow<Set<String>>(emptySet())
+    /** Highlighted row of the approval choice list (Enter picks it). */
+    val _approvalChoice = MutableStateFlow(0)
+    /** Rules allowed with `a` in this session, as the core keeps them. */
+    val _trustRules = MutableStateFlow<List<pl.jclab.refio.core.services.turn.ToolApprovalService.TrustRuleView>>(emptyList())
     val _pastedContent = MutableStateFlow<String?>(null)
     val _pendingQuestionId = MutableStateFlow<String?>(null)
+    /** Round, time and last check of a running long task, shown under the prompt. */
+    val _longTaskLine = MutableStateFlow<String?>(null)
     val _pendingQuestionOptions = MutableStateFlow<List<String>>(emptyList())
     val _pendingApprovals = MutableStateFlow<List<TuiPendingApproval>>(emptyList())
     val _pendingToolApproval = MutableStateFlow<TuiToolApprovalRequest?>(null)
@@ -64,6 +76,8 @@ class TuiChatViewModel(
     val _autocompleteVisible = MutableStateFlow(false)
     val _autocompleteCandidates = MutableStateFlow<List<String>>(emptyList())
     val _autocompleteSelectedIndex = MutableStateFlow(0)
+    /** How long each tool call of this session took, by call id; the database does not store it. */
+    internal val toolDurations = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
     // --- Paste detection fields ---
     @Volatile private var lastInsertTime = 0L
@@ -182,24 +196,34 @@ class TuiChatViewModel(
         )}
     }
 
-    // --- Message selection ---
+    // --- Message selection (moves over messages and tool rows, as the transcript shows them) ---
+
+    /** Messages and tool rows in the order the transcript shows them under the current agent filter. */
+    fun transcriptUnits(): List<TranscriptUnit> =
+        TranscriptBuilder.units(TranscriptBuilder.build(TranscriptBuilder.visibleMessages(_messages.value, _agentFilter.value)))
 
     fun messageSelectionUp() {
-        val msgs = _messages.value
-        if (msgs.isEmpty()) return
+        val count = transcriptUnits().size
+        if (count == 0) return
         val current = _selectedMessageIndex.value
-        _selectedMessageIndex.value = if (current <= 0) msgs.lastIndex else current - 1
+        _selectedMessageIndex.value = if (current <= 0 || current > count - 1) count - 1 else current - 1
     }
 
     fun messageSelectionDown() {
-        val msgs = _messages.value
-        if (msgs.isEmpty()) return
+        val count = transcriptUnits().size
+        if (count == 0) return
         val current = _selectedMessageIndex.value
-        _selectedMessageIndex.value = if (current < 0 || current >= msgs.lastIndex) 0 else current + 1
+        _selectedMessageIndex.value = if (current < 0 || current >= count - 1) 0 else current + 1
     }
 
     fun clearMessageSelection() {
         _selectedMessageIndex.value = -1
+    }
+
+    fun selectedUnit(): TranscriptUnit? = transcriptUnits().getOrNull(_selectedMessageIndex.value)
+
+    fun toggleToolRow(key: String) {
+        _expandedToolRows.update { if (key in it) it - key else it + key }
     }
 
     // --- Answer question ---
@@ -359,17 +383,19 @@ class TuiChatViewModel(
     }
 
     fun copyLastMessageToClipboard() {
-        val msgs = _messages.value
+        val units = transcriptUnits()
         val idx = _selectedMessageIndex.value
-        val msg = if (idx in msgs.indices) {
-            msgs[idx]
-        } else {
-            msgs.lastOrNull { it.role == "assistant" } ?: msgs.lastOrNull()
-        }
-        if (msg == null) return
-        copyToClipboard(msg.content)
-        if (idx in msgs.indices) {
-            addSystemMessage("Copied message ${idx + 1}/${msgs.size} to clipboard.")
+        val text = when (val unit = units.getOrNull(idx)) {
+            is TranscriptUnit.Message -> unit.message.content
+            is TranscriptUnit.Tool -> unit.row.result
+            null -> {
+                val msgs = _messages.value
+                (msgs.lastOrNull { it.role == "assistant" } ?: msgs.lastOrNull())?.content
+            }
+        } ?: return
+        copyToClipboard(text)
+        if (idx in units.indices) {
+            addSystemMessage("Copied item ${idx + 1}/${units.size} to clipboard.")
         }
     }
 
@@ -463,6 +489,15 @@ class TuiChatViewModel(
     // --- Continue / Summarize ---
 
     fun continueConversation() {
+        val r = getRouter()
+        val tid = getTaskId()
+        val resumable = !_isStreaming.value && r != null && tid != null && mode.value == CoreTaskMode.AGENT.name &&
+            runCatching { r.longTaskRouter.canResume(tid) }.getOrDefault(false)
+        if (resumable) {
+            addSystemMessage("⟳ Resuming the long task with its next round")
+            launchTurn("", resume = true)
+            return
+        }
         sendMessage("Continue from where you left off")
     }
 
@@ -521,6 +556,7 @@ class TuiChatViewModel(
         currentJob?.cancel()
         currentJob = null
         _isStreaming.value = false
+        _longTaskLine.value = null
         onUpdateExecutionStatus("Cancelled")
         workflowListener.reset()
         addSystemMessage("Operation cancelled.")
@@ -603,7 +639,15 @@ class TuiChatViewModel(
         )
         _messages.update { it + userMsg }
         _inputBuffer.value = ""
+        launchTurn(processedInput, resume = false)
+    }
 
+    /**
+     * Runs the turn for [processedInput], or continues a stopped long task with its next round when
+     * [resume] is set. A task with `/until` or `/long on` runs in rounds, and each round's messages
+     * show up as soon as the round ends.
+     */
+    private fun launchTurn(processedInput: String, resume: Boolean) {
         currentJob = scope.launch {
             val r = getRouter() ?: run {
                 addSystemMessage("Core not initialized")
@@ -617,6 +661,7 @@ class TuiChatViewModel(
 
                 // Ensure we have a valid DB-persisted task
                 val tid = getTaskId() ?: onCreateNewTaskInDb(r).also { onSetTaskId(it) }
+                var loopSummary: String? = null
 
                 val taskMode = try {
                     CoreTaskMode.valueOf(mode.value)
@@ -670,6 +715,7 @@ class TuiChatViewModel(
                             onReloadSubtasks = {
                                 try { onLoadSubtasksFromDb(r, tid) } catch (_: Exception) {}
                             },
+                            toolDurations = toolDurations,
                         )
 
                         val turnRequest = TurnRequest(
@@ -680,19 +726,27 @@ class TuiChatViewModel(
                             model = selectedModel,
                             provider = selectedProvider
                         )
-                        val result: TurnResult = r.agentRouter.runTurn(
-                            turnRequest,
-                            streamCallback = { chunk -> workflowListener.onStreamChunk(chunk.delta) },
-                            listener = turnListener
-                        )
-                        // Finalize stream
-                        workflowListener.onStreamComplete(result.response)
-                        // Update metrics
-                        onUpdateTotalTokens((result.tokensIn + result.tokensOut).toLong())
-                        onUpdateTotalCost(result.cost)
-                        onUpdateCachedTokens(result.cachedTokens)
+                        val rounds = RoundListener(r, tid)
+                        val streamCallback: (pl.jclab.refio.core.api.StreamChunk) -> Unit = { chunk -> workflowListener.onStreamChunk(chunk.delta) }
+                        // A single turn, or rounds until the task's /until or /goal condition holds.
+                        val result: TurnResult? = if (resume) {
+                            r.longTaskRouter.resume(turnRequest, streamCallback, turnListener, rounds)
+                        } else {
+                            r.longTaskRouter.runTurnOrLoop(turnRequest, streamCallback, turnListener, rounds)
+                        }
+                        if (result != null) {
+                            // Finalize stream
+                            workflowListener.onStreamComplete(result.response)
+                            // Update metrics
+                            onUpdateTotalTokens((result.tokensIn + result.tokensOut).toLong())
+                            onUpdateTotalCost(result.cost)
+                            onUpdateCachedTokens(result.cachedTokens)
+                        } else {
+                            addSystemMessage("There is no stopped long task to resume.")
+                        }
                         // Reload subtasks from DB -- plan/agent may have created new ones
                         onLoadSubtasksFromDb(r, tid)
+                        loopSummary = rounds.summary()
                     }
                 }
 
@@ -701,14 +755,24 @@ class TuiChatViewModel(
 
                 // Reload messages from DB (authoritative source)
                 onLoadMessagesFromDb(r, tid)
+                _longTaskLine.value = null
+                loopSummary?.let { addSystemMessage(it) }
 
                 onUpdateDebugInfo(_messages.value.size)
 
                 // Auto-name session if still using default name
-                autoNameSessionIfNeeded(r, tid, processedInput)
+                if (processedInput.isNotBlank()) {
+                    autoNameSessionIfNeeded(r, tid, processedInput)
+                }
 
                 // Refresh API logs from database
                 onRefreshApiLogs(r)
+            } catch (e: CancellationException) {
+                // Ctrl+C: cancelCurrentOperation already told the user. Not an error; the task
+                // (and a long task's loop, saved by the runner) ends as cancelled.
+                _longTaskLine.value = null
+                runCatching { getTaskId()?.let { r.taskRepository.update(it, status = pl.jclab.refio.core.db.TaskStatus.CANCELED) } }
+                throw e
             } catch (e: pl.jclab.refio.core.errors.RefioError.MalformedResponse) {
                 logger.error(e) {
                     "Malformed response from provider=${e.provider}/${e.model}: reason=${e.reason}, " +
@@ -728,6 +792,7 @@ class TuiChatViewModel(
             } catch (e: Exception) {
                 logger.error(e) { "Workflow error" }
                 _isStreaming.value = false
+                _longTaskLine.value = null
                 onUpdateExecutionStatus("Error")
                 _messages.update { messages ->
                     messages + TuiChatMessage(
@@ -739,6 +804,36 @@ class TuiChatViewModel(
                     )
                 }
             }
+        }
+    }
+
+    /** Shows a long task's round under the prompt and the round's messages as soon as it ends. */
+    private inner class RoundListener(private val r: CoreApiRouter, private val tid: String) : LongTaskListener {
+        @Volatile
+        private var looped = false
+
+        override fun onRoundStarted(round: Int, state: LongTaskState) {
+            looped = true
+            _longTaskLine.value = LongTaskStatusLine.of(state, round)
+            onUpdateExecutionStatus("Round $round of ${state.spec.maxRounds}...")
+        }
+
+        override fun onRoundFinished(record: RoundRecord, state: LongTaskState) {
+            _longTaskLine.value = LongTaskStatusLine.of(state)
+            runCatching { onLoadMessagesFromDb(r, tid) }
+            runCatching { onLoadSubtasksFromDb(r, tid) }
+            // The next round streams into a fresh bubble; the loop itself is still running.
+            workflowListener.reset()
+            _isStreaming.value = true
+        }
+
+        /** One line on how the loop ended, or null when the message ran as a single turn. */
+        fun summary(): String? {
+            if (!looped) {
+                return null
+            }
+            val state = runCatching { r.longTaskRouter.state(tid) }.getOrNull() ?: return null
+            return "⟳ Long task ${state.status.name.lowercase()} after ${state.roundsDone} rounds" + (state.stopReason?.let { ": $it" } ?: "")
         }
     }
 
@@ -807,7 +902,10 @@ class TuiChatViewModel(
     /** Built-in slash prompts for autocomplete */
     private val builtinCommandNames: List<String> by lazy {
         try {
-            pl.jclab.refio.api.models.SlashPrompt.BUILTINS.map { "/${it.name}" }
+            // Actions first (unless a template takes the name), then task controls, then the prompt templates.
+            val templates = getSlashPrompts().map { it.name }
+            val actions = pl.jclab.refio.cli.tui.input.SlashActions.ALL.map { it.name }.filter { name -> templates.none { it.equals(name, ignoreCase = true) } }
+            actions.map { "/$it" } + listOf("/goal", "/until", "/long") + templates.map { "/$it" }
         } catch (_: Exception) {
             listOf("/explain", "/fix", "/test", "/refactor", "/optimize", "/simplify",
                 "/document", "/security-review", "/translate", "/implement")
@@ -935,7 +1033,7 @@ class TuiChatViewModel(
                 val slashIdx = input.lastIndexOf('/')
                 if (slashIdx < 0) { autocompleteDismiss(); return }
                 val filter = input.substring(slashIdx).lowercase()
-                val filtered = builtinCommandNames.filter { it.lowercase().startsWith(filter) }
+                val filtered = pl.jclab.refio.cli.tui.input.SlashActions.filter(builtinCommandNames, filter)
                 if (filtered.isEmpty()) { autocompleteDismiss() }
                 else {
                     _autocompleteCandidates.value = filtered
