@@ -103,8 +103,9 @@ class MultiAgentRunnerTest {
             )
 
             runTest {
+                // With on_failure: continue the dependent must actually run, which proves it was unblocked.
                 val results = withTimeout(10.seconds) {
-                    runner.run("s1", specs, successExecutor())
+                    runner.run("s1", specs, WorkflowLimits(onFailure = OnFailure.CONTINUE), successExecutor())
                 }
 
                 assertFalse(results["upstream"]!!.success)
@@ -156,8 +157,8 @@ class MultiAgentRunnerTest {
                 AgentSpec("dependent", task = "Dep", dependsOn = listOf("base"))
             )
 
-            // Base fails but still completes (completedAgents updated)
-            val results = runner.run("s1", specs) { spec, _ ->
+            // Base fails but still completes (completedAgents updated); continue lets the dependent run
+            val results = runner.run("s1", specs, WorkflowLimits(onFailure = OnFailure.CONTINUE)) { spec, _ ->
                 if (spec.name == "base") throw RuntimeException("Base failed")
                 AgentResult(spec.name, true, "done", 100, 0.01)
             }
@@ -264,7 +265,7 @@ class MultiAgentRunnerTest {
                 AgentSpec("C", task = "Depends on B", dependsOn = listOf("B"))
             )
 
-            val results = runner.run("s1", specs) { spec, _ ->
+            val results = runner.run("s1", specs, WorkflowLimits(onFailure = OnFailure.CONTINUE)) { spec, _ ->
                 executionOrder.add(spec.name)
                 when (spec.name) {
                     "B" -> throw RuntimeException("LLM unavailable")
@@ -280,7 +281,7 @@ class MultiAgentRunnerTest {
             assertEquals("LLM unavailable", results["B"]!!.error)
 
             // C runs because B is added to completedAgents in finally block
-            // (current behavior: failed agents still unblock dependents)
+            // (with on_failure: continue a failed agent still unblocks its dependents)
             assertTrue(results.containsKey("C"), "C should have run after B failed")
             assertTrue(results["C"]!!.success)
 
