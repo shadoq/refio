@@ -58,7 +58,8 @@ class TurnPromptLayoutTest {
             contextService.buildAgentTurnMessages(
                 taskId = any(), projectRoot = any(), userContextRefs = any(), query = any(),
                 staticPrefixTokens = any(), includeProjectContext = any(), modelId = any(),
-                agentInstanceId = any(), allowSummarization = any(), trailingState = capture(trailingFlag)
+                agentInstanceId = any(), allowSummarization = any(), trailingState = capture(trailingFlag),
+                history = any()
             )
         } answers {
             val trailing = trailingFlag.captured
@@ -75,7 +76,7 @@ class TurnPromptLayoutTest {
         every { configService.getTyped(ConfigKeys.AGENT_PROMPT_LAYOUT, any()) } returns layout
     }
 
-    private fun builder() = TurnPromptBuilder(
+    private fun builder(clock: () -> Long = System::currentTimeMillis) = TurnPromptBuilder(
         promptsService = mockk<PromptsService>(relaxed = true).also {
             every { it.getSystemPrompt(any(), any()) } returns "You are the agent."
         },
@@ -84,7 +85,8 @@ class TurnPromptLayoutTest {
         contextService = contextService,
         workingMemoryService = null,
         projectRoot = Path.of("/tmp/project"),
-        configService = configService
+        configService = configService,
+        clock = clock
     )
 
     private suspend fun build(iteration: Int) = builder().buildPrompt(
@@ -136,26 +138,34 @@ class TurnPromptLayoutTest {
         assertFalse(trailingFlag.captured)
         assertTrue(prompt.systemPrompt.contains("<RECENT_WORK>"))
         assertTrue(prompt.systemPrompt.contains("<task_requirements>"))
+        assertTrue(prompt.systemPrompt.contains("3 of 200"), "the turn status stays in the system prompt")
         assertEquals(conversation, prompt.messages)
     }
 
     @Test
-    fun `subagent without a context profile keeps the system layout even when trailing is configured`() = runTest {
+    fun `system prompt stays identical across iterations in trailing layout`() = runTest {
+        // Near the end of the iteration budget the turn status changes on every iteration; with the
+        // trailing layout it travels in the final message, not in the system prompt the server caches.
         useLayout(ConfigKeys.PROMPT_LAYOUT_TRAILING)
 
-        val prompt = builder().buildPrompt(
-            taskId = taskId,
-            mode = TaskMode.AGENT,
-            currentIteration = 3,
-            maxIterations = 200,
-            userContextRefs = emptyList(),
-            runProfile = TurnRunProfile.SUBAGENT,
-            profileOverrides = null
+        val first = build(iteration = 190)
+        val second = build(iteration = 191)
+
+        assertEquals(first.systemPrompt, second.systemPrompt)
+        assertTrue(second.messages.last().content.contains("191 of 200"), second.messages.last().content)
+    }
+
+    @Test
+    fun `turn status counts minutes from the start of the turn`() = runTest {
+        useLayout(ConfigKeys.PROMPT_LAYOUT_TRAILING)
+
+        val prompt = builder(clock = { 10 * 60_000L }).buildPrompt(
+            taskId = taskId, mode = TaskMode.AGENT, currentIteration = 3, maxIterations = 200,
+            userContextRefs = emptyList(), runProfile = TurnRunProfile.DEFAULT, profileOverrides = null,
+            turnStartedAtMs = 0L, maxTurnMinutes = 45L
         )
 
-        assertFalse(trailingFlag.captured)
-        assertTrue(prompt.systemPrompt.contains("<RECENT_WORK>"))
-        assertEquals(conversation, prompt.messages)
+        assertTrue(prompt.messages.last().content.contains("35 left"), prompt.messages.last().content)
     }
 
     private fun userMessage(content: String) = ChatMessage(

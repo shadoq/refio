@@ -127,6 +127,7 @@ internal class TurnExecutor(
      * no longer branches "native vs JSON" to figure out what the model invoked.
      */
     private val toolCallExtractor = ToolCallExtractor(toolCallParser, toolRegistry)
+    private val handoffNoteWriter = HandoffNoteWriter(llmClient, chatMessageRepository, configService, toolCallParser::extractTextResponse)
     private val llmResponseRecovery = LLMResponseRecovery(toolCallParser)
 
     private val _turnState = MutableStateFlow(TurnStateSnapshot())
@@ -238,6 +239,7 @@ internal class TurnExecutor(
                 agentInstanceId = agentInstanceId,
                 agentName = agentName,
                 agentDepth = agentDepth,
+                stopReason = reason,
             ).copy(stopReason = reason)
                 .also { if (depth == 0) updateTurnState { TurnStateSnapshot() } }
         }
@@ -356,16 +358,33 @@ internal class TurnExecutor(
         agentName: String? = null
     ): TurnResult {
         probeProviderToolSupport(mode, taskId, model, provider, profileOverrides)
-        val result = executeLoop(
+        val lastRequest = LastRequestHolder()
+        val changedFiles = ChangedFiles()
+        val loopResult = executeLoop(
             taskId, mode, executionMode, listener, streamCallback, model, provider,
             userContextRefs, runProfile, profileOverrides, runId, parentRunId, depth,
-            source, userMessageStrategy, emitSessionId, emitSourceAgentId, agentName
+            source, userMessageStrategy, emitSessionId, emitSourceAgentId, agentName, lastRequest, changedFiles
         )
+        val result = leaveHandoffNote(taskId, loopResult.copy(filesChanged = changedFiles.toList()), lastRequest, depth)
         emitTurnFinal(
             taskId, emitSessionId, emitSourceAgentId, runId, parentRunId, depth,
             iterations = result.iterations, success = result.success
         )
         return result
+    }
+
+    /**
+     * A turn that stopped before delivering leaves a note on what is done and what is left, so the
+     * next turn does not start from the history alone. Written here, after the loop, for the same
+     * reason as the final event above. A subagent's note also goes into its answer: the parent only
+     * reads that answer, never the subagent's thread.
+     */
+    private suspend fun leaveHandoffNote(taskId: String, result: TurnResult, lastRequest: LastRequestHolder, depth: Int): TurnResult {
+        if (result.success) {
+            return result
+        }
+        val note = handoffNoteWriter.write(taskId, result.stopReason, lastRequest.request, lastRequest.agent) ?: return result
+        return if (depth > 0) result.copy(response = result.response + "\n\n" + note) else result
     }
 
     /**
@@ -419,7 +438,7 @@ internal class TurnExecutor(
                 content = buildConsolidationNudge(state.consecutiveGatheringCalls),
                 // Tagged as guardian_nudge so the UI renders it as a gentle "agent guidance" note
                 // (same category: internal steering), not a full alarming SYSTEM bubble.
-                metadata = """{"type":"guardian_nudge"}""",
+                metadata = HarnessMessageTypes.metadataFor(HarnessMessageTypes.GUARDIAN_NUDGE),
                 toolCalls = null,
             )
             state.consolidationNudges++
@@ -441,7 +460,7 @@ internal class TurnExecutor(
                 turnPersistence.persist(
                     role = MessageRole.SYSTEM,
                     content = buildRegenerationNudge(regeneratedPath, regenCount),
-                    metadata = """{"type":"guardian_nudge"}""",
+                    metadata = HarnessMessageTypes.metadataFor(HarnessMessageTypes.GUARDIAN_NUDGE),
                     toolCalls = null,
                 )
                 state.regenerationNudges++
@@ -466,7 +485,7 @@ internal class TurnExecutor(
             turnPersistence.persist(
                 role = MessageRole.SYSTEM,
                 content = buildSubagentInvokeNudge(state.definedSubagentNames.toList()),
-                metadata = """{"type":"guardian_nudge"}""",
+                metadata = HarnessMessageTypes.metadataFor(HarnessMessageTypes.GUARDIAN_NUDGE),
                 toolCalls = null,
             )
             state.subagentInvokeNudges++
@@ -548,7 +567,10 @@ internal class TurnExecutor(
         userMessageStrategy: UserMessageStrategy,
         emitSessionId: String?,
         emitSourceAgentId: String?,
-        agentName: String?
+        agentName: String?,
+        /** Filled on every model call, for the note [execute] may write after the loop. */
+        lastRequest: LastRequestHolder,
+        changedFiles: ChangedFiles
     ): TurnResult {
         // sessionId/sourceAgentId used in AgentEvent emissions. Default to taskId so
         // single-agent sessions remain self-contained; multi-agent overrides with parent ids.
@@ -663,7 +685,8 @@ internal class TurnExecutor(
         // sibling subagents — see ChatMessageRepository.findHistoryForInvocation.
         val persistAgentInstanceId: String? = resolveSubagentInstanceId(profileOverrides)
         val persistAgentName: String? = profileOverrides?.subagentName
-        val persistAgentDepth: Int? = if (persistAgentName != null) (profileOverrides?.depth ?: 0) + 1 else null
+        val persistAgentDepth: Int? = storedAgentDepth(profileOverrides)
+        lastRequest.agent = AgentRef(persistAgentInstanceId, persistAgentName, persistAgentDepth)
 
         val turnPersistence = TurnPersistence(
             taskId, listener, runId, parentRunId, depth,
@@ -867,7 +890,8 @@ internal class TurnExecutor(
                         userContextRefs, runProfile, profileOverrides,
                         writeToolsExecutedInTurn, useNativeTools,
                         nativeToolSchemas = iterationNativeToolSchemas,
-                        agentName = agentName, sessionId = evSessionId, modelId = effectiveModel, runId = runId
+                        agentName = agentName, sessionId = evSessionId, modelId = effectiveModel, runId = runId,
+                        turnStartedAtMs = turnStartMs, maxTurnMinutes = maxTurnMinutes
                     )
 
                     // Call LLM
@@ -894,13 +918,16 @@ internal class TurnExecutor(
                         streamCallback = effectiveStreamCallback,
                         initialPrompt = prompt,
                         initialNativeToolSchemas = activeNativeToolSchemas,
-                        guardianHasRestorableAnswer = guardianState.restorableResponse(usedTools.size) != null
+                        guardianHasRestorableAnswer = guardianState.restorableResponse(usedTools.size) != null,
+                        turnStartedAtMs = turnStartMs,
+                        maxTurnMinutes = maxTurnMinutes
                     )
                     // The helper owns the retry loop, so its final prompt / schema state has to
                     // come back out: a fallback there drops native tools for the rest of the turn.
                     var llmResponse = llmCall.response
                     prompt = llmCall.prompt
                     activeNativeToolSchemas = llmCall.nativeToolSchemas
+                    lastRequest.request = LastLlmRequest.of(prompt, activeNativeToolSchemas, effectiveModel, effectiveProvider)
                     val llmDurationMs = (System.nanoTime() - llmCallStartNanos) / 1_000_000
 
                     // Preserve the last substantial assistant PROSE (not a tool-call envelope) so an
@@ -1082,6 +1109,7 @@ internal class TurnExecutor(
                                         "{\"actions\":[{\"tool\":\"NAME\",\"args\":{...}}]," +
                                         "\"response\":\"...\",\"intent\":\"implementation\"}. " +
                                         "No prose, no markdown fences.",
+                                    metadata = HarnessMessageTypes.metadataFor(HarnessMessageTypes.FORMAT_NUDGE),
                                     toolCalls = null,
                                 )
                                 continue
@@ -1384,11 +1412,12 @@ internal class TurnExecutor(
                         // project's verification command passes on the UNMODIFIED tree. The
                         // finalization verify uses that baseline to avoid blaming the agent (and
                         // starting a repair loop) for a build/test command that was already red.
-                        // Same gating as the finalization verify: top-level AGENT turns only.
+                        // Same gating as the finalization verify: top-level AGENT turns only. A
+                        // subagent may write too, so its start counts as a first write.
                         if (turnVerifier != null &&
                             mode == TaskMode.AGENT &&
                             depth == 0 &&
-                            toolCalls.any { turnToolExecutor.isFileWriteTool(it.name) }
+                            toolCalls.any { turnToolExecutor.isFileWriteTool(it.name) || it.name == SUBAGENT_TOOL }
                         ) {
                             turnVerifier.captureBaseline(taskId)
                         }
@@ -1428,6 +1457,7 @@ internal class TurnExecutor(
                             turnPersistence.persist(
                                 role = MessageRole.SYSTEM,
                                 content = "User rejected tool '${e.toolName}'. Reason: ${e.reason ?: "not specified"}",
+                                metadata = HarnessMessageTypes.metadataFor(HarnessMessageTypes.TOOL_REJECTION),
                             )
                             updateTurnState { copy(phase = TurnPhase.IDLE) }
                             val result = TurnResult(
@@ -1610,6 +1640,7 @@ internal class TurnExecutor(
                         val writeToolCalls = turnToolExecutor.countWriteToolCalls(toolCalls)
                         val verificationToolCalls = turnToolExecutor.countVerificationToolCalls(toolCalls)
                         writeToolsExecutedInTurn += writeToolCalls
+                        changedFiles.record(toolResults.map { it.second })
                         fileWriteToolsExecutedInTurn +=
                             turnToolExecutor.countLandedFileWriteToolCalls(toolCalls, toolResults.map { it.second })
                         if (writeToolCalls > 0) {
@@ -1659,7 +1690,8 @@ internal class TurnExecutor(
                             logger.info { "[MID_EXEC_INPUT] New user message detected after tool execution, nudging LLM (iteration=$iteration)" }
                             turnPersistence.persist(
                                 role = MessageRole.SYSTEM,
-                                content = "[New user message above — address it next]",
+                                content = "[New user message above - address it next]",
+                                metadata = HarnessMessageTypes.metadataFor(HarnessMessageTypes.INTERJECTION_NOTICE),
                                 toolCalls = null,
                             )
                         }
@@ -1673,7 +1705,8 @@ internal class TurnExecutor(
                             logger.info { "[MID_EXEC_INPUT] New user message detected before turn completion, continuing loop (iteration=$iteration)" }
                             turnPersistence.persist(
                                 role = MessageRole.SYSTEM,
-                                content = "[New user message above — address it before finishing]",
+                                content = "[New user message above - address it before finishing]",
+                                metadata = HarnessMessageTypes.metadataFor(HarnessMessageTypes.INTERJECTION_NOTICE),
                                 toolCalls = null,
                             )
                             // Save the current assistant response before continuing
@@ -1948,6 +1981,7 @@ internal class TurnExecutor(
                                             "\"response\":\"...\",\"intent\":\"implementation\"}. " +
                                             "No prose, no markdown fences."
                                 },
+                                metadata = HarnessMessageTypes.metadataFor(HarnessMessageTypes.FORMAT_NUDGE),
                                 toolCalls = null,
                             )
                             continue
@@ -2112,7 +2146,7 @@ internal class TurnExecutor(
                                         // SYSTEM bubble with the alarming "STOP — the turn is NOT
                                         // finished" wall of text (which is model-facing, not for the
                                         // user). Full text stays in DB. See OtherBubbleRenderer.
-                                        metadata = """{"type":"guardian_nudge"}""",
+                                        metadata = HarnessMessageTypes.metadataFor(HarnessMessageTypes.GUARDIAN_NUDGE),
                                         toolCalls = null,
                                     )
                                     continue
@@ -2142,13 +2176,14 @@ internal class TurnExecutor(
                         // which protects against the known regression of optional post-deliverable
                         // self-verification loops (and naturally excludes PLAN, which cannot
                         // write). Top-level turns only: a subagent's writes are re-verified by the
-                        // parent turn's own finalization, and running a full build per subagent
-                        // would multiply cost for no extra signal.
+                        // parent turn's own finalization (they count as the parent's changed
+                        // files), and running a full build per subagent would multiply cost for no
+                        // extra signal.
                         if (turnVerifier != null &&
                             turnIncompleteReason == null &&
                             mode == TaskMode.AGENT &&
                             depth == 0 &&
-                            usedTools.any { turnToolExecutor.isFileWriteTool(it) }
+                            (usedTools.any { turnToolExecutor.isFileWriteTool(it) } || changedFiles.isNotEmpty())
                         ) {
                             updateTurnState { copy(phase = TurnPhase.FINALIZING) }
                             val outcome = turnVerifier.verify(taskId)
@@ -2178,6 +2213,7 @@ internal class TurnExecutor(
                                     turnPersistence.persist(
                                         role = MessageRole.SYSTEM,
                                         content = "Verification failed (exit ${outcome.exitCode}). Errors:\n$errorList\nFix them.",
+                                        metadata = HarnessMessageTypes.metadataFor(HarnessMessageTypes.VERIFICATION_FEEDBACK),
                                         toolCalls = null,
                                     )
                                     continue
@@ -2417,7 +2453,9 @@ internal class TurnExecutor(
             tokensIn = totalTokensIn,
             tokensOut = totalTokensOut,
             cost = totalCost,
-            toolsUsed = usedTools.distinct()
+            toolsUsed = usedTools.distinct(),
+            // Out of steps is not an error: the work may be half done and the next turn can pick it up.
+            incomplete = true
         )
         return turnPersistence.finish(result, persistAssistantMessage = true, stopReason = TurnStopReason.MAX_ITERATIONS)
     }
@@ -2643,7 +2681,9 @@ internal class TurnExecutor(
         streamCallback: StreamCallback?,
         initialPrompt: TurnPrompt,
         initialNativeToolSchemas: List<ToolSchema>?,
-        guardianHasRestorableAnswer: Boolean
+        guardianHasRestorableAnswer: Boolean,
+        turnStartedAtMs: Long,
+        maxTurnMinutes: Long
     ): LlmCallOutcome {
         var prompt = initialPrompt
         var nativeToolSchemas = initialNativeToolSchemas
@@ -2691,7 +2731,8 @@ internal class TurnExecutor(
             taskId, mode, iteration, maxIterations,
             userContextRefs, runProfile, profileOverrides,
             writeToolsExecutedInTurn, false,
-            agentName = agentName, sessionId = sessionId, modelId = effectiveModel, runId = runId
+            agentName = agentName, sessionId = sessionId, modelId = effectiveModel, runId = runId,
+            turnStartedAtMs = turnStartedAtMs, maxTurnMinutes = maxTurnMinutes
         )
 
         while (true) {
@@ -2930,6 +2971,7 @@ internal class TurnExecutor(
                 turnPersistence.persist(
                     role = MessageRole.SYSTEM,
                     content = responseContent,
+                    metadata = HarnessMessageTypes.metadataFor(HarnessMessageTypes.PEER_RESPONSE),
                 )
                 logger.info { "[AWAITING_RESPONSE] Got response for $requestId: ${responseContent.take(100)}" }
             }
@@ -2977,14 +3019,13 @@ internal class TurnExecutor(
         // A no-op write is NOT consolidation progress (P1) — it must not reset the
         // read-only spree counter below, otherwise a futile edit masks a read-forever loop.
         val noopCallIds = mutableSetOf<String>()
+        // A denial is the environment refusing, not the model failing: counting it as a tool
+        // error let our own policy push a working turn over the error-rate threshold.
+        val judgedResults = toolResults.filterNot { (_, result) -> result.notPermitted }
+        errorTracker.recordBatch(failed = judgedResults.count { (_, result) -> !result.success }, total = judgedResults.size)
         for ((toolCall, result) in toolResults) {
             if (result.noop) noopCallIds.add(toolCall.id)
             val success = result.success
-            // A denial is the environment refusing, not the model failing: counting it as a tool
-            // error let our own policy push a working turn over the error-rate threshold.
-            if (!result.notPermitted) {
-                errorTracker.recordResult(success)
-            }
             when (val deniedStatus = deniedTracker.record(result.notPermitted)) {
                 is TurnGuardrails.LoopStatus.ABORT -> if (deniedAbort == null) deniedAbort = deniedStatus
                 TurnGuardrails.LoopStatus.OK -> Unit
@@ -3073,7 +3114,9 @@ internal class TurnExecutor(
         agentName: String? = null,
         sessionId: String? = null,
         modelId: String? = null,
-        runId: String? = null
+        runId: String? = null,
+        turnStartedAtMs: Long? = null,
+        maxTurnMinutes: Long = 0L
     ): TurnPrompt {
         val turnPrompt = turnPromptBuilder.buildPrompt(
             taskId = taskId,
@@ -3089,7 +3132,9 @@ internal class TurnExecutor(
             agentName = agentName,
             sessionId = sessionId,
             modelId = modelId,
-            runId = runId
+            runId = runId,
+            turnStartedAtMs = turnStartedAtMs,
+            maxTurnMinutes = maxTurnMinutes
         )
 
         // Build PromptSnapshot for UI inspection
@@ -3252,6 +3297,7 @@ internal class TurnExecutor(
             taskId = taskId,
             role = MessageRole.SYSTEM,
             content = "Task verification failed: ${verification.reason}.$suggested",
+            metadata = HarnessMessageTypes.metadataFor(HarnessMessageTypes.VERIFICATION_FEEDBACK),
             toolCalls = null,
             agentInstanceId = agentInstanceId,
             agentName = agentName,
@@ -3435,6 +3481,9 @@ internal class TurnExecutor(
     }
 
     companion object {
+        /** The tool that runs a subagent, whose file changes count for the turn that started it. */
+        private const val SUBAGENT_TOOL = "invoke_subagent"
+
         /** At most one "you never invoke your agents" nudge per turn — a soft hint, never spam. */
         private const val MAX_SUBAGENT_INVOKE_NUDGES = 1
 

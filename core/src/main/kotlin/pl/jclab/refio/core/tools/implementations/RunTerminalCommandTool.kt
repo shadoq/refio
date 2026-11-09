@@ -254,21 +254,7 @@ class RunTerminalCommandTool(
         }
     }
 
-    private fun getShellCommand(command: String): List<String> {
-        val os = System.getProperty("os.name").lowercase()
-
-        return when {
-            os.contains("windows") -> listOf(
-                "powershell.exe",
-                "-NoLogo",
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                WINDOWS_UTF8_PREFIX + command
-            )
-            else -> listOf("/bin/sh", "-c", command)
-        }
-    }
+    private fun getShellCommand(command: String): List<String> = shellCommand(command)
 
     override fun getParameterSchema(): Map<String, Any> {
         return mapOf(
@@ -288,6 +274,18 @@ class RunTerminalCommandTool(
     }
 
     companion object {
+        /**
+         * How the agent's terminal runs [command]: PowerShell with UTF-8 output on Windows, sh
+         * elsewhere. A long task's end command runs the same way, so a command that works for the
+         * agent also works as the check.
+         */
+        fun shellCommand(command: String, osName: String = System.getProperty("os.name")): List<String> =
+            if (osName.lowercase().contains("windows")) {
+                listOf("powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", WINDOWS_UTF8_PREFIX + command)
+            } else {
+                listOf("/bin/sh", "-c", command)
+            }
+
         const val MIN_TIMEOUT_SECONDS = 30L
         const val MAX_TIMEOUT_SECONDS = 600L
 

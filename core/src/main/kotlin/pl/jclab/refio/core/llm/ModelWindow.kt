@@ -1,7 +1,32 @@
 package pl.jclab.refio.core.llm
 
+import pl.jclab.refio.core.config.ConfigKey
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.services.ConfigService
+
+/** Which step of [ModelWindow]'s resolution order produced the window a UI shows. */
+enum class ContextWindowSource {
+    /** The user set the provider's own context size key (Ollama, LM Studio, custom OpenAI-compatible). */
+    PROVIDER_EXPLICIT,
+
+    /** The provider's context size key was never set, so its built-in default answered (e.g. Ollama 32768). */
+    PROVIDER_DEFAULT,
+
+    /** The static model table knows this model. */
+    MODEL_TABLE,
+
+    /** The provider's own model listing reported the window. */
+    DISCOVERED,
+
+    /** Nothing knew the model, so the global max context size answered. */
+    FALLBACK,
+
+    /** An explicitly set global max context size lowered the window that one of the steps above found. */
+    CEILING,
+}
+
+/** A context window in tokens together with where that number came from. */
+data class ResolvedContextWindow(val tokens: Int, val source: ContextWindowSource)
 
 /**
  * Single resolver for "context window size in tokens" — the only function in :core that
@@ -47,7 +72,33 @@ object ModelWindow {
         model: String?,
         configService: ConfigService,
         taskId: String? = null,
-    ): Int = applyCeiling(rawWindow(provider, model, configService, taskId), configService, taskId)
+    ): Int = applyCeiling(rawWindow(provider, model, configService, taskId).tokens, configService, taskId)
+
+    /**
+     * Same number as [resolve], plus the step that produced it, so a UI can say why the window is
+     * what it is (a never-configured Ollama size reads very differently from a declared one).
+     *
+     * When an explicit [ConfigKeys.MAX_CONTEXT_SIZE] lowers the window, the source is
+     * [ContextWindowSource.CEILING]: the shown number is then the ceiling, not what the provider
+     * or the model tables said.
+     */
+    fun resolveWithSource(
+        provider: String,
+        model: String?,
+        configService: ConfigService,
+        taskId: String? = null,
+    ): ResolvedContextWindow {
+        val raw = rawWindow(provider, model, configService, taskId)
+        val tokens = applyCeiling(raw.tokens, configService, taskId)
+        val source = when {
+            tokens < raw.tokens -> ContextWindowSource.CEILING
+            raw.source != null -> raw.source
+            providerContextKey(provider)?.let { isExplicitlySet(it, configService, taskId) } == true ->
+                ContextWindowSource.PROVIDER_EXPLICIT
+            else -> ContextWindowSource.PROVIDER_DEFAULT
+        }
+        return ResolvedContextWindow(tokens, source)
+    }
 
     /**
      * Same as [resolve] but for callers that only have a provider — used during config
@@ -60,27 +111,34 @@ object ModelWindow {
         taskId: String? = null,
     ): Int = resolve(provider, model = null, configService = configService, taskId = taskId)
 
+    /**
+     * The window before the ceiling. [source] is null when the provider's own size key answered:
+     * telling an explicit value from the key's default costs one more config read, which only
+     * [resolveWithSource] pays, so [resolve] reads config exactly as before.
+     */
+    private class RawWindow(val tokens: Int, val source: ContextWindowSource?)
+
     private fun rawWindow(
         provider: String,
         model: String?,
         configService: ConfigService,
         taskId: String?,
-    ): Int {
-        val providerOverride = providerOverride(provider, configService, taskId)
-        if (providerOverride != null) return providerOverride
+    ): RawWindow {
+        val providerKey = providerContextKey(provider)
+        if (providerKey != null) return RawWindow(configService.getTyped(providerKey, taskId), source = null)
 
         if (model != null) {
             val definition = ModelDefinitions.getDefinition(provider, model)
-            if (definition != null) return definition.maxContext
+            if (definition != null) return RawWindow(definition.maxContext, ContextWindowSource.MODEL_TABLE)
 
             // Models the provider reports but our static tables don't know (new cloud releases,
             // any locally served model). Without this step they fall to the global default,
             // which under-uses large windows.
             val discovered = getModelConfigFromCache(model)
-            if (discovered != null) return discovered.maxContext
+            if (discovered != null) return RawWindow(discovered.maxContext, ContextWindowSource.DISCOVERED)
         }
 
-        return configService.getTyped(ConfigKeys.MAX_CONTEXT_SIZE, taskId)
+        return RawWindow(configService.getTyped(ConfigKeys.MAX_CONTEXT_SIZE, taskId), ContextWindowSource.FALLBACK)
     }
 
     /**
@@ -95,12 +153,20 @@ object ModelWindow {
         return minOf(window, explicitCeiling)
     }
 
-    private fun providerOverride(provider: String, configService: ConfigService, taskId: String?): Int? {
+    private fun providerContextKey(provider: String): ConfigKey<Int>? {
         return when (provider.lowercase()) {
-            "ollama" -> configService.getTyped(ConfigKeys.PROVIDER_OLLAMA_CONTEXT_SIZE, taskId)
-            "lmstudio" -> configService.getTyped(ConfigKeys.PROVIDER_LM_STUDIO_CONTEXT_SIZE, taskId)
-            "generic_openai" -> configService.getTyped(ConfigKeys.PROVIDER_CUSTOM_OPENAI_CONTEXT_SIZE, taskId)
+            "ollama" -> ConfigKeys.PROVIDER_OLLAMA_CONTEXT_SIZE
+            "lmstudio" -> ConfigKeys.PROVIDER_LM_STUDIO_CONTEXT_SIZE
+            "generic_openai" -> ConfigKeys.PROVIDER_CUSTOM_OPENAI_CONTEXT_SIZE
             else -> null
         }
     }
+
+    /**
+     * True when [key] holds a value someone set (stored setting, config file or run override).
+     * The same test the ceiling uses: a key's default is never persisted, so an unset key reads
+     * back as null from the raw getter while the typed getter returns the default.
+     */
+    private fun isExplicitlySet(key: ConfigKey<Int>, configService: ConfigService, taskId: String?): Boolean =
+        configService.get(key.key, taskId = taskId)?.let(key.parser) != null
 }

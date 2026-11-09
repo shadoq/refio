@@ -37,29 +37,61 @@ interface VerificationCommandRunner {
 }
 
 /**
+ * The end of a command's output, at most [capacity] characters of it, with a note at the start when
+ * the beginning was dropped.
+ */
+internal class OutputTail(private val capacity: Int) {
+    private val text = StringBuilder()
+    private var cut = false
+
+    @Synchronized
+    fun appendLine(line: String) {
+        text.append(line).append('\n')
+        // Trimmed in batches: dropping the start after every line would copy the whole tail each time.
+        if (text.length > 2 * capacity) {
+            trim()
+        }
+    }
+
+    @Synchronized
+    override fun toString(): String {
+        trim()
+        return if (cut) CUT_NOTE + text else text.toString()
+    }
+
+    private fun trim() {
+        if (text.length > capacity) {
+            text.delete(0, text.length - capacity)
+            cut = true
+        }
+    }
+
+    private companion object {
+        const val CUT_NOTE = "[... earlier output cut ...]\n"
+    }
+}
+
+/**
  * Default [VerificationCommandRunner]: runs the command through the platform shell with the
  * project root as working directory, merged stdout/stderr, and a hard timeout after which the
  * process tree is killed.
  */
-class ProcessVerificationCommandRunner : VerificationCommandRunner {
+class ProcessVerificationCommandRunner(
+    /** Wraps the command in the shell it runs in: the platform shell unless the caller wants another. */
+    private val shellCommand: (command: String) -> List<String> = { command -> platformShell(command) },
+) : VerificationCommandRunner {
 
     override fun run(command: String, workingDir: File, timeoutSeconds: Int): VerificationExecution {
-        val isWindows = System.getProperty("os.name").lowercase().contains("win")
-        val shellCommand = if (isWindows) {
-            listOf("cmd.exe", "/c", command)
-        } else {
-            listOf("sh", "-c", command)
-        }
-        val process = ProcessBuilder(shellCommand)
+        val process = ProcessBuilder(shellCommand(command))
             .directory(workingDir)
             .redirectErrorStream(true)
             .start()
         // Drain output on a separate thread so a chatty build cannot deadlock on a full pipe
-        // buffer while we block in waitFor. StringBuffer, not StringBuilder: the reader may still
-        // be appending when this thread snapshots the text (see [awaitReader]), and Thread.join
-        // with a timeout neither reports success nor establishes happens-before, so a plain
-        // builder would be read unsynchronized and yield an arbitrarily mangled excerpt.
-        val output = StringBuffer()
+        // buffer while we block in waitFor. The tail is synchronized: the reader may still be
+        // appending when this thread snapshots the text (see [awaitReader]), and Thread.join with a
+        // timeout neither reports success nor establishes happens-before, so an unsynchronized
+        // builder would yield an arbitrarily mangled excerpt.
+        val output = OutputTail(MAX_OUTPUT_CHARS)
         val reader = Thread {
             try {
                 process.inputStream.bufferedReader().forEachLine { line ->
@@ -73,9 +105,15 @@ class ProcessVerificationCommandRunner : VerificationCommandRunner {
         }
         reader.isDaemon = true
         reader.start()
-        val finished = process.waitFor(timeoutSeconds.toLong(), TimeUnit.SECONDS)
+        val finished = try {
+            process.waitFor(timeoutSeconds.toLong(), TimeUnit.SECONDS)
+        } catch (e: InterruptedException) {
+            // The caller was stopped (a long task cancelled during its check): the command goes too.
+            killTree(process)
+            throw e
+        }
         if (!finished) {
-            process.destroyForcibly()
+            killTree(process)
             process.waitFor(KILL_GRACE_SECONDS, TimeUnit.SECONDS)
         }
         val fullyDrained = awaitReader(reader, process)
@@ -85,6 +123,16 @@ class ProcessVerificationCommandRunner : VerificationCommandRunner {
             timedOut = !finished,
             outputTruncated = !fullyDrained,
         )
+    }
+
+    /**
+     * Kills the command and everything it started. Children go first: once their parent is gone they
+     * no longer show up as its descendants, and a test server left running would hold its port and
+     * the output pipe into the next check.
+     */
+    private fun killTree(process: Process) {
+        process.toHandle().descendants().forEach { it.destroyForcibly() }
+        process.destroyForcibly()
     }
 
     /**
@@ -111,6 +159,20 @@ class ProcessVerificationCommandRunner : VerificationCommandRunner {
     }
 
     companion object {
+        /**
+         * Most of a command's output kept in memory, its end. A hung test that logs in a loop can
+         * print gigabytes before the timeout, and callers only ever use the end of the output.
+         */
+        const val MAX_OUTPUT_CHARS = 1_000_000
+
+        /** The platform shell: cmd.exe on Windows, sh elsewhere. */
+        fun platformShell(command: String): List<String> =
+            if (System.getProperty("os.name").lowercase().contains("win")) {
+                listOf("cmd.exe", "/c", command)
+            } else {
+                listOf("sh", "-c", command)
+            }
+
         /** Grace period for a killed process to actually die before we stop waiting on it. */
         private const val KILL_GRACE_SECONDS = 5L
 

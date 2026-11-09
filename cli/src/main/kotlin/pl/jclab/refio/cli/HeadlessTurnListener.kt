@@ -6,6 +6,7 @@ import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.services.TurnResult
 import pl.jclab.refio.core.services.turn.ToolBatchSummary
 import pl.jclab.refio.core.services.turn.TurnEventListener
+import pl.jclab.refio.core.services.turn.TurnJsonUtils
 
 private val logger = dualLogger("HeadlessTurn")
 
@@ -28,6 +29,19 @@ class HeadlessTurnListener : TurnEventListener {
     // arguments across many deltas yields ONE "building" line, not one per fragment.
     private val announcedToolCallProgress = mutableSetOf<Int>()
 
+    // Which subagent a line belongs to. The turn events carry no subagent name, so the name is
+    // taken from the delegating call and handed to the next subagent turn that starts. With
+    // subagents running one at a time this is exact; with several at once at the same depth a
+    // tool line cannot be attributed and is printed without a name.
+    private val lock = Any()
+    // Delegating call id -> subagent name, until that subagent's turn starts. A call that fails
+    // before starting one (an unknown name) is dropped when it completes, so its name does not
+    // pass to the next subagent.
+    private val pendingSubagentNames = LinkedHashMap<String, String>()
+    private val activeSubagents = LinkedHashMap<String, ActiveSubagent>()
+
+    private data class ActiveSubagent(val name: String, val depth: Int)
+
     private fun err(line: String) = System.err.println(line)
 
     private fun clip(s: String, max: Int): String {
@@ -36,21 +50,52 @@ class HeadlessTurnListener : TurnEventListener {
     }
 
     override fun onTurnStarted(taskId: String, mode: TaskMode, runId: String, parentRunId: String?, depth: Int) {
-        val tag = if (depth > 0) "subagent (depth=$depth)" else "turn"
+        val tag = if (depth > 0) {
+            val name = synchronized(lock) {
+                val next = pendingSubagentNames.keys.firstOrNull()
+                (next?.let { pendingSubagentNames.remove(it) } ?: "subagent").also {
+                    activeSubagents[runId] = ActiveSubagent(it, depth)
+                }
+            }
+            "subagent $name (depth=$depth)"
+        } else {
+            "turn"
+        }
         logger.info { "[HEADLESS] $tag started: mode=$mode runId=$runId parent=$parentRunId" }
         announcedToolCallProgress.clear()
         err("▶ $tag started (mode=$mode)")
     }
 
     override fun onToolExecutionStarted(taskId: String, toolCall: ToolCallData) {
+        if (toolCall.name == SUBAGENT_TOOL) {
+            val name = runCatching { TurnJsonUtils.parseJsonToMap(toolCall.arguments)["subagent_name"] }
+                .getOrNull()?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+            synchronized(lock) { pendingSubagentNames[toolCall.id] = name ?: "subagent" }
+        }
         val args = clip(toolCall.arguments, 120)
-        logger.info { "[HEADLESS] tool start: ${toolCall.name} args=$args" }
-        err("  → ${toolCall.name}  $args")
+        val owner = currentSubagentTag()
+        logger.info { "[HEADLESS] ${owner}tool start: ${toolCall.name} args=$args" }
+        err("  $owner→ ${toolCall.name}  $args")
     }
 
     override fun onToolExecutionCompleted(taskId: String, toolCall: ToolCallData, result: String, success: Boolean) {
-        logger.info { "[HEADLESS] tool done: ${toolCall.name} success=$success result=${clip(result, 200)}" }
-        err("  ${if (success) "✓" else "✗ FAILED"} ${toolCall.name}")
+        if (toolCall.name == SUBAGENT_TOOL) {
+            synchronized(lock) { pendingSubagentNames.remove(toolCall.id) }
+        }
+        val owner = currentSubagentTag()
+        logger.info { "[HEADLESS] ${owner}tool done: ${toolCall.name} success=$success result=${clip(result, 200)}" }
+        err("  $owner${if (success) "✓" else "✗ FAILED"} ${toolCall.name}")
+    }
+
+    /**
+     * "[name] " for a line printed while a subagent works, empty for the main turn. The deepest
+     * running subagent is the one working: its caller waits for it. Two at the same depth run in
+     * parallel and either could own the line, so no name is given then.
+     */
+    private fun currentSubagentTag(): String = synchronized(lock) {
+        val deepest = activeSubagents.values.maxOfOrNull { it.depth } ?: return ""
+        val working = activeSubagents.values.filter { it.depth == deepest }
+        if (working.size == 1) "[${working.single().name}] " else ""
     }
 
     override fun onToolStreamChunk(taskId: String, toolCallId: String, delta: String, accumulated: String) {
@@ -76,7 +121,15 @@ class HeadlessTurnListener : TurnEventListener {
 
     override fun onTurnCompleted(taskId: String, result: TurnResult, runId: String, parentRunId: String?, depth: Int) {
         if (depth > 0) {
-            logger.info { "[HEADLESS] subagent complete (depth=$depth): success=${result.success}" }
+            val name = synchronized(lock) { activeSubagents.remove(runId)?.name } ?: "subagent"
+            val stop = result.stopReason.name.lowercase()
+            logger.info {
+                "[HEADLESS] subagent $name complete (depth=$depth): success=${result.success} " +
+                    "iterations=${result.iterations} stop=$stop"
+            }
+            err(
+                "■ subagent $name finished: success=${result.success}, iterations=${result.iterations}, stop=$stop"
+            )
             return
         }
         logger.info {
@@ -88,5 +141,9 @@ class HeadlessTurnListener : TurnEventListener {
             "■ turn complete: success=${result.success}, iterations=${result.iterations}, " +
                 "tokens=${result.tokensIn + result.tokensOut}, cost=\$${String.format(java.util.Locale.US, "%.4f", result.cost)}"
         )
+    }
+
+    private companion object {
+        const val SUBAGENT_TOOL = "invoke_subagent"
     }
 }

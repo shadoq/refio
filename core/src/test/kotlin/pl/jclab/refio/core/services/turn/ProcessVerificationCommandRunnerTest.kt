@@ -3,6 +3,7 @@ package pl.jclab.refio.core.services.turn
 import org.junit.jupiter.api.Assumptions.assumeFalse
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -65,5 +66,91 @@ class ProcessVerificationCommandRunnerTest {
             execution.outputTruncated || execution.output.contains("compile-error"),
             "output reported as complete must actually be complete, was '${execution.output}'",
         )
+    }
+
+    @Test
+    fun `a command stopped at the timeout takes its child processes with it`() {
+        assumePosixShell()
+
+        val execution = runner.run(BACKGROUND_CHILD, workingDir.toFile(), 1)
+
+        assertTrue(execution.timedOut)
+        assertProcessGone(childPid())
+    }
+
+    @Test
+    fun `an interrupted wait stops the command and its children`() {
+        assumePosixShell()
+        var thrown: Throwable? = null
+        val caller = Thread {
+            try {
+                runner.run(BACKGROUND_CHILD, workingDir.toFile(), 60)
+            } catch (e: Throwable) {
+                thrown = e
+            }
+        }
+        caller.start()
+        val pid = childPid()
+
+        caller.interrupt()
+        caller.join(10_000)
+
+        assertFalse(caller.isAlive, "the call returned instead of waiting out its 60 s")
+        assertTrue(thrown is InterruptedException, "was $thrown")
+        assertProcessGone(pid)
+    }
+
+    /** Pid of the background child [BACKGROUND_CHILD] started, once the shell has written it. */
+    private fun childPid(): Long {
+        val file = workingDir.resolve("child.pid")
+        val deadline = System.currentTimeMillis() + 10_000
+        while (System.currentTimeMillis() < deadline) {
+            val text = runCatching { Files.readString(file).trim() }.getOrNull()
+            if (!text.isNullOrEmpty()) {
+                return text.toLong()
+            }
+            Thread.sleep(50)
+        }
+        error("the command did not write its child's pid")
+    }
+
+    private fun assertProcessGone(pid: Long) {
+        fun alive() = ProcessHandle.of(pid).map { it.isAlive }.orElse(false)
+        val deadline = System.currentTimeMillis() + 5_000
+        while (alive() && System.currentTimeMillis() < deadline) {
+            Thread.sleep(50)
+        }
+        assertFalse(alive(), "child process $pid is still running")
+    }
+
+    private companion object {
+        /** A shell that starts a long child, records its pid and waits for it. */
+        const val BACKGROUND_CHILD = "sleep 30 & echo \$! > child.pid; wait"
+    }
+
+    @Test
+    fun `a command that prints without end keeps only the end of its output`() {
+        assumePosixShell()
+        // A hung test that logs in a loop can print gigabytes before the timeout. Holding all of it
+        // ran the IDE out of memory, while the next round is only ever shown the end.
+        val execution = runner.run("yes 0123456789 | head -c 3000000; echo LAST-LINE", workingDir.toFile(), 60)
+
+        assertTrue(
+            execution.output.length <= ProcessVerificationCommandRunner.MAX_OUTPUT_CHARS + 100,
+            "kept ${execution.output.length} characters",
+        )
+        assertTrue(execution.output.trimEnd().endsWith("LAST-LINE"), "the end of the output stays")
+    }
+
+    @Test
+    fun `the command runs in the shell the runner was given`() {
+        assumePosixShell()
+        // The until check must run a command the way the agent's own terminal does; on Windows that
+        // is PowerShell, where cmd.exe failed on commands like ./gradlew test in every round.
+        val terminalLike = ProcessVerificationCommandRunner(shellCommand = { command -> listOf("/bin/sh", "-c", "echo terminal-shell: $command") })
+
+        val execution = terminalLike.run("check-command", workingDir.toFile(), 30)
+
+        assertEquals("terminal-shell: check-command", execution.output.trim())
     }
 }

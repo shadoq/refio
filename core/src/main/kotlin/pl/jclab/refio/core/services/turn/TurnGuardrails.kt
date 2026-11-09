@@ -27,13 +27,37 @@ private fun bodySignature(body: Any?): String = when (body) {
 class TurnGuardrails {
 
     /**
-     * Tool error tracker using a sliding window. Aborts when the recent error
+     * Tool error tracker using a sliding window of calls. Aborts when the recent error
      * rate exceeds a threshold and enough data points have accumulated.
      */
     class ToolErrorTracker(private val windowSize: Int = 10) {
         private val recentResults = ArrayDeque<Boolean>(windowSize)
 
-        fun recordResult(success: Boolean) {
+        /** One model reply that still has calls in [recentResults]. */
+        private data class ReplyOutcome(val calls: Int, val allFailed: Boolean)
+
+        private val recentReplies = ArrayDeque<ReplyOutcome>()
+
+        fun recordResult(success: Boolean) = recordBatch(failed = if (success) 0 else 1, total = 1)
+
+        /**
+         * Records one model reply that ran [total] tool calls, [failed] of which failed. The reply is
+         * one decision of the model: it counts as a failed decision only when none of its calls worked.
+         */
+        fun recordBatch(failed: Int, total: Int) {
+            if (total <= 0) return
+            val failures = failed.coerceIn(0, total)
+            repeat(total - failures) { push(true) }
+            repeat(failures) { push(false) }
+            recentReplies.addLast(ReplyOutcome(total, allFailed = failures == total))
+            var callsAfterOldest = recentReplies.sumOf { it.calls } - recentReplies.first().calls
+            while (recentReplies.size > 1 && callsAfterOldest >= recentResults.size) {
+                recentReplies.removeFirst()
+                callsAfterOldest -= recentReplies.first().calls
+            }
+        }
+
+        private fun push(success: Boolean) {
             if (recentResults.size >= windowSize) {
                 recentResults.removeFirst()
             }
@@ -54,11 +78,20 @@ class TurnGuardrails {
          * aborted at 4/5 = 80% and never executed the plan). A still-stuck agent that fails again on
          * the next call re-crosses the threshold immediately, so this spares only the single iteration
          * right after a genuine recovery — not sustained thrashing.
+         *
+         * The unit of "failing" is a model reply, not a call: the last reply must have failed entirely,
+         * and an earlier failed reply must still be in the window. One reply that fires twelve calls
+         * at missing files is a single decision taken before the model read any error, so it alone
+         * never ends the turn (observed 2026-10: 2 of 3 runs ended 0/12 on one reply of
+         * `create_new_file` calls whose error said exactly what to do instead). With one call per
+         * reply this is the same rule as before.
          */
         fun shouldAbort(threshold: Double = 0.7): Boolean {
+            val lastReply = recentReplies.lastOrNull() ?: return false
             return recentResults.size >= 5 &&
                 getErrorRate() > threshold &&
-                recentResults.last() == false
+                lastReply.allFailed &&
+                recentReplies.count { it.allFailed } >= 2
         }
 
         fun getStats(): String {

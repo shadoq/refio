@@ -112,6 +112,11 @@ class ConfigService(
         projectId: String? = null
     ): Pair<String, String>? = modelSelectionService.getStrongModel(taskId, projectId)
 
+    fun getDecisionModel(
+        taskId: String? = null,
+        projectId: String? = null
+    ): Pair<String, String>? = modelSelectionService.getDecisionModel(taskId, projectId)
+
     @Suppress("UNUSED_PARAMETER")
     fun setDefaultModel(
         operation: ModelOperation,
@@ -192,6 +197,10 @@ class ConfigService(
     fun getEmbeddingModel(): String = modelSelectionService.getEmbeddingModel()
 
     fun setEmbeddingModel(model: String) = modelSelectionService.setEmbeddingModel(model)
+
+    /** Splits "provider/model" (or a bare model id) into (provider, model) the way the selected model is read. */
+    internal fun parseModelString(modelString: String): Pair<String, String> =
+        modelSelectionService.parseModelString(modelString)
 
     fun getYamlConfig(): ConfigYaml {
         return yamlLoader.getConfig()

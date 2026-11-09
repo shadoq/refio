@@ -1,5 +1,7 @@
 package pl.jclab.refio.ui.execution
 
+import pl.jclab.refio.core.api.routers.LongTaskProgress
+import pl.jclab.refio.core.services.longtask.LongTaskStatus
 import pl.jclab.refio.core.services.turn.TurnPhase
 import pl.jclab.refio.core.services.turn.TurnStateSnapshot
 
@@ -13,17 +15,32 @@ data class NowRunningState(
     val visible: Boolean,
     val busy: Boolean,
     val stepText: String,
-    val detailText: String
+    val detailText: String,
+    val roundText: String = "",
 ) {
 
     companion object {
 
         val HIDDEN = NowRunningState(visible = false, busy = false, stepText = "", detailText = "")
 
-        fun from(snapshot: TurnStateSnapshot): NowRunningState {
+        /** [longTask] is the session's long task, if any; only a running one shows up in the bar. */
+        fun from(snapshot: TurnStateSnapshot, longTask: LongTaskProgress? = null): NowRunningState {
+            val round = longTask?.takeIf { it.status == LongTaskStatus.RUNNING }
+            val roundText = round?.line?.replaceFirstChar { it.uppercase() } ?: ""
             val phase = snapshot.phase
             if (phase == TurnPhase.IDLE || phase == TurnPhase.COMPLETED || phase == TurnPhase.FAILED) {
-                return HIDDEN
+                // Between two rounds no turn runs while the harness checks the end condition, which
+                // can take minutes; the bar stays up so the task does not look finished.
+                if (round == null) {
+                    return HIDDEN
+                }
+                return NowRunningState(
+                    visible = true,
+                    busy = true,
+                    stepText = "",
+                    detailText = "checking ${round.condition}",
+                    roundText = roundText
+                )
             }
 
             // Waiting phases are stalled on the user, not on the engine, so the spinner stops
@@ -40,7 +57,8 @@ data class NowRunningState(
                 visible = true,
                 busy = busy,
                 stepText = stepText,
-                detailText = detailFor(snapshot)
+                detailText = detailFor(snapshot),
+                roundText = roundText
             )
         }
 

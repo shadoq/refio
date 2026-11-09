@@ -126,6 +126,38 @@ class TurnGuardrailsTest {
             val stats = tracker.getStats()
             assertTrue(stats.contains("3/10"))
         }
+
+        // One model reply that fires twelve calls is one decision. Before the model reads any of the
+        // twelve errors it has had no chance to correct itself, so the turn must go on.
+        @Test
+        fun `twelve failures in one batch do not end the turn`() {
+            val tracker = TurnGuardrails.ToolErrorTracker(windowSize = 10)
+            tracker.recordBatch(failed = 12, total = 12)
+            assertFalse(tracker.shouldAbort(), "the model has not seen a single error yet")
+        }
+
+        @Test
+        fun `three fully failed batches in a row end the turn`() {
+            val tracker = TurnGuardrails.ToolErrorTracker(windowSize = 10)
+            repeat(3) { tracker.recordBatch(failed = 2, total = 2) }
+            assertTrue(tracker.shouldAbort(), "the model saw the errors and kept failing")
+        }
+
+        @Test
+        fun `a repeated batch with one success is progress, not a repeated failure`() {
+            val tracker = TurnGuardrails.ToolErrorTracker(windowSize = 10)
+            tracker.recordBatch(failed = 12, total = 12)
+            tracker.recordBatch(failed = 11, total = 12)
+            assertFalse(tracker.shouldAbort(), "one call of the second reply worked, so the model is moving")
+        }
+
+        @Test
+        fun `a failed batch after errors the model already saw ends the turn`() {
+            val tracker = TurnGuardrails.ToolErrorTracker(windowSize = 10)
+            tracker.recordBatch(failed = 12, total = 12)
+            tracker.recordBatch(failed = 3, total = 3)
+            assertTrue(tracker.shouldAbort())
+        }
     }
 
     @Nested

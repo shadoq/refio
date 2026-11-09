@@ -35,6 +35,10 @@ internal class AgentTurnLoopFactory(
     private val workingMemoryIntegration get() = support.workingMemoryIntegration
     private val hookService get() = support.hookService
 
+    // One factory per composition root: it caches an HTTP client per decision-model provider,
+    // and creates none until the decision judge is first used.
+    private val decisionClientFactory by lazy { pl.jclab.refio.core.llm.decision.DecisionClientFactory(configService) }
+
     fun build(toolRegistry: ToolRegistry?, toolExecutor: ToolExecutor?): AgentTurnLoop? {
         if (toolRegistry == null || toolExecutor == null) return null
 
@@ -108,7 +112,11 @@ internal class AgentTurnLoopFactory(
         // registry's hard cap and the guardian's self-cap stay in sync.
         val nextSpeakerJudge = NextSpeakerJudgeGuardian(
             llmClient = llmClient,
-            configService = configService
+            configService = configService,
+            decisionJudge = DecisionNextSpeakerJudge { provider -> decisionClientFactory.forProvider(provider) },
+            recentToolOutput = { taskId ->
+                NextSpeakerJudgeGuardian.lastToolOutput(chatMessageRepository.findHistoryForInvocation(taskId, null))
+            }
         )
         val completionGuardians = GuardianRegistry(
             guardians = listOf(nextSpeakerJudge),
@@ -150,7 +158,8 @@ internal class AgentTurnLoopFactory(
             agentEventBus = agentEventBus,
             hookService = hookService,
             toolPermissionsService = toolPermissionsService,
-            turnVerifier = turnVerifier
+            turnVerifier = turnVerifier,
+            taskLease = persistence.taskLease
         )
     }
 }

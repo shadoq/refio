@@ -97,7 +97,8 @@ internal class ConfigYamlBuilder(
                 plan = "$planProvider/$planModel",
                 coding = "$codingProvider/$codingModel",
                 weak = "$weakProvider/$weakModel",
-                embedding = "$embeddingProvider/$embeddingModel"
+                embedding = "$embeddingProvider/$embeddingModel",
+                decision = configService.getDecisionModel()?.let { (model, provider) -> "$provider/$model" }
             ),
             visibility = configService.getModelsVisibility()
         )

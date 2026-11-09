@@ -146,7 +146,8 @@ object TestDatabase {
             ProjectAnalysisReportsTable,
             AgentSessionsTable,
             AgentInstancesTable,
-            AgentEventsTable
+            AgentEventsTable,
+            TaskStateTable
         )
     }
 
@@ -182,6 +183,7 @@ object TestDatabase {
             ConfigTable.deleteAll()
             MCPServersTable.deleteAll()
             ApiLogsTable.deleteAll()
+            TaskStateTable.deleteAll()
             ChatMessagesTable.deleteAll()
             SnapshotsTable.deleteAll()
             SubtasksTable.deleteAll()

@@ -23,6 +23,8 @@ data class ProjectContextDTO(
     // Task and subtasks
     val currentTask: CurrentTaskDTO? = null,
     val subtasks: List<SubtaskDTO> = emptyList(),
+    /** Agent run this context was built for: null for the parent run, the invocation id for a subagent. */
+    val agentInstanceId: String? = null,
 
     // Conversation history
     val conversationHistory: List<ConversationMessageDTO> = emptyList(),

@@ -4,6 +4,7 @@ import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.core.main
 import com.github.ajalt.clikt.core.ProgramResult
 import com.github.ajalt.clikt.core.UsageError
+import com.github.ajalt.clikt.parameters.options.check
 import com.github.ajalt.clikt.parameters.options.default
 import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.multiple
@@ -11,7 +12,9 @@ import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.types.choice
 import com.github.ajalt.clikt.parameters.types.double
 import com.github.ajalt.clikt.parameters.types.enum
+import com.github.ajalt.clikt.parameters.types.int
 import com.github.ajalt.clikt.parameters.types.path
+import com.github.ajalt.clikt.parameters.types.restrictTo
 import kotlinx.coroutines.runBlocking
 import pl.jclab.refio.api.models.ContextReference
 import pl.jclab.refio.api.models.TaskMode
@@ -33,6 +36,7 @@ import pl.jclab.refio.core.debug.SessionDebugOptions
 import pl.jclab.refio.core.debug.StabilizationGate
 import pl.jclab.refio.core.models.api.ChatRequest
 import pl.jclab.refio.core.models.api.LLMParams
+import pl.jclab.refio.core.services.longtask.LongTaskCommand
 import java.nio.file.Path
 import kotlin.io.path.exists
 import kotlin.io.path.readText
@@ -151,6 +155,26 @@ class RefioCommand : CliktCommand(name = "refio") {
         "--mcp-probe",
         help = "Connect the MCP servers, print what they expose, and exit. No LLM call. Tells a server that failed to connect apart from a model that did not call its tool."
     ).flag()
+    val until by option(
+        "--until",
+        help = "Headless AGENT: run the task in rounds until this shell command exits with 0, checked in the project after every round. E.g. --until \"npm test\"."
+    )
+    val goal by option(
+        "--goal",
+        help = "Headless AGENT: run the task in rounds until the judge at the end of a turn finds this goal met."
+    )
+    val maxRounds by option(
+        "--max-rounds",
+        help = "With --until or --goal: most rounds before the task ends as incomplete (default long_task.max_rounds)."
+    ).int().restrictTo(1..LongTaskCommand.MAX_ROUNDS)
+    val maxHours by option(
+        "--max-hours",
+        help = "With --until or --goal: most hours of work before the task ends as incomplete (default long_task.max_minutes)."
+    ).double().check("must be above 0 and at most 168") { it > 0 && it <= LongTaskCommand.MAX_HOURS }
+    val resume by option(
+        "--resume",
+        help = "Headless AGENT: continue the long task with this id with its next round, after the process stopped, Ctrl+C or a limit. It keeps its own request and end condition; --max-rounds and --max-hours raise its limits, and a task that ended on its round or time limit gets the same allowance again."
+    )
 
     /** Parsed once in [run] so a broken file fails before any heavy initialization. */
     private var runScopeMcpServers: List<MCPServerConfig> = emptyList()
@@ -217,16 +241,19 @@ class RefioCommand : CliktCommand(name = "refio") {
         }
 
         val effectivePrompt = prompt ?: promptFile?.readText()
+        validateLongTaskFlags()
 
         // --no-egress is a hard switch. The interactive TUI applies it via its own runtime
         // toggle (and must stay user-toggleable), so we only fold it into the overrides for the
         // headless / multi-agent paths, where it must reach the egress gate via config.
         if (headless && multiAgent != null) {
-            runMultiAgent(withSelectedModel(withNoEgress(effectiveOverrides, noEgress), model))
+            runMultiAgent(withSelectedModel(withNoEgress(effectiveOverrides, noEgress), model), autoApproveRegex)
+        } else if (headless && resume != null) {
+            runHeadless(withSelectedModel(withNoEgress(effectiveOverrides, noEgress), model), "", autoApproveRegex, resumeTaskId = resume)
         } else if (headless && effectivePrompt != null) {
             runHeadless(withSelectedModel(withNoEgress(effectiveOverrides, noEgress), model), effectivePrompt, autoApproveRegex)
         } else if (headless) {
-            echo("Error: --headless requires --prompt, --prompt-file, or --multi-agent <file>", err = true)
+            echo("Error: --headless requires --prompt, --prompt-file, --multi-agent <file> or --resume <taskId>", err = true)
             throw ProgramResult(HeadlessExit.FAILURE)
         } else {
             // Run-scope overrides apply to the interactive TUI too, so a user can point Ollama /
@@ -236,7 +263,7 @@ class RefioCommand : CliktCommand(name = "refio") {
         }
     }
 
-    private fun runMultiAgent(runConfigOverrides: Map<String, String>) {
+    private fun runMultiAgent(runConfigOverrides: Map<String, String>, autoApproveRegex: Regex?) {
         var exitCode = HeadlessExit.SUCCESS
         runBlocking {
             val bootstrap = StandaloneCoreBootstrap(project, runConfigOverrides, runScopeMcpServers)
@@ -253,18 +280,20 @@ class RefioCommand : CliktCommand(name = "refio") {
                 // headless path does; passing it whole left the provider unset, so the turn resolved
                 // it as "openrouter/ollama/qwen3.5:9b" — an invalid model id that failed every agent.
                 val (maProvider, maModel) = splitProviderModel(model)
-                val result = router.multiAgentRouter.launchMultiAgentSession(
+                val result = runMultiAgentSession(
+                    router,
                     MultiAgentSessionRequest(
                         name = definition.name,
                         yamlDefinition = yamlContent,
                         model = maModel,
                         provider = maProvider
-                    )
+                    ),
+                    autoApproveRegex,
                 )
 
                 // Print results per agent
                 for (agent in result.agents) {
-                    val status = if (agent.success == true) "OK" else "FAIL"
+                    val status = if (agent.success == true) "OK" else agent.status
                     echo("[$status] ${agent.agentName}: tokens=${agent.tokensUsed}, cost=$${String.format(java.util.Locale.US, "%.4f", agent.costUsd)}", err = true)
                     if (agent.response != null) {
                         println("--- ${agent.agentName} ---")
@@ -496,7 +525,12 @@ class RefioCommand : CliktCommand(name = "refio") {
         }
     }
 
-    private fun runHeadless(runConfigOverrides: Map<String, String>, promptText: String, autoApproveRegex: Regex?) {
+    private fun runHeadless(
+        runConfigOverrides: Map<String, String>,
+        promptText: String,
+        autoApproveRegex: Regex?,
+        resumeTaskId: String? = null,
+    ) {
         var exitCode = HeadlessExit.SUCCESS
         runBlocking {
             val cliScope = this
@@ -525,11 +559,11 @@ class RefioCommand : CliktCommand(name = "refio") {
                     TaskMode.PLAN -> pl.jclab.refio.core.db.TaskMode.PLAN
                     TaskMode.AGENT -> pl.jclab.refio.core.db.TaskMode.AGENT
                 }
-                val task = router.taskRouter.createTask(CreateTaskRequest(
+                val taskId = resumeTaskId?.also { checkResumable(router, it) } ?: router.taskRouter.createTask(CreateTaskRequest(
                     name = "headless-${System.currentTimeMillis()}",
                     mode = coreMode
-                ))
-                headlessTaskId = task.id
+                )).id
+                headlessTaskId = taskId
 
                 // Route exactly like the interactive TUI / IntelliJ plugin: PLAN/AGENT go through
                 // the AgentTurnLoop (agentRouter.runTurn) — the full agentic loop that actually
@@ -560,7 +594,7 @@ class RefioCommand : CliktCommand(name = "refio") {
                     pl.jclab.refio.core.db.TaskMode.CHAT -> {
                         val response = router.chatRouter.chat(
                             ChatRequest(
-                                taskId = task.id,
+                                taskId = taskId,
                                 mode = coreMode,
                                 input = promptText,
                                 contextRefs = contextRefs,
@@ -573,29 +607,43 @@ class RefioCommand : CliktCommand(name = "refio") {
                     }
                     pl.jclab.refio.core.db.TaskMode.PLAN,
                     pl.jclab.refio.core.db.TaskMode.AGENT -> {
-                        val result = router.agentRouter.runTurn(
-                            TurnRequest(
-                                taskId = task.id,
-                                userInput = promptText,
-                                mode = coreMode,
-                                executionMode = pl.jclab.refio.core.db.ExecutionMode.AUTO,
-                                model = selectedModel,
-                                provider = selectedProvider,
-                                userContextRefs = contextRefs
-                            ),
-                            streamCallback = tokenStream,
-                            listener = turnListener
+                        applyLongTaskFlags(router, taskId)
+                        val turnRequest = TurnRequest(
+                            taskId = taskId,
+                            userInput = promptText,
+                            mode = coreMode,
+                            executionMode = pl.jclab.refio.core.db.ExecutionMode.AUTO,
+                            model = selectedModel,
+                            provider = selectedProvider,
+                            userContextRefs = contextRefs
                         )
-                        // Headless calls runTurn directly, bypassing CoreSessionService, which is what
-                        // normally promotes the task off NEW. Mirror its mapping here so the exported
-                        // run.json reports the real outcome (SUCCESS / INCOMPLETE / FAILED) instead of a
-                        // permanent NEW that hides whether the agent actually delivered.
-                        val finalStatus = when {
-                            result.incomplete -> pl.jclab.refio.core.db.TaskStatus.INCOMPLETE
-                            result.success -> pl.jclab.refio.core.db.TaskStatus.SUCCESS
-                            else -> pl.jclab.refio.core.db.TaskStatus.FAILED
+                        // A single turn, or rounds until --until / --goal holds: the same entry point
+                        // the TUI and the IDE use when the user sets /until or /long on. --resume
+                        // goes on with a stopped loop's next round instead.
+                        val result = if (resumeTaskId != null) {
+                            router.longTaskRouter.resume(turnRequest, tokenStream, turnListener, HeadlessRoundListener())
+                                ?: throw UsageError("Task $taskId has no stopped long task to continue")
+                        } else {
+                            router.longTaskRouter.runTurnOrLoop(
+                                turnRequest,
+                                streamCallback = tokenStream,
+                                listener = turnListener,
+                                longTaskListener = HeadlessRoundListener()
+                            )
                         }
-                        runCatching { router.taskRepository.update(id = task.id, status = finalStatus) }
+                        val loop = router.longTaskRouter.state(taskId)
+                        loop?.let {
+                            echo("■ long task ${it.status.name.lowercase()} after ${it.roundsDone} rounds" + (it.stopReason?.let { why -> ": $why" } ?: ""), err = true)
+                        }
+                        if (router.longTaskRouter.canResume(taskId)) {
+                            echo("  continue it with: --resume $taskId", err = true)
+                        }
+                        // Headless bypasses CoreSessionService, which is what normally promotes the
+                        // task off NEW. Mirror its mapping here so the exported run.json reports the
+                        // real outcome (SUCCESS / INCOMPLETE / FAILED) instead of a permanent NEW that
+                        // hides whether the agent actually delivered; a loop's own outcome decides.
+                        val finalStatus = headlessStatus(result, loop)
+                        runCatching { router.taskRepository.update(id = taskId, status = finalStatus) }
                         // Exit code mirrors the turn outcome so a CI step gating on $? sees a
                         // FAILED / INCOMPLETE run as a failure instead of a silent success.
                         exitCode = HeadlessExit.forStatus(finalStatus)
@@ -606,7 +654,7 @@ class RefioCommand : CliktCommand(name = "refio") {
                 val jsonMode = outputFormat == "json"
                 if (jsonMode) {
                     val level = SessionDebugOptions.levelFromString(debugLevel)
-                    val snapshot = router.sessionDebugExporter.export(task.id, SessionDebugOptions.forLevel(level))
+                    val snapshot = router.sessionDebugExporter.export(taskId, SessionDebugOptions.forLevel(level))
                     val json = router.sessionDebugExporter.toJson(snapshot)
                     val target = outputFile
                     if (target != null) {
@@ -637,6 +685,63 @@ class RefioCommand : CliktCommand(name = "refio") {
             }
         }
         if (exitCode != HeadlessExit.SUCCESS) throw ProgramResult(exitCode)
+    }
+
+    /** The loop flags only make sense for a single headless AGENT task. */
+    private fun validateLongTaskFlags() {
+        if (resume != null) {
+            if (!headless || multiAgent != null || prompt != null || promptFile != null) {
+                throw UsageError("--resume <taskId> needs --headless and no --prompt or --multi-agent: the task goes on with its own request")
+            }
+            if ((mode ?: TaskMode.AGENT) != TaskMode.AGENT) {
+                throw UsageError("--resume continues a long task, which runs in AGENT mode")
+            }
+        }
+        val loopFlags = until != null || goal != null || maxRounds != null || maxHours != null
+        if (!loopFlags) {
+            return
+        }
+        if (!headless || multiAgent != null) {
+            throw UsageError("--until, --goal, --max-rounds and --max-hours need --headless with --prompt; in the TUI use /until and /long")
+        }
+        if ((mode ?: TaskMode.AGENT) != TaskMode.AGENT) {
+            throw UsageError("--until and --goal need --mode AGENT: only an agent that can change files can make the check pass")
+        }
+        if (until == null && goal == null && resume == null) {
+            throw UsageError("--max-rounds and --max-hours need --until <command>, --goal <text> or --resume <taskId>")
+        }
+    }
+
+    /** A resumed task must exist in this Refio home and belong to --project: its tools work in that folder. */
+    private fun checkResumable(router: pl.jclab.refio.core.api.CoreApiRouter, taskId: String) {
+        val task = router.taskRepository.findById(taskId)
+            ?: throw UsageError("There is no task $taskId in this Refio home")
+        val taskProject = task.projectPath.takeIf { it.isNotBlank() && it != "unknown" }?.let { canonical(java.nio.file.Paths.get(it)) }
+        if (taskProject != null && taskProject != canonical(project)) {
+            throw UsageError("Task $taskId belongs to $taskProject; run it with --project $taskProject")
+        }
+        if (!router.longTaskRouter.canResume(taskId)) {
+            throw UsageError("Task $taskId has no stopped long task to continue")
+        }
+    }
+
+    private fun canonical(path: java.nio.file.Path): java.nio.file.Path =
+        runCatching { path.toRealPath() }.getOrElse { path.toAbsolutePath().normalize() }
+
+    /** Applies --until, --goal, --max-rounds and --max-hours the way /until, /goal and /long do in the TUI. */
+    private fun applyLongTaskFlags(router: pl.jclab.refio.core.api.CoreApiRouter, taskId: String) {
+        goal?.let { router.taskRouter.setGoal(taskId, it) }
+        val commands = listOfNotNull(
+            until?.let { LongTaskCommand.Until(it) },
+            maxRounds?.let { LongTaskCommand.Rounds(it) },
+            maxHours?.let { LongTaskCommand.Hours(it) },
+            LongTaskCommand.On.takeIf { goal != null },
+        )
+        if (commands.isEmpty()) {
+            return
+        }
+        commands.forEach { router.longTaskRouter.handle(taskId, it) }
+        echo(router.longTaskRouter.handle(taskId, LongTaskCommand.Status), err = true)
     }
 
     private companion object {

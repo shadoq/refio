@@ -1,6 +1,7 @@
 package pl.jclab.refio.core.services
 
 import pl.jclab.refio.core.logging.dualLogger
+import pl.jclab.refio.core.utils.GsonInstance
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 
@@ -41,23 +42,38 @@ data class AgentPlanStep(
     val updatedAt: Instant = Instant.now()
 )
 
+/** Where the main agent's plan is kept between processes, as the JSON [AgentPlanService] writes. */
+interface PlanStore {
+    fun savePlan(taskId: String, json: String?)
+    fun loadPlan(taskId: String): String?
+}
+
 /**
  * In-memory service for managing agent execution plans.
  *
  * Each plan is keyed by taskId (optionally scoped by agentId).
  * The orchestrator can view plans from all agents via [getAllPlansForTask].
  * Plans are injected into context via [buildPlanSection].
+ *
+ * The main agent's plan (agentId null) is also written to [planStore] on every change and read
+ * back when it is not in memory, so a task that outlives the process keeps its plan. A subagent's
+ * plan lives only as long as its run.
  */
-class AgentPlanService {
+class AgentPlanService(private val planStore: PlanStore? = null) {
 
     private val plans = ConcurrentHashMap<String, MutableList<AgentPlanStep>>()
     private val planLocks = ConcurrentHashMap<String, Any>()
+    /** Tasks whose stored plan was already looked up; the prompt asks for the plan every iteration. */
+    private val lookedUp = ConcurrentHashMap.newKeySet<String>()
 
     fun setPlan(taskId: String, agentId: String?, steps: List<AgentPlanStep>) {
         val key = planKey(taskId, agentId)
         val lock = planLocks.computeIfAbsent(key) { Any() }
         synchronized(lock) {
             plans[key] = steps.toMutableList()
+            if (agentId == null) {
+                store(taskId, steps)
+            }
         }
         logger.info { "Plan set for $key with ${steps.size} steps" }
     }
@@ -65,7 +81,7 @@ class AgentPlanService {
     fun getPlan(taskId: String, agentId: String? = null): List<AgentPlanStep>? {
         val key = planKey(taskId, agentId)
         val lock = planLocks.computeIfAbsent(key) { Any() }
-        return synchronized(lock) { plans[key]?.toList() }
+        return synchronized(lock) { (plans[key] ?: restoreInto(key, taskId, agentId))?.toList() }
     }
 
     fun updateStep(
@@ -78,19 +94,23 @@ class AgentPlanService {
         val key = planKey(taskId, agentId)
         val lock = planLocks.computeIfAbsent(key) { Any() }
         return synchronized(lock) {
-            val plan = plans[key] ?: return null
+            val plan = plans[key] ?: restoreInto(key, taskId, agentId) ?: return null
             if (stepIndex !in plan.indices) return null
             plan[stepIndex] = plan[stepIndex].copy(
                 status = status,
                 note = note ?: plan[stepIndex].note,
                 updatedAt = Instant.now()
             )
+            if (agentId == null) {
+                store(taskId, plan)
+            }
             logger.info { "Step $stepIndex in $key → $status" }
             plan[stepIndex]
         }
     }
 
     fun getAllPlansForTask(taskId: String): Map<String, List<AgentPlanStep>> {
+        getPlan(taskId) // brings a stored main-agent plan back into memory
         return plans.filterKeys { it.startsWith("$taskId:") || it == taskId }
             .mapValues { it.value.toList() }
     }
@@ -134,8 +154,41 @@ class AgentPlanService {
      */
     fun clear() {
         plans.clear()
+        lookedUp.clear()
     }
 
     private fun planKey(taskId: String, agentId: String?): String =
         if (agentId != null) "$taskId:$agentId" else taskId
+
+    /** One stored step. The position in the list is the step's index. */
+    private data class StoredStep(val title: String, val description: String?, val status: String, val note: String?)
+
+    /** Best effort: a failed write keeps the plan in memory and only loses it at the next restart. */
+    private fun store(taskId: String, steps: List<AgentPlanStep>) {
+        val store = planStore ?: return
+        runCatching {
+            store.savePlan(taskId, GsonInstance.gson.toJson(steps.map { StoredStep(it.title, it.description, it.status.name, it.note) }))
+        }.onFailure { logger.warn { "Could not store the plan of task $taskId: ${it.message}" } }
+    }
+
+    /** Reads the main agent's stored plan into memory; called under the plan's lock. */
+    private fun restoreInto(key: String, taskId: String, agentId: String?): MutableList<AgentPlanStep>? {
+        if (agentId != null || !lookedUp.add(taskId)) return null
+        val store = planStore ?: return null
+        val steps = runCatching {
+            store.loadPlan(taskId)?.let { json ->
+                GsonInstance.gson.fromJson(json, Array<StoredStep>::class.java)?.mapIndexed { index, step ->
+                    AgentPlanStep(
+                        index = index,
+                        title = step.title,
+                        description = step.description,
+                        status = PlanStepStatus.fromString(step.status) ?: PlanStepStatus.PENDING,
+                        note = step.note
+                    )
+                }
+            }
+        }.onFailure { logger.warn { "Could not read the stored plan of task $taskId: ${it.message}" } }.getOrNull()
+            ?: return null
+        return steps.toMutableList().also { plans[key] = it }
+    }
 }

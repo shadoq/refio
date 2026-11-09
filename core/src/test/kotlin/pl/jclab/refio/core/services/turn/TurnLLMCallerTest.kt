@@ -230,8 +230,10 @@ class TurnLLMCallerTest {
         // The live retry path called callWithRetry with no arguments, so the handler defaults
         // (3 attempts / 1000 ms) always won and the user-facing limits.max_retries knob was
         // silently ignored — including limits.max_retries=1, which must mean "do not retry".
+        // The attempt count applies once the time limit for retries is turned off.
         every { configService.getModel(any(), any(), any()) } returns ("model-a" to "anthropic")
         every { configService.getTyped(any<ConfigKey<Any>>(), any()) } answers { firstArg<ConfigKey<Any>>().default }
+        every { configService.getTyped(ConfigKeys.LLM_RETRY_MAX_SECONDS, "task-1") } returns 0L
         every { configService.getTyped(ConfigKeys.MAX_RETRIES, "task-1") } returns 1
         every { configService.getTyped(ConfigKeys.RETRY_DELAY_MS, "task-1") } returns 1L
         var calls = 0

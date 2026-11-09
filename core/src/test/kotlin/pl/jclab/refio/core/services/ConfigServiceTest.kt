@@ -371,6 +371,33 @@ class ConfigServiceTest {
             // Then
             assertEquals(Pair("gpt-4.1", "openai"), result)
         }
+
+        @Test
+        fun `decision slot never inherits the chat model`() {
+            // A chat model cannot answer the decision API, so "inherit" (what the IDE stores for
+            // "Not configured") must mean no decision model, not the chat model.
+            every {
+                configRepository.getWithPrecedence(ConfigKeys.DECISION_MODEL.key, any(), any())
+            } returns createConfig(ConfigKeys.DECISION_MODEL.key, """{"modelId":"inherit","provider":"inherit"}""")
+            every {
+                configRepository.getWithPrecedence(ConfigKeys.DEFAULT_MODEL_CHAT.key, any(), any())
+            } returns createConfig(ConfigKeys.DEFAULT_MODEL_CHAT.key, """{"modelId":"gpt-4.1","provider":"openai"}""")
+
+            assertNull(configService.getDecisionModel())
+        }
+
+        @Test
+        fun `decision slot accepts provider-slash-model from a run override`() {
+            // The form people type: --config default_model.decision=ollama/nimble:9b
+            every { configRepository.getWithPrecedence(any(), any(), any()) } returns null
+            val svc = ConfigService(
+                configRepository,
+                defaultProjectId = "test-project",
+                runConfigOverrides = mapOf(ConfigKeys.DECISION_MODEL.key to "ollama/nimble:9b")
+            )
+
+            assertEquals(Pair("nimble:9b", "ollama"), svc.getDecisionModel())
+        }
     }
 
     @Nested

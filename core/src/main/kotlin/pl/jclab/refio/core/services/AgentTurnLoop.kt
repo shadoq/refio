@@ -16,6 +16,7 @@ import pl.jclab.refio.core.prompts.ToolDescriptionBuilder
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.monitoring.OperationInfo
 import pl.jclab.refio.core.services.turn.GuardianRegistry
+import pl.jclab.refio.core.services.turn.HarnessMessageTypes
 import pl.jclab.refio.core.services.turn.PromptSnapshot
 import pl.jclab.refio.core.services.turn.ToolCallParser
 import pl.jclab.refio.core.services.turn.TurnEventListener
@@ -27,6 +28,8 @@ import pl.jclab.refio.core.services.turn.TurnResponseProcessor
 import pl.jclab.refio.core.services.turn.TurnStateSnapshot
 import pl.jclab.refio.core.services.turn.TurnSubagentValidator
 import pl.jclab.refio.core.services.turn.TurnToolExecutor
+import pl.jclab.refio.core.services.turn.storedAgentDepth
+import pl.jclab.refio.core.services.turn.withResolvedInstanceId
 import pl.jclab.refio.core.tools.base.ToolRegistry
 import java.util.*
 
@@ -93,7 +96,12 @@ class AgentTurnLoop(
      * Deterministic post-turn verification (project build/test) with a bounded repair loop.
      * Null disables the step. See [pl.jclab.refio.core.services.turn.TurnVerifier].
      */
-    private val turnVerifier: pl.jclab.refio.core.services.turn.TurnVerifier? = null
+    private val turnVerifier: pl.jclab.refio.core.services.turn.TurnVerifier? = null,
+    /**
+     * Marks a task as worked on by this process while its top-level turn runs, so the next process
+     * can repair it if this one stops in the middle. Subagent turns run inside their parent's turn.
+     */
+    private val taskLease: pl.jclab.refio.core.services.maintenance.TaskLease? = null
 ) {
     /**
      * The turn loop itself. This class is a thin facade over it: it owns the same dependency set
@@ -175,8 +183,12 @@ class AgentTurnLoop(
         /** Override for AgentEvent.sourceAgentId (see TurnRequest.emitSourceAgentId). */
         emitSourceAgentId: String? = null,
         /** Stable agent name for A2A routing (see TurnRequest.agentName). */
-        agentName: String? = null
+        agentName: String? = null,
+        /** Harness message type of [userInput] when the harness wrote it (see TurnRequest.inputType). */
+        inputType: String? = null
     ): TurnResult {
+        @Suppress("NAME_SHADOWING")
+        val profileOverrides = withResolvedInstanceId(profileOverrides)
         val runId = UUID.randomUUID().toString()
         val parentRunId = profileOverrides?.parentRunId
         val depth = profileOverrides?.depth ?: 0
@@ -205,20 +217,24 @@ class AgentTurnLoop(
             "agentName" to (profileOverrides?.subagentName ?: "default")
         ))
 
-        // Step 1: Save user message to history
+        // Step 1: Save the message to history: the user's own, or a harness message when the harness
+        // started this turn (the next round of a long task), so the user's words stay apart from it.
         chatMessageRepository.create(
             taskId = taskId,
-            role = MessageRole.USER,
+            role = if (inputType != null) MessageRole.SYSTEM else MessageRole.USER,
             content = userInput,
+            metadata = inputType?.let { HarnessMessageTypes.metadataFor(it) },
             agentInstanceId = profileOverrides?.agentInstanceId,
             agentName = profileOverrides?.subagentName,
-            agentDepth = profileOverrides?.subagentName?.let { (profileOverrides.depth) + 1 },
+            agentDepth = storedAgentDepth(profileOverrides),
         )
 
         // Step 2: Execute turn loop.
         // Mark the turn active so background RAG indexing/embedding yields the SQLite
         // WAL writer-lock for its duration — concurrent RAG writes otherwise stalled
         // tool subtask-status writes ~122s. try/finally keeps the count balanced.
+        val lease = taskLease?.takeIf { depth == 0 }
+        lease?.acquire(taskId)
         GlobalMetrics.beginAgentTurn()
         return try {
             val result = turnExecutor.execute(
@@ -246,6 +262,7 @@ class AgentTurnLoop(
             result.copy(cachedTokens = taskRepository.findById(taskId)?.cachedTokens ?: 0)
         } finally {
             GlobalMetrics.endAgentTurn()
+            lease?.release(taskId)
         }
     }
 
@@ -278,6 +295,8 @@ class AgentTurnLoop(
         /** Stable agent name for A2A routing (see TurnRequest.agentName). */
         agentName: String? = null
     ): TurnResult {
+        @Suppress("NAME_SHADOWING")
+        val profileOverrides = withResolvedInstanceId(profileOverrides)
         val runId = UUID.randomUUID().toString()
         val parentRunId = profileOverrides?.parentRunId
         val depth = profileOverrides?.depth ?: 0
@@ -301,6 +320,8 @@ class AgentTurnLoop(
         // for its duration, exactly as runTurn does — an interactive resume-after-approval is still a
         // live agent turn, and skipping this let concurrent RAG writes stall tool subtask-status
         // writes. try/finally keeps the count balanced.
+        val lease = taskLease?.takeIf { depth == 0 }
+        lease?.acquire(taskId)
         GlobalMetrics.beginAgentTurn()
         return try {
             turnExecutor.execute(
@@ -325,6 +346,7 @@ class AgentTurnLoop(
             )
         } finally {
             GlobalMetrics.endAgentTurn()
+            lease?.release(taskId)
         }
     }
 
@@ -378,5 +400,10 @@ data class TurnResult(
      * Cumulative cache-read input tokens for the whole task at turn end (subset of the task's
      * total input). Surfaced so the UI can show how much of the context was served from cache.
      */
-    val cachedTokens: Int = 0
+    val cachedTokens: Int = 0,
+    /**
+     * Files the turn's tools reported changing, in the order they were first changed, including
+     * those a subagent the turn started changed. A subagent's caller lists them in its report.
+     */
+    val filesChanged: List<String> = emptyList(),
 )

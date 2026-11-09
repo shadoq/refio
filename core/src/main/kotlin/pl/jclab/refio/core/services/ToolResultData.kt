@@ -58,7 +58,9 @@ data class ToolResultData(
     // and per-message stats include these tokens — they are real LLM cost.
     val subTokensIn: Int? = null,
     val subTokensOut: Int? = null,
-    val subCost: Double? = null
+    val subCost: Double? = null,
+    /** Files the tool reported changing; for a subagent, every file its run changed. */
+    val filesChanged: List<String> = emptyList(),
 )
 
 /**

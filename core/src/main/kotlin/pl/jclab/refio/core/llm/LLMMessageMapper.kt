@@ -35,9 +35,11 @@ object LLMMessageMapper {
             //
             // Only emit when we have a real subtaskId — memory(get_subtask_output)
             // resolves by subtask_id, not by the legacy toolCallId fallback.
-            if (msg.isSummarized && !msg.subtaskId.isNullOrBlank()) {
-                val rawLen = msg.rawOutput?.length
-                val sumLen = summarizedContent.length
+            // A result stored whole (rawOutput no longer than what is shown) gets no hint: telling
+            // the model to fetch what it already has costs a call and reads like missing data.
+            val rawLen = msg.rawOutput?.length
+            val sumLen = summarizedContent.length
+            if (msg.isSummarized && !msg.subtaskId.isNullOrBlank() && (rawLen == null || rawLen > sumLen)) {
                 append("\n\n[Output was summarized")
                 if (rawLen != null && rawLen > sumLen) {
                     append(" from $rawLen to $sumLen chars")

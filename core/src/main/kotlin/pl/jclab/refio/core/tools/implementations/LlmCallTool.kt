@@ -158,7 +158,7 @@ class LlmCallTool(
             "model" to model,
             "tokens_in" to response.usage.inputTokens,
             "tokens_out" to response.usage.outputTokens,
-            "cost" to response.cost
+            "cost_usd" to response.cost
         )
 
         val cleanContent = stripThinkingTags(response.content)

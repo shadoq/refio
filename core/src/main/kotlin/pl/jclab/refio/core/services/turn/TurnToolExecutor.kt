@@ -79,6 +79,31 @@ class TurnToolExecutor(
     private val slowToolWarnMs = 5_000L
     private val codingToolNames = setOf("advance_code_editing", "multi_line_editor")
 
+    /** True for an invoke_subagent call that [SubagentConcurrencyPolicy] keeps out of a parallel batch. */
+    private fun subagentRunsInOrder(toolCall: ToolCallData, mode: TaskMode): Boolean {
+        if (!toolCall.name.equals("invoke_subagent", ignoreCase = true)) {
+            return false
+        }
+        val invoker = toolRegistry.getTool(toolCall.name) as? pl.jclab.refio.core.tools.implementations.InvokeSubagentTool
+            ?: return false
+        val subagentName = TurnJsonUtils.parseJsonToMap(toolCall.arguments)["subagent_name"]?.toString()?.trim()
+            ?: return false
+        val shape = runCatching { invoker.runShape(subagentName) }.getOrNull() ?: return false
+        val candidates = shape.allowedTools?.mapNotNull { toolRegistry.getTool(it) } ?: toolRegistry.getAllTools()
+        val disallowed = shape.disallowedTools.orEmpty()
+        val canWrite = candidates.any { it.mode != ToolMode.READ_ONLY && disallowed.none { name -> name.equals(it.name, ignoreCase = true) } }
+        val parallel = SubagentConcurrencyPolicy.canRunInParallel(
+            definitionHasWriteTools = canWrite,
+            mode = mode,
+            provider = shape.provider,
+            ollamaMaxConcurrent = pl.jclab.refio.core.services.OllamaRequestGate.maxConcurrentPerEndpoint
+        )
+        if (!parallel) {
+            logger.info { "[PARALLEL] invoke_subagent '$subagentName' runs in order (writes=$canWrite, provider=${shape.provider})" }
+        }
+        return !parallel
+    }
+
     private fun isDelegationTool(name: String): Boolean =
         name.equals("invoke_subagent", ignoreCase = true) ||
         name.equals("delegate_to_strong_model", ignoreCase = true)
@@ -551,6 +576,9 @@ class TurnToolExecutor(
             }.trim()
         }
 
+        /** A delegated run's report up to this size (chars) reaches the parent whole; a longer one is cut head+tail. */
+        const val SUBAGENT_REPORT_INLINE_MAX = 16 * 1024
+
         /** Max raw output size (chars) to preserve in-context for DATA_PRODUCING tools */
         const val DATA_PRODUCING_RAW_OUTPUT_BUFFER = 16_000
 
@@ -572,8 +600,18 @@ class TurnToolExecutor(
             toolName: String = ""
         ): Pair<String, Boolean> {
             val rawLen = rawOutput.length
+            val isDelegatedReport = toolName.equals("invoke_subagent", ignoreCase = true) ||
+                toolName.equals("delegate_to_strong_model", ignoreCase = true)
             return when {
                 rawLen <= 500 -> rawOutput to false
+
+                // A delegated run's report is the only thing the parent gets from that run. Stored as
+                // final content so the conversation does not cut it to a short preview; past the limit
+                // head and tail survive and the history tells the parent how to read the rest.
+                isDelegatedReport && rawLen <= SUBAGENT_REPORT_INLINE_MAX -> rawOutput to true
+                isDelegatedReport ->
+                    pl.jclab.refio.core.services.context.ToolResultCompression
+                        .headTailTruncate(rawOutput, SUBAGENT_REPORT_INLINE_MAX) to true
 
                 // read_file: keep raw up to 512KB, let RECENT_WORK compress lazily
                 toolName == "read_file" && rawLen <= READ_FILE_RAW_OUTPUT_BUFFER ->
@@ -623,6 +661,9 @@ class TurnToolExecutor(
         // so a plain getMaxOrderIndex+create races and hits the uk_task_order UNIQUE constraint
         // (which used to throw out of the turn and leave the subagent's graph node stuck RUNNING).
         val subtaskIds = mutableMapOf<String, String>()
+        // Position of each call in the whole task: working memory ages facts by it, so a fact from
+        // a new turn is not mistaken for an old one when the turn's iteration counter restarts.
+        val subtaskSteps = mutableMapOf<String, Int>()
         toolCalls.forEach { toolCall ->
             val kind = toolRegistry.toSubtaskKind(toolCall.name)
             val description = buildToolDescription(toolCall)
@@ -632,9 +673,11 @@ class TurnToolExecutor(
                 kind = kind,
                 description = description,
                 paramsJson = toolCall.arguments,
-                status = TaskStatus.PENDING
+                status = TaskStatus.PENDING,
+                agentInstanceId = profileOverrides?.agentInstanceId
             )
             subtaskIds[toolCall.id] = subtask.id
+            subtaskSteps[toolCall.id] = subtask.orderIndex
 
             logger.debug { "[SUBTASK_CREATED] toolCall=${toolCall.name}, subtaskId=${subtask.id}, status=PENDING" }
         }
@@ -690,10 +733,11 @@ class TurnToolExecutor(
         // LLM-level concurrency is bounded per-endpoint by OllamaRequestGate.
         val shouldDisableParallel = containsAskTool
 
-        // Parallel execution for READ_ONLY tools
+        // Parallel execution for READ_ONLY tools. invoke_subagent is read-only itself, but a subagent
+        // that writes files, or one served by a one-slot Ollama, runs in order like a write tool.
         if (config.parallelReadTools && allowedIndexed.size > 1 && !shouldDisableParallel) {
             val (readOnlyIndexed, writeIndexed) = allowedIndexed.partition { (_, tc) ->
-                toolRegistry.getTool(tc.name)?.mode == ToolMode.READ_ONLY
+                toolRegistry.getTool(tc.name)?.mode == ToolMode.READ_ONLY && !subagentRunsInOrder(tc, mode)
             }
 
             if (readOnlyIndexed.isNotEmpty() && writeIndexed.isEmpty()) {
@@ -729,7 +773,8 @@ class TurnToolExecutor(
                                 runId = runId,
                                 depth = depth,
                                 profileOverrides = profileOverrides,
-                                _subtaskIds = subtaskIds
+                                _subtaskIds = subtaskIds,
+                                taskStep = subtaskSteps[toolCall.id] ?: iteration
                             )
                             originalIndex to (toolCall to result)
                         }
@@ -757,6 +802,7 @@ class TurnToolExecutor(
                         depth = depth,
                         profileOverrides = profileOverrides,
                         _subtaskIds = subtaskIds,
+                        taskStep = subtaskSteps[toolCall.id] ?: iteration,
                         agentName = agentName,
                         sessionId = sessionId,
                     )
@@ -794,7 +840,8 @@ class TurnToolExecutor(
                 runId = runId,
                 depth = depth,
                 profileOverrides = profileOverrides,
-                _subtaskIds = subtaskIds
+                _subtaskIds = subtaskIds,
+                taskStep = subtaskSteps[toolCall.id] ?: iteration
             )
             sequentialResults.add(index to (toolCall to resultData))
         }
@@ -996,6 +1043,8 @@ class TurnToolExecutor(
         _subtaskIds: Map<String, String>,
         agentName: String? = null,
         sessionId: String? = null,
+        /** The call's position in the whole task (its subtask's order index). */
+        taskStep: Int = iteration,
     ): ToolResultData {
         if (toolCall.error != null) {
             val errorText = "Error: ${toolCall.error}"
@@ -1192,7 +1241,10 @@ class TurnToolExecutor(
             }
             if (isSystemOrDelegation) {
                 argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.MODE, mode.name)
-                argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.ITERATION, iteration)
+                argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.ITERATION, taskStep)
+                profileOverrides?.agentInstanceId?.let {
+                    argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.AGENT_INSTANCE_ID, it)
+                }
                 // SESSION_ID is the multi-agent session id when provided (see TurnRequest.emitSessionId);
                 // falls back to taskId for single-agent runs.
                 argumentsMap.putIfAbsent(pl.jclab.refio.core.tools.base.ToolInternalParams.SESSION_ID, sessionId ?: taskId)
@@ -1426,9 +1478,10 @@ class TurnToolExecutor(
                     toolName = toolCall.name,
                     params = argumentsMap,
                     result = outputWithWarnings,
-                    iteration = iteration,
+                    iteration = taskStep,
                     metadata = toolResult.metadata,
-                    originId = subtaskId
+                    originId = subtaskId,
+                    agentInstanceId = profileOverrides?.agentInstanceId
                 )
 
                 // Decide what content to store in conversation history.
@@ -1483,7 +1536,8 @@ class TurnToolExecutor(
                     noop = (toolResult.metadata?.get("noop") as? Boolean) == true,
                     subTokensIn = subTokensIn,
                     subTokensOut = subTokensOut,
-                    subCost = subCost
+                    subCost = subCost,
+                    filesChanged = toolResult.filesChanged.orEmpty()
                 )
 
                 return resultData
@@ -1531,12 +1585,20 @@ class TurnToolExecutor(
                     isSummarized = false,
                     success = false,
                     rawOutput = null,
-                    metadata = null
+                    // A failed subagent still reports how far it got; keep that for the history
+                    // and the run document. Plain failures carry no metadata and stay as before.
+                    metadata = toolResult.metadata?.takeIf { it.isNotEmpty() }?.let {
+                        gson.toJson(buildToolResultMetadata(toolCall.name, argumentsMap, it))
+                    },
+                    // A subagent that failed half-way has still changed these.
+                    filesChanged = toolResult.filesChanged.orEmpty()
                 )
             }
         } catch (e: CancellationException) {
             // The user stopped the turn. Reporting that as a failed tool would write a fake error
-            // into the history and mark the subtask FAILED for work nobody asked to finish.
+            // into the history and mark the subtask FAILED for work nobody asked to finish. Left
+            // RUNNING, the step would show as still working in the steps list.
+            runCatching { subtaskRepository.updateStatus(subtaskId, TaskStatus.CANCELED) }
             throw e
         } catch (e: Exception) {
             logger.error(e) { "[TOOL_ERROR] Failed to execute ${toolCall.name}: ${e.message}" }

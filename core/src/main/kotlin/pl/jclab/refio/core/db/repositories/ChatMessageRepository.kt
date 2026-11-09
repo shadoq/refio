@@ -13,7 +13,7 @@ private val logger = dualLogger("ChatMessageRepository")
  * Repository for ChatMessage database operations
  * Manages conversation history for tasks
  */
-class ChatMessageRepository {
+class ChatMessageRepository(private val nanoClock: () -> Long = System::nanoTime) {
 
     /**
      * Create a new chat message
@@ -54,6 +54,7 @@ class ChatMessageRepository {
                 it[ChatMessagesTable.tokensIn] = tokensIn
                 it[ChatMessagesTable.tokensOut] = tokensOut
                 it[ChatMessagesTable.cost] = cost
+                it[ChatMessagesTable.seq] = NextSeq(taskId, nanoClock())
             } get ChatMessagesTable.id
 
             val toolCallsInfo = if (toolCalls != null) ", toolCalls=${toolCalls.size}" else ""
@@ -63,6 +64,28 @@ class ChatMessageRepository {
             logger.info { "Created chat message: id=$messageId, taskId=$taskId, role=$role$toolCallsInfo$toolCallIdInfo$subtaskIdInfo$thinkingInfo, tokens=$tokensIn/$tokensOut, cost=$cost" }
 
             findById(messageId) ?: throw IllegalStateException("Failed to retrieve created message")
+        }
+    }
+
+    /**
+     * The position of a new message in [taskId]'s history: the clock ([now]), but never at or below
+     * the task's last message. The clock starts again near zero after the computer restarts, and a
+     * long task's history must still read in the order it was written.
+     *
+     * The insert computes it itself. Reading the last position first made the insert a read that
+     * later wants to write, and SQLite answers that with "database is locked" at once instead of
+     * waiting for another process's write. Two writers of one task right after a restart may get
+     * the same value, and the (task, seq) index returns such rows in the order they were inserted.
+     */
+    private class NextSeq(private val taskId: String, private val now: Long) : Expression<Long>() {
+        override fun toQueryBuilder(queryBuilder: QueryBuilder) {
+            queryBuilder.append("(SELECT max(")
+            queryBuilder.registerArgument(LongColumnType(), now)
+            queryBuilder.append(", coalesce(max(${ChatMessagesTable.seq.name}) + 1, ")
+            queryBuilder.registerArgument(LongColumnType(), now)
+            queryBuilder.append(")) FROM ${ChatMessagesTable.tableName} WHERE ${ChatMessagesTable.taskId.name} = ")
+            queryBuilder.registerArgument(ChatMessagesTable.taskId.columnType, taskId)
+            queryBuilder.append(")")
         }
     }
 
