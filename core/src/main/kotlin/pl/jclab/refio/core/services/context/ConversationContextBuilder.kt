@@ -5,6 +5,8 @@ import pl.jclab.refio.core.db.MessageRole
 import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.llm.LLMToolCall
 import pl.jclab.refio.core.llm.LLMMessageMapper
+import pl.jclab.refio.core.services.turn.HarnessMessageTypes
+import pl.jclab.refio.core.utils.GsonInstance
 
 /**
  * Stateless helper that slices, filters and converts persisted [ChatMessage] lists
@@ -51,6 +53,7 @@ class ConversationContextBuilder {
                 }
                 MessageRole.SYSTEM -> {
                     isConversationSummary(msg) ||
+                        HarnessMessageTypes.isHarnessMessage(msg.metadata) ||
                         msg.metadata == "compaction" ||
                         msg.content.contains("<conversation_summary>") ||
                         msg.content.contains("<parent_working_memory>")
@@ -59,10 +62,49 @@ class ConversationContextBuilder {
         }
     }
 
+    /**
+     * The history the model sees once a summary exists: the summary in place of every row it covers,
+     * then every row after them.
+     *
+     * A summary row is stored after the rows it follows (it is written once they exist), so its
+     * stored position says nothing about where it belongs; the `last_message_id` in its metadata
+     * does. Cutting at the summary's stored position instead dropped the most recent rows between
+     * the summarized range and the summary row: they were neither summarized nor shown.
+     */
     fun sliceConversationHistoryFromLastSummary(
         messages: List<ChatMessage>
     ): List<ChatMessage> {
         val lastSummaryIndex = messages.indexOfLast { isConversationSummary(it) }
+        if (lastSummaryIndex < 0) return messages
+        val summary = messages[lastSummaryIndex]
+        val boundaryIndex = summaryBoundaryIndex(messages, summary)
+        if (boundaryIndex < 0) return sliceAtStoredSummaryPosition(messages, lastSummaryIndex)
+
+        // The first message (usually the opening request) and every USER message the summary covers
+        // stay verbatim: they may carry instructions or constraints, and they are small.
+        val preservedHead = messages.subList(0, boundaryIndex + 1).filterIndexed { index, msg ->
+            !isConversationSummary(msg) && (index == 0 || msg.role == MessageRole.USER)
+        }
+        val tail = messages.subList(boundaryIndex + 1, messages.size).filterNot { isConversationSummary(it) }
+        return preservedHead + summary + tail
+    }
+
+    /** Index of the last row [summary] covers, or -1 when its metadata names no row in [messages]. */
+    fun summaryBoundaryIndex(messages: List<ChatMessage>, summary: ChatMessage): Int {
+        val lastId = summaryMetadataValue(summary, "last_message_id") as? String ?: return -1
+        return messages.indexOfFirst { it.id == lastId }
+    }
+
+    fun summaryMetadataValue(summary: ChatMessage, key: String): Any? {
+        val metadata = summary.metadata ?: return null
+        return runCatching { GsonInstance.gson.fromJson(metadata, Map::class.java)?.get(key) }.getOrNull()
+    }
+
+    /** Summaries written without a usable `last_message_id` keep the cut they were written for. */
+    private fun sliceAtStoredSummaryPosition(
+        messages: List<ChatMessage>,
+        lastSummaryIndex: Int
+    ): List<ChatMessage> {
         if (lastSummaryIndex < 2) return messages
 
         val tail = messages.drop(lastSummaryIndex - 1)
@@ -328,6 +370,11 @@ class ConversationContextBuilder {
                     LLMMessage(
                         role = "user",
                         content = "[Conversation summary context]\n${msg.content}"
+                    )
+                } else if (HarnessMessageTypes.isHarnessMessage(msg.metadata)) {
+                    LLMMessage(
+                        role = "user",
+                        content = "${HarnessMessageTypes.PREFIX} ${msg.content}"
                     )
                 } else {
                     LLMMessage(
