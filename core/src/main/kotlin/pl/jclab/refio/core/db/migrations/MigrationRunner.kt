@@ -21,6 +21,7 @@ object MigrationRunner {
         V4SnapshotGroups(),
         V5RenameThinkingEnabledToReasoningEffort(),
         V6AddCachedTokensToTasks(),
+        V7SubtaskAgentInstance(),
     )
 
     fun run(database: Database) {

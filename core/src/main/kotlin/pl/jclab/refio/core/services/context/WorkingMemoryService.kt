@@ -24,7 +24,13 @@ data class WorkingMemoryEntry(
     val importance: Int = 5,
     val timestamp: Instant = Instant.now(),
     val lastAccessedAt: Instant = Instant.now(),
-    val originId: String? = null
+    val originId: String? = null,
+    /**
+     * A note the model wrote itself with the memory tool. Pinned notes sit in their own pool of
+     * [WorkingMemoryService.MAX_PINNED_ENTRIES], do not lose importance with age and are pushed out
+     * only by newer notes of the model, never by automatic facts from tool results.
+     */
+    val pinned: Boolean = false
 )
 
 class WorkingMemoryService(
@@ -133,8 +139,16 @@ class WorkingMemoryService(
         else -> kind.name.lowercase()
     }
 
-    fun recordEntries(taskId: String, entries: List<WorkingMemoryEntry>, sessionId: String? = null) {
-        if (entries.isEmpty()) return
+    /**
+     * Records [entries] under [taskId] (a task, or a subagent's space from [scopeKey]) and returns
+     * the pinned notes that had to make room for them.
+     */
+    fun recordEntries(
+        taskId: String,
+        entries: List<WorkingMemoryEntry>,
+        sessionId: String? = null
+    ): List<WorkingMemoryEntry> {
+        if (entries.isEmpty()) return emptyList()
         val taskEntries = entriesByTask.computeIfAbsent(taskId) { ConcurrentHashMap() }
 
         entries.forEach { entry ->
@@ -142,7 +156,7 @@ class WorkingMemoryService(
             taskEntries[id] = entry.copy(lastAccessedAt = Instant.now())
         }
 
-        trimEntries(taskEntries)
+        val evictedPinned = trimEntries(taskEntries)
         touchScope(entriesByTask, taskLastUsed, taskId)
 
         // Also record under sessionId so orchestrator sees all subagent memory
@@ -155,6 +169,7 @@ class WorkingMemoryService(
             trimEntries(sessionEntries)
             touchScope(entriesBySession, sessionLastUsed, sessionId)
         }
+        return evictedPinned
     }
 
     /**
@@ -399,6 +414,17 @@ class WorkingMemoryService(
     }
 
     companion object {
+        /** Notes the model wrote itself that are kept per task (or per subagent space). */
+        const val MAX_PINNED_ENTRIES = 10
+
+        /**
+         * The space a run keeps its memory in: the task for the main agent, a separate space per
+         * subagent invocation, so a subagent's facts do not flood the parent and the parent's do
+         * not leak into a subagent that was given a narrow job.
+         */
+        fun scopeKey(taskId: String, agentInstanceId: String?): String =
+            if (agentInstanceId.isNullOrBlank()) taskId else "$taskId::$agentInstanceId"
+
         /**
          * How many tasks (and sessions) keep their working memory resident. Each one holds at
          * most `maxEntriesPerTask` short entries, so this bounds the cache at a few megabytes
@@ -1168,16 +1194,27 @@ class WorkingMemoryService(
         return "${entry.key}:${entry.value.hashCode()}"
     }
 
-    private fun trimEntries(taskEntries: ConcurrentHashMap<String, WorkingMemoryEntry>) {
-        if (taskEntries.size <= maxEntriesPerTask) return
-        val maxIteration = taskEntries.values.maxOfOrNull { it.iteration } ?: 0
-        val sorted = taskEntries.values.sortedWith(
-            compareByDescending<WorkingMemoryEntry> { effectiveImportance(it, maxIteration) }.thenByDescending { it.lastAccessedAt }
-        )
-        val toKeep = sorted.take(maxEntriesPerTask)
-        val keepIds = toKeep.map { buildEntryId(it) }.toSet()
+    /**
+     * Keeps the [maxEntriesPerTask] most important automatic facts and, separately, up to
+     * [MAX_PINNED_ENTRIES] pinned notes (least important, then oldest, go first). Returns the
+     * pinned notes that were dropped so the caller can tell the model.
+     */
+    private fun trimEntries(taskEntries: ConcurrentHashMap<String, WorkingMemoryEntry>): List<WorkingMemoryEntry> {
+        val (pinned, automatic) = taskEntries.values.partition { it.pinned }
 
-        taskEntries.keys.filterNot { keepIds.contains(it) }.forEach { taskEntries.remove(it) }
+        if (automatic.size > maxEntriesPerTask) {
+            val maxIteration = automatic.maxOf { it.iteration }
+            val keepIds = automatic.sortedWith(
+                compareByDescending<WorkingMemoryEntry> { effectiveImportance(it, maxIteration) }.thenByDescending { it.lastAccessedAt }
+            ).take(maxEntriesPerTask).map { buildEntryId(it) }.toSet()
+            automatic.map { buildEntryId(it) }.filterNot { it in keepIds }.forEach { taskEntries.remove(it) }
+        }
+
+        if (pinned.size <= MAX_PINNED_ENTRIES) return emptyList()
+        val evicted = pinned.sortedWith(compareBy<WorkingMemoryEntry> { it.importance }.thenBy { it.timestamp })
+            .take(pinned.size - MAX_PINNED_ENTRIES)
+        evicted.forEach { taskEntries.remove(buildEntryId(it)) }
+        return evicted
     }
 
     /**
@@ -1186,6 +1223,7 @@ class WorkingMemoryService(
      * Minimum effective importance is 1.
      */
     private fun effectiveImportance(entry: WorkingMemoryEntry, maxIterationInCollection: Int): Int {
+        if (entry.pinned) return entry.importance
         val iterationsSinceCreated = (maxIterationInCollection - entry.iteration).coerceAtLeast(0)
         val decay = iterationsSinceCreated / 5
         return (entry.importance - decay).coerceAtLeast(1)

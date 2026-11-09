@@ -161,7 +161,15 @@ class ContextService(
         projectRoot: Path,
         taskId: String,
         query: String? = null,
-        userContextRefs: List<ContextReference> = emptyList()
+        userContextRefs: List<ContextReference> = emptyList(),
+        /**
+         * The agent run the context is for: null for the parent run, a subagent's invocation id for
+         * that subagent. Recent work, working memory, conversation history and the current task are
+         * then built from that run's own steps and messages only.
+         */
+        agentInstanceId: String? = null,
+        /** The run's conversation when the caller has already read it; null reads it here. */
+        threadMessages: List<ChatMessage>? = null,
     ): ProjectContextDTO {
         logger.info { "Building project context for task=$taskId" }
 
@@ -183,20 +191,32 @@ class ContextService(
             logger.info { "[CONTEXT_DEBUG] No user context references provided for task=$taskId" }
         }
 
-        // 4. Get subtasks
-        val subtasks = transaction { subtaskRepository.findByTaskId(taskId) }
+        // 4. Get subtasks: files changed anywhere in the task stay visible, but recent work and
+        // working memory come from this run's own steps. A subagent's internal steps are its own
+        // business; the parent gets its report through the invoke_subagent result instead.
+        val taskSubtasks = transaction { subtaskRepository.findByTaskId(taskId) }
+        val subtasks = taskSubtasks.filter { it.agentInstanceId == agentInstanceId }
+        val memoryScope = WorkingMemoryService.scopeKey(taskId, agentInstanceId)
 
         // 4a. Lazily rebuild WORKING_MEMORY from persisted subtasks. Working memory lives
         // in-memory only, so after a plugin/app restart (or when the user reopens an old
         // conversation) the in-memory map is empty even though the underlying data —
         // subtask params + result — is still in the database. hasEntries() guards against
         // re-running the extraction on every turn within a live session.
-        workingMemoryService?.rebuildFromSubtasks(taskId = taskId, subtasks = subtasks)
+        workingMemoryService?.rebuildFromSubtasks(taskId = memoryScope, subtasks = subtasks)
+
+        // A subagent's task is the prompt it was started with, not the parent's request.
+        val threadMessages = threadMessages
+            ?: transaction { chatMessageRepository.findHistoryForInvocation(taskId, agentInstanceId) }
+        val taskDescription = if (agentInstanceId == null) {
+            task.name
+        } else {
+            threadMessages.firstOrNull { it.role == MessageRole.USER }?.content ?: task.name
+        }
 
         // 4. Get conversation history (if requested)
         val rawConversationHistory = if (CONTEXT_INCLUDE_CONVERSATION_HISTORY) {
-            val allMessages = transaction { chatMessageRepository.findByTaskId(taskId) }
-            conversationContextBuilder.sliceConversationHistoryFromLastSummary(allMessages)
+            conversationContextBuilder.sliceConversationHistoryFromLastSummary(threadMessages)
                 .takeLast(CONTEXT_CONVERSATION_HISTORY_LIMIT * 2)  // Get more, then filter
         } else {
             emptyList()
@@ -215,13 +235,13 @@ class ContextService(
         }.takeLast(CONTEXT_CONVERSATION_HISTORY_LIMIT)
 
         // 6. Build completed files data
-        val completedFiles = taskContextExtractor.buildCompletedFiles(subtasks)
+        val completedFiles = taskContextExtractor.buildCompletedFiles(taskSubtasks)
 
         // 6a. Build structured executed steps for RECENT_WORK
         val executedSteps = taskContextExtractor.buildExecutedSteps(subtasks)
 
         // 7. Extract user requirements from task description
-        val userRequirements = taskContextExtractor.extractUserRequirements(task.name)
+        val userRequirements = taskContextExtractor.extractUserRequirements(taskDescription)
 
         // 8. Build rich DTOs
         val metaData = MetaDataDTO(
@@ -297,8 +317,8 @@ class ContextService(
 
         val currentTask = CurrentTaskDTO(
             id = task.id,
-            name = task.name,
-            description = task.name,  // Task doesn't have separate description field
+            name = taskDescription,
+            description = taskDescription,  // Task doesn't have separate description field
             status = task.status.name,
             priority = null,
             executionMode = null,
@@ -383,6 +403,7 @@ class ContextService(
             // Task and subtasks
             currentTask = currentTask,
             subtasks = subtaskDTOs,
+            agentInstanceId = agentInstanceId,
 
             // Conversation history (filtered!)
             conversationHistory = conversationDTOs,
@@ -540,9 +561,12 @@ class ContextService(
         }
 
         val taskId = context.currentTask?.id
+        // The stable layer holds the current task, which differs per agent run, so parent and each
+        // subagent cache their own copy; working memory is kept per run the same way.
+        val runScope = taskId?.let { WorkingMemoryService.scopeKey(it, context.agentInstanceId) }
 
         // === STABLE CONTEXT LAYER (cached, invalidated on project file change) ===
-        val stableCacheHit = taskId?.let { contextLayerCache.getStableContext(it) }
+        val stableCacheHit = runScope?.let { contextLayerCache.getStableContext(it) }
         if (stableCacheHit != null) {
             parts.add(stableCacheHit.content)
             val tokens = stableCacheHit.tokensUsed
@@ -598,10 +622,10 @@ class ContextService(
             }
 
             // Cache stable layer for reuse across turns
-            if (taskId != null) {
+            if (runScope != null) {
                 val stableContent = "<STABLE_CONTEXT>\n${stableParts.joinToString("\n\n")}\n</STABLE_CONTEXT>"
                 val stableTokens = ContextTokenEstimator.estimateTokens(stableContent, modelId)
-                contextLayerCache.putStableContext(taskId, stableContent, stableTokens)
+                contextLayerCache.putStableContext(runScope, stableContent, stableTokens)
             }
         }
 
@@ -632,7 +656,7 @@ class ContextService(
         // RECENT_WORK so WORKING_MEMORY can suppress their outputExcerpt. Before this
         // the same tool-call head appeared in both sections, wasting tokens and
         // confusing the model.
-        if (taskId != null && workingMemoryService != null) {
+        if (runScope != null && workingMemoryService != null) {
             val workingBudget = minOf(
                 budgetAfterStable.budgetFor(ContextSection.WORKING_MEMORY),
                 remainingTokens
@@ -640,7 +664,7 @@ class ContextService(
             if (workingBudget > 0) {
                 val recentWorkSubtaskIds = context.executedSteps.map { it.subtaskId }.toSet()
                 val workingMemory = workingMemoryService.buildWorkingMemorySection(
-                    taskId = taskId,
+                    taskId = runScope,
                     maxTokens = workingBudget,
                     skipExcerptForOriginIds = recentWorkSubtaskIds
                 )
@@ -782,6 +806,8 @@ class ContextService(
          * and the duplicated CONVERSATION_HISTORY section is not built (see [buildLLMContext]).
          */
         trailingState: Boolean = false,
+        /** The run's conversation when the caller has already read it this iteration; null reads it here. */
+        history: List<ChatMessage>? = null,
     ): AgentTurnMessagesResult {
         logger.info {
             "[AGENT_TURN] Building messages for task=$taskId, contextRefs=${userContextRefs.size}, " +
@@ -796,7 +822,8 @@ class ContextService(
 
         // Load only the caller's own thread: the parent run (null id) never sees a subagent's
         // intermediate steps, and a subagent never sees the parent conversation.
-        val allMessages = transaction { chatMessageRepository.findHistoryForInvocation(taskId, agentInstanceId) }
+        val allMessages = history
+            ?: transaction { chatMessageRepository.findHistoryForInvocation(taskId, agentInstanceId) }
         val summarizedMessages = if (conversationSummaryService != null && conversationBudget > 0 && allowSummarization) {
             // Pass the same resolver that convertChatMessageToLLMMessage uses below, so the
             // summarizer's token estimate reflects the rendered prompt (TOOL bodies truncated
@@ -856,7 +883,11 @@ class ContextService(
                 projectRoot = projectRoot,
                 taskId = taskId,
                 query = query,
-                userContextRefs = userContextRefs
+                userContextRefs = userContextRefs,
+                agentInstanceId = agentInstanceId,
+                // The whole thread as it stands after any compaction above: the summarizer hands
+                // back a fresh read when it added a summary, the same list otherwise.
+                threadMessages = summarizedMessages
             )
             buildLLMContext(projectContext, staticPrefixTokens, modelId, trailingState)
         } catch (e: Exception) {

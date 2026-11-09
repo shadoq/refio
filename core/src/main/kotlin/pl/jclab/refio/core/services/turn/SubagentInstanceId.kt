@@ -18,3 +18,23 @@ internal fun resolveSubagentInstanceId(overrides: TurnProfileOverrides?): String
     }
     return null
 }
+
+/**
+ * [overrides] carrying the instance id this run is stored under. Resolved once at the start of the
+ * run, so the prompt row, the replies, the tool steps and the working memory all land in one thread.
+ * Without it a subagent spawned without an id stored its prompt in the parent thread and its steps
+ * as if the parent had taken them.
+ */
+internal fun withResolvedInstanceId(overrides: TurnProfileOverrides?): TurnProfileOverrides? {
+    val instanceId = resolveSubagentInstanceId(overrides) ?: return overrides
+    return if (overrides?.agentInstanceId == instanceId) overrides else overrides?.copy(agentInstanceId = instanceId)
+}
+
+/**
+ * Nesting level stored on every row of a subagent run, null for the main agent. The chat view indents
+ * a row by it: 1 is a subagent called by the main agent, 2 one called by that subagent. invoke_subagent
+ * already passes the child's level as [TurnProfileOverrides.depth]; a subagent the user starts from the
+ * prompt runs at depth 0 and is still one level below the main agent.
+ */
+internal fun storedAgentDepth(overrides: TurnProfileOverrides?): Int? =
+    overrides?.subagentName?.let { maxOf(overrides.depth, 1) }

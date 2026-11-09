@@ -210,7 +210,9 @@ class InvokeSubagentToolTest {
 
             // Then
             assertTrue(result.success)
-            assertEquals("Subagent completed successfully", result.output)
+            val output = result.output!!
+            assertTrue(output.startsWith("[subagent test-agent · status: done · "), output)
+            assertTrue(output.endsWith("Report:\nSubagent completed successfully"), output)
             assertEquals(1, runTurnCallCount)
         }
 
@@ -231,8 +233,8 @@ class InvokeSubagentToolTest {
             assertEquals("test-agent", result.metadata!!["subagent_name"])
             assertEquals(1, result.metadata!!["depth"])
             assertEquals(1, result.metadata!!["iterations"])
-            assertEquals(100, result.metadata!!["tokens_in"])
-            assertEquals(50, result.metadata!!["tokens_out"])
+            assertEquals(100, result.metadata!!["delegated_tokens_in"])
+            assertEquals(50, result.metadata!!["delegated_tokens_out"])
         }
 
         @Test
@@ -828,8 +830,93 @@ class InvokeSubagentToolTest {
             val result = toolReturning("Applied the fix to src/shipping.py.", listOf("code_editing"))
                 .execute(params)
 
-            assertEquals("Applied the fix to src/shipping.py.", result.output)
+            val output = result.output!!
+            assertTrue(output.endsWith("Report:\nApplied the fix to src/shipping.py."), output)
+            assertFalse(output.contains("no tool calls"), output)
             assertEquals(false, result.metadata!!["made_no_tool_calls"])
+        }
+    }
+
+    @Nested
+    inner class StructuredResultTests {
+
+        private var now = 1_000_000L
+
+        private fun toolReturning(result: TurnResult) = InvokeSubagentTool(
+            subagentRouterProvider = mockSubagentRouterProvider,
+            runTurnCallback = { _, _, _ ->
+                now += 125_000
+                result
+            },
+            configServiceProvider = mockConfigServiceProvider,
+            clock = { now }
+        )
+
+        private val params = mapOf(
+            "_task_id" to "task-123",
+            "subagent_name" to "test-agent",
+            "goal" to "Implement the stubs in src/a.js, src/b.js and src/c.js",
+            "_mode" to "AGENT"
+        )
+
+        @Test
+        fun `subagent at its iteration limit returns partial with its files`() = runBlocking {
+            // A subagent that ran out of steps has still done work. Reported as a bare failure, the
+            // caller cannot tell what changed and what is left, and redoes or loses that work.
+            val result = toolReturning(
+                TurnResult(
+                    success = false,
+                    incomplete = true,
+                    stopReason = pl.jclab.refio.core.debug.TurnStopReason.MAX_ITERATIONS,
+                    response = "Implemented a and b.\n\nHandoff note: done src/a.js and src/b.js, left src/c.js.",
+                    iterations = 10,
+                    tokensIn = 1200,
+                    tokensOut = 340,
+                    cost = 0.0,
+                    toolsUsed = listOf("code_editing"),
+                    filesChanged = listOf("src/a.js", "src/b.js")
+                )
+            ).execute(params)
+
+            assertTrue(result.success, "a partial report is something to build on, not a tool error")
+            val output = result.output!!
+            assertEquals(
+                "[subagent test-agent · status: partial · stop: max_iterations · iterations: 10 · tokens: 1200/340 · time: 2:05]",
+                output.lines().first()
+            )
+            assertTrue(output.contains("Files changed:\n- src/a.js\n- src/b.js"), output)
+            assertTrue(output.contains("Report:\nImplemented a and b.\n\nHandoff note: done src/a.js and src/b.js, left src/c.js."), output)
+            assertEquals("partial", result.metadata!!["status"])
+            assertEquals("max_iterations", result.metadata!!["stop_reason"])
+            assertEquals(listOf("src/a.js", "src/b.js"), result.metadata!!["files_changed"])
+            assertEquals(125_000L, result.metadata!!["duration_ms"])
+        }
+
+        @Test
+        fun `failed subagent returns a partial report`() = runBlocking {
+            val result = toolReturning(
+                TurnResult(
+                    success = false,
+                    stopReason = pl.jclab.refio.core.debug.TurnStopReason.EXCEPTION,
+                    response = "LLM server is not responding at http://localhost:11434 (ollama).",
+                    iterations = 3,
+                    tokensIn = 400,
+                    tokensOut = 90,
+                    cost = 0.0,
+                    toolsUsed = listOf("code_editing"),
+                    filesChanged = listOf("src/a.js"),
+                    unansweredQuestions = listOf("Should c() keep the old signature?")
+                )
+            ).execute(params)
+
+            assertFalse(result.success)
+            val report = result.error!!
+            assertTrue(report.startsWith("[subagent test-agent · status: failed · stop: exception · iterations: 3 · "), report)
+            assertTrue(report.contains("Files changed:\n- src/a.js"), "the caller must know src/a.js already changed: $report")
+            assertTrue(report.contains("Open questions:\n- Should c() keep the old signature?"), report)
+            assertTrue(report.contains("Report:\nLLM server is not responding"), report)
+            assertEquals("failed", result.metadata!!["status"])
+            assertEquals(listOf("src/a.js"), result.metadata!!["files_changed"])
         }
     }
 }

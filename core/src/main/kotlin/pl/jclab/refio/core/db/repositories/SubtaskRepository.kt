@@ -27,7 +27,8 @@ class SubtaskRepository {
         requiresApproval: Boolean = false,
         status: TaskStatus = TaskStatus.PENDING,
         llmModel: String? = null,
-        llmProvider: String? = null
+        llmProvider: String? = null,
+        agentInstanceId: String? = null
     ): Subtask {
         return transaction {
             val subtaskId = SubtasksTable.insert {
@@ -42,6 +43,7 @@ class SubtaskRepository {
                 it[approvalStatus] = if (requiresApproval) ApprovalStatus.PENDING_APPROVAL else ApprovalStatus.NOT_REQUIRED
                 it[SubtasksTable.llmModel] = llmModel
                 it[SubtasksTable.llmProvider] = llmProvider
+                it[SubtasksTable.agentInstanceId] = agentInstanceId
             } get SubtasksTable.id
 
             logger.info { "Created subtask: id=$subtaskId, taskId=$taskId, kind=$kind, status=$status" }
@@ -70,7 +72,8 @@ class SubtaskRepository {
         status: TaskStatus = TaskStatus.PENDING,
         llmModel: String? = null,
         llmProvider: String? = null,
-        maxAttempts: Int = 25
+        maxAttempts: Int = 25,
+        agentInstanceId: String? = null
     ): Subtask {
         var lastError: Exception? = null
         repeat(maxAttempts) { attempt ->
@@ -86,7 +89,8 @@ class SubtaskRepository {
                     requiresApproval = requiresApproval,
                     status = status,
                     llmModel = llmModel,
-                    llmProvider = llmProvider
+                    llmProvider = llmProvider,
+                    agentInstanceId = agentInstanceId
                 )
             } catch (e: Exception) {
                 if (!isOrderIndexConflict(e)) throw e
@@ -541,7 +545,8 @@ class SubtaskRepository {
             createdAt = row[SubtasksTable.createdAt],
             updatedAt = row[SubtasksTable.updatedAt],
             startedAt = row[SubtasksTable.startedAt],
-            completedAt = row[SubtasksTable.completedAt]
+            completedAt = row[SubtasksTable.completedAt],
+            agentInstanceId = row[SubtasksTable.agentInstanceId]
         )
     }
 }

@@ -611,6 +611,51 @@ class ContextServiceTest {
     }
 
     @Nested
+    inner class IterationHistoryReadsTests {
+
+        @Test
+        fun `history is read once per iteration`() = runTest {
+            // A long task runs hundreds of iterations, and each built its prompt from four reads of
+            // the whole conversation, tool output included, which grows with every iteration.
+            val messages = listOf(
+                MockFactory.createChatMessage(taskId = "task-1", role = MessageRole.USER, content = "Implement the stubs"),
+                MockFactory.createChatMessage(taskId = "task-1", role = MessageRole.ASSISTANT, content = "Reading src first.")
+            )
+            setupStandardMocks(messages = messages)
+            every { chatMessageRepository.findByRole("task-1", MessageRole.USER) } returns messages.filter { it.role == MessageRole.USER }
+            every { configService.getContextBudget(any(), any(), any()) } returns
+                pl.jclab.refio.core.services.context.ContextBudget.forContextSize(32000)
+            val builderConfig = mockk<ConfigService>(relaxed = true)
+            every { builderConfig.getTyped(any<ConfigKey<Any>>(), any()) } answers { firstArg<ConfigKey<Any>>().default }
+            val promptBuilder = pl.jclab.refio.core.services.turn.TurnPromptBuilder(
+                promptsService = mockk<PromptsService>(relaxed = true).also {
+                    every { it.getSystemPrompt(any(), any()) } returns "You are the agent."
+                },
+                chatMessageRepository = chatMessageRepository,
+                toolDescriptionBuilder = mockk(relaxed = true),
+                contextService = service,
+                workingMemoryService = null,
+                projectRoot = projectRoot,
+                configService = builderConfig
+            )
+
+            promptBuilder.buildPrompt(
+                taskId = "task-1",
+                mode = TaskMode.AGENT,
+                currentIteration = 3,
+                maxIterations = 200,
+                userContextRefs = emptyList(),
+                runProfile = pl.jclab.refio.core.api.TurnRunProfile.DEFAULT,
+                profileOverrides = null
+            )
+
+            coVerify(exactly = 1) { projectAnalyzer.analyzeProject(any(), any()) }
+            verify(exactly = 1) { chatMessageRepository.findHistoryForInvocation("task-1", null) }
+            verify(exactly = 0) { chatMessageRepository.findByTaskId(any()) }
+        }
+    }
+
+    @Nested
     inner class CollectUserContextRefsTests {
 
         @Test
@@ -638,7 +683,7 @@ class ContextServiceTest {
                     createdAt = System.currentTimeMillis()
                 )
             )
-            every { chatMessageRepository.findByTaskId("task-1") } returns messages
+            every { chatMessageRepository.findByRole("task-1", MessageRole.USER) } returns messages
 
             val refs = service.collectAllUserContextRefs("task-1")
             assertEquals(1, refs.size)
@@ -651,7 +696,7 @@ class ContextServiceTest {
             val messages = listOf(
                 MockFactory.createChatMessage(taskId = "task-1", role = MessageRole.USER, content = "Just text")
             )
-            every { chatMessageRepository.findByTaskId("task-1") } returns messages
+            every { chatMessageRepository.findByRole("task-1", MessageRole.USER) } returns messages
 
             val refs = service.collectAllUserContextRefs("task-1")
             assertTrue(refs.isEmpty())
@@ -659,7 +704,7 @@ class ContextServiceTest {
 
         @Test
         fun `should return empty for no messages`() {
-            every { chatMessageRepository.findByTaskId("task-1") } returns emptyList()
+            every { chatMessageRepository.findByRole("task-1", MessageRole.USER) } returns emptyList()
 
             val refs = service.collectAllUserContextRefs("task-1")
             assertTrue(refs.isEmpty())

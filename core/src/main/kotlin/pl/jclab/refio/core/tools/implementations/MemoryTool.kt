@@ -90,6 +90,10 @@ Use for: key findings, intermediate results, decisions, blockers, recovering dat
         }
     }
 
+    /** A subagent reads and writes its own memory space; the main agent uses the task's. */
+    private fun scopeOf(params: Map<String, Any>, taskId: String): String =
+        WorkingMemoryService.scopeKey(taskId, params[ToolInternalParams.AGENT_INSTANCE_ID] as? String)
+
     private fun handleWrite(params: Map<String, Any>): ToolResult {
         val taskId = params[ToolInternalParams.TASK_ID] as? String
             ?: return ToolResult.error("No task context")
@@ -112,15 +116,23 @@ Use for: key findings, intermediate results, decisions, blockers, recovering dat
             importance = importance.coerceIn(1, 10),
             timestamp = Instant.now(),
             lastAccessedAt = Instant.now(),
-            originId = subtaskId
+            originId = subtaskId,
+            pinned = true
         )
 
         val sessionId = params[ToolInternalParams.SESSION_ID] as? String
-        workingMemoryService.recordEntries(taskId, listOf(entry), sessionId)
+        val evicted = workingMemoryService.recordEntries(scopeOf(params, taskId), listOf(entry), sessionId)
 
+        val output = buildString {
+            append("Stored in working memory: [$prefixedKey] $value (importance: ${importance.coerceIn(1, 10)})")
+            if (evicted.isNotEmpty()) {
+                append("\nYour notes are limited to ${WorkingMemoryService.MAX_PINNED_ENTRIES}; dropped to make room: ")
+                append(evicted.joinToString("; ") { "[${it.key}] ${it.value}" })
+            }
+        }
         return ToolResult(
             success = true,
-            output = "Stored in working memory: [$prefixedKey] $value (importance: ${importance.coerceIn(1, 10)})",
+            output = output,
             metadata = mapOf("memory_key" to prefixedKey, "agent" to (agentName ?: "main"))
         )
     }
@@ -130,7 +142,7 @@ Use for: key findings, intermediate results, decisions, blockers, recovering dat
             ?: return ToolResult.error("No task context")
         val filter = params["filter"] as? String ?: params["key"] as? String
 
-        val section = workingMemoryService.buildWorkingMemorySection(taskId, maxTokens = 4096)
+        val section = workingMemoryService.buildWorkingMemorySection(scopeOf(params, taskId), maxTokens = 4096)
 
         val filtered = if (filter != null && section.isNotBlank()) {
             val lines = section.lines()
@@ -238,7 +250,7 @@ Use for: key findings, intermediate results, decisions, blockers, recovering dat
         val taskId = params[ToolInternalParams.TASK_ID] as? String
             ?: return ToolResult.error("No task context")
 
-        val section = workingMemoryService.buildWorkingMemorySection(taskId, maxTokens = 4096)
+        val section = workingMemoryService.buildWorkingMemorySection(scopeOf(params, taskId), maxTokens = 4096)
 
         if (section.isBlank()) {
             return ToolResult(success = true, output = "Working memory is empty.")
