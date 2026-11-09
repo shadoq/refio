@@ -1,11 +1,14 @@
 package pl.jclab.refio.core.services.turn
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import pl.jclab.refio.core.api.ModelOperation
 import pl.jclab.refio.core.api.TurnRunProfile
 import pl.jclab.refio.core.config.ConfigKeys
+import pl.jclab.refio.core.db.ChatMessage
+import pl.jclab.refio.core.db.MessageRole
 import pl.jclab.refio.core.db.TaskMode
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.LLMMessage
@@ -52,10 +55,18 @@ private val logger = dualLogger("NextSpeakerJudgeGuardian")
  *
  * Safety: a parse failure or LLM exception returns [GuardianDecision.Pass] (treat as "done")
  * — never block a turn on the judge being broken.
+ *
+ * **Who answers** is set by [ConfigKeys.GENERAL_JUDGE_BACKEND]: the WEAK chat model (default), a
+ * decision model through [decisionJudge], or the decision model first and the chat model only
+ * when it is unsure. Everything above the verdict (pre-filters, re-entry budget, nudge text) is
+ * the same for all three. Whenever the decision model cannot answer, the chat model does.
  */
 class NextSpeakerJudgeGuardian(
     private val llmClient: LLMClient,
-    private val configService: ConfigService
+    private val configService: ConfigService,
+    private val decisionJudge: DecisionNextSpeakerJudge? = null,
+    /** The task's latest tool results, shown to the judge as evidence when a goal is set. */
+    private val recentToolOutput: (taskId: String) -> String? = { null }
 ) : TurnCompletionGuardian {
 
     override val name: String = "next_speaker_judge"
@@ -151,7 +162,10 @@ class NextSpeakerJudgeGuardian(
         // intent preamble the model buried it behind). A bare intent stub stays below the bar and
         // falls through to the judge. Trade-off (accepted): a top-level agent asked to WRITE a file
         // that only describes it in >= the bar of prose is now taken as delivered rather than nagged.
+        // With a goal set (`/goal`) prose proves nothing: a turn that only reported must still be
+        // judged against the goal, or a long task would count a summary as the goal met.
         if (context.runProfile != TurnRunProfile.SUBAGENT &&
+            context.completionCondition == null &&
             context.mode == TaskMode.AGENT &&
             context.fileWriteToolsExecutedInTurn == 0 &&
             response.length >= AGENT_PROSE_DELIVERABLE_MIN_CHARS
@@ -165,12 +179,23 @@ class NextSpeakerJudgeGuardian(
         }
 
         if (looksClearlyDone(response, hasGoal = context.completionCondition != null)) {
+            // A question ends the turn, but in a long task nobody answers it before the round's
+            // check, which reads the judge's verdict on the goal: give that verdict anyway.
+            if (context.completionCondition != null && context.runProfile != TurnRunProfile.SUBAGENT &&
+                GoalVerdicts.isAwaited(context.taskId)
+            ) {
+                recordGoalVerdict(context, response)
+            }
             logger.debug { "[JUDGE] pre-filter says clearly done — skipping LLM call" }
             return GuardianDecision.Pass
         }
 
         return try {
-            val verdict = callJudge(context, response)
+            val verdict = resolveVerdict(context, response)
+            // A long task in goal mode reads this verdict after the round instead of asking again.
+            if (context.completionCondition != null && context.runProfile != TurnRunProfile.SUBAGENT) {
+                GoalVerdicts.record(context.taskId, verdict == NextSpeakerVerdict.USER)
+            }
             // Bounded re-entry on a MODEL verdict (request not yet delivered). Restored 2026-05
             // after manual-tests showed T4 models (qwen3.5:9b) silently abandon multi-step tasks:
             // they end turns on a bare intent announcement ("Now let me run git branch…", "I'll now
@@ -335,6 +360,69 @@ class NextSpeakerJudgeGuardian(
         }
     }
 
+    /**
+     * The verdict from the judge selected in settings. The decision model is skipped in favour
+     * of the LLM judge when a `/goal` condition is set, when no decision model is configured, or
+     * when its call fails; in hybrid mode the LLM also answers when the decision model is unsure.
+     */
+    private suspend fun resolveVerdict(context: GuardianContext, response: String): NextSpeakerVerdict {
+        val backend = configService.getTyped(ConfigKeys.GENERAL_JUDGE_BACKEND, context.taskId)
+        if (backend != ConfigKeys.JUDGE_BACKEND_DECISION && backend != ConfigKeys.JUDGE_BACKEND_HYBRID) {
+            return callJudge(context, response)
+        }
+        if (context.completionCondition != null) {
+            logger.debug { "[JUDGE] taskId=${context.taskId} backend=$backend: /goal condition set - goal judge stays on the LLM" }
+            return callJudge(context, response)
+        }
+        val judge = decisionJudge
+        val slot = configService.getDecisionModel(context.taskId)
+        if (judge == null || slot == null) {
+            logger.warn {
+                "[JUDGE] taskId=${context.taskId} backend=$backend but no decision model is configured " +
+                    "(Settings -> Models -> Decision) - using the LLM judge"
+            }
+            return callJudge(context, response)
+        }
+        val (modelId, providerName) = slot
+        val state = DecisionNextSpeakerJudge.buildState(
+            mode = context.mode,
+            userRequest = context.userRequest,
+            boundedReply = boundedResponseForJudge(response),
+            renderedTools = renderToolsUsed(context.toolsUsed),
+            iteration = context.iteration,
+            maxIterations = context.maxIterations
+        )
+        val outcome = try {
+            judge.judge(providerName, modelId, state, context.taskId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.warn {
+                "[JUDGE] taskId=${context.taskId} backend=$backend failed " +
+                    "(model=$providerName/$modelId): ${e.message} - falling back to the LLM judge"
+            }
+            return callJudge(context, response)
+        }
+        val step = DecisionNextSpeakerJudge.decisionStep(
+            hybrid = backend == ConfigKeys.JUDGE_BACKEND_HYBRID,
+            pContinue = outcome.pContinue,
+            threshold = configService.getTyped(ConfigKeys.GENERAL_JUDGE_DECISION_THRESHOLD, context.taskId),
+            bandLow = configService.getTyped(ConfigKeys.GENERAL_JUDGE_HYBRID_BAND_LOW, context.taskId),
+            bandHigh = configService.getTyped(ConfigKeys.GENERAL_JUDGE_HYBRID_BAND_HIGH, context.taskId)
+        )
+        logger.info {
+            "[JUDGE] taskId=${context.taskId} backend=$backend step=$step " +
+                "p(continue)=${"%.3f".format(outcome.pContinue)} strongest=${outcome.strongest} " +
+                "p=${outcome.probabilities.mapValues { "%.3f".format(it.value) }} " +
+                "(model=$providerName/$modelId, inputTokens=${outcome.inputTokens}, ${outcome.latencyMs}ms)"
+        }
+        return when (step) {
+            DecisionNextSpeakerJudge.Step.CONTINUE -> NextSpeakerVerdict.MODEL
+            DecisionNextSpeakerJudge.Step.FINISHED -> NextSpeakerVerdict.USER
+            DecisionNextSpeakerJudge.Step.ASK_LLM -> callJudge(context, response)
+        }
+    }
+
     private suspend fun callJudge(context: GuardianContext, response: String): NextSpeakerVerdict {
         val (modelId, providerName) = configService.getModel(ModelOperation.WEAK, context.taskId)
 
@@ -355,6 +443,12 @@ class NextSpeakerJudgeGuardian(
             append("\n\nTools used so far in this turn: ")
             append(renderToolsUsed(context.toolsUsed))
             append("\nIteration: ${context.iteration}/${context.maxIterations}")
+            if (isGoalMode) {
+                recentToolOutput(context.taskId)?.takeIf { it.isNotBlank() }?.let { evidence ->
+                    append("\n\nLatest tool results (newest last), to check the reply against:\n")
+                    append(evidence)
+                }
+            }
         }
 
         val llmResponse = llmClient.complete(
@@ -483,6 +577,17 @@ class NextSpeakerJudgeGuardian(
         return trimmed.length < SHORT_REPLY_MAX_CHARS
     }
 
+    /** Judges the goal for a long task's round check without changing how the turn ends. */
+    private suspend fun recordGoalVerdict(context: GuardianContext, response: String) {
+        try {
+            GoalVerdicts.record(context.taskId, resolveVerdict(context, response) == NextSpeakerVerdict.USER)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.warn { "[JUDGE] taskId=${context.taskId} goal verdict for the round check failed: ${e.message}" }
+        }
+    }
+
     private enum class NextSpeakerVerdict { USER, MODEL, UNCERTAIN }
 
     @Serializable
@@ -493,6 +598,33 @@ class NextSpeakerJudgeGuardian(
     )
 
     companion object {
+        /** Most of the latest tool output a goal judge is shown. */
+        const val TOOL_EVIDENCE_MAX_CHARS = 3_000
+
+        /**
+         * The newest tool results among [rows] (oldest first), newest last, in at most [maxChars]
+         * characters: what a goal judge checks the agent's claim against. Null when there are none.
+         */
+        fun lastToolOutput(rows: List<ChatMessage>, maxChars: Int = TOOL_EVIDENCE_MAX_CHARS): String? {
+            val picked = ArrayDeque<String>()
+            var size = 0
+            for (row in rows.asReversed()) {
+                if (row.role != MessageRole.TOOL || row.content.isBlank()) {
+                    continue
+                }
+                val text = row.content.trim()
+                if (size + text.length > maxChars) {
+                    if (picked.isEmpty()) {
+                        picked.addFirst(text.takeLast(maxChars))
+                    }
+                    break
+                }
+                picked.addFirst(text)
+                size += text.length + 2
+            }
+            return picked.takeIf { it.isNotEmpty() }?.joinToString("\n\n")
+        }
+
         /** Max judge-driven re-entries per turn (cap on consecutive "continue" verdicts). */
         const val MAX_JUDGE_REENTRIES = 3
 

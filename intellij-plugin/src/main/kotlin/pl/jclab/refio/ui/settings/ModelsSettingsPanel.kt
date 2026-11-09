@@ -14,7 +14,10 @@ import com.intellij.util.ui.JBUI
 import pl.jclab.refio.ui.theme.LCATheme
 import pl.jclab.refio.core.api.CoreApiRouter
 import pl.jclab.refio.core.api.ModelOperation
+import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.config.ModelPresetConfig
+import pl.jclab.refio.core.llm.isDecisionOnlyModel
+import pl.jclab.refio.core.llm.supportsDecisions
 import pl.jclab.refio.core.utils.GsonInstance.gson
 import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.services.notification.NotificationService
@@ -171,6 +174,15 @@ class ModelsSettingsPanel(
         private const val MODEL_VISIBILITY_INITIALIZED_KEY = "model_visibility_initialized"
         private const val INHERIT_LABEL = "Inherit"
         private const val NOT_CONFIGURED_LABEL = "Not configured"
+
+        /** The one OpenAI decision model; offered even before the OpenAI model list is fetched. */
+        private const val OPENAI_DECISION_MODEL = "openai/gpt-6-luna"
+
+        private val JUDGE_BACKEND_LABELS = linkedMapOf(
+            ConfigKeys.JUDGE_BACKEND_LLM to "LLM (weak model)",
+            ConfigKeys.JUDGE_BACKEND_DECISION to "Decision model",
+            ConfigKeys.JUDGE_BACKEND_HYBRID to "Hybrid (decision model, LLM when unsure)"
+        )
     }
 
     private val logger = dualLogger("ModelsSettingsPanel")
@@ -184,6 +196,9 @@ class ModelsSettingsPanel(
     private val weakModelCombo = JComboBox<String>()
     private val embeddingModelCombo = JComboBox<String>()
     private val strongModelCombo = JComboBox<String>()
+    private val decisionModelCombo = JComboBox<String>()
+    private val judgeBackendCombo = JComboBox(JUDGE_BACKEND_LABELS.values.toTypedArray())
+    private val judgeThresholdSpinner = JSpinner(SpinnerNumberModel(0.5, 0.0, 1.0, 0.05))
 
     private data class StoredModelConfig(
         val modelId: String? = null,
@@ -586,7 +601,7 @@ class ModelsSettingsPanel(
             // Apply friendly-name renderer to every combo up-front.
             listOf(
                 defaultModelCombo, planModelCombo, codingModelCombo,
-                weakModelCombo, embeddingModelCombo, strongModelCombo
+                weakModelCombo, embeddingModelCombo, strongModelCombo, decisionModelCombo
             ).forEach { it.renderer = modelComboRenderer }
 
             // Default model
@@ -670,6 +685,42 @@ class ModelsSettingsPanel(
                 isEnabled = true
             }, gbc)
 
+            // Decision model (completion judge)
+            gbc.gridx = 0
+            gbc.gridy++
+            gbc.weightx = 0.0
+            add(JLabel("Decision Model (judge):"), gbc)
+            gbc.gridx++
+            gbc.weightx = 1.0
+            add(decisionModelCombo.apply {
+                addActionListener {
+                    onModelSelectionChanged("decision", selectedItem as? String)
+                }
+                isEnabled = true
+            }, gbc)
+
+            // Which model answers "is the agent done?"
+            gbc.gridx = 0
+            gbc.gridy++
+            gbc.weightx = 0.0
+            add(JLabel("Completion Judge:"), gbc)
+            gbc.gridx++
+            gbc.weightx = 1.0
+            add(judgeBackendCombo.apply {
+                addActionListener { onJudgeSettingChanged() }
+            }, gbc)
+
+            gbc.gridx = 0
+            gbc.gridy++
+            gbc.weightx = 0.0
+            add(JLabel("Decision Threshold:"), gbc)
+            gbc.gridx++
+            gbc.weightx = 1.0
+            add(judgeThresholdSpinner.apply {
+                toolTipText = "The agent continues when the decision model's 'not finished' probability is at or above this value"
+                addChangeListener { onJudgeSettingChanged() }
+            }, gbc)
+
             // Description
             gbc.gridx = 0
             gbc.gridy++
@@ -683,7 +734,10 @@ class ModelsSettingsPanel(
                             "• Coding: used in Agent mode for coding tasks<br>" +
                             "• Weak: cheaper model for auxiliary tasks (summaries, simple questions)<br>" +
                             "• Embedding: model for generating embeddings (RAG search) - prefer Ollama for free local embeddings<br>" +
-                            "• Strong: powerful model for complex delegation (optional, agent delegates hard tasks to it)" +
+                            "• Strong: powerful model for complex delegation (optional, agent delegates hard tasks to it)<br>" +
+                            "• Decision: decision model for the completion judge (e.g. ollama/nimble:9b); it cannot chat, so it never inherits<br>" +
+                            "• Completion Judge: LLM = weak model reads the reply; Decision = decision model answers three yes/no questions in about a second;<br>" +
+                            "&nbsp;&nbsp;Hybrid = decision model, weak model only when unsure. Without a working decision model the weak model judges." +
                             "</font></html>"
                 ), gbc
             )
@@ -966,6 +1020,9 @@ class ModelsSettingsPanel(
                 val agentModel = coreApiClient?.configRouter?.getDefaultModel(ModelOperation.CODING)
                 val weakModel = coreApiClient?.configRouter?.getDefaultModel(ModelOperation.WEAK)
                 val embeddingModel = coreApiClient?.configRouter?.getDefaultModel(ModelOperation.EMBEDDING)
+                val decisionModel = coreApiClient?.configService?.getDecisionModel()
+                val judgeBackend = coreApiClient?.configService?.getTyped(ConfigKeys.GENERAL_JUDGE_BACKEND)
+                val judgeThreshold = coreApiClient?.configService?.getTyped(ConfigKeys.GENERAL_JUDGE_DECISION_THRESHOLD)
                 val defaultModelSettings = coreApiClient?.configRouter?.getConfig("default_model", "app")?.settings ?: emptyMap()
 
                 ApplicationManager.getApplication().invokeLater {
@@ -998,6 +1055,16 @@ class ModelsSettingsPanel(
                             effectiveValue = null,
                             defaultToInherit = true
                         )
+
+                        // Keep a saved decision model visible even when its provider is offline right now,
+                        // so the combo never pretends the slot is empty.
+                        val decisionValue = decisionModel?.let { (model, provider) -> "$provider/$model" } ?: NOT_CONFIGURED_LABEL
+                        if ((0 until decisionModelCombo.itemCount).none { decisionModelCombo.getItemAt(it) == decisionValue }) {
+                            decisionModelCombo.addItem(decisionValue)
+                        }
+                        selectModelInCombo(decisionModelCombo, decisionValue)
+                        judgeBackend?.let { backend -> JUDGE_BACKEND_LABELS[backend]?.let { judgeBackendCombo.selectedItem = it } }
+                        judgeThreshold?.let { judgeThresholdSpinner.value = it }
 
                         // Set embedding model or default to Ollama nomic-embed-text
                         val embeddingValue =
@@ -1116,7 +1183,8 @@ class ModelsSettingsPanel(
             return
         }
 
-        if (modelId == NOT_CONFIGURED_LABEL) {
+        // "Not configured" clears the decision slot; for the other slots it is display-only.
+        if (modelId == NOT_CONFIGURED_LABEL && modelType != "decision") {
             return
         }
 
@@ -1130,6 +1198,19 @@ class ModelsSettingsPanel(
 
         coroutineScope.launch {
             try {
+                if (modelType == "decision" && modelId == NOT_CONFIGURED_LABEL) {
+                    coreApiClient?.configRouter?.setDefaultModel(
+                        request = pl.jclab.refio.core.api.SetDefaultModelRequest(
+                            operation = ModelOperation.DECISION,
+                            modelId = pl.jclab.refio.core.services.ConfigService.INHERIT_MODEL_VALUE,
+                            provider = pl.jclab.refio.core.services.ConfigService.INHERIT_MODEL_VALUE
+                        ),
+                        taskId = null
+                    )
+                    logger.info { "Model saved: decision -> not configured" }
+                    return@launch
+                }
+
                 // Extract provider and modelId from combined format (provider/modelId)
                 val parts = modelId.split("/", limit = 2)
                 if (parts.size != 2) {
@@ -1146,6 +1227,7 @@ class ModelsSettingsPanel(
                     "weak" -> ModelOperation.WEAK
                     "embedding" -> ModelOperation.EMBEDDING
                     "strong" -> ModelOperation.STRONG
+                    "decision" -> ModelOperation.DECISION
                     else -> {
                         logger.error { "Unknown modelType: $modelType" }
                         return@launch
@@ -1191,12 +1273,35 @@ class ModelsSettingsPanel(
         }
     }
 
+    /** Saves the judge backend and threshold as soon as either control changes. */
+    private fun onJudgeSettingChanged() {
+        if (isUpdatingDropdowns) {
+            return
+        }
+        val backend = JUDGE_BACKEND_LABELS.entries.firstOrNull { it.value == judgeBackendCombo.selectedItem }?.key ?: return
+        val threshold = (judgeThresholdSpinner.value as? Number)?.toDouble() ?: return
+        val configService = coreApiClient?.configService ?: return
+        coroutineScope.launch {
+            try {
+                configService.setTyped(ConfigKeys.GENERAL_JUDGE_BACKEND, backend)
+                configService.setTyped(ConfigKeys.GENERAL_JUDGE_DECISION_THRESHOLD, threshold)
+                logger.info { "Completion judge saved: backend=$backend threshold=$threshold" }
+            } catch (e: Exception) {
+                logger.error(e) { "Failed to save completion judge settings" }
+            }
+        }
+    }
+
     private fun updateModelDropdowns(models: List<pl.jclab.refio.core.api.ModelInfo>) {
         // Set flag to prevent saving during programmatic update
         isUpdatingDropdowns = true
         try {
-            // Get only models with showInDropdown = true
-            val visibleModels = models.filter { it.showInDropdown }
+            // Get only models with showInDropdown = true; a decision-only model cannot chat.
+            val visibleModels = models.filter { it.showInDropdown && !isDecisionOnlyModel(it.capabilities) }
+            // The decision list ignores chat visibility: hiding a model from the chat dropdown
+            // says nothing about using it as the judge.
+            val decisionModels = models.filter { supportsDecisions(it.capabilities) }
+                .sortedWith(compareBy<pl.jclab.refio.core.api.ModelInfo> { it.provider.lowercase() }.thenBy { it.id.lowercase() })
 
             // Sort visible models: alphabetically by provider, then by model ID
             val sortedVisibleModels = visibleModels.sortedWith(
@@ -1205,7 +1310,7 @@ class ModelsSettingsPanel(
             )
 
             // Rebuild display-name map for the combo renderer.
-            modelDisplayNames = sortedVisibleModels.associate { model ->
+            modelDisplayNames = (sortedVisibleModels + decisionModels).associate { model ->
                 "${model.provider}/${model.id}" to "${model.provider} - ${model.name}"
             }
 
@@ -1215,6 +1320,7 @@ class ModelsSettingsPanel(
             val currentWeak = weakModelCombo.selectedItem as? String
             val currentEmbedding = embeddingModelCombo.selectedItem as? String
             val currentStrong = strongModelCombo.selectedItem as? String
+            val currentDecision = decisionModelCombo.selectedItem as? String
 
             // Update dropdowns - use model.id (not model.name) for proper persistence
             listOf(defaultModelCombo, planModelCombo, codingModelCombo, weakModelCombo, strongModelCombo).forEach { combo ->
@@ -1238,6 +1344,14 @@ class ModelsSettingsPanel(
             embeddingModelCombo.addItem("ollama/nomic-embed-text")  // Free, local
             embeddingModelCombo.addItem("openai/text-embedding-3-small")  // OpenAI
 
+            decisionModelCombo.removeAllItems()
+            decisionModelCombo.addItem(NOT_CONFIGURED_LABEL)
+            val decisionIds = decisionModels.map { "${it.provider}/${it.id}" }.toMutableList()
+            if (OPENAI_DECISION_MODEL !in decisionIds) {
+                decisionIds += OPENAI_DECISION_MODEL
+            }
+            decisionIds.forEach { decisionModelCombo.addItem(it) }
+
             // Restore previous selections (if still available)
             restoreSelection(defaultModelCombo, currentDefault)
             restoreSelection(planModelCombo, currentPlan)
@@ -1245,6 +1359,7 @@ class ModelsSettingsPanel(
             restoreSelection(weakModelCombo, currentWeak)
             restoreSelection(embeddingModelCombo, currentEmbedding)
             restoreSelection(strongModelCombo, currentStrong)
+            restoreSelection(decisionModelCombo, currentDecision)
         } finally {
             // Always reset flag
             isUpdatingDropdowns = false

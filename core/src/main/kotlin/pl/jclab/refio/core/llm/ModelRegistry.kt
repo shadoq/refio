@@ -35,7 +35,19 @@ enum class ModelCapability {
     AUDIO,
     TOOL_USE,
     REASONING,
+    /** Answers typed questions with probabilities (Ollama `/v1/systemone`, OpenAI `/v1/decisions`). */
+    DECISION,
 }
+
+/**
+ * True for a model that serves only the decision API and cannot chat: Ollama answers `/api/chat`
+ * for it with HTTP 400. Such a model belongs in the decision slot and nowhere else.
+ */
+fun isDecisionOnlyModel(capabilities: List<String>): Boolean =
+    ModelCapability.DECISION.name in capabilities && ModelCapability.CHAT_COMPLETION.name !in capabilities
+
+/** True for a model the completion judge can use through the decision API. */
+fun supportsDecisions(capabilities: List<String>): Boolean = ModelCapability.DECISION.name in capabilities
 
 /**
  * Model type categories

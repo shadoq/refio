@@ -194,6 +194,8 @@ object ModelDefinitions {
                 ModelCapability.CHAT_COMPLETION,
                 ModelCapability.TEXT_COMPLETION,
                 ModelCapability.VISION,
+                // The only model behind OpenAI's /v1/decisions (input billed at the same rate, output free).
+                ModelCapability.DECISION,
             ),
             modelType = ModelType.TEXT,
             maxContext = 1_050_000,

@@ -11,6 +11,8 @@ import pl.jclab.refio.core.db.TaskMode
  * WEAK      - cheap auxiliary steps (summaries, reflections)
  * EMBEDDING - RAG embedding generation
  * STRONG    - powerful model for complex delegation (optional, no fallback)
+ * DECISION  - decision model for the completion judge (optional, no fallback; answers typed
+ *             questions with probabilities and cannot chat, so it never inherits a chat model)
  */
 enum class ModelOperation {
     DEFAULT,
@@ -18,7 +20,8 @@ enum class ModelOperation {
     CODING,
     WEAK,
     EMBEDDING,
-    STRONG;
+    STRONG,
+    DECISION;
 
     companion object {
         fun fromTaskMode(mode: TaskMode): ModelOperation = when (mode) {
