@@ -170,6 +170,8 @@ class ContextService(
         agentInstanceId: String? = null,
         /** The run's conversation when the caller has already read it; null reads it here. */
         threadMessages: List<ChatMessage>? = null,
+        /** False for a UI preview: MCP tool output only from cache, no call to the server. */
+        allowMcpToolCalls: Boolean = true,
     ): ProjectContextDTO {
         logger.info { "Building project context for task=$taskId" }
 
@@ -373,7 +375,7 @@ class ContextService(
             )
         }
 
-        val mcpResources = mcpContextLoader.loadMcpResources(projectRoot, query)
+        val mcpResources = mcpContextLoader.loadMcpResources(projectRoot, query, allowMcpToolCalls)
 
         // 9. Resolve user context references (from @ mentions)
         val resolvedUserContext = if (dedupedUserContextRefs.isNotEmpty()) {

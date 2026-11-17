@@ -94,6 +94,36 @@ class McpContextLoaderToolSelectionTest {
         coVerify(exactly = 1) { connection.callTool("delete_docs", any()) }
     }
 
+    @Test
+    fun `a context preview never calls the server, so a UI refresh timer costs no MCP request`() {
+        val connection = connect(
+            serverConfig(accessMode = MCPAccessMode.READ, contextToolName = "search_docs")
+        )
+
+        val resources = runBlocking {
+            McpContextLoader().loadMcpResources(projectRoot, "how do I paginate", allowToolCalls = false)
+        }
+
+        coVerify(exactly = 0) { connection.callTool(any(), any()) }
+        assertTrue(resources.isEmpty())
+    }
+
+    @Test
+    fun `a context preview shows what the last real build fetched for the same prompt`() {
+        val connection = connect(
+            serverConfig(accessMode = MCPAccessMode.READ, contextToolName = "search_docs")
+        )
+        val loader = McpContextLoader()
+
+        runBlocking { loader.loadMcpResources(projectRoot, "how do I paginate") }
+        val preview = runBlocking {
+            loader.loadMcpResources(projectRoot, "how do I paginate", allowToolCalls = false)
+        }
+
+        coVerify(exactly = 1) { connection.callTool("search_docs", any()) }
+        assertTrue(preview.any { it.name == "tool:search_docs" && it.description == "result" })
+    }
+
     private fun serverConfig(accessMode: MCPAccessMode, contextToolName: String?) = MCPServerConfig(
         id = SERVER_ID,
         type = MCPServerType.STDIO,

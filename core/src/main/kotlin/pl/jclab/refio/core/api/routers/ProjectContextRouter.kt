@@ -150,7 +150,9 @@ class ProjectContextRouter(
                 projectRoot = projectRoot,
                 taskId = taskId,
                 query = effectiveQuery,
-                userContextRefs = userContextRefs
+                userContextRefs = userContextRefs,
+                // Panels poll this on a timer; a live MCP call per poll was a request every 30 s.
+                allowMcpToolCalls = false
             )
 
             val promptContext = if (task.mode == TaskMode.AGENT || task.mode == TaskMode.CHAT) {
