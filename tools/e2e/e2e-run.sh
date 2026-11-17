@@ -20,7 +20,10 @@
 #
 # Usage:
 #   e2e-run.sh --self-test
-#   e2e-run.sh --list                         # show selectable scenarios (id + mode + file), then exit
+#   e2e-run.sh --list [--json]                # show selectable scenarios (id + category + mode + file), then exit
+#   e2e-run.sh --catalog [--category C] [--filter ERE]   # Markdown table of the corpus (golden/negative/asserts), then exit
+#   e2e-run.sh --list --category bugfix      # --category (exact) and --filter (ERE on the id) narrow --list
+#   e2e-run.sh [opts] --all --filter '^sw-'   #   and any --all run alike
 #   e2e-run.sh [opts] --all                   # run every scenario under test_data/e2e/
 #   e2e-run.sh [opts] <id|scenario.json> ...  # run selected scenarios (by id OR by file path)
 #     opts: [--cli <path>] [--max-cost <usd>] [--model <provider/model>] [--ollama-host <h>]
@@ -98,6 +101,10 @@ KEEP=0
 SELF_TEST=0
 LIST=0
 ALL=0
+JSON=0
+CATALOG=0
+CATEGORY=""
+FILTER=""
 SCENARIOS=()
 CONFIG_OVERRIDES=()
 # Headless auto-approval for verification commands. Without it, run_terminal_command (a
@@ -129,20 +136,56 @@ require_cmd() { command -v "$1" >/dev/null 2>&1 || die "'$1' not found on PATH (
 
 # --- scenario discovery & selection -----------------------------------------
 # Top-level *.json under E2E_DIR are scenarios; examples/ is a subdir (samples), so it is skipped.
+# One jq process for the whole directory: spawning jq per file costs ~0.3 s each on Windows.
+# Rows are "file<TAB>id<TAB>mode<TAB>category", narrowed by --category (exact) and --filter (ERE on id).
+scenario_rows() {
+    local f
+    for f in "$E2E_DIR"/*.json; do [[ -e "$f" ]] && break; return 0; done
+    jq -r '[(input_filename | split("/") | last), (.id // "?"), (.mode // "AGENT"), (.category // "-")] | @tsv' "$E2E_DIR"/*.json \
+        | tr -d '\r' \
+        | while IFS=$'\t' read -r f id mode cat; do
+            [[ -z "$CATEGORY" || "$cat" == "$CATEGORY" ]] || continue
+            [[ -z "$FILTER" || "$id" =~ $FILTER ]] || continue
+            printf '%s\t%s\t%s\t%s\n' "$E2E_DIR/$f" "$id" "$mode" "$cat"
+        done
+}
+
 discover_scenarios() {
     local f
-    for f in "$E2E_DIR"/*.json; do [[ -e "$f" ]] && echo "$f"; done
+    if [[ -n "$CATEGORY$FILTER" ]]; then
+        scenario_rows | cut -f1
+    else
+        for f in "$E2E_DIR"/*.json; do [[ -e "$f" ]] && echo "$f"; done
+    fi
+}
+
+# Markdown catalog of the corpus (id, category, mode, golden/negative present, assert keys), read from the
+# scenario files themselves so the table cannot drift. Honours --category / --filter. Paste into the docs.
+catalog_scenarios() {
+    local ids id g n
+    echo "| id | category | mode | golden | negative | asserts |"
+    echo "|---|---|---|---|---|---|"
+    scenario_rows | cut -f1 | tr '\n' '\0' | xargs -0 jq -r '[(input_filename | split("/") | last), (.id // "?"), (.category // "-"), (.mode // "AGENT"), ((.assert // {}) | keys | join(", "))] | @tsv' \
+        | tr -d '\r' \
+        | while IFS=$'\t' read -r _ id cat mode asserts; do
+            g="-"; n="-"
+            [[ -d "$E2E_DIR/golden/$id" ]] && g="yes"
+            [[ -d "$E2E_DIR/negative/$id" ]] && n="yes"
+            echo "| $id | $cat | $mode | $g | $n | $asserts |"
+        done
 }
 
 list_scenarios() {
+    local f id mode cat
+    if [[ $JSON -eq 1 ]]; then
+        scenario_rows | jq -Rn \
+            '[inputs | split("\t") | {id: .[1], mode: .[2], category: .[3], file: (.[0] | split("/") | last | "test_data/e2e/" + .)}]'
+        return 0
+    fi
     echo "Selectable e2e scenarios in ${E2E_DIR#"$REPO_ROOT"/}:" >&2
-    local f id mode
-    while IFS= read -r f; do
-        [[ -n "$f" ]] || continue
-        id="$(jq -r '.id // "?"' "$f" 2>/dev/null)"
-        mode="$(jq -r '.mode // "AGENT"' "$f" 2>/dev/null)"
-        printf '  %-24s mode=%-6s %s\n' "$id" "$mode" "${f#"$REPO_ROOT"/}" >&2
-    done < <(discover_scenarios)
+    while IFS=$'\t' read -r f id mode cat; do
+        printf '  %-24s %-14s mode=%-6s %s\n' "$id" "$cat" "$mode" "${f#"$REPO_ROOT"/}" >&2
+    done < <(scenario_rows)
 }
 
 # Resolve a positional arg to a scenario path: existing file → that file; else <E2E_DIR>/<arg>.json;
@@ -172,7 +215,11 @@ while [[ $# -gt 0 ]]; do
         --self-test) SELF_TEST=1; shift ;;
         --list)      LIST=1; shift ;;
         --all)       ALL=1; shift ;;
-        -h|--help)   sed -n '2,34p' "$0"; exit 0 ;;
+        --json)      JSON=1; shift ;;
+        --catalog)   CATALOG=1; shift ;;
+        --category)  CATEGORY="$2"; shift 2 ;;
+        --filter)    FILTER="$2"; shift 2 ;;
+        -h|--help)   sed -n '2,38p' "$0"; exit 0 ;;
         -*)          die "unknown flag: $1" ;;
         *)           SCENARIOS+=("$1"); shift ;;
     esac
@@ -1596,6 +1643,11 @@ JSON
 
 if [[ $SELF_TEST -eq 1 ]]; then
     self_test
+    exit 0
+fi
+
+if [[ $CATALOG -eq 1 ]]; then
+    catalog_scenarios
     exit 0
 fi
 

@@ -198,6 +198,9 @@ check_hard() {
     return 1
 }
 
+# Every key under `.assert` that e2e-run.sh (and its .ps1 sibling) evaluates; keep in sync with it.
+ALLOWED_ASSERT_KEYS="agent_order build_cmd enforce_max_iterations file_absent file_unchanged forbidden_markers needle_in_file needle_in_output needles_in_file no_context_overflow no_immediate_repeat output_absent preserved_except self_verified smoke tool_budget tool_invoked tool_order"
+
 validate_scenario() {
     local scenario="$1"
     local sdir id fixture prompt_file golden
@@ -208,6 +211,11 @@ validate_scenario() {
     golden="$GOLDEN_DIR/$id"
 
     # --- (a) fixture sanity ---
+    # An unknown assert key is never evaluated by e2e-run.sh, so a typo would silently disable a check.
+    local unknown
+    unknown="$(jq -r --arg allowed "$ALLOWED_ASSERT_KEYS" \
+        '(.assert // {}) | keys[] | select(. as $k | ($allowed | split(" ") | index($k)) | not)' "$scenario" | tr -d '\r' | paste -sd, -)"
+    [[ -z "$unknown" ]] || { echo "| $id | FAIL (a) | unknown assert key(s): $unknown |"; return 1; }
     [[ -d "$fixture" ]] || { echo "| $id | FAIL (a) | fixture dir missing: $fixture |"; return 1; }
     [[ -d "$golden" ]]  || { echo "| $id | FAIL (a) | golden dir missing: golden/$id |"; return 1; }
     if [[ -n "$prompt_file" && ! -f "$sdir/$prompt_file" ]]; then
