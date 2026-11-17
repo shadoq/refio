@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- e2e harness selection and reports, all in `tools/e2e` (bash and jq, no new runtime): `e2e-run.sh --list --category <name> --filter <regex>` narrows the list and `--all` to one category (exact match) and to ids matching an extended regex; `--list --json` prints the list as a JSON array; `--catalog` prints a Markdown table of every scenario with its category, mode, whether it has a golden solution, how many deliberately wrong solutions it has and which assertions it uses. `e2e-stats.sh --junit` / `--tap` (or `--format junit|tap`) turn `results.jsonl` into JUnit XML (one suite per model, one case per run, the failure mode and reasons in the failure) or TAP 13 for CI. `validate-scenarios.sh` fails a scenario whose `assert` block has a key the runner does not know, since a misspelled key used to skip its check without a word.
+- New e2e scenarios (101, the suite now has 205): security (CTF, token forgery, SSRF, privilege escalation, container and dependency audits, malware and network forensics), debugging (crash reports, deadlocks, race conditions, leaks, bisecting a regression, flaky tests), operations (disk quota, cron, log rotation, permissions, database drift), reverse engineering and deobfuscation, small tasks in C++, Go, Java, Ruby, Rust and TypeScript, browser games, multi-agent tasks and an agent benchmark set (`ab-*`: algorithms, databases, games, knowledge graphs, puzzles, web flows). Most come with a golden solution and deliberately wrong solutions that `validate-scenarios.sh` must reject. `test_data/e2e-harness.md` describes the new domains.
+
+### Fixed
+
+- The context preview in the TUI panels and in the IDE's Debug and Context panels no longer calls MCP tools. Panels refresh it every 30 seconds, and each refresh asked a server in context mode (for example context7) again with the last prompt, because the cached answer lived exactly 30 seconds too; an idle TUI with the API tab open made a request every half minute. The preview now shows what the last real turn fetched for the same prompt and never contacts the server; turns themselves are unchanged.
+
 ## [0.0.2.2] - 2026-11-09
 
 ### Added
