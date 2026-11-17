@@ -1,0 +1,33 @@
+name: "Audit then patch: zip-slip in the extractor"
+description: "An auditor documents the archive-extraction weakness; a patcher then contains extraction to the destination while legitimate archives keep working."
+on_failure: stop
+max_minutes: 40
+agents:
+  - name: auditor
+    profile: auditor
+    mode: agent
+    max_iterations: 15
+    task: >
+      Audit `src/extractor.py` (the upload-archive extractor) for the classic
+      archive-extraction weakness: entries whose names contain `../` can escape the
+      destination directory when the paths are joined naively. Demonstrate the concern
+      concretely against `samples/evil.zip` (look at its entry names) and write
+      `audit/findings.md` naming the vulnerable function (`extract_archive`), the CWE
+      identifier for path traversal (`CWE-22`), the exact entry that escapes, what file
+      it would overwrite outside the destination, and the fix direction (validate that
+      every entry's resolved path stays inside the destination). Do not modify any
+      existing file and do not fix the code - the deliverable is the audit only.
+  - name: patcher
+    profile: patcher
+    mode: agent
+    depends_on: [auditor]
+    max_iterations: 20
+    task: >
+      The audit in `audit/findings.md` documents a zip-slip weakness in
+      `src/extractor.py` (`extract_archive`). Patch it: validate every entry so that its
+      fully resolved path stays inside the (resolved) destination directory - reject or
+      skip entries that would escape, while `samples/legit.zip` still extracts correctly
+      (every file, correct contents). Verify with `python3 verify_attack.py` (it replays
+      the malicious archive into a scratch destination and checks the canary stays
+      clean, then extracts the clean archive) and iterate until it passes. Do not modify
+      the gate, the samples, the canary, the audit, the agent profiles or the README.

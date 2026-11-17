@@ -1,0 +1,24 @@
+name: "HumanEval review-then-fix"
+description: "A reviewer agent diagnoses the red test suite, a fixer agent implements the stubs to green."
+on_failure: stop
+max_minutes: 30
+agents:
+  - name: reviewer
+    profile: reviewer
+    mode: plan
+    max_iterations: 12
+    task: >
+      The stats module (`stats.py`) ships two stubs and `test_stats.py` is red.
+      Run the suite, enumerate every failing test with its error and the contract
+      line it exercises, and write the diagnosis to `review/failures.md`. Do not
+      fix anything - your deliverable is the report.
+  - name: fixer
+    profile: fixer
+    mode: agent
+    depends_on: [reviewer]
+    max_iterations: 20
+    task: >
+      Read the reviewer's `review/failures.md`, then implement `median` and
+      `variance` in `stats.py` exactly per the docstring contracts so
+      `python3 -m unittest discover -p "test_*.py"` exits 0. Do not modify the
+      tests or the reviewer's report.

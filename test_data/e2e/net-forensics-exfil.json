@@ -1,0 +1,25 @@
+{
+  "id": "net-forensics-exfil",
+  "mode": "AGENT",
+  "description": "Network forensics: recognise DNS-tunnelled exfiltration in a packet-capture text log, reassemble the base32 chunks in sequence order (ignoring the noise and the 999 terminal marker), decode the payload and write it to report/extracted.txt.",
+  "category": "forensics",
+  "max_iterations": 30,
+  "fixture": "fixtures/net-forensics",
+  "prompt_file": "prompts/net-forensics-exfil.md",
+  "assert": {
+    "tool_order": ["read_file"],
+    "needle_in_file": { "path": "report/extracted.txt", "text": "FLAG{dns_exfil_reassembled_5d10}" },
+    "file_unchanged": [
+      "capture/dns-session.log",
+      "checks.py",
+      "README.md"
+    ],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The agent identified the tunnelled queries (*.exfil.example.com), ordered the chunks by their numeric first label, ignored the 999 terminal marker and the unrelated noise, base32-decoded the joined payload and wrote the exact plaintext to report/extracted.txt; the capture, the gate and the README are untouched."
+    ]
+  }
+}

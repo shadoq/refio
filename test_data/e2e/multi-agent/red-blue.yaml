@@ -1,0 +1,31 @@
+name: "Red exploits, blue patches"
+description: "A red operator exploits the SQL-injectable user lookup on the live local target and saves the leaked admin secret; a blue hardener then patches the query so the same injection stops working."
+on_failure: stop
+max_minutes: 40
+agents:
+  - name: red
+    profile: red-operator
+    mode: agent
+    max_iterations: 15
+    task: >
+      A deliberately vulnerable local service is already running at http://127.0.0.1:8727 -
+      reach it over HTTP only. `GET /user?name=<value>` looks a user up by name; the value is
+      interpolated straight into a SQL query string, so it is injectable. Ordinary names such
+      as alice are returned; the admin row is filtered out by a role condition at the end of
+      the query. Exploit the injection - for example with a payload that comments out the rest
+      of the query - so the service returns the hidden admin row, and save the `FLAG{...}`
+      string from its note as the only line of `redteam/leaked-flag.txt`. Do not edit any
+      existing file.
+  - name: blue
+    profile: blue-hardener
+    mode: agent
+    depends_on: [red]
+    max_iterations: 20
+    task: >
+      The user lookup in `server/app.py` (function `lookup_user`) is SQL-injectable: the name
+      is interpolated into the query string. Patch it with a parameterized query (placeholder
+      in the SQL, value passed separately) so injection payloads can no longer change the
+      query, while keeping the behaviour for legitimate names and the admin-row filter exactly
+      as they are. Verify with `python3 attack_check.py` (it starts its own instance on port
+      8728) and iterate until it passes. Do not modify `attack_check.py`, `redteam/`, the
+      agent profiles under `.refio/agents/`, or the README.

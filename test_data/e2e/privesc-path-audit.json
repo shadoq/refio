@@ -1,0 +1,33 @@
+{
+  "id": "privesc-path-audit",
+  "mode": "AGENT",
+  "description": "Local privilege-escalation triage from recon artifacts: separate the viable paths to root (sudo tar GTFOBins technique, a root-cron script writable by our group) from the non-viable one (patched SUID screen), with the exact commands that work.",
+  "category": "security",
+  "max_iterations": 30,
+  "fixture": "fixtures/privesc-audit",
+  "prompt_file": "prompts/privesc-path-audit.md",
+  "assert": {
+    "tool_order": ["read_file"],
+    "needle_in_file": { "path": "report/privesc.md", "text": "--checkpoint" },
+    "needles_in_file": [
+      { "path": "report/privesc.md", "regex": "backup\\.sh" },
+      { "path": "report/privesc.md", "regex": "writab" },
+      { "path": "report/privesc.md", "regex": "patched|not vulnerable|does not apply|4\\.9\\.1" }
+    ],
+    "file_unchanged": [
+      "recon/sudo-l.txt",
+      "recon/suid.txt",
+      "recon/crontab-root.txt",
+      "recon/writable.txt",
+      "recon/notes.txt",
+      "opt/backup.sh",
+      "README.md"
+    ],
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The report names both viable paths with working commands - sudo tar via the --checkpoint technique (NOPASSWD on /usr/bin/tar from sudo -l) and the root-cron /usr/local/bin/backup.sh which recon shows writable by our group - and explains that the SUID screen 4.9.1 binary is patched, i.e. not a viable path, citing the version note."
+    ]
+  }
+}

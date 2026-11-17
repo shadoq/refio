@@ -1,0 +1,28 @@
+{
+  "id": "pg-ts-generics",
+  "mode": "AGENT",
+  "description": "Type a TypeScript orders-report client end to end: introduce User/Order/OrderLine interfaces and a Paginated<T> shape, route every call through a generic request<T> so methods return concrete Promise types, type the error path, and leave no ': any' in src/client.ts or src/models.ts so the module is strict-clean and importable.",
+  "category": "polyglot-editing",
+  "max_iterations": 30,
+  "fixture": "fixtures/pg-ts-generics",
+  "prompt_file": "prompts/pg-ts-generics.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": ["advance_code_editing"],
+    "needles_in_file": [
+      { "path": "src/client.ts", "regex": "interface [A-Z]" },
+      { "path": "src/client.ts", "regex": "<T" },
+      { "path": "src/client.ts", "regex": "Promise<" },
+      { "path": "src/client.ts", "regex": "export" },
+      { "path": "src/client.ts", "regex": ": any", "absent": true }
+    ],
+    "file_unchanged": [
+      "README.md"
+    ]
+  },
+  "judge": {
+    "criteria": [
+      "src/client.ts and src/models.ts define exported interfaces for the resource shapes, route every request through a generic private request<T> so getUser and getOrder return Promise<User> and Promise<Order> while the listings return Promise<Paginated<T>>, unwrap a typed error body on non-2xx responses, export the ApiClient class and the shapes so other modules can import them, and contain no ': any' annotation anywhere, with the README untouched."
+    ]
+  }
+}

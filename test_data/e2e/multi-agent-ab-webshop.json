@@ -1,0 +1,29 @@
+{
+  "id": "multi-agent-ab-webshop",
+  "mode": "AGENT",
+  "description": "AgentBench-WebShop x orchestration: a planner agent (plan) fetches the live catalog over HTTP and computes the unique optimal cart under budget, a buyer agent (depends_on planner) materializes it as cart/cart.json; the gate brute-forces the optimum.",
+  "category": "multi-agent-benchmark",
+  "max_iterations": 60,
+  "fixture": "fixtures/webshop-team",
+  "multi_agent": "multi-agent/ab-webshop.yaml",
+  "fixture_server": { "dir": "server", "port": 8743, "cmd": "exec python3 {{DIR}}/app.py {{PORT}}" },
+  "assert": {
+    "agent_order": ["planner", "buyer"],
+    "tool_invoked": [{ "name": "http_request" }],
+    "needle_in_file": { "path": "cart/cart.json", "text": "\"k2\"" },
+    "needles_in_file": [
+      { "path": "cart/cart.json", "text": "\"m2\"" },
+      { "path": "cart/cart.json", "text": "\"d1\"" },
+      { "path": "plan/plan.md", "text": "k2" },
+      { "path": "plan/plan.md", "regex": "59\\.5|59\\.50" }
+    ],
+    "file_unchanged": ["server/app.py", "server/catalog.json", "docs/mission.md", "checks.py", "README.md", ".refio/agents/planner.md", ".refio/agents/buyer.md"],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The planner fetched the catalog over HTTP and its plan cites the chosen ids with the 59.50 total, the buyer materialized exactly that cart, and the gate confirms the unique optimum (k2, m2, d1)."
+    ]
+  }
+}

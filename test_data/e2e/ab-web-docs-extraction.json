@@ -1,0 +1,27 @@
+{
+  "id": "ab-web-docs-extraction",
+  "mode": "AGENT",
+  "description": "AgentBench-WebBench style browsing extraction: fetch three served HTML pages and extract structured facts (latest RELEASED version - not the newer unreleased one - deprecated list, build status, team leads only where present) into JSON the gate re-parses from the HTML.",
+  "category": "agentbench-web",
+  "max_iterations": 25,
+  "fixture": "fixtures/ab-web-docs",
+  "prompt_file": "prompts/ab-web-docs-extraction.md",
+  "fixture_server": { "dir": "server", "port": 8742, "cmd": "exec python3 {{DIR}}/app.py {{PORT}}" },
+  "assert": {
+    "tool_invoked": [{ "name": "http_request" }],
+    "needle_in_file": { "path": "facts/facts.json", "text": "\"latest_released_version\": \"v3.2.0\"" },
+    "needles_in_file": [
+      { "path": "facts/facts.json", "text": "\"latest_release_date\": \"2026-06-18\"" },
+      { "path": "facts/facts.json", "text": "\"v3.0.9\"" },
+      { "path": "facts/facts.json", "text": "\"team_leads\"" }
+    ],
+    "file_unchanged": ["checks.py", "docs/extract.md", "www/releases.html", "www/status.html", "www/team.html", "server/app.py"],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "All five fact groups match the pages: the unreleased rc2 excluded from latest, both deprecated versions sorted, three service statuses, and only the two led teams in team_leads."
+    ]
+  }
+}

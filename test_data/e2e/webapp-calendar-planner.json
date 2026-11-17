@@ -1,0 +1,46 @@
+{
+  "id": "webapp-calendar-planner",
+  "mode": "AGENT",
+  "description": "Single-file calendar planner: month and week views with drag-to-create events, event CRUD with categories/colors and recurrence (daily/weekly/monthly), conflict detection, agenda list, navigation today/prev/next, search, localStorage persistence.",
+  "category": "browser-app",
+  "max_iterations": 40,
+  "fixture": "fixtures/webapp-calendar-planner",
+  "prompt_file": "prompts/webapp-calendar-planner.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": [
+      "advance_code_editing"
+    ],
+    "needles_in_file": [
+      {
+        "path": "calendar_planner_model_01.html",
+        "regex": "recurrence|recurring|RRULE|repeat"
+      },
+      {
+        "path": "calendar_planner_model_01.html",
+        "regex": "localStorage"
+      },
+      {
+        "path": "calendar_planner_model_01.html",
+        "regex": "month|week|agenda"
+      },
+      {
+        "path": "calendar_planner_model_01.html",
+        "regex": "conflict|overlap"
+      },
+      {
+        "path": "calendar_planner_model_01.html",
+        "regex": "today|prev|next"
+      }
+    ],
+    "smoke": {
+      "entry": "calendar_planner_model_01.html",
+      "dom_present": []
+    }
+  },
+  "judge": {
+    "criteria": [
+      "calendar_planner_model_01.html is one self-contained calendar planner (no libraries): month and week grids rendered from real date math (correct weekday alignment and month lengths), drag on empty grid space to create an event plus full edit/delete dialog with title, time range, category colors and recurrence rules for daily/weekly/monthly with an end condition, recurring instances expanded correctly across views, overlap/conflict warnings, an agenda view listing upcoming events, today/prev/next navigation and a date picker, search over event titles, and localStorage persistence with demo data seeding on first run. No impossible dates or silent data loss."
+    ]
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "id": "vuln-audit-report",
+  "mode": "AGENT",
+  "description": "White-box security audit of a small notes service: find the SQL injection, the path traversal and the hardcoded credential, and write a structured findings report with severities and CWE identifiers.",
+  "category": "security",
+  "max_iterations": 30,
+  "fixture": "fixtures/vuln-audit",
+  "prompt_file": "prompts/vuln-audit-report.md",
+  "assert": {
+    "tool_order": ["read_file", "grep_search"],
+    "needle_in_file": { "path": "report/findings.md", "regex": "search_notes" },
+    "needles_in_file": [
+      { "path": "report/findings.md", "regex": "CWE-89" },
+      { "path": "report/findings.md", "regex": "CWE-22" },
+      { "path": "report/findings.md", "regex": "CWE-798" },
+      { "path": "report/findings.md", "regex": "Critical|High" }
+    ],
+    "file_unchanged": [
+      "src/app.py",
+      "src/db.py",
+      "README.md"
+    ],
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The report names all three real vulnerabilities - SQL injection in search_notes (src/app.py, CWE-89), path traversal in read_note (src/app.py, CWE-22) and the hardcoded API key (CWE-798) - each with a severity and a concrete attack path, and no application file was modified."
+    ]
+  }
+}

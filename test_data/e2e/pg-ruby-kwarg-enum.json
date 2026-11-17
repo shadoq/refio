@@ -1,0 +1,28 @@
+{
+  "id": "pg-ruby-kwarg-enum",
+  "mode": "AGENT",
+  "description": "Modernize a Ruby Order model: switch initialize to keyword arguments with defaults, normalize the status with to_sym against a frozen STATUSES tuple, add pending?/paid?/shipped? predicates over symbols, and freeze instances at the terminal state so the magic-string status comparisons in lib/order.rb are gone.",
+  "category": "polyglot-editing",
+  "max_iterations": 30,
+  "fixture": "fixtures/pg-ruby-kwarg-enum",
+  "prompt_file": "prompts/pg-ruby-kwarg-enum.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": ["advance_code_editing"],
+    "needles_in_file": [
+      { "path": "lib/order.rb", "regex": "def initialize\\([^)]*:" },
+      { "path": "lib/order.rb", "regex": "to_sym" },
+      { "path": "lib/order.rb", "regex": "freeze" },
+      { "path": "lib/order.rb", "regex": "def (pending|paid|shipped)\\?" },
+      { "path": "lib/order.rb", "regex": "== \"pending\"", "absent": true }
+    ],
+    "file_unchanged": [
+      "README.md"
+    ]
+  },
+  "judge": {
+    "criteria": [
+      "lib/order.rb takes keyword arguments with defaults in initialize and normalizes the status through to_sym, exposes pending?, paid? and shipped? (plus a generic status?) comparing against symbols from the frozen STATUSES tuple, freezes an order when it reaches the shipped terminal state, keeps total_cents, item_count, summary and to_s behavior intact, and no longer compares the status against the string \"pending\" or its siblings, with the README untouched."
+    ]
+  }
+}

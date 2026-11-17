@@ -1,0 +1,19 @@
+{
+  "id": "ab-db-normalize-orders",
+  "mode": "AGENT",
+  "description": "AgentBench-DB style schema surgery: a denormalized one-table export must be normalized in place into customers/orders/order_items (case-insensitive email merge, quantities preserved, UNIQUE enforced by the schema) while the raw table stays as the immutable source the gate re-derives from.",
+  "category": "agentbench-db",
+  "max_iterations": 25,
+  "fixture": "fixtures/ab-db-normalize",
+  "prompt_file": "prompts/ab-db-normalize-orders.md",
+  "assert": {
+    "file_unchanged": ["checks.py", "docs/target-schema.md", "README.md"],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The three target tables exist with the documented columns, emails are unique case-insensitively with a schema-level UNIQUE constraint, all 10 orders and every item row migrated with quantities preserved, and raw_orders still holds the original 10 rows."
+    ]
+  }
+}

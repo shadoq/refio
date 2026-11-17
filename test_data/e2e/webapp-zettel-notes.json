@@ -1,0 +1,46 @@
+{
+  "id": "webapp-zettel-notes",
+  "mode": "AGENT",
+  "description": "Single-file Zettelkasten notes: create/edit notes with markdown-ish text and [[wiki-links]], automatic backlinks panel, tag management, full-text search, force-directed graph of note connections on canvas with click-to-open, localStorage persistence with seeded demo graph.",
+  "category": "browser-app",
+  "max_iterations": 40,
+  "fixture": "fixtures/webapp-zettel-notes",
+  "prompt_file": "prompts/webapp-zettel-notes.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": [
+      "advance_code_editing"
+    ],
+    "needles_in_file": [
+      {
+        "path": "zettel_notes_model_01.html",
+        "regex": "\\[\\["
+      },
+      {
+        "path": "zettel_notes_model_01.html",
+        "regex": "backlink|back-link"
+      },
+      {
+        "path": "zettel_notes_model_01.html",
+        "regex": "localStorage"
+      },
+      {
+        "path": "zettel_notes_model_01.html",
+        "regex": "force|graph|canvas"
+      },
+      {
+        "path": "zettel_notes_model_01.html",
+        "regex": "search|tag"
+      }
+    ],
+    "smoke": {
+      "entry": "zettel_notes_model_01.html",
+      "dom_present": []
+    }
+  },
+  "judge": {
+    "criteria": [
+      "zettel_notes_model_01.html is one self-contained Zettelkasten (no libraries): notes created and edited with a title, body and tags where [[Wiki-Links]] in the body resolve to other notes and auto-create backlinks shown in a backlinks panel for the open note, broken links visibly marked, full-text search across titles, bodies and tags with result ranking or highlighting, a tags sidebar with filtering, and an interactive canvas graph where notes are nodes and links are edges laid out by a real force-directed simulation that can be dragged, with click opening the note and the current note highlighted. Persistence in localStorage with a seeded demo graph of at least 8 connected notes on first run."
+    ]
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "id": "log-incident-timeline",
+  "mode": "AGENT",
+  "description": "Incident-response triage across an ssh auth log and a web access log: identify the brute-force source, the compromised account, the first successful login time, the privilege-escalation command and the persistence account, and write them as key=value lines into a timeline report.",
+  "category": "incident-response",
+  "max_iterations": 30,
+  "fixture": "fixtures/incident-logs",
+  "prompt_file": "prompts/log-incident-timeline.md",
+  "assert": {
+    "tool_order": ["read_file"],
+    "needle_in_file": { "path": "report/timeline.md", "regex": "attacker_ip[[:space:]]*=[[:space:]]*198\\.51\\.100\\.23" },
+    "needles_in_file": [
+      { "path": "report/timeline.md", "regex": "compromised_account[[:space:]]*=[[:space:]]*svc_backup" },
+      { "path": "report/timeline.md", "regex": "first_success[[:space:]]*=[[:space:]]*02:14:37" },
+      { "path": "report/timeline.md", "regex": "escalation_command[[:space:]]*=[[:space:]]*/bin/cat[[:space:]]+/etc/shadow" },
+      { "path": "report/timeline.md", "regex": "persistence_user[[:space:]]*=[[:space:]]*backdoor" }
+    ],
+    "file_unchanged": [
+      "logs/auth.log",
+      "logs/web-access.log",
+      "checks.py",
+      "README.md"
+    ],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The report derives all five facts from the logs - attacker_ip=198.51.100.23 (five failed passwords then Accepted for svc_backup, not the decoy scanner), compromised_account=svc_backup, first_success=02:14:37, escalation_command=/bin/cat /etc/shadow (the sudo line) and persistence_user=backdoor (the useradd) - and correlates the web log as the same source IP probing /admin."
+    ]
+  }
+}

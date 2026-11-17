@@ -1,0 +1,27 @@
+{
+  "id": "symlink-farm",
+  "mode": "AGENT",
+  "description": "AgentBench-OS style drift repair on a release slot manifest: four slots drifted from the authoritative matrix, and the gate parses the manifest, cross-checks every slot and verifies each pointed-to version directory exists.",
+  "category": "agentbench-os",
+  "max_iterations": 15,
+  "fixture": "fixtures/symlink-farm",
+  "prompt_file": "prompts/symlink-farm.md",
+  "assert": {
+    "needle_in_file": { "path": "releases/links.txt", "text": "prod -> v2.6.1" },
+    "needles_in_file": [
+      { "path": "releases/links.txt", "text": "canary -> v2.7.0-rc3" },
+      { "path": "releases/links.txt", "text": "current -> v2.6.1" },
+      { "path": "releases/links.txt", "regex": "demo -> v2.7.0-rc3" },
+      { "path": "releases/links.txt", "regex": "v2\\.5\\.9", "absent": true },
+      { "path": "releases/links.txt", "regex": "v2\\.7\\.0-rc2", "absent": true }
+    ],
+    "file_unchanged": ["checks.py", "docs/release-matrix.md", "README.md"],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "All six slots match the matrix, the stale rc2/v2.5.9 pointers are gone, and the version dirs, matrix and gate are untouched."
+    ]
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "id": "sw-dst-arithmetic",
+  "mode": "AGENT",
+  "description": "Fix the DST drift in the room-booking meeting shifter: it adds whole days as absolute seconds on a naive copy and stamps the original offset back on, so meetings crossing a Europe/Warsaw CET/CEST transition move by an hour on the wall clock; the hidden gate replays both 2024 transitions plus the no-transition regressions.",
+  "category": "swe-bench",
+  "max_iterations": 30,
+  "fixture": "fixtures/sw-dst-arithmetic",
+  "prompt_file": "prompts/sw-dst-arithmetic.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": ["advance_code_editing"],
+    "needles_in_file": [
+      { "path": "scheduler.py", "regex": "ZoneInfo\\(\"Europe/Warsaw\"\\)" },
+      { "path": "scheduler.py", "regex": "replace\\(tzinfo=None\\)" },
+      { "path": "scheduler.py", "regex": "timedelta\\(days=days\\)" },
+      { "path": "scheduler.py", "regex": "astimezone\\(tz\\)" },
+      { "path": "scheduler.py", "regex": "timezone\\(offset\\)", "absent": true }
+    ],
+    "file_unchanged": [
+      "README.md",
+      "checks.py"
+    ],
+    "build_cmd": "python3 checks.py"
+  },
+  "judge": {
+    "criteria": [
+      "scheduler.py shifts meetings on the local wall clock across DST transitions - a 09:30 Europe/Warsaw slot stays 09:30 with the offset recomputed for the target day (CET vs CEST), for naive and aware input alike - and weekly_slots and describe line up with it again, without touching the gate or the README."
+    ]
+  }
+}

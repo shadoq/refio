@@ -1,0 +1,46 @@
+{
+  "id": "webapp-habit-tracker",
+  "mode": "AGENT",
+  "description": "Single-file habit tracker: habit CRUD with color/icon/schedule, daily check-off grid for the week, GitHub-style year heatmap per habit, current/longest streak computation, weekly goals with progress, stats dashboard, demo data, localStorage persistence.",
+  "category": "browser-app",
+  "max_iterations": 40,
+  "fixture": "fixtures/webapp-habit-tracker",
+  "prompt_file": "prompts/webapp-habit-tracker.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": [
+      "advance_code_editing"
+    ],
+    "needles_in_file": [
+      {
+        "path": "habit_tracker_model_01.html",
+        "regex": "streak"
+      },
+      {
+        "path": "habit_tracker_model_01.html",
+        "regex": "heatmap|heat-map|heatmap"
+      },
+      {
+        "path": "habit_tracker_model_01.html",
+        "regex": "localStorage"
+      },
+      {
+        "path": "habit_tracker_model_01.html",
+        "regex": "habit|Habit"
+      },
+      {
+        "path": "habit_tracker_model_01.html",
+        "regex": "week|goal|progress"
+      }
+    ],
+    "smoke": {
+      "entry": "habit_tracker_model_01.html",
+      "dom_present": []
+    }
+  },
+  "judge": {
+    "criteria": [
+      "habit_tracker_model_01.html is one self-contained habit tracker (no libraries): habits created and edited with name, color, icon or emoji and a weekly schedule of target days, a week grid where today and past days can be checked or unchecked, a GitHub-style year heatmap per habit built from real date math, current streak and longest streak computed from the schedule rather than naive day counting, weekly goal progress bars, a stats dashboard with completion rates per habit and per week, adding demo data on first run, and full localStorage persistence with date-robust serialization (no timezone drift). Streaks must survive month and year boundaries when computed."
+    ]
+  }
+}

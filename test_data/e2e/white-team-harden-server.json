@@ -1,0 +1,30 @@
+{
+  "id": "white-team-harden-server",
+  "mode": "AGENT",
+  "description": "White-team hardening: contain the download endpoint to public/ (path traversal) and replace the hardcoded admin password with the ADMIN_PASSWORD environment variable, while legitimate traffic keeps working. attack_check.py replays the attacks as the deterministic gate.",
+  "category": "security",
+  "max_iterations": 30,
+  "fixture": "fixtures/white-team-harden",
+  "prompt_file": "prompts/white-team-harden-server.md",
+  "assert": {
+    "tool_order": ["read_file"],
+    "needle_in_file": { "path": "server.py", "regex": "ADMIN_PASSWORD" },
+    "needles_in_file": [
+      { "path": "server.py", "regex": "realpath|commonpath|abspath|normpath|relpath", "min_count": 1 },
+      { "path": "server.py", "regex": "hunter2-admin-42", "absent": true }
+    ],
+    "file_unchanged": [
+      "attack_check.py",
+      "README.md",
+      "public/readme.txt",
+      "secret.txt"
+    ],
+    "build_cmd": "python3 attack_check.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The download endpoint refuses names that escape public/ (../ segments and absolute paths) while readme.txt still resolves and reads; the hardcoded password literal is gone, ADMIN_PASSWORD from the environment authenticates and wrong passwords are refused; the gate, the README, the public files and secret.txt are untouched."
+    ]
+  }
+}

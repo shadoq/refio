@@ -1,0 +1,31 @@
+{
+  "id": "api-contract-diff",
+  "mode": "AGENT",
+  "description": "Contract analysis: diff two API specs from the shipped SDK's perspective, distinguish the three real breaking changes (field removed, query param now required, request field type changed) from the additive one, and map each to the SDK call sites that break.",
+  "category": "software-analysis",
+  "max_iterations": 30,
+  "fixture": "fixtures/api-contract",
+  "prompt_file": "prompts/api-contract-diff.md",
+  "assert": {
+    "tool_order": ["read_file"],
+    "needle_in_file": { "path": "report/breaking-changes.md", "regex": "[Bb]reaking" },
+    "needles_in_file": [
+      { "path": "report/breaking-changes.md", "regex": "email.*(removed|renamed)|(removed|renamed).*email" },
+      { "path": "report/breaking-changes.md", "regex": "limit.*required|required.*limit" },
+      { "path": "report/breaking-changes.md", "regex": "total.*type|type.*total" },
+      { "path": "report/breaking-changes.md", "regex": "metrics.*(additive|non-breaking)|(additive|non-breaking).*metrics" }
+    ],
+    "file_unchanged": [
+      "api/openapi-v1.json",
+      "api/openapi-v2.json",
+      "client/sdk.py",
+      "README.md"
+    ],
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The report lists exactly the three breaking changes between v1 and v2 - the /users/{id} response field email removed (renamed to contact), the /items query parameter limit becoming required, and the /orders request field total changing type from number to string - each mapped to the SDK lines in client/sdk.py that break, and explicitly classifies the new /metrics endpoint as non-breaking."
+    ]
+  }
+}

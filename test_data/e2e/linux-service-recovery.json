@@ -1,0 +1,30 @@
+{
+  "id": "linux-service-recovery",
+  "mode": "AGENT",
+  "description": "Terminal-Bench style service recovery: fix the drifted systemd unit (wrong interpreter path, no restart policy, no User/WorkingDirectory) and the broken env file so the gate's parser accepts the unit AND the service actually boots and answers /health.",
+  "category": "linux-ops",
+  "max_iterations": 30,
+  "fixture": "fixtures/systemd-unit",
+  "prompt_file": "prompts/linux-service-recovery.md",
+  "assert": {
+    "needle_in_file": { "path": "etc/app.service", "text": "Restart=always" },
+    "needles_in_file": [
+      { "path": "etc/app.service", "text": "/usr/bin/python3" },
+      { "path": "etc/app.service", "text": "User=app" }
+    ],
+    "file_unchanged": [
+      "opt/app/server.py",
+      "opt/app/token.txt",
+      "docs/service-spec.md",
+      "checks.py",
+      "README.md"
+    ],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The unit matches the spec (python3 interpreter, Restart=always, User=app, WorkingDirectory=/opt/app) and the env file points TOKEN_FILE at the real token file - proven by the gate actually booting the service with the fixed env and probing /health, not just by parsing."
+    ]
+  }
+}

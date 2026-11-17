@@ -1,0 +1,25 @@
+{
+  "id": "proc-autopsy",
+  "mode": "AGENT",
+  "description": "AgentBench-OS style host triage from cold evidence: re-derive the CPU hog, the zombie and its parent, the OOM victim, and the worker pool shape from a ps snapshot plus a dmesg excerpt, and report them as verbatim key = value facts the gate recomputes from the evidence.",
+  "category": "agentbench-os",
+  "max_iterations": 20,
+  "fixture": "fixtures/proc-autopsy",
+  "prompt_file": "prompts/proc-autopsy.md",
+  "assert": {
+    "needle_in_file": { "path": "report/proc-report.md", "text": "hog_pid = 1003" },
+    "needles_in_file": [
+      { "path": "report/proc-report.md", "text": "zombie_parent = 1005" },
+      { "path": "report/proc-report.md", "text": "oom_victim = 1013" },
+      { "path": "report/proc-report.md", "text": "worker_count = 3" }
+    ],
+    "file_unchanged": ["checks.py", "ps-snapshot.txt", "dmesg-oom.txt", "README.md"],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "All six facts are correct per the evidence, the narrative distinguishes the zombie (parent must reap it) from the OOM victim (already dead, absent from ps), and no evidence file was edited."
+    ]
+  }
+}

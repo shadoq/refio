@@ -1,0 +1,30 @@
+{
+  "id": "sw-sort-comparator",
+  "mode": "AGENT",
+  "description": "Fix the results-table comparator: it returns booleans instead of -1/0/1, ignores the direction of every column after the first, and mishandles null and mixed-type values, so the table comes out scrambled; the hidden gate asserts exact orderings for single- and multi-column sorts, dictionary string order and stability.",
+  "category": "swe-bench",
+  "max_iterations": 30,
+  "fixture": "fixtures/sw-sort-comparator",
+  "prompt_file": "prompts/sw-sort-comparator.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": ["advance_code_editing"],
+    "needles_in_file": [
+      { "path": "sorttable.js", "regex": "function compareValues\\(" },
+      { "path": "sorttable.js", "regex": "localeCompare" },
+      { "path": "sorttable.js", "regex": "return -1;" },
+      { "path": "sorttable.js", "regex": "result \\* -1" },
+      { "path": "sorttable.js", "regex": "return av < bv;", "absent": true }
+    ],
+    "file_unchanged": [
+      "README.md",
+      "checks.js"
+    ],
+    "build_cmd": "node checks.js"
+  },
+  "judge": {
+    "criteria": [
+      "sorttable.js compares cell values numerically (-1/0/1, never a boolean) through a helper that sorts null and undefined first, compares numbers numerically and everything else with localeCompare, honours the direction of every column in the spec, keeps equal rows in input order and still returns a new array without mutating its input - without touching the gate or the README."
+    ]
+  }
+}

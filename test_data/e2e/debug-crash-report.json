@@ -1,0 +1,29 @@
+{
+  "id": "debug-crash-report",
+  "mode": "AGENT",
+  "description": "Debug from a production incident report: an unhandled IndexError in take_recent when fewer events exist than requested, and a cross-call state leak from a mutable default argument in record_event. Fix both in place while the visible tests stay green.",
+  "category": "debugging",
+  "max_iterations": 30,
+  "fixture": "fixtures/debug-crash",
+  "prompt_file": "prompts/debug-crash-report.md",
+  "assert": {
+    "tool_order": ["read_file"],
+    "needle_in_file": { "path": "src/events.py", "regex": "history[[:space:]]+is[[:space:]]+None|history[[:space:]]*=[[:space:]]*None" },
+    "needles_in_file": [
+      { "path": "src/events.py", "regex": "def[[:space:]]+record_event\\(event,[[:space:]]*history[[:space:]]*=[[:space:]]*\\[\\]\\)", "absent": true }
+    ],
+    "file_unchanged": [
+      "crash-report.txt",
+      "checks.py",
+      "test/test_events.py",
+      "README.md"
+    ],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "Both root causes are fixed in src/events.py - the mutable default argument in record_event replaced with a None sentinel and take_recent clamped to the available events - without touching the incident report, the gate, the visible tests or the README."
+    ]
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "id": "debug-race-condition",
+  "mode": "AGENT",
+  "description": "Fix a lost-update race in a shared counter: the read-modify-write spans a 1ms compliance-mandated derivation window, so concurrent increments lose updates. The stress gate demands the exact total while the latency gate keeps the window in place.",
+  "category": "debugging",
+  "max_iterations": 30,
+  "fixture": "fixtures/race-counter",
+  "prompt_file": "prompts/debug-race-condition.md",
+  "assert": {
+    "needle_in_file": { "path": "src/counter.py", "regex": "[Ll]ock" },
+    "needles_in_file": [
+      { "path": "src/counter.py", "regex": "time[.]sleep", "min_count": 1 }
+    ],
+    "file_unchanged": [
+      "checks.py",
+      "test/test_counter.py",
+      "README.md"
+    ],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The read-modify-write in increment is serialised with a threading lock while the 1ms derivation window (time.sleep) is preserved - removing the sleep instead of locking is the wrong fix and fails both the latency gate and the needle; the stress gate then observes the exact expected total."
+    ]
+  }
+}

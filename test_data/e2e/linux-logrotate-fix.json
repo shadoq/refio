@@ -1,0 +1,30 @@
+{
+  "id": "linux-logrotate-fix",
+  "mode": "AGENT",
+  "description": "Terminal-Bench style policy repair: bring a drifted logrotate.conf in line with the documented retention policy - weekly rotation, keep 4 compressed, create 0640 app app, su directive, and the reload command from the spec instead of the raw kill.",
+  "category": "linux-ops",
+  "max_iterations": 30,
+  "fixture": "fixtures/logrotate-broken",
+  "prompt_file": "prompts/linux-logrotate-fix.md",
+  "assert": {
+    "needle_in_file": { "path": "etc/logrotate.conf", "text": "weekly" },
+    "needles_in_file": [
+      { "path": "etc/logrotate.conf", "text": "rotate 4" },
+      { "path": "etc/logrotate.conf", "text": "su app app" },
+      { "path": "etc/logrotate.conf", "regex": "app-reload" }
+    ],
+    "file_unchanged": [
+      "checks.py",
+      "docs/logrotate-spec.md",
+      "README.md",
+      "var/log/app/app.log"
+    ],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The conf matches the retention policy exactly - weekly (not daily), rotate 4, compress, create 0640 app app, su app app, dateext, and the postrotate runs /usr/local/bin/app-reload - with the spec, gate and the existing log untouched."
+    ]
+  }
+}

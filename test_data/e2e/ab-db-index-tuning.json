@@ -1,0 +1,24 @@
+{
+  "id": "ab-db-index-tuning",
+  "mode": "AGENT",
+  "description": "AgentBench-DB style query tuning: three documented slow queries (lookup, composite status/date filter, per-sku aggregation) must get the right indexes in the database itself - the gate proves it through EXPLAIN QUERY PLAN, including the covering-index requirement for the GROUP BY.",
+  "category": "agentbench-db",
+  "max_iterations": 20,
+  "fixture": "fixtures/ab-db-tuning",
+  "prompt_file": "prompts/ab-db-index-tuning.md",
+  "assert": {
+    "needle_in_file": { "path": "indexes.sql", "regex": "CREATE INDEX idx_orders_customer_id ON orders\\(customer_id\\)" },
+    "needles_in_file": [
+      { "path": "indexes.sql", "regex": "CREATE INDEX idx_orders_status_placed_at ON orders\\(status, placed_at\\)" },
+      { "path": "indexes.sql", "regex": "CREATE INDEX idx_order_items_sku_qty ON order_items\\(sku, qty\\)" }
+    ],
+    "file_unchanged": ["checks.py", "docs/slow-queries.md", "README.md"],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The three indexes exist in shop.db with the documented columns and order, EXPLAIN QUERY PLAN uses each one (no TEMP B-TREE for the GROUP BY), indexes.sql documents the DDL, and the data is untouched."
+    ]
+  }
+}

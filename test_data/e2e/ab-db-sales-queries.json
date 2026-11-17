@@ -1,0 +1,25 @@
+{
+  "id": "ab-db-sales-queries",
+  "mode": "AGENT",
+  "description": "AgentBench-DB style analytics: eight business questions (revenue rules, cancelled-vs-returned statuses, ties broken deterministically) answered from a SQLite shop database into a JSON file the gate recomputes with plain SQL.",
+  "category": "agentbench-db",
+  "max_iterations": 20,
+  "fixture": "fixtures/ab-db-sales",
+  "prompt_file": "prompts/ab-db-sales-queries.md",
+  "assert": {
+    "needle_in_file": { "path": "answers/answers.json", "text": "\"q1_total_revenue\": 2986.5" },
+    "needles_in_file": [
+      { "path": "answers/answers.json", "text": "\"q2_top_customer\": \"Aldrich Labs\"" },
+      { "path": "answers/answers.json", "text": "\"q3_returned_orders\": 2" },
+      { "path": "answers/answers.json", "text": "\"q6_emea_customers\": 3" }
+    ],
+    "file_unchanged": ["shop.db", "checks.py", "docs/questions.md", "README.md"],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "All eight answers are exactly the recomputed values; the database was only read; the JSON has no extra keys."
+    ]
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "id": "webgame-minesweeper",
+  "mode": "AGENT",
+  "description": "Single-file Minesweeper: three difficulties plus custom size/mine count, guaranteed-safe first click, flood-fill reveal, flags and question marks, chording, timer, mine counter, win detection, localStorage best times per difficulty.",
+  "category": "browser-game",
+  "max_iterations": 40,
+  "fixture": "fixtures/webgame-minesweeper",
+  "prompt_file": "prompts/webgame-minesweeper.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": [
+      "advance_code_editing"
+    ],
+    "needles_in_file": [
+      {
+        "path": "minesweeper_model_01.html",
+        "regex": "flood|recursive|reveal"
+      },
+      {
+        "path": "minesweeper_model_01.html",
+        "regex": "contextmenu|flag"
+      },
+      {
+        "path": "minesweeper_model_01.html",
+        "regex": "localStorage"
+      },
+      {
+        "path": "minesweeper_model_01.html",
+        "regex": "beginner|intermediate|expert"
+      },
+      {
+        "path": "minesweeper_model_01.html",
+        "regex": "timer|chord"
+      }
+    ],
+    "smoke": {
+      "entry": "minesweeper_model_01.html",
+      "dom_present": []
+    }
+  },
+  "judge": {
+    "criteria": [
+      "minesweeper_model_01.html is one self-contained Minesweeper (no libraries): beginner/intermediate/expert presets plus a custom dialog, mine placement that guarantees the first click never hits a mine, left-click reveal with recursive flood-fill of empty regions, right-click flag cycle, middle-click or both-button chording, an accurate mine counter and centisecond timer, win/lose detection with reveal of all mines and wrongly flagged cells, and best-time persistence per difficulty in localStorage. No precomputed or lucky boards."
+    ]
+  }
+}

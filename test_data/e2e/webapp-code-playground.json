@@ -1,0 +1,46 @@
+{
+  "id": "webapp-code-playground",
+  "mode": "AGENT",
+  "description": "Single-file HTML/CSS/JS playground: three editors with line numbers and tab support, sandboxed live preview iframe via srcdoc, captured console panel with log levels, runtime error overlay, debounced auto-run, example templates, localStorage persistence.",
+  "category": "browser-app",
+  "max_iterations": 40,
+  "fixture": "fixtures/webapp-code-playground",
+  "prompt_file": "prompts/webapp-code-playground.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": [
+      "advance_code_editing"
+    ],
+    "needles_in_file": [
+      {
+        "path": "code_playground_model_01.html",
+        "regex": "srcdoc|iframe"
+      },
+      {
+        "path": "code_playground_model_01.html",
+        "regex": "postMessage|console"
+      },
+      {
+        "path": "code_playground_model_01.html",
+        "regex": "localStorage"
+      },
+      {
+        "path": "code_playground_model_01.html",
+        "regex": "line|gutter"
+      },
+      {
+        "path": "code_playground_model_01.html",
+        "regex": "template|example|debounce"
+      }
+    ],
+    "smoke": {
+      "entry": "code_playground_model_01.html",
+      "dom_present": []
+    }
+  },
+  "judge": {
+    "criteria": [
+      "code_playground_model_01.html is one self-contained coding playground (no libraries): three editor panes for HTML, CSS and JavaScript with line numbers, Tab insertion and undo-friendly editing, a preview rendered in a sandboxed iframe built from srcdoc that combines the three panes, a console panel that captures console.log/info/warn/error from the iframe via postMessage and shows them with levels and timestamps, uncaught runtime errors surfaced as an overlay or console entry with line hints, a Run button plus debounced auto-run, reset, and at least three working example templates, and persistence of all three panes to localStorage. The console capture must be real, not decorative."
+    ]
+  }
+}

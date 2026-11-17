@@ -1,0 +1,29 @@
+{
+  "id": "pg-go-error-wrapping",
+  "mode": "AGENT",
+  "description": "Modernize the error handling of a Go config loader: introduce the sentinel errors ErrConfigMissing and ErrInvalidValue, wrap every failure with the %w verb so callers can branch with errors.Is, and export an IsNotFound helper, with the old fmt.Errorf(\"%s\", err) flattening gone from config/config.go.",
+  "category": "polyglot-editing",
+  "max_iterations": 30,
+  "fixture": "fixtures/pg-go-error-wrapping",
+  "prompt_file": "prompts/pg-go-error-wrapping.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": ["advance_code_editing"],
+    "needles_in_file": [
+      { "path": "config/config.go", "regex": "errors\\.New" },
+      { "path": "config/config.go", "regex": ": %w" },
+      { "path": "config/config.go", "regex": "errors\\.Is" },
+      { "path": "config/config.go", "regex": "Err[A-Z][a-zA-Z]*" },
+      { "path": "config/config.go", "regex": "fmt\\.Errorf\\(\"%s\"", "absent": true }
+    ],
+    "file_unchanged": [
+      "README.md",
+      "go.mod"
+    ]
+  },
+  "judge": {
+    "criteria": [
+      "config/config.go declares the exported sentinels ErrConfigMissing and ErrInvalidValue via errors.New, wraps every error it returns with fmt.Errorf and the %w verb (including the os.ReadFile and strconv.Atoi failures) so errors.Is works through the chain, adds an IsNotFound(err) helper, keeps the Load signature and the validation rules intact, and contains no remaining fmt.Errorf(\"%s\", ...) call, while go.mod and the README stay untouched."
+    ]
+  }
+}

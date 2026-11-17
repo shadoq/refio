@@ -1,0 +1,29 @@
+{
+  "id": "pg-go-context-timeout",
+  "mode": "AGENT",
+  "description": "Harden a Go HTTP fetcher against hung origins: add FetchCtx building requests with http.NewRequestWithContext under the caller's context, install a configurable default timeout in Fetch via context.WithTimeout with a deferred cancel, map context.DeadlineExceeded to a typed ErrTimeout, and leave no direct http.Get call in fetcher/fetcher.go.",
+  "category": "polyglot-editing",
+  "max_iterations": 30,
+  "fixture": "fixtures/pg-go-context-timeout",
+  "prompt_file": "prompts/pg-go-context-timeout.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": ["advance_code_editing"],
+    "needles_in_file": [
+      { "path": "fetcher/fetcher.go", "regex": "context\\.WithTimeout" },
+      { "path": "fetcher/fetcher.go", "regex": "NewRequestWithContext" },
+      { "path": "fetcher/fetcher.go", "regex": "defer cancel" },
+      { "path": "fetcher/fetcher.go", "regex": "DeadlineExceeded" },
+      { "path": "fetcher/fetcher.go", "regex": "http\\.Get\\(", "absent": true }
+    ],
+    "file_unchanged": [
+      "README.md",
+      "go.mod"
+    ]
+  },
+  "judge": {
+    "criteria": [
+      "fetcher/fetcher.go provides FetchCtx(ctx, url) that builds the request with http.NewRequestWithContext, honors the caller's cancellation, maps context.DeadlineExceeded (via errors.Is) to the exported ErrTimeout, and still enforces the status check and the MaxBodyBytes cap, while Fetch stays a thin wrapper that installs the DefaultTimeout with context.WithTimeout and a deferred cancel and delegates to FetchCtx, with no http.Get call left in the file and go.mod and the README untouched."
+    ]
+  }
+}

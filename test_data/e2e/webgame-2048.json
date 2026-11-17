@@ -1,0 +1,46 @@
+{
+  "id": "webgame-2048",
+  "mode": "AGENT",
+  "description": "Single-file 2048: 4x4 grid, keyboard arrows and touch/swipe, correct merge rules (one merge per tile per move), animated tile spawn/slide/merge transitions, score with best score in localStorage, undo of the last move, win at 2048 with keep-playing.",
+  "category": "browser-game",
+  "max_iterations": 40,
+  "fixture": "fixtures/webgame-2048",
+  "prompt_file": "prompts/webgame-2048.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": [
+      "advance_code_editing"
+    ],
+    "needles_in_file": [
+      {
+        "path": "game_2048_model_01.html",
+        "regex": "localStorage"
+      },
+      {
+        "path": "game_2048_model_01.html",
+        "regex": "undo"
+      },
+      {
+        "path": "game_2048_model_01.html",
+        "regex": "merge|slide"
+      },
+      {
+        "path": "game_2048_model_01.html",
+        "regex": "touchstart|swipe|pointer"
+      },
+      {
+        "path": "game_2048_model_01.html",
+        "regex": "2048|transition"
+      }
+    ],
+    "smoke": {
+      "entry": "game_2048_model_01.html",
+      "dom_present": []
+    }
+  },
+  "judge": {
+    "criteria": [
+      "game_2048_model_01.html is one self-contained 2048 (no libraries): a 4x4 grid driven by arrow keys and pointer/touch swipes, move logic that slides and merges exactly once per tile per move and only merges equal values, random 2/4 spawns with correct probabilities, smooth CSS transitions for spawn/slide/merge rather than a static redraw, score with best score persisted in localStorage, undo of the last move (at least one level), game-over detection, and the win screen at 2048 with continue playing. No instant un-animated grid flips and no illegal merges."
+    ]
+  }
+}

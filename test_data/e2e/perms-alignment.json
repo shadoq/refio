@@ -1,0 +1,25 @@
+{
+  "id": "perms-alignment",
+  "mode": "AGENT",
+  "description": "AgentBench-OS style policy manifest repair: every row of the permission manifest drifted from the authoritative policy (modes, owners, groups, a world-writable cache dir); the gate parses the CSV and cross-checks every policy row plus a global no-world-writable rule.",
+  "category": "agentbench-os",
+  "max_iterations": 15,
+  "fixture": "fixtures/perms-alignment",
+  "prompt_file": "prompts/perms-alignment.md",
+  "assert": {
+    "needle_in_file": { "path": "etc/perms.csv", "text": "etc/secrets.env,0640,root,app" },
+    "needles_in_file": [
+      { "path": "etc/perms.csv", "text": "var/lib/app/cache,2770,app,app" },
+      { "path": "etc/perms.csv", "text": "opt/app/bin/run.sh,0750,root,app" },
+      { "path": "etc/perms.csv", "regex": "0775|0664|0644,root,root", "max_count": 1 }
+    ],
+    "file_unchanged": ["checks.py", "docs/perms-policy.md", "README.md"],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "All five rows match the policy (mode, owner, group), nothing is world-writable, and no row was dropped or invented."
+    ]
+  }
+}

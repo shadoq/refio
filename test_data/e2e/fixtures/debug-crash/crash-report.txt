@@ -1,0 +1,22 @@
+Incident report - nightly digest job (job id 2026-11-14-digest)
+
+The nightly digest failed at 03:12 with an unhandled exception. The same job had been logging
+an oddity for a few days first: events recorded for one tenant started showing up in other
+tenants' digests (see the excerpt below). We suspect the two are related.
+
+--- log excerpt (digest worker, 03:11:5x) ---
+2026-11-14 03:11:58 DEBUG digest: tenant=a events=['order.placed']
+2026-11-14 03:11:58 DEBUG digest: tenant=b events=['order.placed', 'order.paid']
+2026-11-14 03:11:59 DEBUG digest: tenant=c events=['order.placed', 'order.paid', 'order.shipped']
+   ^-- none of these tenants should see the others' events; each digest starts fresh
+
+--- traceback (03:12:07) ---
+Traceback (most recent call last):
+  File "jobs/digest.py", line 41, in run
+    tail = take_recent(events, 5)
+  File "src/events.py", line 17, in take_recent
+    taken.insert(0, events.pop())
+IndexError: pop from empty list
+
+The digest closes the day by reading the five most recent events; last night a tenant only
+had three left, and the job died instead of taking what was there.

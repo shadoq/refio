@@ -1,0 +1,15 @@
+tracemalloc snapshot - worker session tier
+captured: 2026-02-14 03:00:01 (t=24h after deploy 1.19.3)
+RSS: 41.2 MB (baseline expectation ~8 MB)
+
+top allocations by line (cumulative, live blocks):
+  #1  38.9 MB  src/sessions.py:19   SessionStore.open  ->  self._audit.append((sid, bytes(payload)))
+  #2   1.7 MB  src/sessions.py:18   SessionStore.open  ->  self._live[sid] = payload
+  #3   0.4 MB  src/sessions.py:24   SessionStore.close ->  self._live.pop(sid, None) [allocations under teardown]
+  #4   0.2 MB  interpreter/other
+
+notes (on-call):
+- _audit grows without bound: one (sid, payload-copy) tuple per session ever opened;
+  nothing ever reads it back.
+- _live also grows without bound on days with heavy abandoned sessions (no close).
+- the issued counter is the only part of the audit contract the dashboards actually read.

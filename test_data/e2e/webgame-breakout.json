@@ -1,0 +1,46 @@
+{
+  "id": "webgame-breakout",
+  "mode": "AGENT",
+  "description": "Single-file Breakout/Arkanoid: mouse and keyboard paddle, multi-hit and unbreakable bricks, power-ups (multi-ball, wide paddle, laser, slow ball), particles, lives, score, 4+ levels with brick layouts, pause and level transition.",
+  "category": "browser-game",
+  "max_iterations": 40,
+  "fixture": "fixtures/webgame-breakout",
+  "prompt_file": "prompts/webgame-breakout.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": [
+      "advance_code_editing"
+    ],
+    "needles_in_file": [
+      {
+        "path": "breakout_model_01.html",
+        "regex": "<canvas"
+      },
+      {
+        "path": "breakout_model_01.html",
+        "regex": "requestAnimationFrame"
+      },
+      {
+        "path": "breakout_model_01.html",
+        "regex": "power.?up|powerUp|POWERUPS"
+      },
+      {
+        "path": "breakout_model_01.html",
+        "regex": "keydown|mousemove"
+      },
+      {
+        "path": "breakout_model_01.html",
+        "regex": "lives|particle|score"
+      }
+    ],
+    "smoke": {
+      "entry": "breakout_model_01.html",
+      "dom_present": []
+    }
+  },
+  "judge": {
+    "criteria": [
+      "breakout_model_01.html is one self-contained Breakout (no libraries): a paddle controlled by both mouse and keyboard, ball with correct wall/paddle reflections where paddle position changes the angle, brick layouts for at least 4 levels with multi-hit colored bricks and unbreakable ones, falling power-ups that actually work (multi-ball, wider paddle, laser shots, slow ball, extra life), lives, score with per-brick values, particles on hits, level transitions, pause, and a win/lose screen. No fake collisions."
+    ]
+  }
+}

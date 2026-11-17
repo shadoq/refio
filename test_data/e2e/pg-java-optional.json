@@ -1,0 +1,28 @@
+{
+  "id": "pg-java-optional",
+  "mode": "AGENT",
+  "description": "Migrate a Java inventory service to Optional and streams: findItem and mostExpensive return Optional<Item> with the nullable scanner input guarded by Optional.ofNullable, getStockLabel is built from Optional.map/orElse instead of null checks and nested ternaries, the loops become filter/map/findFirst/sum pipelines, and no null comparison remains in InventoryService.java.",
+  "category": "polyglot-editing",
+  "max_iterations": 30,
+  "fixture": "fixtures/pg-java-optional",
+  "prompt_file": "prompts/pg-java-optional.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": ["advance_code_editing"],
+    "needles_in_file": [
+      { "path": "src/com/example/inventory/InventoryService.java", "regex": "Optional\\." },
+      { "path": "src/com/example/inventory/InventoryService.java", "regex": "\\.stream\\(\\)" },
+      { "path": "src/com/example/inventory/InventoryService.java", "regex": "ofNullable" },
+      { "path": "src/com/example/inventory/InventoryService.java", "regex": "\\.orElse" },
+      { "path": "src/com/example/inventory/InventoryService.java", "regex": "== null|!= null", "absent": true }
+    ],
+    "file_unchanged": [
+      "README.md"
+    ]
+  },
+  "judge": {
+    "criteria": [
+      "InventoryService.java returns Optional<Item> from findItem (guarding the nullable scanner sku with Optional.ofNullable and flatMapping into a stream-based lookup) and from mostExpensive, builds getStockLabel with Optional.map(...).orElse(...) producing the same three strings as before, computes the stock total with mapToLong/sum and the category names with filter/map/collect, and contains no '== null' or '!= null' comparison, with the README untouched."
+    ]
+  }
+}

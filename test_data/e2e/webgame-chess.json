@@ -1,0 +1,46 @@
+{
+  "id": "webgame-chess",
+  "mode": "AGENT",
+  "description": "Single-file chess: full legal move generation with castling, en passant and promotion, check/checkmate/stalemate detection, threefold-repetition awareness, move list in algebraic notation, simple minimax AI opponent with material+position eval, board flip, localStorage save.",
+  "category": "browser-game",
+  "max_iterations": 40,
+  "fixture": "fixtures/webgame-chess",
+  "prompt_file": "prompts/webgame-chess.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": [
+      "advance_code_editing"
+    ],
+    "needles_in_file": [
+      {
+        "path": "chess_model_01.html",
+        "regex": "castling|en.?passant|promotion"
+      },
+      {
+        "path": "chess_model_01.html",
+        "regex": "checkmate|stalemate|check"
+      },
+      {
+        "path": "chess_model_01.html",
+        "regex": "minimax|eval|negamax|alpha.?beta"
+      },
+      {
+        "path": "chess_model_01.html",
+        "regex": "algebraic|notation|Nf3|history"
+      },
+      {
+        "path": "chess_model_01.html",
+        "regex": "localStorage"
+      }
+    ],
+    "smoke": {
+      "entry": "chess_model_01.html",
+      "dom_present": []
+    }
+  },
+  "judge": {
+    "criteria": [
+      "chess_model_01.html is one self-contained chess game (no libraries): legal move generation for all pieces including castling rights, en passant and promotion with a choice dialog, full check/checkmate/stalemate detection (no moves that leave the king in check), a move history rendered in standard algebraic notation with disambiguation, a simple AI opponent playing a minimax search at a fixed depth with material and positional evaluation that responds in reasonable time, board flip, undo, and game state persistence to localStorage. No illegal moves accepted; no hardcoded AI moves."
+    ]
+  }
+}

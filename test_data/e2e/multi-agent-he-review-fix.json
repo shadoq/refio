@@ -1,0 +1,26 @@
+{
+  "id": "multi-agent-he-review-fix",
+  "mode": "AGENT",
+  "description": "AgentBench-HumanEval x orchestration: a reviewer agent (plan) runs the red test suite and documents every failing test with its contract line, then a fixer agent implements the two stubs to green without touching the tests.",
+  "category": "multi-agent-benchmark",
+  "max_iterations": 60,
+  "fixture": "fixtures/he-team",
+  "multi_agent": "multi-agent/he-review-fix.yaml",
+  "assert": {
+    "agent_order": ["reviewer", "fixer"],
+    "needle_in_file": { "path": "review/failures.md", "regex": "test_" },
+    "needles_in_file": [
+      { "path": "review/failures.md", "text": "median" },
+      { "path": "review/failures.md", "text": "variance" },
+      { "path": "stats.py", "regex": "NotImplementedError", "absent": true }
+    ],
+    "file_unchanged": ["test_stats.py", "README.md", ".refio/agents/reviewer.md", ".refio/agents/fixer.md"],
+    "build_cmd": "python3 -m unittest discover -p \"test_*.py\"",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The reviewer actually ran the tests (its report names the failing test methods), the fixer implemented both functions per the docstring contracts, the suite is green, and neither agent touched the tests or the profiles."
+    ]
+  }
+}

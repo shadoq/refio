@@ -1,0 +1,34 @@
+{
+  "id": "multi-agent-red-blue",
+  "mode": "AGENT",
+  "description": "Two-agent red/blue pipeline against a live local target: the red operator exploits the SQL-injectable user lookup and saves the leaked admin secret; the blue hardener (depends_on red) patches the query with placeholders. attack_check.py verifies both halves.",
+  "category": "orchestration",
+  "max_iterations": 40,
+  "fixture": "fixtures/red-blue-team",
+  "multi_agent": "multi-agent/red-blue.yaml",
+  "fixture_server": { "dir": "server", "port": 8727, "cmd": "exec python3 {{DIR}}/app.py {{PORT}}" },
+  "assert": {
+    "agent_order": [
+      "red",
+      "blue"
+    ],
+    "needle_in_file": { "path": "redteam/leaked-flag.txt", "text": "FLAG{sqli_auth_bypass_4d81}" },
+    "needles_in_file": [
+      { "path": "server/app.py", "regex": "name[[:space:]]*=[[:space:]]*\\?", "min_count": 1 },
+      { "path": "server/app.py", "regex": "\\{name\\}", "absent": true }
+    ],
+    "file_unchanged": [
+      "attack_check.py",
+      "README.md",
+      ".refio/agents/red-operator.md",
+      ".refio/agents/blue-hardener.md"
+    ],
+    "build_cmd": "python3 attack_check.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The red agent obtained the admin secret through the injected query and saved it as redteam/leaked-flag.txt; the blue agent replaced the string interpolation in lookup_user with a parameterized query, kept legitimate lookups and the admin filter working, and neither agent touched the gate, the profiles or the README."
+    ]
+  }
+}

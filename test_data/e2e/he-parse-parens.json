@@ -1,0 +1,23 @@
+{
+  "id": "he-parse-parens",
+  "mode": "AGENT",
+  "description": "HumanEval-style completion of the canonical parse_nested_parens task: per-group maximum nesting depth (not counting total parens), empty input edge case, verified by untouched unit tests.",
+  "category": "humaneval",
+  "max_iterations": 15,
+  "fixture": "fixtures/he-parse-parens",
+  "prompt_file": "prompts/he-parse-parens.md",
+  "assert": {
+    "needle_in_file": { "path": "parse_parens.py", "regex": "def parse_nested_parens" },
+    "needles_in_file": [
+      { "path": "parse_parens.py", "regex": "NotImplementedError", "absent": true }
+    ],
+    "file_unchanged": ["test_parse_parens.py", "README.md"],
+    "build_cmd": "python3 -m unittest discover -p \"test_*.py\"",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "All eight tests pass; depth semantics (not paren counts, not whole-string-as-one-group); tests untouched."
+    ]
+  }
+}

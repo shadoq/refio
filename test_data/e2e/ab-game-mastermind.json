@@ -1,0 +1,24 @@
+{
+  "id": "ab-game-mastermind",
+  "mode": "AGENT",
+  "description": "AgentBench digital-games style: a Mastermind solver played against a real game driver - every guess must be a valid 4-color string AND consistent with all previous feedback (the classic filter rule), solved within 7 attempts; the driver rejects guesses that contradict the feedback.",
+  "category": "agentbench-games",
+  "max_iterations": 20,
+  "fixture": "fixtures/ab-game-mastermind",
+  "prompt_file": "prompts/ab-game-mastermind.md",
+  "assert": {
+    "needle_in_file": { "path": "solver.py", "regex": "def next_guess" },
+    "needles_in_file": [
+      { "path": "solver.py", "regex": "NotImplementedError", "absent": true }
+    ],
+    "needle_in_output": { "regex": "SOLVED in [1-7] guesses" },
+    "file_unchanged": ["engine.py", "run_game.py", "README.md"],
+    "build_cmd": "python3 run_game.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The game is solved within seven attempts, every guess is consistent with all earlier feedback, and the driver/engine are untouched."
+    ]
+  }
+}

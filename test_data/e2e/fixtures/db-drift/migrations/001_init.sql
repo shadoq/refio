@@ -1,0 +1,9 @@
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL
+);
+CREATE TABLE items (
+    id INTEGER PRIMARY KEY,
+    owner TEXT NOT NULL,
+    label TEXT NOT NULL
+);

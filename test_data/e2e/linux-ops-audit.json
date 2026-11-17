@@ -1,0 +1,31 @@
+{
+  "id": "linux-ops-audit",
+  "mode": "AGENT",
+  "description": "Linux on-call work: triage failed SSH logins from var/log/auth.log into a report (failed_logins=9, top_offender=203.0.113.77), tighten a world-writable file to mode 640 and restore bin/run-backup.sh's executable bit. verify.sh gates all three. Needs chmod in the run's --auto-approve (not in the default set).",
+  "category": "linux-ops",
+  "max_iterations": 30,
+  "fixture": "fixtures/linux-ops",
+  "prompt_file": "prompts/linux-ops-audit.md",
+  "assert": {
+    "tool_order": ["run_terminal_command"],
+    "tool_invoked": [ { "name": "run_terminal_command" } ],
+    "needle_in_file": { "path": "report/intrusion-report.txt", "regex": "failed_logins=9" },
+    "needles_in_file": [
+      { "path": "report/intrusion-report.txt", "regex": "top_offender=203\\.0\\.113\\.77" }
+    ],
+    "file_unchanged": [
+      "var/log/auth.log",
+      "verify.sh",
+      "etc/app.conf",
+      "shared/team-notes.txt",
+      "bin/run-backup.sh"
+    ],
+    "build_cmd": "bash verify.sh",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The report derives failed_logins=9 and top_offender=203.0.113.77 from the auth log (nine Failed password lines, five of them from 203.0.113.77), shared/team-notes.txt is mode 640 with unchanged contents, bin/run-backup.sh is executable, and the log, the gate and etc/ are untouched."
+    ]
+  }
+}

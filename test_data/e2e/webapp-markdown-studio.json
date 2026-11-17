@@ -1,0 +1,46 @@
+{
+  "id": "webapp-markdown-studio",
+  "mode": "AGENT",
+  "description": "Single-file Markdown studio: from-scratch Markdown-to-HTML parser (headings, emphasis, lists, tables, fenced code, quotes, links, images), live preview, editor toolbar, scroll sync, word count, autosave and export .md/.html.",
+  "category": "browser-app",
+  "max_iterations": 40,
+  "fixture": "fixtures/webapp-markdown-studio",
+  "prompt_file": "prompts/webapp-markdown-studio.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": [
+      "advance_code_editing"
+    ],
+    "needles_in_file": [
+      {
+        "path": "markdown_studio_model_01.html",
+        "regex": "table|\\|.*\\|"
+      },
+      {
+        "path": "markdown_studio_model_01.html",
+        "regex": "fenced|```|code"
+      },
+      {
+        "path": "markdown_studio_model_01.html",
+        "regex": "localStorage"
+      },
+      {
+        "path": "markdown_studio_model_01.html",
+        "regex": "scroll"
+      },
+      {
+        "path": "markdown_studio_model_01.html",
+        "regex": "download|export|Blob"
+      }
+    ],
+    "smoke": {
+      "entry": "markdown_studio_model_01.html",
+      "dom_present": []
+    }
+  },
+  "judge": {
+    "criteria": [
+      "markdown_studio_model_01.html is one self-contained Markdown studio (no libraries): a hand-written parser covering headings, bold/italic/strikethrough, inline code, fenced code blocks, ordered and unordered and nested lists, blockquotes, tables, links, images and horizontal rules — escaping HTML in text nodes, plus live preview as you type, a working toolbar (bold, italic, heading, list, code, link) that wraps or prefixes the selection, synchronized scrolling between editor and preview, word/character/line counts, debounced localStorage autosave, manual save, and export to .md and .html files. The parser must be real; no markdown library or CDN."
+    ]
+  }
+}

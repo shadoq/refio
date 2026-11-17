@@ -1,0 +1,28 @@
+{
+  "id": "deobfuscate-javascript",
+  "mode": "AGENT",
+  "description": "Statically deobfuscate a string-array-rotated, hex-escaped JavaScript beacon: account for the IIFE rotation before mapping accessor indices, and recover the C2 URL, key, interval and round count into a config report.",
+  "category": "reversing",
+  "max_iterations": 30,
+  "fixture": "fixtures/js-deobfuscate",
+  "prompt_file": "prompts/deobfuscate-javascript.md",
+  "assert": {
+    "tool_order": ["read_file"],
+    "needle_in_file": { "path": "report/deobfuscated-config.md", "regex": "cdn-metrics\\.example" },
+    "needles_in_file": [
+      { "path": "report/deobfuscated-config.md", "regex": "9f8e7d" },
+      { "path": "report/deobfuscated-config.md", "regex": "60000" },
+      { "path": "report/deobfuscated-config.md", "regex": "\\.well-known/pixel" }
+    ],
+    "file_unchanged": [
+      "sample/tracker.js",
+      "README.md"
+    ],
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The report recovers the real config - c2 https://cdn-metrics.example/.well-known/pixel, key 9f8e7d, interval 60000 ms, rounds 3 - accounting for the array rotation the IIFE performs, and the sample is untouched."
+    ]
+  }
+}

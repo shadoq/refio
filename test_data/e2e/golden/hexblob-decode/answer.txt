@@ -1,0 +1,15 @@
+Following docs/format.md: the magic is 0xDEADBEEF, section_count is 2. The section table
+(at offset 8) lists a type-0x0001 raw section at offset 28 (length 55) - that payload is
+plaintext filler ("not-the-flag (raw section decoy)...BADGE-TEST-ONLY") and is a decoy - and a
+type-0x0003 string table at offset 83 (length 62).
+
+Walking the string table's entries (big-endian u16 length, then the bytes):
+
+- entry 1: length 24 -> decode each byte XOR 0x5A -> "badge-reader-fw/1.4.2-test"
+- entry 2: length 32 -> decode each byte XOR 0x5A -> "FLAG{firmware_string_table_8c41}"
+
+Recovered strings:
+- badge-reader-fw/1.4.2-test
+- FLAG{firmware_string_table_8c41}
+
+The flag is FLAG{firmware_string_table_8c41}.

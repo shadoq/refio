@@ -1,0 +1,42 @@
+{
+  "id": "rf-css-design-tokens",
+  "mode": "AGENT",
+  "description": "Replace the hardcoded palette and magic spacing values scattered through styles.css with :root custom properties consumed via var(--...) in every rule, keeping the rendered result identical and leaving none of the old repeated literals behind.",
+  "category": "refactoring",
+  "max_iterations": 30,
+  "fixture": "fixtures/rf-css-design-tokens",
+  "prompt_file": "prompts/rf-css-design-tokens.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": [
+      "advance_code_editing"
+    ],
+    "needles_in_file": [
+      {
+        "path": "styles.css",
+        "regex": ":root"
+      },
+      {
+        "path": "styles.css",
+        "regex": "--[a-z-]+:"
+      },
+      {
+        "path": "styles.css",
+        "regex": "var\\(--"
+      },
+      {
+        "path": "styles.css",
+        "regex": "#4a5568",
+        "absent": true
+      }
+    ],
+    "file_unchanged": [
+      "README.md"
+    ]
+  },
+  "judge": {
+    "criteria": [
+      "styles.css declares the color palette and the 4px-based spacing, type and radius scales as custom properties in a :root block, every rule below consumes them through var(--...) so that none of the old repeated hex or px literals survives inside the rules, and substituting the token values reproduces exactly the previous stylesheet with the same selectors, cascade and media query."
+    ]
+  }
+}
