@@ -1,0 +1,27 @@
+{
+  "id": "appworld-multi-app",
+  "mode": "AGENT",
+  "description": "AppWorld style (multi-app task): build a meeting briefing from three local apps - a contacts JSON with merged duplicate entries, a SQLite calendar with a cancelled event and a join table, and a notes folder with archived notes and case-differing titles. The output file must resolve duplicates to the canonical person, skip cancelled meetings and other dates, and match notes ignoring case. A checks script compares the file with the expected briefing and the apps must stay untouched.",
+  "category": "appworld",
+  "max_iterations": 40,
+  "fixture": "fixtures/appworld-multi-app",
+  "prompt_file": "prompts/appworld-multi-app.md",
+  "config": ["verify.command=python checks.py"],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": [
+      "checks.py",
+      "apps/contacts.json",
+      "apps/calendar.sqlite",
+      "apps/notes/2025-03-01-sprint-old.md",
+      "apps/notes/2025-03-09-groceries.md",
+      "apps/notes/2025-03-10-design-moodboard.md",
+      "apps/notes/2025-03-10-sprint-prep.md",
+      "apps/notes/2025-03-11-sprint-risks.md",
+      "apps/notes/2025-03-11-vendor-terms.md",
+      "apps/notes/2025-03-12-retro-ideas.md"
+    ],
+    "build_cmd": "python checks.py",
+    "self_verified": true
+  }
+}

@@ -1,0 +1,5 @@
+The test fails because of the weekday table in scheduler/recurrence.py, not because of the clock change.
+
+DAY_NAMES is ("sun", "mon", "tue", ...) but it is indexed with date.weekday(), where Monday is 0. So matches_day() is off by one day: the name "mon" is matched on a Tuesday, "tue" on a Wednesday, and so on. next_digest() therefore returns Tuesday 31 March 07:00 UTC instead of Monday 30 March 07:00 UTC.
+
+The daylight saving code in scheduler/zones.py is correct (its own tests pass). The other digest tests pass only because they use all seven days, so the shift hides itself. The fix would be to start DAY_NAMES at "mon", but I have not changed anything, as asked.

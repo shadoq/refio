@@ -1,0 +1,36 @@
+{
+  "id": "aider-refactor-lazy-large",
+  "mode": "AGENT",
+  "description": "Aider refactoring-laziness style (Python), complex: a 1500+ line class with two long methods in the middle of the file to be split into private helpers. A large file invites the model to rewrite only part of it, drop code behind placeholder comments, or quietly alter neighbouring methods. A checks script compares the AST of every other method and each signature against a baseline, requires both targets to be short outlines with new private helpers, then runs golden-master tests. The change must go through Refio edit tools: run_code is off, writing a helper script is rejected (create_new_file absent), and an edit made only from the terminal never triggers the post-turn verifier, which self_verified requires.",
+  "category": "aider-refactor",
+  "max_iterations": 50,
+  "fixture": "fixtures/aider-refactor-lazy-large",
+  "prompt_file": "prompts/aider-refactor-lazy-large.md",
+  "config": [
+    "verify.command=python checks/check_refactor.py",
+    "tools.permissions={\"run_code\":{\"planMode\":\"OFF\",\"agentMode\":\"OFF\"}}"
+  ],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": [
+      "test_warehouse_journal.py",
+      "checks/check_refactor.py",
+      "checks/baseline.json"
+    ],
+    "needles_in_file": [
+      {
+        "path": "warehouse_journal.py",
+        "regex": "(rest|remainder|remaining)[a-z ]{0,25}(unchanged|same|omitted)|\\.\\.\\. ?(existing|unchanged|rest)|# \\.\\.\\.|same as (before|above)|unchanged",
+        "absent": true
+      }
+    ],
+    "build_cmd": "python checks/check_refactor.py",
+    "self_verified": true,
+    "tool_invoked": [
+      {
+        "name": "create_new_file",
+        "absent": true
+      }
+    ]
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "id": "transcoder-java-to-kotlin",
+  "mode": "AGENT",
+  "description": "TransCoder style (Java to Kotlin): convert three small Java classes to Kotlin with the behaviour that a naive port loses - Math.addExact style overflow exceptions, value equality and hashing, an unmodifiable view instead of a defensive copy, exact exception messages and the String.format layout. A protected plain-Kotlin test runner is compiled with kotlinc in one invocation by run_tests.py. The prompt demands that the Java sources are removed; the harness cannot assert that yet (see notes).",
+  "category": "transcoder",
+  "max_iterations": 45,
+  "fixture": "fixtures/transcoder-java-to-kotlin",
+  "prompt_file": "prompts/transcoder-java-to-kotlin.md",
+  "config": ["verify.command=python run_tests.py"],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": ["src/Tests.kt", "run_tests.py"],
+    "build_cmd": "python run_tests.py",
+    "self_verified": true
+  }
+}

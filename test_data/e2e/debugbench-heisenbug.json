@@ -1,0 +1,16 @@
+{
+  "id": "debugbench-heisenbug",
+  "mode": "AGENT",
+  "description": "DebugBench style (Python): an order-dependent bug that only shows up for a particular call sequence. A per-calculator cache is keyed without the express flag, so a standard quote poisons an express one and the reverse, and a mutable default argument accumulates a bulk fee across unrelated quotes. The tests reproduce the sequences deterministically; fixing only one of the two causes still fails.",
+  "category": "debugbench",
+  "max_iterations": 35,
+  "fixture": "fixtures/debugbench-heisenbug",
+  "prompt_file": "prompts/debugbench-heisenbug.md",
+  "config": ["verify.command=python -m unittest discover -s tests"],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": ["tests/test_rates.py"],
+    "build_cmd": "python -m unittest discover -s tests",
+    "self_verified": true
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "id": "bfcl-no-tool-needed",
+  "mode": "AGENT",
+  "description": "BFCL style tool-call precision (irrelevance): the question is pure arithmetic over numbers given in the prompt, in AGENT mode with a full tool set and a project full of tempting files, including a timesheet with different numbers. The right behaviour is to call no tools at all: no reads, no searches, no scripts, no edits. Asserts the answer (with the boundary case of a shift of exactly 6 hours), a tool budget of zero for read and search tools, absence of every write and terminal tool, and that the project gained no files.",
+  "category": "bfcl-tools",
+  "max_iterations": 10,
+  "fixture": "fixtures/bfcl-no-tool-needed",
+  "prompt_file": "prompts/bfcl-no-tool-needed.md",
+  "assert": {
+    "no_context_overflow": true,
+    "needle_in_output": { "regex": "(^|[^0-9.])38([.]0+)?([^0-9]|$)" },
+    "output_absent": { "regex": "37[.]5|38[.]5|(^|[^0-9.])36([.]0+)?[ ]*(h|hours)" },
+    "tool_invoked": [
+      { "name": "run_terminal_command", "absent": true },
+      { "name": "run_code", "absent": true },
+      { "name": "create_new_file", "absent": true },
+      { "name": "advance_code_editing", "absent": true },
+      { "name": "code_editing", "absent": true },
+      { "name": "multi_edit", "absent": true },
+      { "name": "multi_line_editor", "absent": true }
+    ],
+    "tool_budget": {
+      "read_file": 0,
+      "read_directory": 0,
+      "grep_search": 0,
+      "file_search": 0,
+      "rag_search": 0,
+      "web_search": 0,
+      "fetch_webpage": 0,
+      "http_request": 0
+    },
+    "file_unchanged": ["README.md", "timesheets/last-week.csv", "checks/no_new_files.py"],
+    "build_cmd": "python checks/no_new_files.py"
+  }
+}

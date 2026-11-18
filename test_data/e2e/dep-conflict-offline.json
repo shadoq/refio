@@ -1,0 +1,26 @@
+{
+  "id": "dep-conflict-offline",
+  "mode": "AGENT",
+  "description": "Env-setup style: two vendored packages need conflicting major versions of a third local package (tuple API in 1.x, Point objects in 2.x, same function name path_length with different argument types), with no network and no pip. Putting either version on the path breaks one of the tools, so the agent has to build an adapter shim in its own glue code (or equivalent) without touching the vendored code; a protected checks script runs main.py and compares the output of both tools.",
+  "category": "env-setup",
+  "max_iterations": 40,
+  "fixture": "fixtures/dep-conflict-offline",
+  "prompt_file": "prompts/dep-conflict-offline.md",
+  "config": [
+    "verify.command=python checks.py"
+  ],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": [
+      "main.py",
+      "checks.py",
+      "README.md",
+      "vendor_pkgs/geomlib-1.4/geomlib/__init__.py",
+      "vendor_pkgs/geomlib-2.0/geomlib/__init__.py",
+      "vendor_pkgs/heatmap/heatmap/__init__.py",
+      "vendor_pkgs/routeplan/routeplan/__init__.py"
+    ],
+    "build_cmd": "python checks.py",
+    "self_verified": true
+  }
+}

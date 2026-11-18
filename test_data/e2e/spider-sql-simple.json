@@ -1,0 +1,23 @@
+{
+  "id": "spider-sql-simple",
+  "mode": "AGENT",
+  "description": "Spider style (Python + SQLite): five English questions answered with SQL against a four-table shop database built from synthetic CSV files - a filtered sorted list, a grouped count with a two-key order, a three-table join aggregate with a status filter, an anti-join, and a greatest-per-group lookup. A checks script compares each result set with a reference on the shop data and on an extended copy, so hard-coded values fail.",
+  "category": "spider",
+  "max_iterations": 25,
+  "fixture": "fixtures/spider-sql-simple",
+  "prompt_file": "prompts/spider-sql-simple.md",
+  "config": ["verify.command=python check_queries.py"],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": [
+      "check_queries.py",
+      "build_db.py",
+      "data/customers.csv",
+      "data/products.csv",
+      "data/orders.csv",
+      "data/order_items.csv"
+    ],
+    "build_cmd": "python check_queries.py",
+    "self_verified": true
+  }
+}

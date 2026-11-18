@@ -1,0 +1,19 @@
+{
+  "id": "aider-py-ledger-format",
+  "mode": "AGENT",
+  "description": "Aider-polyglot style (Python): implement a fixed-width multi-currency ledger printer from a stub and an instructions file - locale-dependent symbol placement and separators, negative amounts in parentheses with alignment padding for positives, description truncation at exactly 24 characters, and a three-key sort. The unit tests carry the edge cases a first attempt usually misses (24 vs 25 character boundary, small amounts, case-sensitive ordering) and the post-turn verifier gives a repair round with the test output, like aider's second try.",
+  "category": "aider-polyglot",
+  "max_iterations": 30,
+  "fixture": "fixtures/aider-py-ledger-format",
+  "prompt_file": "prompts/aider-py-ledger-format.md",
+  "config": ["verify.command=python -m unittest ledger_format_test"],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": [
+      "ledger_format_test.py",
+      ".docs/instructions.md"
+    ],
+    "build_cmd": "python -m unittest ledger_format_test",
+    "self_verified": true
+  }
+}

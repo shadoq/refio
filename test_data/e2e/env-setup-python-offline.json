@@ -1,0 +1,28 @@
+{
+  "id": "env-setup-python-offline",
+  "mode": "AGENT",
+  "description": "Env-setup style, offline, no pip: a workspace holds a local library next to a Python tool. The start script builds PYTHONPATH wrongly (replaces the variable, points at the wrong directory and only works from one working directory), the tool needs a config.toml that only exists as config.example.toml, and the library reports a __version__ that disagrees with its pyproject.toml and fails the tool's minimum-version gate. The shortcut of lowering the requirement or the declared version is blocked by protected files. The protected check script runs the start script from two working directories and compares the exact report.",
+  "category": "env-setup",
+  "max_iterations": 40,
+  "fixture": "fixtures/env-setup-python-offline",
+  "prompt_file": "prompts/env-setup-python-offline.md",
+  "config": [
+    "general.no_egress_enabled=true",
+    "verify.command=python check.py"
+  ],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": [
+      "check.py",
+      "README.md",
+      "reporter/requires.txt",
+      "reporter/config.example.toml",
+      "reporter/reporter/main.py",
+      "reporter/data/trips.csv",
+      "unitconv/pyproject.toml",
+      "unitconv/src/unitconv/units.py"
+    ],
+    "build_cmd": "python check.py",
+    "self_verified": true
+  }
+}

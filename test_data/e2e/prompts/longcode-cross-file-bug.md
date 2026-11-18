@@ -1,0 +1,3 @@
+Support tickets from our shop: the price shown for the same basket changes between requests. A quote with a seasonal promotion looks right the first time, but the second identical quote is cheaper still, and after any promotion has been quoted, even quotes without a promotion come out too low until the service is restarted.
+
+The project is large (it is the whole `shopkit` code base, well over a hundred modules). The failing behaviour is pinned down by `tests/test_quote.py`: `python -m unittest discover -s tests` must pass. Find the actual cause, fix it, and keep the public functions and their behaviour otherwise unchanged. Do not edit anything under `tests/`.

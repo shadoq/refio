@@ -1,0 +1,3 @@
+Implement `sort_surnames(names)` in `plsort.py`. It must return a new list of surnames in Polish dictionary order: the Polish alphabet is a ą b c ć d e ę f g h i j k l ł m n ń o ó p r s ś t u w y z ź ż, so for example "Lis" comes before "Łoś", and "Zdun" before "Źrebiec" before "Żak". Compare case-insensitively; surnames that differ only by case keep their original relative order. A space or a hyphen sorts before any letter.
+
+This must work the same on every machine, so do not depend on the operating system locale. The tests are in `test_plsort.py` (`python -m unittest test_plsort`); do not modify them.

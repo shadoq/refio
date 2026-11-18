@@ -1,0 +1,25 @@
+{
+  "id": "commit0-mini-lib",
+  "mode": "AGENT",
+  "description": "Commit0 style (Python, long task): a five-module library (semantic versions with ranges, glob matching with hidden-file rules, an INI parser with quoting, continuation lines and interpolation, text tables, durations) exists only as signatures and docstrings next to a complete protected test suite. Run as a long task: rounds of AGENT turns until python -m unittest discover -s tests exits 0, so the score is how far the library gets within the round budget.",
+  "category": "commit0",
+  "max_iterations": 200,
+  "fixture": "fixtures/commit0-mini-lib",
+  "prompt_file": "prompts/commit0-mini-lib.md",
+  "until": "python -m unittest discover -s tests",
+  "max_rounds": 5,
+  "config": [
+    "long_task.max_minutes=60"
+  ],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": [
+      "tests/test_semver.py",
+      "tests/test_globmatch.py",
+      "tests/test_ini.py",
+      "tests/test_table.py",
+      "tests/test_duration.py"
+    ],
+    "build_cmd": "python -m unittest discover -s tests"
+  }
+}

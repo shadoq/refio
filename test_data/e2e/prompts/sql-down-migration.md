@@ -1,0 +1,3 @@
+The `migrations/` folder has three forward migrations (`*.up.sql`) for our SQLite database but nobody ever wrote the reverse ones. Add a matching `NNN_name.down.sql` for each of the three, in the same folder and with the same base name, so that rolling back restores exactly the previous schema and keeps the data that existed before the migration.
+
+`python checks.py` applies everything up, rolls back step by step comparing against the schema and data it saw on the way up, and then migrates up again, all on an in-memory database with foreign keys enabled. Do not change the up migrations or the checker.

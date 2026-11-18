@@ -1,0 +1,16 @@
+{
+  "id": "longcode-cross-file-bug",
+  "mode": "AGENT",
+  "description": "LongCodeArena style (Python): a bug report in a 190-file project where only a few modules matter. The symptom (quotes that drift between calls) comes from three files interacting: the catalog hands out its internal tier lists, the promo module edits them in place, and the checkout quote trusts the result. The agent has to navigate the noise, trace the data flow across files and fix the real cause; a shallow copy is not enough.",
+  "category": "longcodearena",
+  "max_iterations": 50,
+  "fixture": "fixtures/longcode-cross-file-bug",
+  "prompt_file": "prompts/longcode-cross-file-bug.md",
+  "config": ["verify.command=python -m unittest discover -s tests"],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": ["tests/test_quote.py"],
+    "build_cmd": "python -m unittest discover -s tests",
+    "self_verified": true
+  }
+}

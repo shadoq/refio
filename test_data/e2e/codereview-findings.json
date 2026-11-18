@@ -1,0 +1,19 @@
+{
+  "id": "codereview-findings",
+  "mode": "PLAN",
+  "description": "CodeReviewer style (read-only review): a diff that adds a small TTL cache with three real defects (mutation of a dict while iterating it, division by zero on a fresh cache, a shared mutable default argument) and two decoys that look suspicious but are correct (key normalisation that merges case variants on purpose, an oldest-entry eviction that only runs on a non-empty dict). The answer must end with a FINDINGS line naming the three real methods and none of the decoys; no file may change.",
+  "category": "codereviewer",
+  "max_iterations": 20,
+  "fixture": "fixtures/codereview-findings",
+  "prompt_file": "prompts/codereview-findings.md",
+  "assert": {
+    "no_context_overflow": true,
+    "needle_in_output": {
+      "regex": "FINDINGS:.*(expire_stale.*hit_ratio.*load_many|expire_stale.*load_many.*hit_ratio|hit_ratio.*expire_stale.*load_many|hit_ratio.*load_many.*expire_stale|load_many.*expire_stale.*hit_ratio|load_many.*hit_ratio.*expire_stale)"
+    },
+    "output_absent": {
+      "regex": "FINDINGS:.*(_normalize_key|_evict_oldest)"
+    },
+    "file_unchanged": ["src/cache.py", "review/change.diff"]
+  }
+}

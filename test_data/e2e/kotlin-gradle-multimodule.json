@@ -1,0 +1,32 @@
+{
+  "id": "kotlin-gradle-multimodule",
+  "mode": "AGENT",
+  "description": "Multi-SWE-bench style (Kotlin, Gradle): a three-module project (money, pricing, app) with two defects that only show in the interaction of modules - the pricing module rounds the bulk discount per unit instead of once on the whole line, and the app module computes bulk tiers per order line instead of per product. The agent has to read across module boundaries, fix both without changing the public API or the tests, and run Gradle offline through the wrapper via the same verify.cjs approach as the single-module Kotlin scenario.",
+  "category": "multi-swe-bench",
+  "max_iterations": 50,
+  "fixture": "fixtures/kotlin-gradle-multimodule",
+  "prompt_file": "prompts/kotlin-gradle-multimodule.md",
+  "config": ["verify.command=node verify.cjs"],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": [
+      "verify.cjs",
+      "build.gradle.kts",
+      "settings.gradle.kts",
+      "gradle.properties",
+      "gradlew",
+      "gradlew.bat",
+      "gradle/wrapper/gradle-wrapper.jar",
+      "gradle/wrapper/gradle-wrapper.properties",
+      "money/build.gradle.kts",
+      "pricing/build.gradle.kts",
+      "app/build.gradle.kts",
+      "money/src/main/kotlin/shop/money/Money.kt",
+      "money/src/test/kotlin/shop/money/MoneyTest.kt",
+      "pricing/src/test/kotlin/shop/pricing/BulkDiscountTest.kt",
+      "app/src/test/kotlin/shop/app/CheckoutTest.kt"
+    ],
+    "build_cmd": "node verify.cjs",
+    "self_verified": true
+  }
+}

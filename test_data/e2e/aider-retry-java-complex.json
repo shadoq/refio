@@ -1,0 +1,23 @@
+{
+  "id": "aider-retry-java-complex",
+  "mode": "AGENT",
+  "description": "Aider-polyglot style (Java), built for the repair round: an integer expression evaluator with a hand-written parser. The natural first implementation folds ^ left to right, so 2^3^2 gives 64 instead of 512, binds unary minus tighter than ^, so -2^2 gives 4 instead of -4, and lets long overflow or Long.MIN_VALUE / -1 pass silently; the tests catch all of these, so the post-turn verifier's second round has to fix them. A protected run_tests.py compiles with javac and runs a plain Java test runner.",
+  "category": "aider-polyglot",
+  "max_iterations": 45,
+  "fixture": "fixtures/aider-retry-java-complex",
+  "prompt_file": "prompts/aider-retry-java-complex.md",
+  "config": [
+    "verify.command=python run_tests.py"
+  ],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": [
+      "CalculatorTest.java",
+      "CalcException.java",
+      "run_tests.py",
+      ".docs/instructions.md"
+    ],
+    "build_cmd": "python run_tests.py",
+    "self_verified": true
+  }
+}

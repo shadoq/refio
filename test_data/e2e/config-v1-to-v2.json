@@ -1,0 +1,21 @@
+{
+  "id": "config-v1-to-v2",
+  "mode": "AGENT",
+  "description": "Config-migration style: write a converter from an INI-like v1 config to a YAML-like v2 text format from a written spec. The hard parts are the ones a quick sketch misses - comments must be preserved (with ; turned into #), a comment run directly above the next [section] header belongs to that header and not to the previous section, missing defaults are inserted before those header comments and blank lines, inline comments need preceding whitespace, ambiguous values get quoted, and errors carry 1-based line numbers. Protected unit tests are the acceptance bar and the post-turn verifier gives a repair round.",
+  "category": "config-migration",
+  "max_iterations": 40,
+  "fixture": "fixtures/config-v1-to-v2",
+  "prompt_file": "prompts/config-v1-to-v2.md",
+  "config": [
+    "verify.command=python -m unittest test_confconv"
+  ],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": [
+      "test_confconv.py",
+      "SPEC.md"
+    ],
+    "build_cmd": "python -m unittest test_confconv",
+    "self_verified": true
+  }
+}

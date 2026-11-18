@@ -1,0 +1,16 @@
+{
+  "id": "ci-fix-pipeline",
+  "mode": "AGENT",
+  "description": "CI-repair style: a local pipeline script (custom AST lint, unittest run, build check that validates __all__ exports) fails in three consecutive stages because it stops at the first red stage - lint (unused import, debug print, long line), tests (inclusive tier boundary and billable weight using min instead of max) and build (stale __all__ entry after a rename). The agent has to fix the code, not the pipeline, so ci.py and the tests are protected. The post-turn verifier runs the pipeline for a repair round.",
+  "category": "ci-repair",
+  "max_iterations": 35,
+  "fixture": "fixtures/ci-fix-pipeline",
+  "prompt_file": "prompts/ci-fix-pipeline.md",
+  "config": ["verify.command=python ci.py"],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": ["ci.py", "tests/test_shipping.py", "tests/__init__.py"],
+    "build_cmd": "python ci.py",
+    "self_verified": true
+  }
+}

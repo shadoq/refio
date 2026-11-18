@@ -1,0 +1,23 @@
+{
+  "id": "env-setup-node-offline",
+  "mode": "AGENT",
+  "description": "Env-setup style, offline: a dependency-free Node service does not start. The start script points to a file that does not exist, there is no .env (only .env.example with synthetic values) and the config reads the port from the wrong variable name. Network egress is switched off, so the fix must come from reading the README and the code. The protected check script starts the service on loopback exactly as the start script does, verifies /health, and proves that values come from .env and that the process environment still overrides them (which rules out hard-coding the port).",
+  "category": "env-setup",
+  "max_iterations": 25,
+  "fixture": "fixtures/env-setup-node-offline",
+  "prompt_file": "prompts/env-setup-node-offline.md",
+  "config": [
+    "general.no_egress_enabled=true",
+    "verify.command=node check.js"
+  ],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": [
+      "check.js",
+      ".env.example",
+      "README.md"
+    ],
+    "build_cmd": "node check.js",
+    "self_verified": true
+  }
+}

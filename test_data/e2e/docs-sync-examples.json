@@ -1,0 +1,21 @@
+{
+  "id": "docs-sync-examples",
+  "mode": "AGENT",
+  "description": "DocAgent style documentation sync: the README of a small library documents an older API (renamed methods, a method that became a property, a function that changed its return type, a changed default and a merge that is no longer in place), so several examples crash and others print stale output. A protected checks script extracts every python block from README.md, executes it and compares stdout with the text block that follows; the library code must stay unchanged, examples cannot be deleted, and old API names must disappear from the prose too.",
+  "category": "docagent",
+  "max_iterations": 30,
+  "fixture": "fixtures/docs-sync-examples",
+  "prompt_file": "prompts/docs-sync-examples.md",
+  "config": [
+    "verify.command=python checks.py"
+  ],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": [
+      "tallykit.py",
+      "checks.py"
+    ],
+    "build_cmd": "python checks.py",
+    "self_verified": true
+  }
+}

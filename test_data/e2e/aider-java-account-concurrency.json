@@ -1,0 +1,23 @@
+{
+  "id": "aider-java-account-concurrency",
+  "mode": "AGENT",
+  "description": "Aider-polyglot style (Java): implement a thread-safe bank account from a stub and an instructions file - open/close lifecycle with reopening from zero, state-before-amount error precedence, overdraft and overflow rejection, close atomic with concurrent deposits, and atomic transfers between accounts that must not deadlock when run in opposite directions. The test hammers the account with threads and checks the final balances; a protected run_tests.py compiles with javac and runs the plain-Java test runner. The post-turn verifier runs it, so a failing first attempt gets a repair round, like aider's second try.",
+  "category": "aider-polyglot",
+  "max_iterations": 40,
+  "fixture": "fixtures/aider-java-account-concurrency",
+  "prompt_file": "prompts/aider-java-account-concurrency.md",
+  "config": [
+    "verify.command=python run_tests.py"
+  ],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": [
+      "test/BankAccountTest.java",
+      "run_tests.py",
+      ".docs/instructions.md",
+      "src/InsufficientFundsException.java"
+    ],
+    "build_cmd": "python run_tests.py",
+    "self_verified": true
+  }
+}

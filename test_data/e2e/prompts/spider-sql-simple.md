@@ -1,0 +1,3 @@
+`queries.sql` contains five questions about our shop database, each under a `-- name:` marker with an empty body. Write the SQLite query that answers each question directly under its question. The schema is in `build_db.py`, the data in `data/*.csv`.
+
+Check your work with `python check_queries.py`: it must report all five queries correct. It also runs the queries on a second, larger database, so each query has to answer the question in general and not just return today's values. Do not edit `check_queries.py`, `build_db.py` or the CSV files, and keep the `-- name:` and `-- question:` lines in `queries.sql` as they are.

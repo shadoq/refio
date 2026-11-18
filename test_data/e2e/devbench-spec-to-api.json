@@ -1,0 +1,16 @@
+{
+  "id": "devbench-spec-to-api",
+  "mode": "AGENT",
+  "description": "DevBench style (spec to working software): build a small Node HTTP service from a written endpoint specification. The spec has the details that separate a careful reading from a sketch - ETag and If-Match optimistic concurrency with a fixed order of checks (404 before 428 before 412 before body validation), filter-before-paging cursor pagination where next_cursor appears only when more matching items remain, exact Allow headers, and independent state per createServer() call. The protected tests start the server in-process on an ephemeral port and the post-turn verifier gives a repair round.",
+  "category": "devbench",
+  "max_iterations": 45,
+  "fixture": "fixtures/devbench-spec-to-api",
+  "prompt_file": "prompts/devbench-spec-to-api.md",
+  "config": ["verify.command=node --test tests/api.test.js"],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": ["tests/api.test.js", "SPEC.md", "package.json"],
+    "build_cmd": "node --test tests/api.test.js",
+    "self_verified": true
+  }
+}

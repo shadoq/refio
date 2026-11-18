@@ -1,0 +1,9 @@
+Review of review/change.diff (src/cache.py). Three real defects:
+
+1. expire_stale deletes from self._entries while iterating over self._entries.items(). As soon as one entry has expired, Python raises RuntimeError (dictionary changed size during iteration), and because get() calls it on every lookup the cache breaks once the first entry goes stale. Collect the expired keys first, then delete them.
+2. hit_ratio divides by hits + misses, which is zero on a fresh cache. It raises ZeroDivisionError instead of returning 0.0 (or None).
+3. load_many uses a mutable default argument, seen=[]. The list is created once and shared by every call, so a second call with the same keys silently skips them and returns an empty dict.
+
+The rest of the file is fine.
+
+FINDINGS: expire_stale, hit_ratio, load_many

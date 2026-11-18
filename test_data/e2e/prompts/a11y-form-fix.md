@@ -1,0 +1,3 @@
+Our signup page `signup.html` failed an accessibility review. The reviewer listed: the document language is not declared, images are missing text alternatives (one of them is purely decorative), the form fields are not associated with their text, the radio buttons are not grouped under a common heading, and the buttons do not say what type they are.
+
+Fix the page so that it meets those rules while keeping the look and the behaviour of the form: do not rename or remove any field names, existing ids, values or the form action. `python checks.py` runs our checker (built on the standard library HTML parser); it must report no problems. Do not edit the checker.

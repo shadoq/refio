@@ -1,0 +1,3 @@
+A request through `fetch_with_retry` keeps failing with ConnectionError until the client gives up. How many milliseconds does the client spend sleeping between the attempts in total, with the code and settings as they are today (version in `src/settings.py`)?
+
+The code counts delays in ticks, and how long a tick is has changed over the years; the release notes in `CHANGELOG.md` are the place to look, but be careful which entries apply to the current version. Do not modify any file. Answer with the number of milliseconds and a short derivation: attempts, delay per wait, tick length and the release that fixed it.
