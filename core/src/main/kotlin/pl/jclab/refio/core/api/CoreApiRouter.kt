@@ -81,7 +81,8 @@ class CoreApiRouter(
     val promptsService = PromptsService(persistence.promptsRepository, promptRegistry)
     val toolPermissionsService = ToolPermissionsService(
         configRepository = persistence.configRepository,
-        toolRegistry = toolRegistry
+        toolRegistry = toolRegistry,
+        runOverride = runConfigOverrides[ToolPermissionsService.CONFIG_KEY]
     )
     val toolApprovalService = ToolApprovalService()
     val llmClient = llmClientOverride ?: LLMClient(

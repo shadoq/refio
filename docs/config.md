@@ -357,6 +357,8 @@ Tools you do not list keep whatever they already have (their smart default deriv
 read/write mode, or a level you set in Settings). So a file with two entries adjusts those two
 tools and leaves the rest alone, both on startup and via **Settings → Reload from YAML**.
 
+For a single CLI run, `--config tools.permissions=<json>` overrides the named tools on top of the stored permissions without saving anything, e.g. `--config 'tools.permissions={"run_code":{"planMode":"OFF","agentMode":"OFF"}}'` (the stored shape `{"tools":{...}}` is accepted too). Unlike the YAML file, a malformed override stops the run with an error.
+
 ### Post-turn Verification
 
 After an AGENT turn that wrote files, the loop runs the project's build/test command and feeds failures back to the model. Usually set in the project config, since the command is project-specific.
