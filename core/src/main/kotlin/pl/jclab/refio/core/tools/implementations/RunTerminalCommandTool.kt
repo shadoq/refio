@@ -281,10 +281,41 @@ class RunTerminalCommandTool(
          */
         fun shellCommand(command: String, osName: String = System.getProperty("os.name")): List<String> =
             if (osName.lowercase().contains("windows")) {
-                listOf("powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", WINDOWS_UTF8_PREFIX + command)
+                listOf(
+                    "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+                    escapeQuotesForWindowsArgument(WINDOWS_UTF8_PREFIX + command),
+                )
             } else {
                 listOf("/bin/sh", "-c", command)
             }
+
+        /**
+         * Java wraps a Windows argument containing spaces in quotes but leaves the double quotes
+         * inside it as they are, so the receiving process drops them while splitting its command
+         * line: `"a|b"` reached PowerShell as `a|b`, a pipeline. Escaping them by the Windows
+         * splitting rules (a quote becomes `\"`, backslashes right before it are doubled) delivers
+         * the command intact. A trailing backslash is left alone: Java already doubles it before
+         * the closing quote it adds.
+         */
+        internal fun escapeQuotesForWindowsArgument(argument: String): String {
+            val escaped = StringBuilder(argument.length + 16)
+            var backslashes = 0
+            for (char in argument) {
+                when (char) {
+                    '\\' -> backslashes++
+                    '"' -> {
+                        escaped.append("\\".repeat(backslashes * 2 + 1)).append('"')
+                        backslashes = 0
+                    }
+                    else -> {
+                        escaped.append("\\".repeat(backslashes)).append(char)
+                        backslashes = 0
+                    }
+                }
+            }
+            escaped.append("\\".repeat(backslashes))
+            return escaped.toString()
+        }
 
         const val MIN_TIMEOUT_SECONDS = 30L
         const val MAX_TIMEOUT_SECONDS = 600L

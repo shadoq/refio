@@ -4,6 +4,8 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.condition.EnabledOnOs
+import org.junit.jupiter.api.condition.OS
 import org.junit.jupiter.api.io.TempDir
 import pl.jclab.refio.core.tools.PathSandbox
 import pl.jclab.refio.core.tools.base.ToolCategory
@@ -103,6 +105,40 @@ class RunTerminalCommandToolTest {
                 tool.validateParams(mapOf("command" to "   "))
             }
             assertTrue(exception.message!!.contains("command"))
+        }
+    }
+
+    /**
+     * Java hands each argument to a Windows process without escaping the double quotes inside
+     * it, so PowerShell used to receive the command with its quotes stripped: a quoted regex such
+     * as "^# (pass|fail)" turned into a pipeline into a command named `pass`.
+     */
+    @Nested
+    @EnabledOnOs(OS.WINDOWS)
+    inner class WindowsQuotingTests {
+
+        @Test
+        fun `a pipe inside a double-quoted string stays part of the string`() = runBlocking {
+            val result = tool.execute(mapOf("command" to "Write-Output \"a|b\""))
+
+            assertTrue(result.success, "output was: ${result.output}")
+            assertEquals("a|b", result.output!!.trim())
+        }
+
+        @Test
+        fun `a path ending in a backslash inside quotes keeps the quote that closes it`() = runBlocking {
+            val result = tool.execute(mapOf("command" to "Write-Output \"C:\\dir\\\"; Write-Output \"x  y\""))
+
+            assertTrue(result.success, "output was: ${result.output}")
+            assertEquals(listOf("C:\\dir\\", "x  y"), result.output!!.trim().lines().map { it.trim() })
+        }
+
+        @Test
+        fun `a command ending in a backslash runs unchanged`() = runBlocking {
+            val result = tool.execute(mapOf("command" to "Write-Output C:\\dir\\"))
+
+            assertTrue(result.success, "output was: ${result.output}")
+            assertEquals("C:\\dir\\", result.output!!.trim())
         }
     }
 

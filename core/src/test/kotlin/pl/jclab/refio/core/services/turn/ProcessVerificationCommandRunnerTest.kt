@@ -2,6 +2,8 @@ package pl.jclab.refio.core.services.turn
 
 import org.junit.jupiter.api.Assumptions.assumeFalse
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.condition.EnabledOnOs
+import org.junit.jupiter.api.condition.OS
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
@@ -11,8 +13,8 @@ import kotlin.test.assertTrue
 
 /**
  * The only tests in this package that spawn real OS processes: the drain contract between the
- * reader thread and the caller cannot be observed through a fake runner. Skipped on Windows -
- * the commands are POSIX shell.
+ * reader thread and the caller cannot be observed through a fake runner. Most are skipped on
+ * Windows - their commands are POSIX shell; the default-shell test runs on Windows only.
  */
 class ProcessVerificationCommandRunnerTest {
 
@@ -140,6 +142,41 @@ class ProcessVerificationCommandRunnerTest {
             "kept ${execution.output.length} characters",
         )
         assertTrue(execution.output.trimEnd().endsWith("LAST-LINE"), "the end of the output stays")
+    }
+
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    fun `by default a command runs the way the agent's terminal runs it`() {
+        // The check after a turn runs the command the agent itself would use. On Windows that is
+        // PowerShell, which resolves ./gradlew to gradlew.bat; cmd.exe rejected it within
+        // milliseconds, so every Gradle project's check failed before any build had started.
+        Files.writeString(workingDir.resolve("wrapper.bat"), "@echo wrapper-ran\r\n")
+
+        val execution = runner.run("./wrapper build", workingDir.toFile(), 60)
+
+        assertEquals(0, execution.exitCode, "output was: ${execution.output}")
+        assertTrue(execution.output.contains("wrapper-ran"), "output was: ${execution.output}")
+    }
+
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    fun `a background child left holding the output does not hang the check on Windows`() {
+        // Gradle leaves its daemon running with the check's output pipe inherited. On Windows,
+        // closing that pipe from our side blocks for as long as the reader is inside read(), so
+        // the check hung until the daemon exited - for an hour and a half in one e2e run. The
+        // child here, like the daemon, writes nothing and keeps the pipe open for 30 s; cmd stays
+        // alive long enough to be seen.
+        val start = System.currentTimeMillis()
+        val execution = runner.run(
+            "cmd /c \"start /b powershell -NoProfile -Command Start-Sleep 30 & ping -n 2 127.0.0.1 > nul\"; Write-Output check-done",
+            workingDir.toFile(),
+            60,
+        )
+        val elapsedMs = System.currentTimeMillis() - start
+
+        assertFalse(execution.timedOut, "the command itself finished, output: ${execution.output}")
+        assertTrue(elapsedMs < 15_000, "the check waited ${elapsedMs}ms for the background child")
+        assertTrue(execution.output.contains("check-done"), "output was: ${execution.output}")
     }
 
     @Test
