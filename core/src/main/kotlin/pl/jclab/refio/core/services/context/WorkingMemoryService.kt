@@ -1198,6 +1198,9 @@ class WorkingMemoryService(
      * Keeps the [maxEntriesPerTask] most important automatic facts and, separately, up to
      * [MAX_PINNED_ENTRIES] pinned notes (least important, then oldest, go first). Returns the
      * pinned notes that were dropped so the caller can tell the model.
+     *
+     * "Oldest" is decided by the task step first: notes written in quick succession share one
+     * clock tick on Windows, and a timestamp tie would leave the choice to hash-map order.
      */
     private fun trimEntries(taskEntries: ConcurrentHashMap<String, WorkingMemoryEntry>): List<WorkingMemoryEntry> {
         val (pinned, automatic) = taskEntries.values.partition { it.pinned }
@@ -1211,7 +1214,9 @@ class WorkingMemoryService(
         }
 
         if (pinned.size <= MAX_PINNED_ENTRIES) return emptyList()
-        val evicted = pinned.sortedWith(compareBy<WorkingMemoryEntry> { it.importance }.thenBy { it.timestamp })
+        val evicted = pinned.sortedWith(
+            compareBy<WorkingMemoryEntry> { it.importance }.thenBy { it.iteration }.thenBy { it.timestamp }
+        )
             .take(pinned.size - MAX_PINNED_ENTRIES)
         evicted.forEach { taskEntries.remove(buildEntryId(it)) }
         return evicted

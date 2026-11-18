@@ -95,6 +95,26 @@ class WorkingMemoryLongRunTest {
     }
 
     @Test
+    fun `notes written within one clock tick still push out the one from the earliest step`() {
+        val wm = WorkingMemoryService(maxEntriesPerTask = 20)
+        val sameTick = java.time.Instant.parse("2026-01-01T00:00:00Z")
+        val notes = (1..WorkingMemoryService.MAX_PINNED_ENTRIES + 1).map { step ->
+            WorkingMemoryEntry(
+                iteration = step, key = "constraint", value = "rule-$step", importance = 10,
+                timestamp = sameTick, lastAccessedAt = sameTick, pinned = true
+            )
+        }
+        // Newest first, so insertion order cannot stand in for age.
+        notes.reversed().forEach { wm.recordEntries("task-wm", listOf(it)) }
+
+        val section = wm.buildWorkingMemorySection("task-wm", maxTokens = 8000)
+        assertFalse(Regex("rule-1\\b").containsMatchIn(section), "the note from step 1 should have been dropped")
+        (2..WorkingMemoryService.MAX_PINNED_ENTRIES + 1).forEach {
+            assertTrue(section.contains("rule-$it"), "note from step $it was dropped instead")
+        }
+    }
+
+    @Test
     fun `subagent facts stay out of the parent memory`() {
         val wm = WorkingMemoryService(maxEntriesPerTask = 20)
         val integration = WorkingMemoryIntegration(wm)
@@ -109,7 +129,9 @@ class WorkingMemoryLongRunTest {
     }
 
     @Test
-    fun `tool executor records knowledge with the task step and the subagent scope`() = runTest {
+    fun `tool executor records knowledge with the task step and the subagent scope`() {
+        // Mocks are built before runTest: the first MockK use in a JVM initialises the library,
+        // which can take longer than runTest's wall-clock limit on a cold machine.
         val integration = mockk<WorkingMemoryIntegration>(relaxed = true)
         val registry = mockk<ToolRegistry>()
         val summarizer = mockk<ToolResultSummarizer>()
@@ -127,14 +149,18 @@ class WorkingMemoryLongRunTest {
             workingMemoryIntegration = integration
         )
 
-        executor.executeSingleTool(
-            taskId = "task-wm",
-            toolCall = ToolCallData(id = "c1", name = "read_file", arguments = "{\"path\":\"TurnVerifier.kt\"}"),
-            subtaskId = "s1", listener = null, iteration = 3, _config = mockk<TurnLoopConfig>(relaxed = true),
-            mode = TaskMode.AGENT, executionMode = ExecutionMode.AUTO, runId = "r1", depth = 1,
-            profileOverrides = TurnProfileOverrides(agentInstanceId = "sub-1", depth = 1), _subtaskIds = emptyMap(),
-            taskStep = 137
-        )
+        val config = mockk<TurnLoopConfig>(relaxed = true)
+
+        runTest {
+            executor.executeSingleTool(
+                taskId = "task-wm",
+                toolCall = ToolCallData(id = "c1", name = "read_file", arguments = "{\"path\":\"TurnVerifier.kt\"}"),
+                subtaskId = "s1", listener = null, iteration = 3, _config = config,
+                mode = TaskMode.AGENT, executionMode = ExecutionMode.AUTO, runId = "r1", depth = 1,
+                profileOverrides = TurnProfileOverrides(agentInstanceId = "sub-1", depth = 1), _subtaskIds = emptyMap(),
+                taskStep = 137
+            )
+        }
 
         verify {
             integration.recordToolKnowledge(
