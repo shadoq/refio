@@ -25,6 +25,9 @@ private val logger = dualLogger("ConfigRouter")
 /** The model choice that means "no specific model, use the configured default". */
 private const val AUTO_MODEL = "auto"
 
+/** Providers served from the user's own machine, where listing models proves the server is up. */
+private val LOCAL_PROVIDERS = setOf("ollama", "lmstudio")
+
 /**
  * Router for configuration operations.
  * Handles model configuration, visibility settings, and orchestration settings.
@@ -391,9 +394,22 @@ class ConfigRouter(
                         )
                     }
 
-                    val testModel = chatModels.first().id
-
                     val latency = (System.currentTimeMillis() - startTime).toInt()
+
+                    // A local server that answered the model list is reachable. A chat probe would
+                    // load the first listed model into GPU memory, and a cold load of a large model
+                    // can alone outlast the 30 s budget and report a running server as unreachable.
+                    if (provider.lowercase() in LOCAL_PROVIDERS) {
+                        logger.info { "Connection test successful for $provider (model list): latency=${latency}ms, models=${models.size}" }
+                        return@withTimeout TestConnectionResult(
+                            success = true,
+                            latencyMs = latency,
+                            message = "Connected successfully",
+                            details = mapOf("models_available" to models.map { it.id })
+                        )
+                    }
+
+                    val testModel = chatModels.first().id
                     val probeResult = runCatching {
                         llmClient.complete(
                             provider = provider.lowercase(),
