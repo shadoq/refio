@@ -22,6 +22,13 @@ class AnthropicThinkingParamsTest {
     }
 
     @Test
+    fun `haiku 5_5 is steered by effort like the rest of the claude 5 family, not by a budget`() {
+        val params = AnthropicAdapter(model = "claude-haiku-5-5").thinkingParams(ReasoningEffort.LOW)
+
+        assertEquals(mapOf("output_config" to mapOf("effort" to "low")), params)
+    }
+
+    @Test
     fun `model that thinks only when asked sends nothing with reasoning off`() {
         // Opus 4.8 leaves thinking off unless the request enables it.
         val params = AnthropicAdapter(model = "claude-opus-4-8").thinkingParams(ReasoningEffort.OFF)

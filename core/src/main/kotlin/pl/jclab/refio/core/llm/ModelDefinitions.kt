@@ -72,6 +72,116 @@ object ModelDefinitions {
     val OPENAI_MODELS = mapOf(
 
         //
+        // GPT 6.2 and 6.1 Terra (models.dev, 2026-11-20)
+        // Short-context prices; above 272K input tokens OpenAI bills about 2x input and 1.5x output.
+        //
+        "gpt-6.2-astra" to ModelDefinition(
+            id = "gpt-6.2-astra",
+            name = "GPT-6.2 Astra",
+            provider = "openai",
+            description = "Frontier GPT-6.2 reasoning model for coding, computer use and professional work",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION,
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 1_050_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 8.00,
+            costPer1MOutput = 40.00,
+            costPer1MCachedInput = 0.4,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.RESPONSES,
+            apiFormat = ApiFormat.RESPONSES,
+            paramMappings = mapOf(
+                "max_tokens" to "max_output_tokens"
+            ),
+            removeParams = listOf(
+                "frequency_penalty",
+                "presence_penalty",
+                "top_p",
+                "temperature"
+            ),
+            active = true
+        ),
+        "gpt-6.2-sol" to ModelDefinition(
+            id = "gpt-6.2-sol",
+            name = "GPT-6.2 Sol",
+            provider = "openai",
+            description = "Efficient GPT-6.2 reasoning model for everyday work, multistep agentic workflows and coding",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION,
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 1_050_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 2.00,
+            costPer1MOutput = 10.00,
+            costPer1MCachedInput = 0.1,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.RESPONSES,
+            apiFormat = ApiFormat.RESPONSES,
+            paramMappings = mapOf(
+                "max_tokens" to "max_output_tokens"
+            ),
+            removeParams = listOf(
+                "frequency_penalty",
+                "presence_penalty",
+                "top_p",
+                "temperature"
+            ),
+            active = true
+        ),
+        "gpt-6.1-terra" to ModelDefinition(
+            id = "gpt-6.1-terra",
+            name = "GPT-6.1 Terra",
+            provider = "openai",
+            description = "Fast, efficient GPT-6.1 model for visual reasoning, precise computer use and natural writing",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION,
+            ),
+            modelType = ModelType.TEXT,
+            maxContext = 1_050_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 1.00,
+            costPer1MOutput = 5.00,
+            costPer1MCachedInput = 0.05,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.RESPONSES,
+            apiFormat = ApiFormat.RESPONSES,
+            paramMappings = mapOf(
+                "max_tokens" to "max_output_tokens"
+            ),
+            removeParams = listOf(
+                "frequency_penalty",
+                "presence_penalty",
+                "top_p",
+                "temperature"
+            ),
+            active = true
+        ),
+
+        //
         // GPT 6.1 (developers.openai.com/api/docs/models/gpt-6.1-sol, 2026-09-30)
         // Sol is the only 6.1 variant the API serves; Astra and Luna stay on 6.
         //
@@ -1834,6 +1944,56 @@ object ModelDefinitions {
             removeParams = listOf("temperature"),
             active = true
         ),
+        // Fable 5.2 (models.dev, 2026-11-20): thinking depth is set by effort only.
+        "claude-fable-5-2" to ModelDefinition(
+            id = "claude-fable-5-2",
+            name = "Claude Fable 5.2",
+            provider = "anthropic",
+            description = "Claude Fable 5.2, 1M context model for demanding reasoning and long-horizon agentic work",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 1_000_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 8.00,
+            costPer1MOutput = 40.00,
+            costPer1MCachedInput = 0.2,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            removeParams = listOf("temperature"),
+            active = true
+        ),
+        // Fable 5.1 (models.dev, 2026-11-20): thinking depth is set by effort only.
+        "claude-fable-5-1" to ModelDefinition(
+            id = "claude-fable-5-1",
+            name = "Claude Fable 5.1",
+            provider = "anthropic",
+            description = "Claude Fable 5.1, 1M context model for demanding reasoning and long-horizon agentic work",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 1_000_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 10.00,
+            costPer1MOutput = 50.00,
+            costPer1MCachedInput = 0.25,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            removeParams = listOf("temperature"),
+            active = true
+        ),
         "claude-fable-5" to ModelDefinition(
             id = "claude-fable-5",
             name = "Claude Fable 5",
@@ -2200,6 +2360,33 @@ object ModelDefinitions {
             active = true
         ),
 
+        // Haiku 5.5 (models.dev, 2026-11-20): thinks only when asked, depth set by effort.
+        // Above 100K input tokens Anthropic bills 5x; these are the short-context prices.
+        "claude-haiku-5-5" to ModelDefinition(
+            id = "claude-haiku-5-5",
+            name = "Claude Haiku 5.5",
+            provider = "anthropic",
+            description = "Fast Claude Haiku 5.5 for responsive assistance, classification and lightweight agents, 1M context",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 1_000_000,
+            maxOutputTokens = 128_000,
+            costPer1MInput = 0.10,
+            costPer1MOutput = 0.50,
+            costPer1MCachedInput = 0.01,
+            supportsVision = true,
+            supportsReasoning = false,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            removeParams = listOf("temperature"),
+            active = true
+        ),
+
         "claude-haiku-4-5" to ModelDefinition(
             id = "claude-haiku-4-5",
             name = "Claude Haiku 4.5",
@@ -2301,6 +2488,191 @@ object ModelDefinitions {
      * Source: https://ai.google.dev/gemini-api/docs/pricing
      */
     val GEMINI_MODELS = mapOf(
+        // Gemini 4 and 3.5-3.8 Flash (models.dev, 2026-11-20). The API window is 1M; Refio caps it like the rest.
+        "gemini-4-neon" to ModelDefinition(
+            id = "gemini-4-neon",
+            name = "Gemini 4 Neon",
+            provider = "gemini",
+            description = "Fast frontier-level Gemini 4 for coding, knowledge work and science workflows ($3 in / $15 out per 1M tokens).",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = GEMINI_MAX_CONTEXT,
+            maxOutputTokens = 65_536,
+            costPer1MInput = 3.0,
+            costPer1MOutput = 15.0,
+            costPer1MCachedInput = 0.15,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = false,
+            active = true
+        ),
+        "gemini-4-hydrogen" to ModelDefinition(
+            id = "gemini-4-hydrogen",
+            name = "Gemini 4 Hydrogen",
+            provider = "gemini",
+            description = "Gemini 4 for everyday coding and agentic workflows ($1.5 in / $7.5 out per 1M tokens).",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = GEMINI_MAX_CONTEXT,
+            maxOutputTokens = 65_536,
+            costPer1MInput = 1.5,
+            costPer1MOutput = 7.5,
+            costPer1MCachedInput = 0.075,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = false,
+            active = true
+        ),
+        "gemini-4-carbon" to ModelDefinition(
+            id = "gemini-4-carbon",
+            name = "Gemini 4 Carbon",
+            provider = "gemini",
+            description = "Most capable Gemini 4 reasoning model for complex software engineering and long-horizon agents ($2 in / $10 out per 1M tokens).",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = GEMINI_MAX_CONTEXT,
+            maxOutputTokens = 32_768,
+            costPer1MInput = 2.0,
+            costPer1MOutput = 10.0,
+            costPer1MCachedInput = 0.1,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = false,
+            active = true
+        ),
+        "gemini-4-argon" to ModelDefinition(
+            id = "gemini-4-argon",
+            name = "Gemini 4 Argon",
+            provider = "gemini",
+            description = "Flagship Gemini 4 reasoning model for complex software engineering and long-horizon agents ($2 in / $10 out per 1M tokens).",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = GEMINI_MAX_CONTEXT,
+            maxOutputTokens = 32_768,
+            costPer1MInput = 2.0,
+            costPer1MOutput = 10.0,
+            costPer1MCachedInput = 0.1,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = false,
+            active = true
+        ),
+        "gemini-3.8-flash" to ModelDefinition(
+            id = "gemini-3.8-flash",
+            name = "Gemini 3.8 Flash",
+            provider = "gemini",
+            description = "Most capable Flash model, for long-horizon software engineering and autonomous agents ($0.75 in / $3.75 out per 1M tokens).",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = GEMINI_MAX_CONTEXT,
+            maxOutputTokens = 65_536,
+            costPer1MInput = 0.75,
+            costPer1MOutput = 3.75,
+            costPer1MCachedInput = 0.075,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = false,
+            active = true
+        ),
+        "gemini-3.7-flash" to ModelDefinition(
+            id = "gemini-3.7-flash",
+            name = "Gemini 3.7 Flash",
+            provider = "gemini",
+            description = "High-efficiency Gemini Flash for agentic workflows, coding and multimodal reasoning ($0.75 in / $3.75 out per 1M tokens).",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = GEMINI_MAX_CONTEXT,
+            maxOutputTokens = 65_536,
+            costPer1MInput = 0.75,
+            costPer1MOutput = 3.75,
+            costPer1MCachedInput = 0.075,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = false,
+            active = true
+        ),
+        "gemini-3.6-flash" to ModelDefinition(
+            id = "gemini-3.6-flash",
+            name = "Gemini 3.6 Flash",
+            provider = "gemini",
+            description = "Fast Gemini Flash balancing multimodal reasoning, tool use and cost ($0.75 in / $3.75 out per 1M tokens).",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = GEMINI_MAX_CONTEXT,
+            maxOutputTokens = 65_536,
+            costPer1MInput = 0.75,
+            costPer1MOutput = 3.75,
+            costPer1MCachedInput = 0.075,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = false,
+            active = true
+        ),
+        "gemini-3.5-flash-lite" to ModelDefinition(
+            id = "gemini-3.5-flash-lite",
+            name = "Gemini 3.5 Flash Lite",
+            provider = "gemini",
+            description = "Low-cost Gemini Flash Lite with tool use ($0.3 in / $2.5 out per 1M tokens).",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = GEMINI_MAX_CONTEXT,
+            maxOutputTokens = 65_536,
+            costPer1MInput = 0.3,
+            costPer1MOutput = 2.5,
+            costPer1MCachedInput = 0.03,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = false,
+            active = true
+        ),
         "gemini-3-pro-preview" to ModelDefinition(
             id = "gemini-3-pro-preview",
             name = "Gemini 3 Pro Preview",
@@ -2983,6 +3355,34 @@ object ModelDefinitions {
             maxOutputTokens = 32_768,
             costPer1MInput = 0.3,
             costPer1MOutput = 0.9,
+            supportsVision = true,
+            supportsReasoning = true,
+            supportsStreaming = true,
+            supportsFunctionCalling = true,
+            supportsThinking = true,
+            reasoningTokensMultiplier = 2.5,
+            endpointType = ApiEndpointType.CHAT_COMPLETIONS,
+            apiFormat = ApiFormat.CHAT_COMPLETIONS,
+            active = true
+        ),
+        "glm-4.6v-flash" to ModelDefinition(
+            id = "glm-4.6v-flash",
+            name = "GLM-4.6V Flash",
+            provider = "zai",
+            description = "Free lightweight GLM-4.6V vision model for visual reasoning, documents and multimodal agents.",
+            capabilities = listOf(
+                ModelCapability.CHAT_COMPLETION,
+                ModelCapability.TEXT_COMPLETION,
+                ModelCapability.TOOL_USE,
+                ModelCapability.REASONING,
+                ModelCapability.VISION
+            ),
+            modelType = ModelType.MULTIMODAL,
+            maxContext = 128_000,
+            maxOutputTokens = 32_768,
+            costPer1MInput = 0.0,
+            costPer1MOutput = 0.0,
+            costPer1MCachedInput = 0.0,
             supportsVision = true,
             supportsReasoning = true,
             supportsStreaming = true,
