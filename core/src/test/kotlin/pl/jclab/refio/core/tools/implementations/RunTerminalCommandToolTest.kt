@@ -134,6 +134,19 @@ class RunTerminalCommandToolTest {
         }
 
         @Test
+        fun `a file written with a shell redirect is UTF-8, so other tools can read it`() = runBlocking {
+            // Windows PowerShell writes `>` as UTF-16 by default; a model that writes a report this
+            // way hands Python and Node a file they cannot decode.
+            val result = tool.execute(mapOf("command" to "Write-Output 'zażółć' > out.md"))
+
+            assertTrue(result.success, "output was: ${result.output}")
+            val bytes = tempDir.resolve("out.md").toFile().readBytes()
+            val utf8Bom = byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte())
+            val body = if (bytes.take(3) == utf8Bom.toList()) bytes.drop(3).toByteArray() else bytes
+            assertEquals("zażółć", String(body, Charsets.UTF_8).trim())
+        }
+
+        @Test
         fun `a command ending in a backslash runs unchanged`() = runBlocking {
             val result = tool.execute(mapOf("command" to "Write-Output C:\\dir\\"))
 

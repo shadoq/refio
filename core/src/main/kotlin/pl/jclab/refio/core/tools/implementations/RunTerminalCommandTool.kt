@@ -335,9 +335,17 @@ class RunTerminalCommandTool(
          * mangled by the console's default OEM/ANSI code page before the JVM reads them as UTF-8.
          * The [Console]::OutputEncoding assignment is wrapped in try/catch because it can throw
          * when stdout is redirected; $OutputEncoding alone still covers the pipeline to native tools.
+         *
+         * Files written through the shell get UTF-8 too: Windows PowerShell writes `>`, `>>`,
+         * Out-File, Set-Content and Add-Content as UTF-16 by default, which Python and Node cannot
+         * read. PowerShell 5.1 can only write UTF-8 with a byte order mark; that still decodes,
+         * UTF-16 does not.
          */
         private const val WINDOWS_UTF8_PREFIX =
             "\$OutputEncoding = [System.Text.Encoding]::UTF8; " +
-            "try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}; "
+            "try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}; " +
+            "\$PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'; " +
+            "\$PSDefaultParameterValues['Set-Content:Encoding'] = 'utf8'; " +
+            "\$PSDefaultParameterValues['Add-Content:Encoding'] = 'utf8'; "
     }
 }
