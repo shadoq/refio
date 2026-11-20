@@ -29,6 +29,10 @@
 # no_context_overflow) need a run.json and are out of scope here - e2e-run.sh owns them.
 # preserved_except runs through the same trusted script the runners use (lib/preserve-check.mjs,
 # needs node on PATH).
+# plan / plan_followed run through lib/plan-check.mjs against a plan text: golden/<id>/plan.txt
+# (an agent's `tasks` plan written out as numbered steps), else golden/<id>/answer.txt (a PLAN-mode
+# answer). A control may bring its own plan.txt or answer.txt to show a wrong plan is rejected;
+# `rounds` needs a long-task run and is checked only by the runners.
 #
 # Usage:
 #   validate-scenarios.sh --list             # scenarios that have a golden dir
@@ -112,7 +116,7 @@ fi
 # Echoes PASS or FAIL (reasons); returns 0/1 accordingly.
 # ---------------------------------------------------------------------------
 check_hard() {
-    local scenario="$1" project_dir="$2" fixture="$3" out_text="$4"
+    local scenario="$1" project_dir="$2" fixture="$3" out_text="$4" plan_file="${5:-}"
     local hard_fail=0 reasons=()
 
     # Needles (needle_in_file + needles_in_file[]) - same semantics as e2e-run.sh.
@@ -182,6 +186,27 @@ check_hard() {
         fi
     fi
 
+    # plan / plan_followed through the same trusted script the runners use (lib/plan-check.mjs). There
+    # is no run here, so the plan is a text file (plan.txt, else the answer); `rounds` needs a run and
+    # is checked only by the runners.
+    local pc_out pc_exit=0 pc_line pc_text
+    if [[ "$(jq '.assert | has("plan") or has("plan_followed")' "$scenario")" == "true" ]]; then
+        if ! command -v node >/dev/null 2>&1; then
+            hard_fail=1; reasons+=("plan checks need node on PATH")
+        else
+            pc_text="$(mktemp "${TMPDIR:-/tmp}/refio-val-plan-XXXXXX")"
+            if [[ -n "$plan_file" && -f "$plan_file" ]]; then cp "$plan_file" "$pc_text"; else printf '%s' "$out_text" > "$pc_text"; fi
+            pc_out="$(node "$SCRIPT_DIR/lib/plan-check.mjs" "$scenario" "$fixture" "$project_dir" --plan-text "$pc_text" 2>&1)" || pc_exit=$?
+            rm -f "$pc_text"
+            if (( pc_exit != 0 )); then
+                hard_fail=1
+                while IFS= read -r pc_line; do
+                    pc_line="${pc_line%$''}"; [[ -n "$pc_line" ]] && reasons+=("$pc_line")
+                done <<<"$pc_out"
+            fi
+        fi
+    fi
+
     # build_cmd in the project dir.
     local build_cmd build_exit=0
     build_cmd="$(jq -r '.assert.build_cmd // empty' "$scenario")"
@@ -199,7 +224,7 @@ check_hard() {
 }
 
 # Every key under `.assert` that e2e-run.sh (and its .ps1 sibling) evaluates; keep in sync with it.
-ALLOWED_ASSERT_KEYS="agent_order build_cmd enforce_max_iterations file_absent file_unchanged forbidden_markers needle_in_file needle_in_output needles_in_file no_context_overflow no_immediate_repeat output_absent preserved_except self_verified smoke tool_budget tool_invoked tool_order"
+ALLOWED_ASSERT_KEYS="agent_order build_cmd enforce_max_iterations file_absent file_unchanged forbidden_markers needle_in_file needle_in_output needles_in_file no_context_overflow no_immediate_repeat output_absent plan plan_followed preserved_except rounds self_verified smoke tool_budget tool_invoked tool_order"
 
 validate_scenario() {
     local scenario="$1"
@@ -236,12 +261,12 @@ validate_scenario() {
     # --- (b) golden pass ---
     local work_b; work_b="$(mktemp -d "${TMPDIR:-/tmp}/refio-val-${id}-b-XXXXXX")"
     cp -R "$fixture/." "$work_b/"
-    ( cd "$golden" && find . -type f ! -name 'answer.txt' | while IFS= read -r f; do
+    ( cd "$golden" && find . -type f ! -name 'answer.txt' ! -name 'plan.txt' | while IFS= read -r f; do
         mkdir -p "$work_b/$(dirname "$f")"
         cp "$f" "$work_b/$f"
       done )
     local v_b
-    v_b="$(check_hard "$scenario" "$work_b" "$fixture" "$answer" || true)"
+    v_b="$(check_hard "$scenario" "$work_b" "$fixture" "$answer" "$golden/plan.txt" || true)"
     if [[ "$v_b" != PASS* ]]; then
         echo "| $id | FAIL (b) | golden solution does not satisfy HARD assertions: $v_b |"
         [[ $KEEP -eq 1 ]] || rm -rf "$work_b"
@@ -269,10 +294,10 @@ validate_scenario() {
             name="$(basename "$ctl")"
             work_d="$(mktemp -d "${TMPDIR:-/tmp}/refio-val-${id}-d-XXXXXX")"
             cp -R "$fixture/." "$work_d/"
-            ( cd "$golden" && find . -type f ! -name 'answer.txt' | while IFS= read -r f; do
+            ( cd "$golden" && find . -type f ! -name 'answer.txt' ! -name 'plan.txt' | while IFS= read -r f; do
                 mkdir -p "$work_d/$(dirname "$f")"; cp "$f" "$work_d/$f"
               done )
-            ( cd "$ctl" && find . -type f ! -name '.delete' | while IFS= read -r f; do
+            ( cd "$ctl" && find . -type f ! -name '.delete' ! -name 'answer.txt' ! -name 'plan.txt' | while IFS= read -r f; do
                 mkdir -p "$work_d/$(dirname "$f")"; cp "$f" "$work_d/$f"
               done )
             if [[ -f "$ctl/.delete" ]]; then
@@ -281,7 +306,12 @@ validate_scenario() {
                     if [[ -n "$f" && "$f" != \#* ]]; then rm -rf "${work_d:?}/$f"; fi
                 done < "$ctl/.delete"
             fi
-            v_d="$(check_hard "$scenario" "$work_d" "$fixture" "" || true)"
+            # A control may bring its own answer.txt / plan.txt (a wrong plan); without them it is judged
+            # with no answer and the golden plan.txt, so only its files are wrong.
+            local ctl_answer="" ctl_plan="$golden/plan.txt"
+            [[ -f "$ctl/answer.txt" ]] && ctl_answer="$(cat "$ctl/answer.txt")"
+            if [[ -f "$ctl/plan.txt" ]]; then ctl_plan="$ctl/plan.txt"; elif [[ -f "$ctl/answer.txt" ]]; then ctl_plan=""; fi
+            v_d="$(check_hard "$scenario" "$work_d" "$fixture" "$ctl_answer" "$ctl_plan" || true)"
             if [[ "$v_d" == FAIL* ]]; then
                 rejected=$((rejected+1))
                 echo "  (d) control ${name} rejected: ${v_d}" >&2

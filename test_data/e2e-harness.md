@@ -576,6 +576,18 @@ golden refactor (no FAIL_TO_PASS here - the point is that nothing breaks).
 | `rf-css-design-tokens` | `styles.css` | repeated literals -> `:root` custom properties + `var(--...)` | `:root` + `--token:` + `var(--`; the most-repeated hex literal gone |
 | `rf-python-procedural-oop` | `pipeline.py` | module-level globals -> `Pipeline` class with typed API | `class Pipeline` + `__init__` + `self.` + `@property`; `^UPPER =` globals gone |
 
+## Planning scenarios
+
+Twenty scenarios check how Refio plans longer work, on three levels. Each has a fixture, a golden plan (and golden files where the agent edits) and deliberately wrong controls that `validate-scenarios.sh` must reject: a plan in the wrong order, a plan naming a file that does not exist, a plan that misses a required part, an agent that edits outside its plan.
+
+| Level | Scenarios | What is judged |
+|---|---|---|
+| 1. Plan quality (PLAN mode, nothing is edited) | `plan-add-field-migration`, `plan-rename-module`, `plan-extract-service`, `plan-bugfix-repro`, `plan-config-env`, `plan-callback-migration`, `plan-split-function`, `plan-i18n-strings`, `plan-trivial-fix`, `plan-api-v2-compat` | `plan`: number of steps (including "do not overplan a typo"), required parts covered, order constraints the prompt states (migration before the code that reads the column, failing test before the fix, importers before deleting the old module), no invented files |
+| 2. Plan, then execution (multi-agent: a `planner` in PLAN mode hands its plan to a `coder` in AGENT mode) | `plan-exec-user-email`, `plan-exec-rename-function`, `plan-exec-paging-bug`, `plan-exec-extract-validators`, `plan-exec-config-constants` | `agent_order`, `plan` on the planner's answer, `plan_followed` on the coder's changes, protected files unchanged, `build_cmd` green |
+| 3. Long tasks (`until`, several rounds) | `long-plan-csv-toolkit`, `long-plan-inventory`, `long-plan-textkit`, `long-plan-ledger`, `long-plan-dates` | a `tasks` plan with steps marked completed and base modules before the ones built on them, `rounds` (at most 3 of the 5 allowed rounds, failing-test count never grows, `.refio/progress.md` written), every stub implemented, tests unchanged, `build_cmd` green |
+
+The level-3 test runners print one `FAILED <name>` line per failing test, so `errorLines` in `run.json.longTask.rounds[]` counts failing tests and `errors_non_increasing` catches a round that broke a test that passed before.
+
 ## Where scenarios come from
 
 Two kinds live side by side under `test_data/e2e/`:
@@ -680,6 +692,14 @@ into CRLF while an agent's write tool may emit LF, which is the environment, not
 under bash and under `cmd /c`. It only reads the pristine fixture and the project; nothing the agent writes can
 change the check. No `node` on PATH is a HARD fail with that reason, never a silent pass.
 
+**Planning gates.** These judge how the agent planned the work, not only what it left behind. The plan is read from the run by `tools/e2e/lib/plan-check.mjs` (run with `node`, like `preserve-check.mjs`): the last plan made with the `tasks` tool, with every later step update applied, or else the numbered steps of the answer (a checklist `- [ ]` / `- [x]`, or top-level bullets, when there are no numbers). A step owns the lines under it until the next step. A scenario with any planning gate runs at `--debug-level full`, because `standard` cuts the answer at 2000 characters and a long plan would lose its last steps.
+
+- **`plan`** (object): `source` (`any` by default: the `tasks` plan when there is one, else the answer; `tasks` or `output` to insist on one), `agent` (multi-agent: judge only this agent's calls and its `--- name ---` section of the answer), `min_steps` / `max_steps`, `covers[]` (`{label, regex}`: some step must match), `order[]` (`{before, after, before_label?, after_label?}`: the first step matching `before` must not come after the first step matching `after`; steps whose title starts with a reading verb such as read, review, inspect or find are left out, and one step matching both is fine), `mentions[]` (regexes the plan as a whole must match), `paths_exist` (every file path the plan names exists in the fixture, by full path or by file name in some folder) with `new_paths[]` (regexes for files the plan may create), and `completed` (`{min}` or `{all: true}`: steps marked completed through `tasks` updates or `[x]`). Regexes are JavaScript and case-insensitive. A run with no plan steps fails.
+- **`plan_followed`** (object, optional `allow_extra[]` regexes): every file the agent added, changed or deleted, compared with the fixture, is named in the plan (by path or file name). Harness files (`.refio/`), caches and build output do not count. A plan that says one thing while the agent edits another fails.
+- **`rounds`** (object, long tasks only): `max` rounds, `errors_non_increasing` (the check's error-line count from `run.json.longTask.rounds[].errorLines` never grows from one round to the next), `plan_steps_done_min` (completed plan steps after the last round) and `progress_file` (`.refio/progress.md` exists). It needs a run, so `validate-scenarios.sh` skips it.
+
+In `validate-scenarios.sh` there is no run, so the plan is a text file: `golden/<id>/plan.txt` (an agent's `tasks` plan written out as numbered steps, `1. [x] ...` for completed ones), else `golden/<id>/answer.txt` (a PLAN-mode answer). A control under `negative/<id>/<name>/` may bring its own `plan.txt` or `answer.txt` to show that a wrong plan is rejected; without one it is judged with the golden `plan.txt`, so only its files are wrong. Neither file is copied into the project.
+
 **Loop-quality gates.** Everything above measures the final state of the project; these five measure
 how the run got there, which is the one thing the rest is blind to. A run that took forty wasted turns,
 never checked its own work, kept retrying a call that could not work, or fired a guardrail and then
@@ -779,11 +799,14 @@ harness splits assertions:
 | **HARD** | `no_context_overflow` (`run.json.metrics.contextOverflow == false`) | fail - silent truncation is never a success |
 | **HARD** | `tool_invoked[]` (`{name, args_regex?, absent?}`) | fail - a named tool **had** to run (or, with `absent:true`, must **not** have). `args_regex` matches the raw arguments JSON in `run.json.conversation[].toolCallDetails[]`, so a scenario can assert the *right* subagent/tool ran, not just *a* tool |
 | **HARD** | `agent_order[]` (multi-agent only) | fail - the listed agent names must appear in this relative order in the real execution sequence (`run.json.multiAgent.agents[]`, sorted by start time) - proves `depends_on` was respected |
+| **HARD** | `plan` (steps, coverage, order, real file paths, completed steps) | fail - proves the plan is complete, in a workable order and names only files that exist |
+| **HARD** | `plan_followed` | fail - proves the agent changed only the files its plan named |
+| **HARD** | `rounds` (long tasks) | fail - proves rounds never made the check worse, stayed within the cap and left `.refio/progress.md` |
 | **SOFT** | `tool_order` is a **subsequence** of the real call order | warn only - order drifts on weak models |
 | **SOFT** | `judge.criteria` | advisory - run the `LlmTaskVerifier` judge separately; score drift can't gate regression |
 
 Tool order is read from `run.json.conversation[].toolCalls[]`, which requires
-`--debug-level standard` (the runner sets it).
+`--debug-level standard` (the runner sets it; scenarios with a planning gate get `full`).
 
 ## Benchmark statistics
 

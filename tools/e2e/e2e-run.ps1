@@ -247,6 +247,30 @@ function Assert-Run {
         }
     }
 
+    # HARD 1c4 - plan / plan_followed / rounds: how the agent planned the work, judged by the same
+    # trusted script as e2e-run.sh (lib/plan-check.mjs) over run.json. Mirrors HARD 1c4.
+    $a = $s.assert
+    if ($a -and ($a.PSObject.Properties.Name -contains 'plan' -or $a.PSObject.Properties.Name -contains 'plan_followed' -or $a.PSObject.Properties.Name -contains 'rounds')) {
+        $node = Get-Command node -ErrorAction SilentlyContinue
+        if (-not $node) {
+            $hardFail = $true; $reasons += "plan checks need node on PATH"
+        } else {
+            $pcFx = if ($s.fixture) { Join-Path (Split-Path -Parent (Resolve-Path $Scenario)) $s.fixture } else { $ProjectDir }
+            $pcScript = Join-Path $ScriptDir 'lib\plan-check.mjs'
+            $savedEAP = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try {
+                $pcOut = @(& $node.Source $pcScript (Resolve-Path $Scenario).Path $pcFx $ProjectDir --run $RunJsonPath 2>&1)
+                $pcExit = $LASTEXITCODE
+            } catch { $pcOut = @("plan check could not run: $_"); $pcExit = 2 }
+            finally { $ErrorActionPreference = $savedEAP }
+            if ($pcExit -ne 0) {
+                $hardFail = $true
+                foreach ($l in $pcOut) { $t = ([string]$l).Trim(); if ($t) { $reasons += $t } }
+            }
+        }
+    }
+
     # HARD 1d — tool_invoked: a named tool MUST (or, with absent:true, must NOT) have been called.
     # {name, args_regex?, absent?}. Name presence reads the always-present conversation[].toolCalls[];
     # args_regex matches the raw arguments JSON in conversation[].toolCallDetails[] (additive run.json
@@ -932,10 +956,14 @@ function Invoke-Scenario {
     }
 
     $mode    = if ($s.mode) { $s.mode } else { 'AGENT' }
+    # A plan is judged from the answer text, which 'standard' cuts at 2000 characters; 'full' keeps
+    # 20000, so a long plan does not lose its last steps. Mirrors e2e-run.sh.
+    $assertKeys = if ($s.assert) { $s.assert.PSObject.Properties.Name } else { @() }
+    $debugLevel = if ($assertKeys -contains 'plan' -or $assertKeys -contains 'plan_followed') { 'full' } else { 'standard' }
     $cliArgs = @(
         '--headless', '-p', $work, '--mode', $mode,
         '--output', 'json', '--output-file', $runJson,
-        '--debug-level', 'standard',
+        '--debug-level', $debugLevel,
         '--max-cost', $MaxCost
     )
     # Single-agent scenarios pass --prompt-file; multi-agent ones pass --multi-agent <yaml> instead.
@@ -1268,6 +1296,30 @@ function Invoke-SelfTest {
         $v = Assert-Run $pscen (Join-Path $sample 'sample-run.pass.json') $pproj 0; Write-Host "  preserve-json  -> $v"; if ($v -notlike '*scripts.test*') { $fails = 1 }
     } else {
         Write-Host "  preserve-*     -> skipped: node not found on PATH"
+    }
+
+    # plan: step order and named files judged from run.json through lib/plan-check.mjs. Mirrors e2e-run.sh.
+    if (Get-Command node -ErrorAction SilentlyContinue) {
+        $plfx = Join-Path $proj 'plfx'; New-Item -ItemType Directory -Path (Join-Path $plfx 'app') -Force | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $plfx 'app\models.py'), "x = 1`n")
+        [System.IO.File]::WriteAllText((Join-Path $plfx 'app\routes.py'), "y = 2`n")
+        $plscen = Join-Path $proj 'plan.scenario.json'
+        '{ "id":"plan","fixture":"plfx","assert":{"plan":{"min_steps":2,"paths_exist":true,"order":[{"before":"models","after":"routes"}]}}}' | Set-Content $plscen
+        $plproj = Join-Path $proj 'plp'; Copy-Item -Recurse $plfx $plproj
+        $planCases = @(
+            @{ name = 'plan-ok   '; out = "1. Add the field in app/models.py`n2. Expose it in app/routes.py`n"; want = 'PASS*' },
+            @{ name = 'plan-order'; out = "1. Expose it in app/routes.py`n2. Add the field in app/models.py`n"; want = '*comes before*' },
+            @{ name = 'plan-path '; out = "1. Add the field in app/models.py`n2. Expose it in app/api/users.py`n"; want = '*app/api/users.py*' }
+        )
+        foreach ($pc in $planCases) {
+            $runObj = Get-Content -Raw (Join-Path $sample 'sample-run.pass.json') | ConvertFrom-Json
+            $runObj | Add-Member -NotePropertyName finalOutput -NotePropertyValue $pc.out -Force
+            $planRun = Join-Path $proj 'plan-run.json'
+            [System.IO.File]::WriteAllText($planRun, ($runObj | ConvertTo-Json -Depth 30))
+            $v = Assert-Run $plscen $planRun $plproj 0; Write-Host "  $($pc.name) -> $v"; if ($v -notlike $pc.want) { $fails = 1 }
+        }
+    } else {
+        Write-Host "  plan-*         -> skipped: node not found on PATH"
     }
 
     # Batch manifest: secrets masked, an unreachable server or a missing CLI recorded as a reason.

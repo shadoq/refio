@@ -397,6 +397,25 @@ assert_run() {
         fi
     fi
 
+    # HARD 1c4 - plan / plan_followed / rounds: how the agent planned the work. The plan is read from
+    # the run (the `tasks` tool calls, else the answer's numbered steps) by a script in this harness
+    # directory; see lib/plan-check.mjs for each rule.
+    local pc_out pc_exit pc_line
+    if [[ "$(jq '.assert | has("plan") or has("plan_followed") or has("rounds")' "$scenario")" == "true" ]]; then
+        if ! command -v node >/dev/null 2>&1; then
+            hard_fail=1; reasons+=("plan checks need node on PATH")
+        else
+            pc_exit=0
+            pc_out="$(node "$SCRIPT_DIR/lib/plan-check.mjs" "$scenario" "${fx_dir:-$project_dir}" "$project_dir" --run "$run_json" 2>&1)" || pc_exit=$?
+            if (( pc_exit != 0 )); then
+                hard_fail=1
+                while IFS= read -r pc_line; do
+                    pc_line="${pc_line%$'\r'}"; [[ -n "$pc_line" ]] && reasons+=("$pc_line")
+                done <<<"$pc_out"
+            fi
+        fi
+    fi
+
     # HARD 1d — tool_invoked: a named tool MUST (or, with absent:true, must NOT) have been called.
     # Each entry is {name, args_regex?, absent?}. Name presence is read from the always-present
     # conversation[].toolCalls[] (bare names). With args_regex it matches the raw arguments JSON in
@@ -542,7 +561,8 @@ assert_run() {
     # cannot see an agent that called the same tool twelve times; this can.
     local tb_json tb_names tb_name tb_max tb_used
     tb_json="$(jq -c '.assert.tool_budget // {}' "$scenario")"
-    tb_names="$(jq -r 'keys[]?' <<<"$tb_json")"
+    # tr: jq on Windows ends lines with CRLF, and a key left as "read_file\r" looks up null.
+    tb_names="$(jq -r 'keys[]?' <<<"$tb_json" | tr -d '\r')"
     while IFS= read -r tb_name; do
         [[ -n "$tb_name" ]] || continue
         tb_max="$(jq -r --arg k "$tb_name" '.[$k]' <<<"$tb_json")"
@@ -1016,10 +1036,14 @@ run_scenario() {
         fi
     fi
 
+    # A plan is judged from the answer text, which `standard` cuts at 2000 characters: a longer plan
+    # would lose its last steps and fail for a reason that is not the model's. `full` keeps 20000.
+    local debug_level=standard
+    if [[ "$(jq '.assert | has("plan") or has("plan_followed")' "$scenario")" == "true" ]]; then debug_level=full; fi
     local -a cli_args=(
         --headless -p "$work" --mode "$mode"
         --output json --output-file "$run_json"
-        --debug-level standard            # docs/0061: tool names live in run.json.conversation[]
+        --debug-level "$debug_level"      # tool names live in run.json.conversation[]
         --max-cost "$MAX_COST"
     )
     # Single-agent scenarios pass --prompt-file; multi-agent ones pass --multi-agent <yaml> instead.
@@ -1607,6 +1631,33 @@ JSON
         [[ "$v" == *"scripts.test"* ]] || { echo "  !! a lost scripts.test must FAIL and name the path" >&2; fails=1; }
     else
         echo "  case preserve-*      -> skipped: node not found on PATH" >&2
+    fi
+
+    # plan: the order of the plan's steps and the files it names are judged from run.json through
+    # lib/plan-check.mjs; the unit tests in tools/e2e/__tests__ cover each rule.
+    if command -v node >/dev/null 2>&1; then
+        local plfx="$proj/plfx"; mkdir -p "$plfx/app"
+        printf 'x = 1\n' > "$plfx/app/models.py"; printf 'y = 2\n' > "$plfx/app/routes.py"
+        local plscen="$proj/plan.scenario.json"
+        cat > "$plscen" <<'JSON'
+{ "id":"plan", "fixture":"plfx", "assert": { "plan": { "min_steps": 2, "paths_exist": true,
+    "order": [ { "before": "models", "after": "routes" } ] } } }
+JSON
+        local plproj="$proj/plp"; mkdir -p "$plproj"; cp -R "$plfx/." "$plproj/"
+        jq '.finalOutput = "1. Add the field in app/models.py\n2. Expose it in app/routes.py\n"' "$sample/sample-run.pass.json" > "$proj/plan-ok.json"
+        v="$(assert_run "$plscen" "$proj/plan-ok.json" "$plproj" 0 2>/dev/null || true)"
+        echo "  case plan-ok         -> $v" >&2
+        [[ "$v" == PASS* ]] || { echo "  !! a plan in the right order naming real files must PASS" >&2; fails=1; }
+        jq '.finalOutput = "1. Expose it in app/routes.py\n2. Add the field in app/models.py\n"' "$sample/sample-run.pass.json" > "$proj/plan-order.json"
+        v="$(assert_run "$plscen" "$proj/plan-order.json" "$plproj" 0 2>/dev/null || true)"
+        echo "  case plan-order      -> $v" >&2
+        [[ "$v" == *"comes before"* ]] || { echo "  !! a plan with the steps swapped must FAIL on order" >&2; fails=1; }
+        jq '.finalOutput = "1. Add the field in app/models.py\n2. Expose it in app/api/users.py\n"' "$sample/sample-run.pass.json" > "$proj/plan-path.json"
+        v="$(assert_run "$plscen" "$proj/plan-path.json" "$plproj" 0 2>/dev/null || true)"
+        echo "  case plan-path       -> $v" >&2
+        [[ "$v" == *"app/api/users.py"* ]] || { echo "  !! a plan naming a file that does not exist must FAIL and name it" >&2; fails=1; }
+    else
+        echo "  case plan-*          -> skipped: node not found on PATH" >&2
     fi
 
     # Batch manifest: written next to results, secrets masked, and an unreachable server or a
