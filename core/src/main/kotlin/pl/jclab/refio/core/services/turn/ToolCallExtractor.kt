@@ -111,7 +111,8 @@ class ToolCallExtractor(
         //    call alongside the real native call. This mirrors the turn loop's native-branch behaviour.
         if (native != null && native.isNotEmpty()) {
             val calls = native.map {
-                ToolCallData(id = it.id, name = it.name, arguments = it.argumentsJson)
+                // Weak models pad the name (" tasks "); untrimmed it misses the registry and the call is lost.
+                ToolCallData(id = it.id, name = it.name.trim(), arguments = it.argumentsJson)
             }
             return ExtractionResult.Calls(parser.applyProfileFilter(calls, profileOverrides), ToolCallSource.NATIVE)
         }
@@ -208,7 +209,7 @@ class ToolCallExtractor(
         val calls = mutableListOf<ToolCallData>()
         for (match in hermesRegex.findAll(content)) {
             val obj = runCatching { json.parseToJsonElement(match.groupValues[1]) as? JsonObject }.getOrNull() ?: continue
-            val name = (obj["name"] as? JsonPrimitive)?.content?.takeIf { it.isNotBlank() } ?: continue
+            val name = (obj["name"] as? JsonPrimitive)?.content?.trim()?.takeIf { it.isNotBlank() } ?: continue
             if (!toolRegistry.hasTool(name)) continue
             val argsElement = obj["arguments"] ?: obj["parameters"]
             val argumentsJson = when (argsElement) {

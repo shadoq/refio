@@ -57,6 +57,23 @@ class ToolCallExtractorTest {
     }
 
     @Test
+    fun `a tool name padded with spaces still reaches the tool (qwen3_5 sent ' tasks ' and lost its plan)`() {
+        val native = extract(
+            response(content = "", native = listOf(NativeToolCall(id = "c1", name = " read_file ", argumentsJson = "{}"))),
+        )
+        assertIs<ExtractionResult.Calls>(native)
+        assertEquals("read_file", native.calls.single().name)
+
+        val envelope = extract(response(content = """{"actions":[{"tool":" read_file\n","arguments":{"path":"a.kt"}}]}"""))
+        assertIs<ExtractionResult.Calls>(envelope)
+        assertEquals("read_file", envelope.calls.single().name)
+
+        val hermes = extract(response(content = """<tool_call>{"name":" read_file ","arguments":{}}</tool_call>"""))
+        assertIs<ExtractionResult.Calls>(hermes)
+        assertEquals("read_file", hermes.calls.single().name)
+    }
+
+    @Test
     fun `empty native list is a legitimate finish, not a failure`() {
         // Model used the native channel and chose to answer in prose — must NOT be flagged as error.
         val result = extract(response(content = "Done, nothing to change.", native = emptyList()))

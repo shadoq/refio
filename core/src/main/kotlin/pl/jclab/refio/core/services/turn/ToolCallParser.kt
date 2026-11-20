@@ -443,8 +443,8 @@ class ToolCallParser(
         for (key in candidates) {
             val value = actionElement[key] as? JsonPrimitive
             if (value != null) {
-                val content = value.content
-                if (content.isNotBlank()) return content
+                val content = value.content.trim()
+                if (content.isNotEmpty()) return content
             }
         }
         return null
