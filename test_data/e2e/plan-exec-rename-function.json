@@ -1,0 +1,60 @@
+{
+  "id": "plan-exec-rename-function",
+  "mode": "AGENT",
+  "description": "A planner plans renaming calcTotal to computeTotal and a coder carries it out in every file the plan names, with no edits outside the plan and no old name left behind.",
+  "category": "planning",
+  "max_iterations": 30,
+  "fixture": "fixtures/plan-exec-rename-function",
+  "multi_agent": "multi-agent/plan-exec-rename-function.yaml",
+  "assert": {
+    "agent_order": [
+      "planner",
+      "coder"
+    ],
+    "plan": {
+      "min_steps": 2,
+      "max_steps": 8,
+      "covers": [
+        {
+          "label": "src/total.js",
+          "regex": "total\\.js"
+        },
+        {
+          "label": "src/cart.js",
+          "regex": "cart\\.js"
+        },
+        {
+          "label": "src/invoice.js",
+          "regex": "invoice\\.js"
+        }
+      ],
+      "paths_exist": true,
+      "new_paths": [],
+      "agent": "planner"
+    },
+    "plan_followed": {},
+    "needles_in_file": [
+      {
+        "path": "src/cart.js",
+        "text": "calcTotal",
+        "absent": true
+      },
+      {
+        "path": "src/invoice.js",
+        "text": "calcTotal",
+        "absent": true
+      }
+    ],
+    "file_unchanged": [
+      "tests/run.js",
+      "README.md"
+    ],
+    "build_cmd": "node tests/run.js",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The planner names src/total.js, src/cart.js and src/invoice.js; the coder renames calcTotal to computeTotal in all three with no alias, touches nothing else, and node tests/run.js prints ok."
+    ]
+  }
+}

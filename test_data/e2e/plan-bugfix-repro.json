@@ -1,0 +1,43 @@
+{
+  "id": "plan-bugfix-repro",
+  "mode": "PLAN",
+  "description": "Plan a bug fix test-first: a failing test that reproduces the double discount comes before the change to src/cart.js, the plan stays small, and it names only real files.",
+  "category": "planning",
+  "max_iterations": 30,
+  "fixture": "fixtures/plan-bugfix-repro",
+  "prompt_file": "prompts/plan-bugfix-repro.md",
+  "assert": {
+    "plan": {
+      "min_steps": 2,
+      "max_steps": 6,
+      "covers": [
+        {
+          "label": "a failing test",
+          "regex": "fail|reproduc"
+        },
+        {
+          "label": "the cart code",
+          "regex": "cart\\.js|discount\\.js"
+        }
+      ],
+      "order": [
+        {
+          "before": "fail|reproduc",
+          "before_label": "the failing test",
+          "after": "^(?:#{1,4}\\s*)?(?:\\*\\*)?(?:step\\s+\\d+\\s*[:.)-]?\\s*)?(?:\\d{1,2}[.):]\\s*)?(?:\\*\\*)?\\s*(?:fix|change|modify|edit|update|correct|apply|implement|guard|make)\\b",
+          "after_label": "the code change"
+        }
+      ],
+      "paths_exist": true,
+      "new_paths": [
+        "^tests/"
+      ]
+    },
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The plan writes a test that reproduces the double discount for a member with a coupon and fails, then changes src/cart.js (or src/discount.js) so the discount is applied once, then runs the tests; it has at most six steps."
+    ]
+  }
+}

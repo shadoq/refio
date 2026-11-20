@@ -1,0 +1,60 @@
+{
+  "id": "plan-callback-migration",
+  "mode": "PLAN",
+  "description": "Plan moving three callers from the callback API in lib/http-legacy.js to the promise API in lib/http.js: every caller is migrated before the legacy module is deleted, and only real files are named.",
+  "category": "planning",
+  "max_iterations": 30,
+  "fixture": "fixtures/plan-callback-migration",
+  "prompt_file": "prompts/plan-callback-migration.md",
+  "assert": {
+    "plan": {
+      "min_steps": 3,
+      "max_steps": 9,
+      "covers": [
+        {
+          "label": "src/weather.js",
+          "regex": "weather\\.js"
+        },
+        {
+          "label": "src/news.js",
+          "regex": "news\\.js"
+        },
+        {
+          "label": "src/stocks.js",
+          "regex": "stocks\\.js"
+        },
+        {
+          "label": "deleting the legacy module",
+          "regex": "(delete|remove)[^\\n]*http-legacy"
+        }
+      ],
+      "order": [
+        {
+          "before": "weather\\.js",
+          "after": "^(?:#{1,4}\\s*)?(?:\\*\\*)?(?:step\\s+\\d+\\s*[:.)-]?\\s*)?(?:\\d{1,2}[.):]\\s*)?(?:\\*\\*)?\\s*(?:delete|remove)\\b",
+          "after_label": "the deletion step"
+        },
+        {
+          "before": "news\\.js",
+          "after": "^(?:#{1,4}\\s*)?(?:\\*\\*)?(?:step\\s+\\d+\\s*[:.)-]?\\s*)?(?:\\d{1,2}[.):]\\s*)?(?:\\*\\*)?\\s*(?:delete|remove)\\b",
+          "after_label": "the deletion step"
+        },
+        {
+          "before": "stocks\\.js",
+          "after": "^(?:#{1,4}\\s*)?(?:\\*\\*)?(?:step\\s+\\d+\\s*[:.)-]?\\s*)?(?:\\d{1,2}[.):]\\s*)?(?:\\*\\*)?\\s*(?:delete|remove)\\b",
+          "after_label": "the deletion step"
+        }
+      ],
+      "paths_exist": true,
+      "new_paths": [
+        "^tests/"
+      ]
+    },
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The plan migrates src/weather.js, src/news.js and src/stocks.js to the promise getJSON from lib/http.js (with their tests) one by one, and deletes lib/http-legacy.js only after the last caller is gone."
+    ]
+  }
+}

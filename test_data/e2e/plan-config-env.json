@@ -1,0 +1,62 @@
+{
+  "id": "plan-config-env",
+  "mode": "PLAN",
+  "description": "Plan moving three hard-coded settings (database URL, SMTP host and password, debug flag) into environment variables read by one app/settings.py: every hard-coded place is covered, the settings module comes before its users, and the password never stays in code.",
+  "category": "planning",
+  "max_iterations": 30,
+  "fixture": "fixtures/plan-config-env",
+  "prompt_file": "prompts/plan-config-env.md",
+  "assert": {
+    "plan": {
+      "min_steps": 3,
+      "max_steps": 9,
+      "covers": [
+        {
+          "label": "app/settings.py",
+          "regex": "settings\\.py"
+        },
+        {
+          "label": "app/db.py",
+          "regex": "db\\.py"
+        },
+        {
+          "label": "app/mailer.py",
+          "regex": "mailer\\.py"
+        },
+        {
+          "label": "app/main.py",
+          "regex": "main\\.py"
+        },
+        {
+          "label": ".env.example",
+          "regex": "\\.env\\.example"
+        },
+        {
+          "label": "the SMTP password",
+          "regex": "password|SMTP_PASS"
+        }
+      ],
+      "order": [
+        {
+          "before": "settings\\.py",
+          "after": "db\\.py"
+        },
+        {
+          "before": "settings\\.py",
+          "after": "mailer\\.py"
+        }
+      ],
+      "paths_exist": true,
+      "new_paths": [
+        "^app/settings\\.py$",
+        "^tests/"
+      ]
+    },
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The plan creates app/settings.py reading DATABASE_URL, SMTP_HOST, SMTP_PASSWORD and DEBUG from the environment first, then switches app/db.py, app/mailer.py and app/main.py to it, removes the hard-coded password, and documents the variables in .env.example."
+    ]
+  }
+}

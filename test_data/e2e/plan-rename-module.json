@@ -1,0 +1,64 @@
+{
+  "id": "plan-rename-module",
+  "mode": "PLAN",
+  "description": "Plan renaming src/utils/strings.js to src/utils/text.js so the tests stay green after every step: every importer is updated before the old module is deleted, and no step names a file that does not exist.",
+  "category": "planning",
+  "max_iterations": 30,
+  "fixture": "fixtures/plan-rename-module",
+  "prompt_file": "prompts/plan-rename-module.md",
+  "assert": {
+    "plan": {
+      "min_steps": 3,
+      "max_steps": 9,
+      "covers": [
+        {
+          "label": "src/routes/posts.js",
+          "regex": "posts\\.js"
+        },
+        {
+          "label": "src/routes/users.js",
+          "regex": "users\\.js"
+        },
+        {
+          "label": "src/views/header.js",
+          "regex": "header\\.js"
+        },
+        {
+          "label": "the test that imports it",
+          "regex": "strings\\.test\\.js|tests/"
+        },
+        {
+          "label": "deleting the old module",
+          "regex": "(delete|remove)[^\\n]*strings\\.js|strings\\.js[^\\n]*(deleted|removed)"
+        }
+      ],
+      "order": [
+        {
+          "before": "text\\.js",
+          "after": "^(?:#{1,4}\\s*)?(?:\\*\\*)?(?:step\\s+\\d+\\s*[:.)-]?\\s*)?(?:\\d{1,2}[.):]\\s*)?(?:\\*\\*)?\\s*(?:delete|remove)\\b",
+          "after_label": "the deletion step"
+        },
+        {
+          "before": "header\\.js",
+          "after": "^(?:#{1,4}\\s*)?(?:\\*\\*)?(?:step\\s+\\d+\\s*[:.)-]?\\s*)?(?:\\d{1,2}[.):]\\s*)?(?:\\*\\*)?\\s*(?:delete|remove)\\b",
+          "after_label": "the deletion step"
+        },
+        {
+          "before": "posts\\.js",
+          "after": "^(?:#{1,4}\\s*)?(?:\\*\\*)?(?:step\\s+\\d+\\s*[:.)-]?\\s*)?(?:\\d{1,2}[.):]\\s*)?(?:\\*\\*)?\\s*(?:delete|remove)\\b",
+          "after_label": "the deletion step"
+        }
+      ],
+      "paths_exist": true,
+      "new_paths": [
+        "^src/utils/text\\.js$"
+      ]
+    },
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The plan creates src/utils/text.js first, updates every importer (src/routes/posts.js, src/routes/users.js, src/views/header.js and tests/strings.test.js) and deletes src/utils/strings.js only at the end, so node tests/run.js passes after every step."
+    ]
+  }
+}

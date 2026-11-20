@@ -1,0 +1,58 @@
+{
+  "id": "plan-add-field-migration",
+  "mode": "PLAN",
+  "description": "Plan a required email field for users when production already has rows: the plan must add a migration that fills existing rows before the code reads the column, touch the model, storage and API, and add tests, naming only real files.",
+  "category": "planning",
+  "max_iterations": 30,
+  "fixture": "fixtures/plan-add-field-migration",
+  "prompt_file": "prompts/plan-add-field-migration.md",
+  "assert": {
+    "plan": {
+      "min_steps": 4,
+      "max_steps": 10,
+      "covers": [
+        {
+          "label": "a migration",
+          "regex": "migrat|ALTER TABLE|00[2-9]_"
+        },
+        {
+          "label": "existing rows",
+          "regex": "existing (rows|users|data|records)|backfill|default"
+        },
+        {
+          "label": "the model",
+          "regex": "models\\.py"
+        },
+        {
+          "label": "storage",
+          "regex": "storage\\.py"
+        },
+        {
+          "label": "the API",
+          "regex": "api\\.py"
+        },
+        {
+          "label": "tests",
+          "regex": "test"
+        }
+      ],
+      "order": [
+        {
+          "before": "ALTER TABLE|migrations/00[2-9]|migration",
+          "after": "storage\\.py"
+        }
+      ],
+      "paths_exist": true,
+      "new_paths": [
+        "^migrations/",
+        "^tests/"
+      ]
+    },
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The plan adds a migration that gives existing rows an email before any code reads or writes the column, then changes app/models.py, app/storage.py and app/api.py, and adds tests, naming only files that exist or new ones under migrations/ and tests/."
+    ]
+  }
+}

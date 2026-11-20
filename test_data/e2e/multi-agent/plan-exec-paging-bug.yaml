@@ -1,0 +1,16 @@
+name: "plan-exec-paging-bug"
+description: "A planner writes the plan, a coder carries it out without leaving it."
+on_failure: stop
+max_minutes: 30
+agents:
+  - name: planner
+    mode: plan
+    max_iterations: 20
+    task: >
+      Bug: app/paging.py drops the last item of every page after the first. Plan the fix test first: a new test in tests/test_paging.py that fails because of the bug comes before the change to app/paging.py. checks.py must not be edited. Do not edit any file. Answer with the plan as a numbered list (1., 2., ...), one step per item, in the order the work must be done, naming in every step the exact files it changes. Name only files that exist, or new files in the places the task allows.
+  - name: coder
+    mode: agent
+    depends_on: [planner]
+    max_iterations: 30
+    task: >
+      Carry out the planner's plan, step by step. Change only the files the plan names. Do not edit checks.py. The work is done when `python checks.py && python -m unittest discover -s tests` passes.

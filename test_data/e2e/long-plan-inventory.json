@@ -1,0 +1,83 @@
+{
+  "id": "long-plan-inventory",
+  "mode": "AGENT",
+  "description": "Implement a five-function inventory library as a long task with a tasks-tool plan: each step is marked completed as its test passes, the failing-test count never grows between rounds, and all five tests pass within three rounds.",
+  "category": "planning",
+  "max_iterations": 200,
+  "fixture": "fixtures/long-plan-inventory",
+  "prompt_file": "prompts/long-plan-inventory.md",
+  "until": "python run_tests.py",
+  "max_rounds": 5,
+  "config": [
+    "long_task.max_minutes=30"
+  ],
+  "score": {
+    "cmd": "python run_tests.py",
+    "regex": "SUMMARY passed ([0-9]+/[0-9]+)"
+  },
+  "assert": {
+    "plan": {
+      "source": "tasks",
+      "min_steps": 4,
+      "max_steps": 15,
+      "completed": {
+        "min": 4
+      },
+      "order": [
+        {
+          "before": "low_stock",
+          "after": "restock_plan",
+          "before_label": "low_stock",
+          "after_label": "what is built on low_stock"
+        }
+      ]
+    },
+    "rounds": {
+      "max": 3,
+      "errors_non_increasing": true,
+      "progress_file": true
+    },
+    "needles_in_file": [
+      {
+        "path": "lib/add_item.py",
+        "text": "not implemented",
+        "absent": true
+      },
+      {
+        "path": "lib/remove_item.py",
+        "text": "not implemented",
+        "absent": true
+      },
+      {
+        "path": "lib/stock_value.py",
+        "text": "not implemented",
+        "absent": true
+      },
+      {
+        "path": "lib/low_stock.py",
+        "text": "not implemented",
+        "absent": true
+      },
+      {
+        "path": "lib/restock_plan.py",
+        "text": "not implemented",
+        "absent": true
+      }
+    ],
+    "file_unchanged": [
+      "run_tests.py",
+      "tests/test_add_item.py",
+      "tests/test_remove_item.py",
+      "tests/test_stock_value.py",
+      "tests/test_low_stock.py",
+      "tests/test_restock_plan.py"
+    ],
+    "build_cmd": "python run_tests.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "All five functions in lib/ are implemented so python run_tests.py prints SUMMARY passed 5/5, the plan was kept in the tasks tool with its steps completed, and nothing under tests/ or run_tests.py changed."
+    ]
+  }
+}

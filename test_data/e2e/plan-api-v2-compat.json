@@ -1,0 +1,44 @@
+{
+  "id": "plan-api-v2-compat",
+  "mode": "PLAN",
+  "description": "Plan a v2 users endpoint that splits the name while v1 stays exactly as it is for existing clients: the plan keeps v1 unchanged, puts v2 in src/v2.js, registers it in src/server.js, and tests both.",
+  "category": "planning",
+  "max_iterations": 30,
+  "fixture": "fixtures/plan-api-v2-compat",
+  "prompt_file": "prompts/plan-api-v2-compat.md",
+  "assert": {
+    "plan": {
+      "min_steps": 3,
+      "max_steps": 9,
+      "covers": [
+        {
+          "label": "src/v2.js",
+          "regex": "v2\\.js"
+        },
+        {
+          "label": "registering the route in src/server.js",
+          "regex": "server\\.js"
+        },
+        {
+          "label": "v1 left unchanged",
+          "regex": "v1[^\\n]*(unchanged|untouched|as it is|as-is|same|keep|stay|still|backward|compat|regress)|(unchanged|untouched|keep|backward|compat|regress)[^\\n]*v1"
+        },
+        {
+          "label": "tests",
+          "regex": "test"
+        }
+      ],
+      "paths_exist": true,
+      "new_paths": [
+        "^src/v2\\.js$",
+        "^tests/"
+      ]
+    },
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The plan adds src/v2.js with the split name, registers /api/v2/users in src/server.js without touching the v1 handler, and adds tests for v2 plus a test that v1 still returns { id, name }."
+    ]
+  }
+}

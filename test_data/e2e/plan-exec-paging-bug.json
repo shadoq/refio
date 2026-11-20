@@ -1,0 +1,60 @@
+{
+  "id": "plan-exec-paging-bug",
+  "mode": "AGENT",
+  "description": "A planner plans a test-first fix of an off-by-one in app/paging.py and a coder carries it out: the plan puts the failing test before the fix, the coder adds the test and fixes only app/paging.py, and the check passes.",
+  "category": "planning",
+  "max_iterations": 30,
+  "fixture": "fixtures/plan-exec-paging-bug",
+  "multi_agent": "multi-agent/plan-exec-paging-bug.yaml",
+  "assert": {
+    "agent_order": [
+      "planner",
+      "coder"
+    ],
+    "plan": {
+      "min_steps": 2,
+      "max_steps": 6,
+      "covers": [
+        {
+          "label": "a failing test",
+          "regex": "fail|reproduc"
+        },
+        {
+          "label": "app/paging.py",
+          "regex": "paging\\.py"
+        }
+      ],
+      "order": [
+        {
+          "before": "fail|reproduc",
+          "before_label": "the failing test",
+          "after": "^(?:#{1,4}\\s*)?(?:\\*\\*)?(?:step\\s+\\d+\\s*[:.)-]?\\s*)?(?:\\d{1,2}[.):]\\s*)?(?:\\*\\*)?\\s*(?:fix|change|modify|edit|update|correct)\\b",
+          "after_label": "the fix"
+        }
+      ],
+      "paths_exist": true,
+      "new_paths": [
+        "^tests/"
+      ],
+      "agent": "planner"
+    },
+    "plan_followed": {},
+    "needles_in_file": [
+      {
+        "path": "tests/test_paging.py",
+        "regex": "def test_",
+        "min_count": 2
+      }
+    ],
+    "file_unchanged": [
+      "checks.py"
+    ],
+    "build_cmd": "python checks.py && python -m unittest discover -s tests",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The planner puts a failing test in tests/test_paging.py before the fix; the coder adds that test, fixes the slice in app/paging.py, changes nothing else, and both checks pass."
+    ]
+  }
+}

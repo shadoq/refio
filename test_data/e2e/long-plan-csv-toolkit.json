@@ -1,0 +1,84 @@
+{
+  "id": "long-plan-csv-toolkit",
+  "mode": "AGENT",
+  "description": "Implement a five-module CSV toolkit as a long task with a tasks-tool plan: parseLine comes before the modules built on it, every step is marked completed, the failing-test count never grows between rounds, and all five tests pass within three rounds.",
+  "category": "planning",
+  "max_iterations": 200,
+  "fixture": "fixtures/long-plan-csv-toolkit",
+  "prompt_file": "prompts/long-plan-csv-toolkit.md",
+  "until": "node run-tests.js",
+  "max_rounds": 5,
+  "config": [
+    "long_task.max_minutes=30"
+  ],
+  "score": {
+    "cmd": "node run-tests.js",
+    "regex": "SUMMARY passed ([0-9]+/[0-9]+)"
+  },
+  "assert": {
+    "plan": {
+      "source": "tasks",
+      "min_steps": 4,
+      "max_steps": 15,
+      "completed": {
+        "min": 4
+      },
+      "order": [
+        {
+          "before": "parseLine",
+          "after": "parseCsv|toObjects|columnStats",
+          "before_label": "parseLine",
+          "after_label": "what is built on parseLine"
+        }
+      ]
+    },
+    "rounds": {
+      "max": 3,
+      "errors_non_increasing": true,
+      "progress_file": true
+    },
+    "needles_in_file": [
+      {
+        "path": "src/parseLine.js",
+        "text": "not implemented",
+        "absent": true
+      },
+      {
+        "path": "src/parseCsv.js",
+        "text": "not implemented",
+        "absent": true
+      },
+      {
+        "path": "src/toObjects.js",
+        "text": "not implemented",
+        "absent": true
+      },
+      {
+        "path": "src/formatCsv.js",
+        "text": "not implemented",
+        "absent": true
+      },
+      {
+        "path": "src/columnStats.js",
+        "text": "not implemented",
+        "absent": true
+      }
+    ],
+    "file_unchanged": [
+      "run-tests.js",
+      "package.json",
+      "tests/parseLine.test.js",
+      "tests/parseCsv.test.js",
+      "tests/toObjects.test.js",
+      "tests/formatCsv.test.js",
+      "tests/columnStats.test.js"
+    ],
+    "build_cmd": "node run-tests.js",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "All five modules in src/ are implemented so node run-tests.js prints SUMMARY passed 5/5, the plan was kept in the tasks tool with every step completed, and nothing under tests/, run-tests.js or package.json changed."
+    ]
+  }
+}

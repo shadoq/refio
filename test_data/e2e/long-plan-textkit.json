@@ -1,0 +1,96 @@
+{
+  "id": "long-plan-textkit",
+  "mode": "AGENT",
+  "description": "Implement a six-function text library as a long task with a tasks-tool plan: helpers come before the functions built on them, steps are marked completed, the failing-test count never grows between rounds, and all six tests pass within three rounds.",
+  "category": "planning",
+  "max_iterations": 200,
+  "fixture": "fixtures/long-plan-textkit",
+  "prompt_file": "prompts/long-plan-textkit.md",
+  "until": "node run-tests.js",
+  "max_rounds": 5,
+  "config": [
+    "long_task.max_minutes=30"
+  ],
+  "score": {
+    "cmd": "node run-tests.js",
+    "regex": "SUMMARY passed ([0-9]+/[0-9]+)"
+  },
+  "assert": {
+    "plan": {
+      "source": "tasks",
+      "min_steps": 5,
+      "max_steps": 18,
+      "completed": {
+        "min": 5
+      },
+      "order": [
+        {
+          "before": "words",
+          "after": "wrap",
+          "before_label": "words",
+          "after_label": "what is built on words"
+        },
+        {
+          "before": "capitalize",
+          "after": "titleCase",
+          "before_label": "capitalize",
+          "after_label": "what is built on capitalize"
+        }
+      ]
+    },
+    "rounds": {
+      "max": 3,
+      "errors_non_increasing": true,
+      "progress_file": true
+    },
+    "needles_in_file": [
+      {
+        "path": "src/words.js",
+        "text": "not implemented",
+        "absent": true
+      },
+      {
+        "path": "src/capitalize.js",
+        "text": "not implemented",
+        "absent": true
+      },
+      {
+        "path": "src/titleCase.js",
+        "text": "not implemented",
+        "absent": true
+      },
+      {
+        "path": "src/truncate.js",
+        "text": "not implemented",
+        "absent": true
+      },
+      {
+        "path": "src/wrap.js",
+        "text": "not implemented",
+        "absent": true
+      },
+      {
+        "path": "src/isPalindrome.js",
+        "text": "not implemented",
+        "absent": true
+      }
+    ],
+    "file_unchanged": [
+      "run-tests.js",
+      "package.json",
+      "tests/words.test.js",
+      "tests/capitalize.test.js",
+      "tests/titleCase.test.js",
+      "tests/truncate.test.js",
+      "tests/wrap.test.js",
+      "tests/isPalindrome.test.js"
+    ],
+    "build_cmd": "node run-tests.js",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "All six functions in src/ are implemented so node run-tests.js prints SUMMARY passed 6/6, the plan was kept in the tasks tool with its steps completed, and nothing under tests/, run-tests.js or package.json changed."
+    ]
+  }
+}
