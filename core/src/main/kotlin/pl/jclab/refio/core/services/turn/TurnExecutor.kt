@@ -1579,18 +1579,19 @@ internal class TurnExecutor(
                                         "'$abortToolName' and a deliverable already landed " +
                                         "(writeToolsExecutedInTurn=$writeToolsExecutedInTurn) — finalizing SUCCESS"
                                 }
-                                val okResult = TurnResult(
-                                    success = true,
-                                    response = "Changes applied. Stopped a repeated verification step " +
-                                        "($abortToolName) that produced no new information; the deliverable is in place.",
-                                    iterations = iteration,
-                                    tokensIn = totalTokensIn,
-                                    tokensOut = totalTokensOut,
-                                    cost = totalCost,
-                                    toolsUsed = usedTools.distinct(),
-                                    incomplete = false
+                                return finalizeLoopAfterEdit(
+                                    taskId = taskId,
+                                    abortToolName = abortToolName,
+                                    verifier = turnVerifier?.takeIf { mode == TaskMode.AGENT && depth == 0 },
+                                    verificationAttempts = verificationAttempts,
+                                    previousVerification = verificationSummary,
+                                    iteration = iteration,
+                                    usedTools = usedTools,
+                                    totalTokensIn = totalTokensIn,
+                                    totalTokensOut = totalTokensOut,
+                                    totalCost = totalCost,
+                                    turnPersistence = turnPersistence,
                                 )
-                                return turnPersistence.finish(okResult, persistAssistantMessage = true)
                             }
                             // Record why the turn aborted so the e2e classifier can tell a no-op-write
                             // stall from a byte-identical output loop.
@@ -2507,6 +2508,82 @@ internal class TurnExecutor(
         val summary = turnVerifier.summarize(taskId, outcome, attempts, previous)
         pl.jclab.refio.core.debug.TurnVerificationTracker.record(taskId, summary)
         return summary
+    }
+
+    /**
+     * Terminal handling for a loop on a verification tool after a real file edit landed.
+     *
+     * The model never said it was done here; the loop guard stopped it. Calling that a success is
+     * Refio's own claim, so it is checked first with the project's verification command: a pass, or
+     * no command to run, finalizes SUCCESS as before; any failure - including one already present
+     * before the turn - ends the turn as VERIFICATION_FAILED. No repair round: the model was just
+     * stopped for going in circles.
+     *
+     * Extracted from `execute` to keep that method under the JVM's 64 KB per-method ceiling.
+     */
+    private suspend fun finalizeLoopAfterEdit(
+        taskId: String,
+        abortToolName: String?,
+        verifier: TurnVerifier?,
+        verificationAttempts: Int,
+        previousVerification: pl.jclab.refio.core.debug.VerificationSummary?,
+        iteration: Int,
+        usedTools: List<String>,
+        totalTokensIn: Int,
+        totalTokensOut: Int,
+        totalCost: Double,
+        turnPersistence: TurnPersistence
+    ): TurnResult {
+        val stopped = "Stopped a repeated verification step ($abortToolName) that produced no new information."
+        val outcome = verifier?.verify(taskId)
+        val summary = if (verifier != null && outcome != null) {
+            recordVerification(
+                verifier, taskId, outcome,
+                if (outcome.executed) verificationAttempts + 1 else verificationAttempts,
+                previousVerification,
+            )
+        } else {
+            previousVerification
+        }
+        val exitCode = when (outcome) {
+            is TurnVerifier.Outcome.Failed -> outcome.exitCode
+            is TurnVerifier.Outcome.PreExistingFailure -> outcome.exitCode
+            else -> null
+        }
+        if (exitCode != null) {
+            logger.warn { "[REPETITION_ABORT] taskId=$taskId - the project's check still fails (exit=$exitCode) - finalizing VERIFICATION_FAILED" }
+            TurnFailureMarkerTracker.record(taskId, TurnFailureMarkerTracker.VERIFICATION_FAILED)
+            val errors = (outcome as? TurnVerifier.Outcome.Failed)?.errors.orEmpty()
+            val result = TurnResult(
+                success = false,
+                response = "Changes applied, but the project's check still fails (exit $exitCode). $stopped" +
+                    if (errors.isEmpty()) "" else " Errors:\n" + errors.joinToString("\n") { "- $it" },
+                iterations = iteration,
+                tokensIn = totalTokensIn,
+                tokensOut = totalTokensOut,
+                cost = totalCost,
+                toolsUsed = usedTools.distinct(),
+                verification = summary
+            )
+            return turnPersistence.finish(result, persistAssistantMessage = true, stopReason = TurnStopReason.VERIFICATION_FAILED)
+        }
+        val untested = if (outcome == null || outcome is TurnVerifier.Outcome.Skipped) {
+            " No check command was found, so the change was not tested."
+        } else {
+            ""
+        }
+        val okResult = TurnResult(
+            success = true,
+            response = "Changes applied. $stopped$untested",
+            iterations = iteration,
+            tokensIn = totalTokensIn,
+            tokensOut = totalTokensOut,
+            cost = totalCost,
+            toolsUsed = usedTools.distinct(),
+            incomplete = false,
+            verification = summary
+        )
+        return turnPersistence.finish(okResult, persistAssistantMessage = true)
     }
 
     /**

@@ -2737,6 +2737,54 @@ class AgentTurnLoopTest {
             assertTrue(result.verification?.ran == true)
         }
 
+        private fun stubVerificationLoopAfterEdit() {
+            stubWriteTool()
+            val cmdTool = mockk<pl.jclab.refio.core.tools.base.Tool>(relaxed = true) {
+                every { name } returns "run_terminal_command"
+                every { mode } returns pl.jclab.refio.core.tools.base.ToolMode.WRITE
+            }
+            every { toolRegistry.getTool("run_terminal_command") } returns cmdTool
+            val runTests = createLLMResponse("""{"response":"checking","actions":[{"tool":"run_terminal_command","arguments":{"command":"python -m unittest"}}]}""")
+            // An edit, then the same test command with byte-identical output until the repetition guard stops it.
+            stubLlmResponses(createLLMResponse(editCall), runTests, runTests, runTests, runTests, runTests, runTests)
+        }
+
+        @Test
+        fun `a stopped loop is not reported as success while the project's tests still fail`() = runTest {
+            // e2e (qwen3.5:9b, aider-py-league-table): the model edited the code, then looped on
+            // re-reading it; the loop guard declared the turn a success without running the tests,
+            // which still failed. Here the model never said it was done - Refio would be the one
+            // claiming it, so a failing check rules success out even if it was failing before.
+            stubVerificationLoopAfterEdit()
+            val runner = RecordingRunner(
+                pl.jclab.refio.core.services.turn.VerificationExecution(exitCode = 1, output = "FAILED (failures=3)"),
+                pl.jclab.refio.core.services.turn.VerificationExecution(exitCode = 1, output = "FAILED (failures=1)")
+            )
+            val loop = buildAgentTurnLoop(NoopTaskVerifier(), turnVerifier = verifierWith(runner))
+
+            val result = loop.runTurn(taskId = testTaskId, userInput = "Make the tests pass", mode = TaskMode.AGENT)
+
+            assertFalse(result.success, "tests still fail, got: ${result.response}")
+            assertEquals(pl.jclab.refio.core.debug.TurnStopReason.VERIFICATION_FAILED, result.stopReason)
+            assertEquals(2, runner.invocations.size, "baseline before the edit + one check after the loop, no repair rounds")
+            assertTrue(result.verification?.ran == true)
+        }
+
+        @Test
+        fun `a stopped loop after an edit is still a success when the project's tests pass`() = runTest {
+            stubVerificationLoopAfterEdit()
+            val runner = RecordingRunner(
+                pl.jclab.refio.core.services.turn.VerificationExecution(exitCode = 1, output = "FAILED (failures=3)"),
+                pl.jclab.refio.core.services.turn.VerificationExecution(exitCode = 0, output = "OK")
+            )
+            val loop = buildAgentTurnLoop(NoopTaskVerifier(), turnVerifier = verifierWith(runner))
+
+            val result = loop.runTurn(taskId = testTaskId, userInput = "Make the tests pass", mode = TaskMode.AGENT)
+
+            assertTrue(result.success, result.response)
+            assertEquals("PASSED", result.verification?.result)
+        }
+
         @Test
         fun `a turn without file writes is never verified`() = runTest {
             // Guard against the known regression: post-deliverable self-verification must never
