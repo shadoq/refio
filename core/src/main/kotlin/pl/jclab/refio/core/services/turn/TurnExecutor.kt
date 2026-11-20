@@ -1028,6 +1028,30 @@ internal class TurnExecutor(
                     // hid Ollama context overflow (input > num_ctx → truncation → empty output).
                     // No nudge here: the model didn't pick the wrong format, it produced nothing
                     // at all. Fail loud with a diagnostic that points at the most common cause.
+                    // A provider refusal comes first: it also arrives as an empty reply, but neither
+                    // a format reminder nor a context-window hint applies, and asking again is only
+                    // refused again at full prompt cost.
+                    if (mode != TaskMode.CHAT
+                        && llmResponse.finishReason.equals("refusal", ignoreCase = true)
+                        && llmResponse.nativeToolCalls.isNullOrEmpty()) {
+                        logger.warn {
+                            "[TURN_MODEL_REFUSED] taskId=$taskId, iteration=$iteration, " +
+                                "provider=$effectiveProvider, model=$effectiveModel"
+                        }
+                        val result = TurnResult(
+                            success = false,
+                            response = "The model ($effectiveModel) declined to work on this request. " +
+                                "Retrying with the same model will be refused again; rephrase the task " +
+                                "or switch to a different model.",
+                            iterations = iteration,
+                            tokensIn = totalTokensIn,
+                            tokensOut = totalTokensOut,
+                            cost = totalCost,
+                            toolsUsed = usedTools.distinct()
+                        )
+                        return turnPersistence.finish(result, persistAssistantMessage = true, stopReason = TurnStopReason.MODEL_REFUSED)
+                    }
+
                     if (mode != TaskMode.CHAT
                         && llmResponse.content.isBlank()
                         && llmResponse.nativeToolCalls.isNullOrEmpty()

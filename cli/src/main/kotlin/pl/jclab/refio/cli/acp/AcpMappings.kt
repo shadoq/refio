@@ -119,14 +119,15 @@ object AcpMappings {
 
     /**
      * ACP `StopReason`. Refio has about 25 ways for a turn to end; ACP has five. Anything that is
-     * not a cancel, the iteration cap or a truncated output is an ordinary end of turn - the reason
-     * itself reaches the user as the turn's final text.
+     * not a cancel, the iteration cap, a truncated output or a model refusal is an ordinary end of
+     * turn - the reason itself reaches the user as the turn's final text.
      */
     fun stopReason(result: TurnResult?, cancelRequested: Boolean): String = when {
         cancelRequested || result == null -> "cancelled"
         result.stopReason == TurnStopReason.CANCELLED -> "cancelled"
         result.stopReason == TurnStopReason.MAX_ITERATIONS -> "max_turn_requests"
         result.stopReason == TurnStopReason.OUTPUT_TRUNCATED -> "max_tokens"
+        result.stopReason == TurnStopReason.MODEL_REFUSED -> "refusal"
         else -> "end_turn"
     }
 

@@ -47,6 +47,9 @@ enum class TurnStopReason {
     /** The model never produced a parsable answer and the recovery retries were exhausted. */
     FORMAT_UNRECOVERABLE,
 
+    /** The provider declined to answer (finish reason `refusal`); retrying would only be refused again. */
+    MODEL_REFUSED,
+
     /**
      * The model answered in prose and the budget of format reminders ran out. Distinct from
      * [FORMAT_UNRECOVERABLE]: there the answer could not be parsed at all, here the loop chose to

@@ -41,6 +41,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.assertFalse
+import pl.jclab.refio.core.debug.TurnStopReason
 
 /**
  * Testy dla AgentTurnLoop — główna silnik wykonawczy dla trybów PLAN/AGENT.
@@ -1001,6 +1002,45 @@ class AgentTurnLoopTest {
             // Should succeed in a single iteration: empty content but thinking carried valid JSON.
             assertTrue(result.success, "expected recovery from thinking field, got: ${result.response}")
             assertEquals(1, result.iterations)
+        }
+
+        @Test
+        fun `a model refusal ends the turn at once with a plain message instead of format retries`() = runTest {
+            // Asking again cannot change a provider's refusal; every retry is paid for and refused
+            // the same way (seen on a defensive CTF task: four retries, four refusals).
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            } returns LLMResponse(
+                content = "",
+                usage = LLMUsage(inputTokens = 100, outputTokens = 0, totalTokens = 100),
+                model = "claude-sonnet-5-5",
+                provider = "anthropic",
+                cost = 0.04,
+                finishReason = "refusal"
+            )
+
+            val result = agentTurnLoop.runTurn(
+                taskId = testTaskId,
+                userInput = "Read the flag through the path traversal bug",
+                mode = TaskMode.AGENT
+            )
+
+            assertFalse(result.success)
+            assertEquals(TurnStopReason.MODEL_REFUSED, result.stopReason)
+            assertTrue(result.response.contains("declined"), "got: ${result.response}")
+            coVerify(exactly = 1) {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            }
         }
 
         @Test

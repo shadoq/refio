@@ -33,6 +33,11 @@ class AcpMappingsTest {
     }
 
     @Test
+    fun `a model refusal is reported to the IDE as a refusal, not as a finished turn`() {
+        assertEquals("refusal", AcpMappings.stopReason(result(TurnStopReason.MODEL_REFUSED, success = false), false))
+    }
+
+    @Test
     fun `limits and guardians end the turn normally so their explanation reaches the user as text`() {
         listOf(TurnStopReason.COMPLETED, TurnStopReason.COST_LIMIT, TurnStopReason.TIME_LIMIT, TurnStopReason.GUARDIAN_INCOMPLETE)
             .forEach { assertEquals("end_turn", AcpMappings.stopReason(result(it), false), it.name) }
