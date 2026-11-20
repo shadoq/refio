@@ -355,6 +355,35 @@ class SessionDebugExporterTest {
     }
 
     @Test
+    fun `a call that parsed fine but failed when run is not exported as ok`() {
+        // qwen3.5 called " tasks "; the call parsed, the executor answered "Tool not found", and
+        // run.json still said ok:true, so a run looked as if the plan had been made.
+        val failed = subtask(orderIndex = 1, errorMessage = "Tool not found:  tasks .")
+            .copy(status = TaskStatus.FAILED)
+        val succeeded = subtask(orderIndex = 2).copy(status = TaskStatus.SUCCESS)
+        stub(
+            subtasks = listOf(failed, succeeded),
+            messages = listOf(
+                msg(
+                    MessageRole.ASSISTANT, "working",
+                    toolCalls = listOf(
+                        ToolCallData(id = "c1", name = " tasks ", arguments = "{}"),
+                        ToolCallData(id = "c2", name = "read_file", arguments = "{}"),
+                    ),
+                ),
+                msg(MessageRole.TOOL, "Error: Tool not found:  tasks .").copy(toolCallId = "c1", subtaskId = failed.id),
+                msg(MessageRole.TOOL, "file body").copy(toolCallId = "c2", subtaskId = succeeded.id),
+            )
+        )
+        val details = exporter.export("t1", SessionDebugOptions.forLevel(DebugLevel.STANDARD))
+            .conversation.first().toolCallDetails
+
+        assertEquals(listOf(false, true), details.map { it.ok })
+        assertTrue(details[0].error!!.contains("Tool not found"))
+        assertNull(details[1].error)
+    }
+
+    @Test
     fun `a steering nudge is recognisable without matching its English text`() {
         stub(
             messages = listOf(

@@ -3,6 +3,8 @@ package pl.jclab.refio.core.debug
 import pl.jclab.refio.core.api.MultiAgentSessionResponse
 import pl.jclab.refio.core.db.ChatMessage
 import pl.jclab.refio.core.db.MessageRole
+import pl.jclab.refio.core.db.Subtask
+import pl.jclab.refio.core.db.TaskStatus
 import pl.jclab.refio.core.db.repositories.ApiLogRepository
 import pl.jclab.refio.core.db.repositories.ChatMessageRepository
 import pl.jclab.refio.core.db.repositories.SubtaskRepository
@@ -157,6 +159,7 @@ class SessionDebugExporter(
                 }
             } else emptyList(),
             conversation = if (options.includeConversation) {
+                val runFailures = runFailuresByCallId(subtasks, messages)
                 messages.map { msg ->
                     SessionDebugSnapshot.MessageInfo(
                         role = msg.role.name,
@@ -164,11 +167,12 @@ class SessionDebugExporter(
                         contentPreview = msg.content.preview(options.maxContentPreviewChars),
                         toolCalls = msg.toolCalls?.map { it.name } ?: emptyList(),
                         toolCallDetails = msg.toolCalls?.map {
+                            val error = it.error ?: runFailures[it.id]
                             SessionDebugSnapshot.ToolCallDetail(
                                 name = it.name,
                                 arguments = it.arguments,
-                                ok = it.error == null,
-                                error = it.error?.preview(options.maxContentPreviewChars),
+                                ok = error == null,
+                                error = error?.preview(options.maxContentPreviewChars),
                             )
                         } ?: emptyList(),
                         metadata = msg.metadata,
@@ -205,7 +209,23 @@ class SessionDebugExporter(
      * tool rows count: the subagent's own closing message carries its name too, and counting it
      * would list every run twice.
      */
-    private fun subagentRun(message: ChatMessage): SessionDebugSnapshot.SubagentRunInfo? {
+    /**
+     * A call can parse fine and still fail when run (unknown tool, tool error). That outcome lives
+     * on the subtask its TOOL message points to, not on the call, so without this a failed call
+     * would read as ok in the run document.
+     */
+    private fun runFailuresByCallId(subtasks: List<Subtask>, messages: List<ChatMessage>): Map<String, String> {
+        val failed = subtasks.filter { it.status == TaskStatus.FAILED }.associateBy { it.id }
+        return messages
+            .filter { it.role == MessageRole.TOOL && it.toolCallId != null }
+            .mapNotNull { m ->
+                val subtask = failed[m.subtaskId] ?: return@mapNotNull null
+                m.toolCallId!! to (subtask.errorMessage ?: m.content)
+            }
+            .toMap()
+    }
+
+        private fun subagentRun(message: ChatMessage): SessionDebugSnapshot.SubagentRunInfo? {
         if (message.role != MessageRole.TOOL) return null
         val raw = message.metadata?.takeIf { it.contains(SUBAGENT_NAME_KEY) } ?: return null
         val meta = runCatching { GsonInstance.gson.fromJson(raw, Map::class.java) }.getOrNull() ?: return null
