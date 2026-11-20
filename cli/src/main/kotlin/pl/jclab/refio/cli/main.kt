@@ -18,6 +18,10 @@ import com.github.ajalt.clikt.parameters.types.restrictTo
 import kotlinx.coroutines.runBlocking
 import pl.jclab.refio.api.models.ContextReference
 import pl.jclab.refio.api.models.TaskMode
+import pl.jclab.refio.cli.acp.AcpAgent
+import pl.jclab.refio.cli.acp.AcpPeer
+import pl.jclab.refio.cli.acp.AcpStdio
+import pl.jclab.refio.cli.acp.StandaloneAcpBackend
 import pl.jclab.refio.cli.tui.launchTuiApp
 import pl.jclab.refio.core.api.CreateTaskRequest
 import pl.jclab.refio.core.api.MultiAgentSessionRequest
@@ -59,6 +63,10 @@ class RefioCommand : CliktCommand(name = "refio") {
         .enum<TaskMode>()
     val model by option("--model", help = "LLM model override")
     val headless by option("--headless", help = "Run without GUI").flag()
+    val acp by option(
+        "--acp",
+        help = "Run as an Agent Client Protocol agent over stdin/stdout, for IDEs such as JetBrains AI Assistant or Zed. The IDE picks the project directory."
+    ).flag()
     val prompt by option("--prompt", help = "Prompt for headless mode")
     val multiAgent by option("--multi-agent", help = "Multi-agent YAML definition file")
         .path(mustExist = true, canBeDir = false)
@@ -223,6 +231,24 @@ class RefioCommand : CliktCommand(name = "refio") {
 
         if (mcpProbe) {
             runMcpProbe(effectiveOverrides)
+            return
+        }
+
+        if (acp) {
+            val conflicting = listOfNotNull(
+                "--headless".takeIf { headless },
+                "--prompt".takeIf { prompt != null },
+                "--prompt-file".takeIf { promptFile != null },
+                "--multi-agent".takeIf { multiAgent != null },
+                "--auto-approve".takeIf { autoApprove != null },
+                "--resume".takeIf { resume != null },
+                "--until".takeIf { until != null },
+                "--goal".takeIf { goal != null },
+            )
+            if (conflicting.isNotEmpty()) {
+                throw UsageError("--acp cannot be combined with ${conflicting.joinToString()}: the IDE sends the prompts and answers the approvals")
+            }
+            runAcp(withSelectedModel(withNoEgress(effectiveOverrides, noEgress), model))
             return
         }
 
@@ -507,6 +533,35 @@ class RefioCommand : CliktCommand(name = "refio") {
         println(StabilizationGate.reportJson(report, decision))
         if (!decision.green) {
             throw ProgramResult(HeadlessExit.FAILURE)
+        }
+    }
+
+    /**
+     * ACP agent mode: the IDE launches this process and talks JSON-RPC over stdin/stdout.
+     * stdout is claimed for the protocol before anything else runs (see [AcpStdio.claimStdout]).
+     */
+    private fun runAcp(runConfigOverrides: Map<String, String>) {
+        val protocolOut = AcpStdio.claimStdout()
+
+        val (selectedProvider, selectedModel) = splitProviderModel(model)
+        val startMode = when (mode) {
+            TaskMode.CHAT -> pl.jclab.refio.core.db.TaskMode.CHAT
+            TaskMode.PLAN -> pl.jclab.refio.core.db.TaskMode.PLAN
+            TaskMode.AGENT, null -> pl.jclab.refio.core.db.TaskMode.AGENT
+        }
+        val backend = StandaloneAcpBackend(runConfigOverrides, selectedModel, selectedProvider, runScopeMcpServers)
+        runBlocking {
+            val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+            val peer = AcpPeer(System.`in`, protocolOut, scope)
+            val agent = AcpAgent(peer, backend, startMode, scope)
+            agent.install()
+            try {
+                peer.run()
+            } finally {
+                agent.shutdown()
+                scope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+                backend.close()
+            }
         }
     }
 

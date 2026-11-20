@@ -408,6 +408,25 @@ When a turn stops on its time or iteration limit or on a guardrail, the agent wr
 
 `llm.retry_max_seconds` (default `300`, `0` disables) sets how long, in seconds counted from the first failure (the failed attempts included), the agent's model call is retried after a passing failure (connection refused, 5xx, 429), with pauses of 2, 4, 8, 16 and then 30 seconds. With `0` the call retries `limits.max_retries` times starting from `limits.retry_delay_ms`.
 
+### Refio as an agent in other IDEs (ACP)
+
+`refio --acp` runs Refio as an Agent Client Protocol (version 1) agent: JetBrains AI Assistant (2025.3 or newer) or Zed starts the process and talks to it over stdin/stdout. The IDE sends the project directory, the prompts and the answers to approval prompts; Refio reports tool calls, file diffs and the final answer. One process serves one project. Modes `agent`, `plan` and `chat` can be switched from the IDE. Tool approvals do not time out in this mode, because the IDE has its own stop button.
+
+To register Refio in AI Assistant use **Tools > Register Refio in AI Assistant** in the Refio plugin, or add an entry to `~/.jetbrains/acp.json` by hand (full path to the launcher):
+
+```json
+{
+  "agent_servers": {
+    "Refio": {
+      "command": "C:/tools/refio/bin/cli.bat",
+      "args": ["--acp", "--model", "ollama/qwen3.6:35b", "--no-egress"]
+    }
+  }
+}
+```
+
+The plugin action keeps every other entry, writes the previous file to `acp.json.bak` and refuses to touch a file that is not valid JSON. To undo, restore `acp.json.bak` or delete the `Refio` entry. Not supported yet: resuming a session from the IDE's history (`session/load`), choosing the model from the IDE, reading and writing files through the IDE's editor buffers, images in prompts.
+
 ### Log Retention
 
 `logs.retention_days` (default `7`, `0` keeps everything) has no YAML mapping; set it as a store key, for example `--config logs.retention_days=30` in the CLI. It sets how long Refio keeps the full request and answer of every model call (`api_logs`), the agent events and the CLI's rolled log files (`~/.refio/refio-cli.<date>.<n>.log`). Older ones are deleted when the IDE or the CLI starts and then every 12 hours. The file the CLI is writing to, `refio-cli.log`, is never deleted.

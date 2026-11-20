@@ -215,6 +215,7 @@ refio.bat -p <throwaway-project> --headless --model ollama/qwen3.6:35b \
 | `--debug-level minimal\|standard\|full\|judge` | Detail in the JSON output. |
 | `--config k=v` (repeatable) / `--config-file <f>` | Run-scope config overrides (headless **and** interactive TUI). E.g. `--config agent.max_turn_minutes=20` or retarget a provider: `--config providers.ollama.ollama_endpoint=http://127.0.0.1:11434` / `--config providers.lmstudio.lmstudio_base_url=...`. |
 | `--print-config` | Print resolved config (overrides applied) and exit - **no LLM call, writes nothing**. |
+| `--acp` | Run as an Agent Client Protocol (v1) agent over stdin/stdout for JetBrains AI Assistant or Zed. The IDE sends the project directory, prompts and approvals; `--model`, `--mode`, `--config`, `--no-egress`, `--max-cost`, `--mcp-server` still apply; cannot be combined with `--headless`, `--prompt*`, `--auto-approve`, `--until`, `--goal`, `--resume`. Code in `cli/acp/`. |
 | `--until "<cmd>"` / `--goal "<condition>"` | Run the task as a long task: rounds of AGENT turns until the command exits 0 in the project after a round, or until the completion judge finds the goal met. |
 | `--max-rounds N` / `--max-hours H` | Limits of a long task (defaults `long_task.max_rounds` 12 and `long_task.max_minutes` 240). |
 | `--resume <taskId>` | Continue a stopped long task with its next round; it keeps its own request and end condition, `--max-rounds` / `--max-hours` raise its limits, and a task that ended on its round or time limit gets the same allowance again. |

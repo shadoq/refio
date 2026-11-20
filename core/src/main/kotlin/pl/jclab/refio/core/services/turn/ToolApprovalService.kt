@@ -20,8 +20,14 @@ private val logger = dualLogger("ToolApprovalService")
  * for previously trusted tool+pattern combinations.
  */
 class ToolApprovalService(
-    /** Timeout in milliseconds for user to respond. 0 = no timeout. Default: 5 minutes. */
-    private val approvalTimeoutMs: Long = DEFAULT_TIMEOUT_MS
+    /**
+     * Timeout in milliseconds for user to respond. 0 = no timeout. Default: 5 minutes.
+     *
+     * Settable because the router builds this service before the caller knows who answers: an IDE
+     * client (ACP) has its own cancel button and a person who may step away, so it turns the
+     * timeout off rather than let a request expire into a silent rejection.
+     */
+    @Volatile var approvalTimeoutMs: Long = DEFAULT_TIMEOUT_MS
 ) {
     companion object {
         const val DEFAULT_TIMEOUT_MS = 5 * 60 * 1000L // 5 minutes

@@ -570,6 +570,7 @@ Shared by the IntelliJ plugin and the CLI TUI (previously plugin-only services).
 - **logging/PluginLogger.kt** - App-level logging: StateFlow of log entries (max 1000) with HTTP/API call logging.
 - **logging/PluginLoggerSink.kt** - IntelliJ-specific `LogSink` bridging core logging to `PluginLogger` for UI visibility.
 - **notification/NotificationService.kt** - IDE notification balloons (info, warning, error) with RAG unavailability handling.
+- **acp/AcpRegistration.kt** - Adds or updates the `Refio` entry in AI Assistant's `~/.jetbrains/acp.json`, keeping other agents and unknown fields, with a `.bak` copy and an atomic write; refuses invalid JSON.
 - **rag/RagProgressService.kt** - RAG indexing/embedding progress via StateFlows for reactive UI updates.
 - **rag/BackgroundIndexingTask.kt** - Background RAG indexing with progress reporting, cancellation, notifications.
 - **session/StatusBarIntegration.kt** - StatusBar reference holder for status updates from services.
@@ -591,6 +592,7 @@ Also in the plugin module, under the `core` package path:
 - **ShowHistoryAction.kt** - Toolbar action: shows the Refio tool window with the history panel.
 - **ShowSettingsAction.kt** - Toolbar action: shows the Refio tool window with the settings view.
 - **ShowHelpAction.kt** - Toolbar action: shows the Refio tool window with help information.
+- **RegisterAcpAgentAction.kt** - Tools menu: asks for the Refio CLI launcher path (remembered) and registers it as an ACP agent in JetBrains AI Assistant.
 - **RefioSlashPromptIntentionAction.kt** - Editor intention ("Refio: /name") that runs a slash prompt on the current selection.
 
 ## `startup/` - Plugin Startup
@@ -729,12 +731,21 @@ The bubble system uses a multi-layout composition pattern. **This is historicall
 ## `cli/` - CLI / TUI
 
 ### Entry Points
-- **main.kt** - `RefioCommand` (Clikt): handles `--project`, `--mode`, `--headless`, `--prompt`, `--multi-agent`, `--config`, `--print-config` and more; implements `runHeadless()`, `runMultiAgent()`, `runMcpProbe()`, `runPrintConfig()` and `runGate()`.
+- **main.kt** - `RefioCommand` (Clikt): handles `--project`, `--mode`, `--headless`, `--acp`, `--prompt`, `--multi-agent`, `--config`, `--print-config` and more; implements `runAcp()`, `runHeadless()`, `runMultiAgent()`, `runMcpProbe()`, `runPrintConfig()` and `runGate()`.
 - **HeadlessResult.kt** - Exit-code contract for headless and multi-agent runs: 0 only for a delivered (SUCCESS) turn, non-zero otherwise.
 - **HeadlessTurnListener.kt** - Mirrors headless turn/tool progress to the log file and to stderr, keeping stdout for `run.json`.
 - **AutoApproveListener.kt** - Headless auto-approval: resolves pending tool approvals via `AutoApprover` so a run never blocks on the approval timeout.
 - **McpProbe.kt** - Connects the declared MCP servers and reports what they expose without any LLM call, to tell a dead server from a model that did not call its tool.
 - **StandaloneCoreBootstrap.kt** - Two-tier init (app + project routers) for non-IntelliJ; SQLite at `~/.refio/data/database.sqlite`; registers standalone context providers and optional MCP.
+
+### ACP agent mode (`cli/acp/`, `refio --acp`)
+- **acp/AcpPeer.kt** - JSON-RPC 2.0 over stdin/stdout, one message per line, both directions; one ordered outbox, concurrent request handling so `session/cancel` can arrive mid-turn.
+- **acp/AcpAgent.kt** - Agent Client Protocol (v1) methods: `initialize`, `session/new`, `session/set_mode`, `session/prompt`, `session/cancel`; one ACP session per Refio task.
+- **acp/AcpSession.kt** - Per-session state and the `TurnEventListener` that reports tool calls (with diffs) as `session/update`.
+- **acp/AcpPermissionBridge.kt** - Turns pending `ToolApprovalService` requests into `session/request_permission` and feeds the IDE's answer back.
+- **acp/AcpMappings.kt** - Pure translations: tool kinds, stop reasons, prompt blocks to turn input (sandbox-checked file links), IDE MCP servers, permission options and decisions.
+- **acp/AcpBackend.kt** - The core seen from the ACP layer; `StandaloneAcpBackend` opens one project per process and turns the approval timeout off.
+- **acp/AcpStdio.kt** - Claims stdout for the protocol and sends `System.out` to stderr.
 
 ### TUI Application
 - **tui/TuiApp.kt** - Main TUI entry: interactive (raw mode) vs simple (line-based) fallback; alternate screen buffer, resize detection, input/render loops.

@@ -266,7 +266,7 @@ is evidence the workflow needs it.
    agents (this is how Codex and Cursor plug in). Exposing `:core` as an ACP
    server puts RefIo in every JetBrains IDE without per-IDE UI work, and composes
    naturally with the Phase 4 headless / `refio run` direction. The cheapest path
-   to distribution on a two-year horizon. **Status (2026-10): not started** - no ACP code in the repo.
+   to distribution on a two-year horizon. **Status (2026-11-20): first version done** - `refio --acp` (ACP v1: sessions, modes, tool calls with diffs, approvals, cancel) and the plugin action that registers it in AI Assistant. Not yet: `session/load`, model choice from the IDE, file access through the IDE (`fs/*`).
 9. **Background agents on isolated worktrees + command center.** The parked
    multi-agent and dashboard items (see Later / uncertain) become the 2027-2028
    bet: worktree isolation per agent, resumability, a live per-agent view. Local
