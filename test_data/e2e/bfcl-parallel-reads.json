@@ -1,7 +1,7 @@
 {
   "id": "bfcl-parallel-reads",
   "mode": "AGENT",
-  "description": "BFCL style tool-call precision (parallel calls): summarise one value from eight small config files into a single new report file. The files are independent, so they should be read in one batch (or found with one search) and the report written once; eight sequential reads plus the write and the answer overshoot the iteration budget, which is enforced. Config files also carry connect_timeout_ms and commented-out old values to catch careless grepping. A checks script recomputes the expected table from the configs and verifies order, values and the final line.",
+  "description": "BFCL style tool-call precision (parallel calls): summarise one value from eight small config files into a single new report file. The files are independent, so they should be read in one batch (or found with one search) and the report written once; eight sequential reads plus the write and the answer overshoot the iteration budget, which is enforced. Config files also carry connect_timeout_ms and commented-out old values to catch careless grepping. A checks script recomputes the expected table from the configs and verifies order, values and the final line. The prompt names that script, so one terminal command (running that script to check the report) is allowed; a second one is not.",
   "category": "bfcl-tools",
   "max_iterations": 7,
   "fixture": "fixtures/bfcl-parallel-reads",
@@ -14,17 +14,13 @@
     "enforce_max_iterations": true,
     "tool_invoked": [
       {
-        "name": "run_terminal_command",
-        "absent": true
-      },
-      {
         "name": "run_code",
         "absent": true
       }
     ],
     "tool_budget": {
       "read_file": 9,
-      "run_terminal_command": 0
+      "run_terminal_command": 1
     },
     "file_unchanged": [
       "README.md",
