@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Typography,
   Card,
@@ -23,8 +23,10 @@ import { TraceSummaryTags } from "@/components/results/TraceSummaryTags";
 import { TraceTimeline } from "@/components/results/TraceTimeline";
 import { inboxScreenshots } from "@/lib/adminArtifacts";
 import { filterInboxEntries, inboxFacetOptions, type QueueFilters } from "@/lib/queueFilters";
-import type { InboxEntry, Score } from "@/schema/results";
-import type { Criterion } from "@/schema/tasks";
+import { buildCalibration, proposeScores, type Calibration } from "@/lib/judge/proposal";
+import { ResultDetailModal } from "@/components/results/ResultDetailModal";
+import type { InboxEntry, Result, Score } from "@/schema/results";
+import type { Criterion, TasksFile } from "@/schema/tasks";
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -38,17 +40,38 @@ function deterministicScores(entry: InboxEntry) {
   return set?.scores ?? [];
 }
 
+// The strong judges' verdicts, i.e. everything but the deterministic measurement.
+function strongJudgeSets(entry: InboxEntry) {
+  return entry.judgeScores.filter((j) => j.judgeId !== "e2e-deterministic" && j.error == null);
+}
+
 function QueueCard({
   entry,
   criteria,
+  calibration,
+  tasksFile,
+  modelName,
+  environmentName,
 }: {
   entry: InboxEntry;
   criteria: Criterion[];
+  calibration: Calibration;
+  tasksFile: TasksFile;
+  modelName: string | undefined;
+  environmentName: string | undefined;
 }) {
+  const [detailOpen, setDetailOpen] = useState(false);
   const t = useT();
   const promote = usePromoteInboxEntry();
   const discard = useDiscardInboxEntry();
-  const [picked, setPicked] = useState<Record<string, number>>({});
+  const proposals = proposeScores(entry, criteria, calibration);
+  const proposalOf = (id: string) => proposals.find((p) => p.criterionId === id);
+  const [picked, setPicked] = useState<Record<string, number>>(() =>
+    Object.fromEntries(
+      proposals.filter((p) => p.value !== undefined).map((p) => [p.criterionId, p.value!]),
+    ),
+  );
+  const judges = strongJudgeSets(entry);
 
   const html = entry.attachments.find((a) => a.type === "html");
   const screenshots = inboxScreenshots(entry);
@@ -70,6 +93,13 @@ function QueueCard({
       message.error(t("queue.promoteFailed", { error: String(e) }));
     }
   }
+
+  // The detail modal renders a Result; an inbox entry is one without manual scores,
+  // so the scores currently picked on the card stand in for them.
+  const detailResult: Result = {
+    ...entry,
+    scores: Object.entries(picked).map(([criterionId, value]) => ({ criterionId, value })),
+  };
 
   async function onDiscard() {
     try {
@@ -95,6 +125,7 @@ function QueueCard({
       }
       extra={
         <Space>
+          <Button onClick={() => setDetailOpen(true)}>{t("queue.details")}</Button>
           <Button type="primary" loading={promote.isPending} onClick={onPromote}>
             {t("queue.promote")}
           </Button>
@@ -157,8 +188,24 @@ function QueueCard({
 
           <Text strong>{t("queue.yourScores")}</Text>
           <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 8 }}>
-            {criteria.map((c) => (
-              <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {criteria.map((c) => {
+              const p = proposalOf(c.id);
+              const judgeValues = judges
+                .map((j) => j.scores.find((s) => s.criterionId === c.id)?.value)
+                .filter((v): v is number => v !== undefined);
+              const hint =
+                p?.source === "judges"
+                  ? `${t("queue.proposalJudges", { values: judgeValues.join(" / ") })} · ${
+                      p.calibrated
+                        ? t("queue.proposalCalibrated", { mean: p.judgeMean!.toFixed(1) })
+                        : t("queue.proposalRaw")
+                    }`
+                  : p?.source === "deterministic"
+                    ? t("queue.proposalDeterministic")
+                    : null;
+              return (
+              <div key={c.id}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <Text style={{ width: 150 }}>{c.name}</Text>
                 <Radio.Group
                   size="small"
@@ -178,14 +225,56 @@ function QueueCard({
                   </Text>
                 )}
               </div>
-            ))}
+              {hint && (
+                <div style={{ marginLeft: 158, fontSize: 12 }}>
+                  {p?.disputed && <Tag color="orange">{t("queue.proposalDisputed")}</Tag>}
+                  <Text type="secondary">{hint}</Text>
+                </div>
+              )}
+              </div>
+              );
+            })}
           </div>
+          {judges.length > 0 && (
+            <Collapse
+              ghost
+              size="small"
+              style={{ marginTop: 8 }}
+              items={[
+                {
+                  key: "rationales",
+                  label: t("queue.judgeRationales"),
+                  children: judges.map((j) => (
+                    <div key={j.judgeId} style={{ marginBottom: 8, fontSize: 12 }}>
+                      <Text strong>{j.judgeId}</Text>
+                      {j.scores.map((s) => (
+                        <div key={s.criterionId}>
+                          <Tag>{s.criterionId}: {s.value}</Tag>
+                          {s.rationale && <Text type="secondary">{s.rationale}</Text>}
+                        </div>
+                      ))}
+                    </div>
+                  )),
+                },
+              ]}
+            />
+          )}
         </div>
       </div>
       {entry.notes && (
         <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0, fontSize: 12 }}>
           {entry.notes}
         </Paragraph>
+      )}
+      {detailOpen && (
+        <ResultDetailModal
+          detailResult={detailResult}
+          tasksFile={tasksFile}
+          task={tasksFile.tasks.find((x) => x.id === entry.taskId)}
+          modelName={modelName}
+          environmentName={environmentName}
+          onClose={() => setDetailOpen(false)}
+        />
       )}
     </Card>
   );
@@ -199,6 +288,8 @@ export default function Queue() {
   const { data: tasks } = useTasks();
   const [filters, setFilters] = useState<QueueFilters>({});
   const [page, setPage] = useState(1);
+  // Learned from every promoted result that has both a human score and judge scores.
+  const calibration = useMemo(() => buildCalibration(results?.results ?? []), [results]);
 
   if (!results || !tasks) {
     return (
@@ -291,7 +382,15 @@ export default function Queue() {
       ) : (
         <>
           {paged.map((entry) => (
-            <QueueCard key={entry.id} entry={entry} criteria={criteriaFor(entry.taskId)} />
+            <QueueCard
+              key={entry.id}
+              entry={entry}
+              criteria={criteriaFor(entry.taskId)}
+              calibration={calibration}
+              tasksFile={tasks}
+              modelName={results.models.find((m) => m.id === entry.modelId)?.name}
+              environmentName={results.environments.find((e) => e.id === entry.environmentId)?.name}
+            />
           ))}
           {filtered.length > PAGE_SIZE && (
             <div style={{ display: "flex", justifyContent: "center", marginTop: 16 }}>

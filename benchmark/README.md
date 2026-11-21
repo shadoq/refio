@@ -218,11 +218,24 @@ existing run without calling a model, use `--from-run <run.json> --artifact <htm
 so target a remote Ollama box (e.g. a DGX Spark) by setting `providers.ollama.ollama_endpoint`
 there.
 
-### 3. Promote an inbox entry to a visible result
+### 3. Let the strong judges score the queue (spends judge CLI calls)
 
-Open `/admin/queue` in the dev server (`npm run dev`), add the human look/code scores and
-promote the entry into `results[]` (or discard it). Only a promoted entry becomes a visible
-result. Optional strong-judge scores can be added afterwards (see below).
+```bash
+npm run judge -- --inbox --limit 0
+```
+
+The queue then pre-fills every criterion. A judged criterion gets the score you have
+historically given when the judges said the same (learned from promoted results with both a
+human and a judge score; at least 10 past reviews per judge mean, otherwise the plain judge
+mean is used). A criterion the judges do not score takes the deterministic check's value.
+Judges two or more points apart are marked "judges disagree". Skipping this step leaves only
+the deterministic hints.
+
+### 4. Promote an inbox entry to a visible result
+
+Open `/admin/queue` in the dev server (`npm run dev`), check the pre-filled scores, correct
+what you disagree with and promote the entry into `results[]` (or discard it). Only a promoted
+entry becomes a visible result.
 
 ### External agents (the Agents page)
 
