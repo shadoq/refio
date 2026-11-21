@@ -38,7 +38,8 @@ class TurnPromptBuilder(
     private val promptCache: PromptCache? = null,
     private val sectionProviders: List<PromptSectionProvider> = emptyList(),
     private val configService: pl.jclab.refio.core.services.ConfigService? = null,
-    private val agentInboxRegistry: AgentInboxRegistry? = null
+    private val agentInboxRegistry: AgentInboxRegistry? = null,
+    private val clock: () -> Long = System::currentTimeMillis
 ) {
     class StructuredPromptBuilder {
         /**
@@ -157,6 +158,10 @@ class TurnPromptBuilder(
         modelId: String? = null,
         /** This turn's run id, used to scope the agent-plans section to a subagent's own plan. */
         runId: String? = null,
+        /** When the turn started, for the minutes shown in the turn status. Null shows no time. */
+        turnStartedAtMs: Long? = null,
+        /** The turn's time limit in minutes (`agent.max_turn_minutes`); 0 means none. */
+        maxTurnMinutes: Long = 0L,
     ): TurnPrompt {
         // Build system prompt based on mode/profile
         val baseSystemPrompt = resolveSystemPrompt(
@@ -186,18 +191,15 @@ class TurnPromptBuilder(
         val promptSections = mutableListOf(
             PromptSection("base_system_prompt", baseSystemPrompt, stable = true)
         )
-        // Iteration warning (only emits when remaining <= 12) — marked stable=false so
-        // it lands AFTER the stable prefix. The cacheable prefix (identity + tools +
-        // family guidance) stays byte-stable as `iteration` increments, instead of
-        // invalidating the prefix-cache the moment the warning kicks in.
-        val iterationInfo = buildIterationInfo(currentIteration, maxIterations, writeToolsExecutedInTurn)
-        if (iterationInfo.isNotBlank()) {
-            promptSections += PromptSection(
-                id = "iteration_status",
-                content = iterationInfo,
-                stable = false
-            )
-        }
+        // Iterations and minutes left. It changes on every iteration, so it goes at the very end of
+        // the request: into the final message with the trailing layout, after everything else in the
+        // system prompt otherwise.
+        val turnStatus = TurnBudgetStatus.render(
+            iteration = currentIteration,
+            maxIterations = maxIterations,
+            elapsedMs = turnStartedAtMs?.let { clock() - it } ?: 0L,
+            maxMinutes = if (turnStartedAtMs != null) maxTurnMinutes else 0L
+        )
         if (stickyRequirements.isNotBlank()) {
             promptSections += PromptSection(
                 id = "task_requirements",
@@ -205,12 +207,12 @@ class TurnPromptBuilder(
                 stable = false
             )
         }
-        // Subagents always use the system layout: their context profile filters and truncates the
-        // system-prompt context, which the trailing message would bypass. Checked on the run profile,
-        // not on contextProfile, because a subagent without a context_profile has none.
-        val trailingLayout = runProfile != TurnRunProfile.SUBAGENT &&
+        // Subagents follow the same layout as the main agent. With the trailing layout their system
+        // prompt stays identical between iterations, so a local server re-reads only the final
+        // message after each tool call; their context profile is applied to that message too.
+        val trailingLayout =
             configService?.getTyped(pl.jclab.refio.core.config.ConfigKeys.AGENT_PROMPT_LAYOUT, taskId) ==
-            pl.jclab.refio.core.config.ConfigKeys.PROMPT_LAYOUT_TRAILING
+                pl.jclab.refio.core.config.ConfigKeys.PROMPT_LAYOUT_TRAILING
 
         // Append sections from providers
         if (sectionProviders.isNotEmpty()) {
@@ -286,6 +288,7 @@ class TurnPromptBuilder(
                     modelId = modelId,
                     agentInstanceId = profileOverrides?.agentInstanceId,
                     trailingState = trailingLayout,
+                    history = history,
                 )
 
                 // Apply context profile filtering for subagents
@@ -338,6 +341,18 @@ $filteredContextPrompt
                     )
                 }
 
+                // The trailing layout's work state goes last. A subagent's context profile filters it
+                // like the rest of its context, and the token limit below counts it.
+                if (trailingLayout) {
+                    val state = contextProfile?.let { applyContextProfileToProjectContext(turnResult.trailingState, it) }
+                        ?: turnResult.trailingState
+                    trailingStateMessage(state, stickyRequirements, turnStatus)?.let {
+                        filteredMessages = filteredMessages + it
+                    }
+                } else {
+                    systemPrompt = appendTurnStatus(systemPrompt, turnStatus)
+                }
+
                 // Apply maxContextTokens limit if set
                 if (contextProfile?.maxContextTokens != null) {
                     val totalTokens = tokenEstimator.estimateString(systemPrompt) +
@@ -361,12 +376,6 @@ $filteredContextPrompt
                 // prefix, the boundary now points past the end of the string and
                 // would be rejected by the Anthropic adapter.
                 cacheableSystemLen = cacheableSystemLen.coerceAtMost(systemPrompt.length)
-
-                if (trailingLayout) {
-                    trailingStateMessage(turnResult.trailingState, stickyRequirements)?.let {
-                        filteredMessages = filteredMessages + it
-                    }
-                }
 
                 logger.info { "[BUILD_PROMPT] Using ContextService: ${filteredMessages.size} messages, context=${filteredContextPrompt.length} chars" +
                     (if (contextProfile != null) ", contextProfile applied" else "") +
@@ -446,7 +455,7 @@ $filteredContextPrompt
         }
 
         return TurnPrompt(
-            systemPrompt = systemPrompt,
+            systemPrompt = appendTurnStatus(systemPrompt, turnStatus),
             messages = appendInboxMessage(messages, sessionId, agentName),
             cacheableSystemLength = cacheableSystemLen.takeIf { it > 0 }
         )
@@ -493,11 +502,22 @@ $stickyRequirements
      * byte-identical between iterations. The requirements also stay in the system prompt; the repeat
      * is what puts the goal at the end of the request.
      */
-    private fun trailingStateMessage(state: String, stickyRequirements: String): LLMMessage? {
+    private fun trailingStateMessage(state: String, stickyRequirements: String, turnStatus: String): LLMMessage? {
         val requirements = if (stickyRequirements.isNotBlank()) taskRequirementsBlock(stickyRequirements) else ""
-        val body = listOf(state.trim(), requirements).filter { it.isNotBlank() }.joinToString("\n")
+        val body = listOf(state.trim(), turnStatus, requirements).filter { it.isNotBlank() }.joinToString("\n")
         if (body.isBlank()) return null
         return LLMMessage(role = "user", content = "<system-reminder>\n$TRAILING_STATE_PREAMBLE\n$body\n</system-reminder>")
+    }
+
+    /** The turn status as the last section of the system prompt (layouts without a final state message). */
+    private fun appendTurnStatus(systemPrompt: String, turnStatus: String): String {
+        if (turnStatus.isBlank() || systemPrompt.contains("<turn_status>")) return systemPrompt
+        return structuredPromptBuilder.buildSystemPrompt(
+            listOf(
+                PromptSection("existing", systemPrompt, stable = true),
+                PromptSection("turn_status", turnStatus, stable = false)
+            )
+        )
     }
 
     private fun buildStickyRequirementsBlock(history: List<ChatMessage>): String {
@@ -878,32 +898,6 @@ $stickyRequirements
     }
 
     /**
-     * Build iteration info with warnings about remaining loop budget.
-     */
-    @Suppress("UNUSED_PARAMETER")
-    fun buildIterationInfo(current: Int, max: Int, _writeToolsExecutedInTurn: Int = 0): String {
-        val remaining = max - current
-
-        val warning = when {
-            remaining <= 3 -> "⚠️ CRITICAL: Only $remaining iterations left! Prioritize essential actions and prepare to conclude."
-            remaining <= 7 -> "⚠️ WARNING: $remaining iterations remaining. Plan efficiently and focus on core objectives."
-            remaining <= 12 -> "Note: $remaining iterations remaining. Consider pacing your tool usage."
-            else -> ""
-        }
-
-        return if (warning.isNotEmpty()) {
-            """
-<iteration_status>
-Current iteration: $current / $max
-${warning}
-</iteration_status>
-            """.trimIndent()
-        } else {
-            ""
-        }
-    }
-
-    /**
      * Get conversation history size for metrics.
      */
     fun getHistorySize(taskId: String): Int {
@@ -993,7 +987,11 @@ ${warning}
 
         if (!profile.includeWorkingMemory) {
             // Remove working memory sections
-            result = result.replace(Regex("<working_memory>.*?</working_memory>", RegexOption.DOT_MATCHES_ALL), "")
+            // The context service tags it <WORKING_MEMORY>, the prompt provider <working_memory>.
+            result = result.replace(
+                Regex("<working_memory>.*?</working_memory>", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE)),
+                ""
+            )
         }
 
         // Clean up excessive blank lines

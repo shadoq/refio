@@ -30,11 +30,15 @@ import pl.jclab.refio.core.api.UpdateTaskRequest
 import pl.jclab.refio.core.db.ConfigScope
 import pl.jclab.refio.core.db.TaskStatus
 import pl.jclab.refio.core.db.ToolCallData
+import pl.jclab.refio.core.debug.TurnStopReason
 import pl.jclab.refio.core.errors.RefioError
 import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.services.AgentTurnLoop
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.TurnResult
+import pl.jclab.refio.core.services.longtask.LongTaskListener
+import pl.jclab.refio.core.services.longtask.LongTaskState
+import pl.jclab.refio.core.services.longtask.RoundRecord
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.monitoring.OperationInfo
 import java.util.UUID
@@ -75,6 +79,7 @@ class CoreSessionService(
         contextRefs: List<ContextReference> = emptyList(),
         model: String? = null,
         provider: String? = null,
+        resumeLongTask: Boolean = false,
     ): Message {
         GlobalMetrics.resetCancellation()
 
@@ -87,7 +92,7 @@ class CoreSessionService(
                     "executionMode=${currentSession.executionMode}, inputChars=${input.length}, " +
                     "contextRefs=${contextRefs.size}, model=${model ?: "auto"}, provider=${provider ?: "auto"}"
         }
-        return sendMessageUsingWorkflow(currentSession, input, contextRefs, model, provider)
+        return sendMessageUsingWorkflow(currentSession, input, contextRefs, model, provider, resumeLongTask)
     }
 
     private suspend fun sendMessageUsingWorkflow(
@@ -96,6 +101,7 @@ class CoreSessionService(
         contextRefs: List<ContextReference>,
         model: String?,
         provider: String?,
+        resumeLongTask: Boolean,
     ): Message {
         stateManager.setIsGenerating(true)
         return try {
@@ -106,18 +112,25 @@ class CoreSessionService(
                         "executionMode=$executionMode, stream=$stream"
             }
 
-            val userMessage = Message(
-                id = UUID.randomUUID().toString(),
-                taskId = session.id,
-                role = "user",
-                content = input,
-                createdAt = System.currentTimeMillis(),
-            )
-            stateManager.appendMessage(userMessage)
+            // A long task that stopped short of its condition continues with its next round, which
+            // restarts from the task's original request, so the continue text is not posted.
+            val resuming = resumeLongTask && session.mode == TaskMode.AGENT &&
+                runCatching { projectRouter.longTaskRouter.canResume(session.id) }.getOrDefault(false)
+            if (!resuming) {
+                val userMessage = Message(
+                    id = UUID.randomUUID().toString(),
+                    taskId = session.id,
+                    role = "user",
+                    content = input,
+                    createdAt = System.currentTimeMillis(),
+                )
+                stateManager.appendMessage(userMessage)
+            }
 
             when (session.mode) {
                 TaskMode.CHAT -> sendMessageUsingChatWorkflow(session, input, contextRefs, model, provider, stream)
-                TaskMode.PLAN, TaskMode.AGENT -> sendMessageUsingTurnLoop(session, input, contextRefs, model, provider, stream, executionMode)
+                TaskMode.PLAN, TaskMode.AGENT ->
+                    sendMessageUsingTurnLoop(session, input, contextRefs, model, provider, stream, executionMode, resuming)
             }
         } catch (e: RefioError.MalformedResponse) {
             logger.error(e) {
@@ -169,6 +182,7 @@ class CoreSessionService(
         provider: String?,
         stream: Boolean,
         executionMode: ExecutionMode,
+        resume: Boolean,
     ): Message {
         logger.info {
             "[TURN_LOOP] Starting turn: taskId=${session.id}, mode=${session.mode}, " +
@@ -471,12 +485,22 @@ class CoreSessionService(
                     }
             }
 
+            // Each round of a long task shows its messages as soon as it ends, not when the loop does.
+            val rounds = object : LongTaskListener {
+                override fun onRoundFinished(record: RoundRecord, state: LongTaskState) {
+                    messageDispatcher.loadMessages()
+                }
+            }
+
             val result = try {
-                projectRouter.agentRouter.runTurn(
-                    request = turnRequest,
-                    streamCallback = streamCallback,
-                    listener = turnListener,
-                )
+                // A single turn, or rounds until the task's /until or /goal condition holds. A resume
+                // that finds nothing to continue (another process took the task) sends the text instead.
+                val resumed = if (resume) {
+                    projectRouter.longTaskRouter.resume(turnRequest, streamCallback, turnListener, rounds)
+                } else {
+                    null
+                }
+                resumed ?: projectRouter.longTaskRouter.runTurnOrLoop(turnRequest, streamCallback, turnListener, rounds)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // User pressed Stop: the turn Job was cancelled, propagating here through the
                 // suspending LLM call. Record CANCELED (not FAILED) and rethrow cooperatively so
@@ -524,12 +548,7 @@ class CoreSessionService(
             // multi-step task is never silently shown as SUCCESS. Either way the task is promoted
             // off NEW so it isn't left pending forever.
             runCatching {
-                val finalStatus = when {
-                    result.incomplete -> TaskStatus.INCOMPLETE
-                    result.success -> TaskStatus.SUCCESS
-                    else -> TaskStatus.FAILED
-                }
-                projectRouter.taskRepository.update(id = session.id, status = finalStatus)
+                projectRouter.taskRepository.update(id = session.id, status = taskStatusAfter(result))
             }.onFailure { logger.warn(it) { "[TURN_LOOP] Failed to update task status for ${session.id}" } }
 
             streamingClosed.set(true)
@@ -769,4 +788,13 @@ class CoreSessionService(
             emptyMap()
         }
     }
+}
+
+/** The task status a finished turn (or a long task's loop) leaves behind in history. */
+internal fun taskStatusAfter(result: TurnResult): TaskStatus = when {
+    // Stop pressed between the model's steps, or between two rounds of a long task.
+    result.stopReason == TurnStopReason.CANCELLED -> TaskStatus.CANCELED
+    result.incomplete -> TaskStatus.INCOMPLETE
+    result.success -> TaskStatus.SUCCESS
+    else -> TaskStatus.FAILED
 }

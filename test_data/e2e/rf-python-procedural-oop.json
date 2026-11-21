@@ -1,0 +1,48 @@
+{
+  "id": "rf-python-procedural-oop",
+  "mode": "AGENT",
+  "description": "Refactor the procedural metrics-ingest module pipeline.py into a Pipeline class with explicit __init__ state, typed methods and a @property read-only view, while the module-level wrappers keep delegating to a shared default instance; the gate drives the public API and the CLI and must stay green before and after.",
+  "category": "refactoring",
+  "max_iterations": 30,
+  "fixture": "fixtures/rf-python-procedural-oop",
+  "prompt_file": "prompts/rf-python-procedural-oop.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": [
+      "advance_code_editing"
+    ],
+    "needles_in_file": [
+      {
+        "path": "pipeline.py",
+        "regex": "class Pipeline"
+      },
+      {
+        "path": "pipeline.py",
+        "regex": "def __init__"
+      },
+      {
+        "path": "pipeline.py",
+        "regex": "self\\."
+      },
+      {
+        "path": "pipeline.py",
+        "regex": "@property"
+      },
+      {
+        "path": "pipeline.py",
+        "regex": "^[A-Z_]+ *=",
+        "absent": true
+      }
+    ],
+    "file_unchanged": [
+      "README.md",
+      "checks.py"
+    ],
+    "build_cmd": "python3 checks.py"
+  },
+  "judge": {
+    "criteria": [
+      "pipeline.py is rebuilt around a Pipeline class that holds its counters, per-source tally, record log and sequence number in __init__, exposes the tally as a fresh-copy @property view, carries type hints on every signature and leaves no module-level mutable state, while process_record, replay, summarize and reset remain as wrappers over a shared default instance and the gate confirming the exact rejection reasons, sequence numbers, per-source attribution, summary shape, reset semantics and CLI output and exit codes still exits 0."
+    ]
+  }
+}

@@ -97,7 +97,8 @@ data class ModelDefaultsConfig(
     val coding: String? = null,
     val weak: String? = null,
     val embedding: String? = null,
-    val strong: String? = null
+    val strong: String? = null,
+    val decision: String? = null
 )
 
 @Serializable

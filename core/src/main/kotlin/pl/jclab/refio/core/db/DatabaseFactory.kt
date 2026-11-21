@@ -97,7 +97,8 @@ object DatabaseFactory {
                     // Multi-agent tables
                     AgentSessionsTable,
                     AgentInstancesTable,
-                    AgentEventsTable
+                    AgentEventsTable,
+                    TaskStateTable
                 )
 
                 logger.info { "All tables created successfully" }

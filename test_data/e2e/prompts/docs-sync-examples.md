@@ -1,0 +1,3 @@
+The README of `tallykit` was written for an older version of the library and its examples no longer run or no longer print what the README claims. Bring `README.md` in sync with the code in `tallykit.py`: every example must run and show the output the library really produces, and the surrounding text must describe the current behaviour.
+
+The library itself is the source of truth and must not be changed. Keep the examples (one per topic) rather than deleting them. `python checks.py` extracts every python block of the README, runs it and compares the output with the text block below it; do not edit the checks script.

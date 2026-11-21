@@ -61,7 +61,8 @@ class WorkingMemoryIntegration(
         result: String,
         iteration: Int,
         metadata: Map<String, Any?>? = null,
-        originId: String? = null
+        originId: String? = null,
+        agentInstanceId: String? = null
     ) {
         val entries = workingMemoryService.extractKnowledge(
             toolName = toolName,
@@ -73,7 +74,7 @@ class WorkingMemoryIntegration(
         )
 
         if (entries.isNotEmpty()) {
-            workingMemoryService.recordEntries(taskId, entries)
+            workingMemoryService.recordEntries(WorkingMemoryService.scopeKey(taskId, agentInstanceId), entries)
             logger.debug {
                 "[WORKING_MEMORY] Recorded ${entries.size} entries from $toolName: " +
                 entries.map { "${it.key}=${it.value.take(30)}" }.joinToString(", ")

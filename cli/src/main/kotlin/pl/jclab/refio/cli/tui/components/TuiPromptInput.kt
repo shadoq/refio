@@ -6,13 +6,10 @@ import pl.jclab.refio.cli.tui.rendering.TuiRenderBuffer
 import pl.jclab.refio.cli.tui.state.TuiState
 
 /**
- * Prompt input area — mirrors IntelliJ plugin's PromptInputPanel.
- *
- * Layout:
+ * Body of the PROMPT frame (mode, model and session numbers live in the status bar):
  * ```
- * ────────────────────────────────────────────────────────────────
  * Context: [@file:app.kt] [@git_diff]              (if refs present)
- * [CHAT] ollama/qwen2.5:7b  Ctrl+M=mode  @=context  !=subagent
+ * ⟳ round 2/12 ...                                 (long task)
  * > user input here_
  * ```
  */
@@ -26,12 +23,17 @@ object TuiPromptInput {
     /** Maximum number of visible input lines (expands from 1 to this) */
     private const val MAX_INPUT_LINES = 4
 
+    private const val PLACEHOLDER = "@file  /command  !agent"
+
+    /** Lines drawn above the first input line (context tags, long-task progress, paste marker). */
+    fun inputLineOffset(state: TuiState): Int =
+        (if (extractContextRefs(state.inputBuffer).isNotEmpty()) 1 else 0) +
+            (if (state.longTaskLine != null) 1 else 0) +
+            (if (state.pastedContent != null) 1 else 0)
+
     /** Render prompt to lines (for buffer-based rendering). */
     fun renderToLines(state: TuiState, availableWidth: Int = 60): List<String> {
         val result = mutableListOf<String>()
-
-        // Separator
-        result.add(TuiColors.border("─".repeat(60)))
 
         // Context tags line (if user has @ references in input)
         val contextRefs = extractContextRefs(state.inputBuffer)
@@ -42,46 +44,8 @@ object TuiPromptInput {
             result.add(TuiColors.muted("Context: ") + tags)
         }
 
-        // Status line: mode + model + toggles + metrics (like plugin StatusBar)
-        val modeIcon = when (state.mode) {
-            "CHAT" -> "💬"
-            "PLAN" -> "📝"
-            "AGENT" -> "🤖"
-            else -> ">"
-        }
-        val mode = TuiColors.accent("[$modeIcon ${state.mode}]")
-        val model = state.model?.let { TuiColors.muted(" $it") } ?: TuiColors.muted(" default")
-
-        // Toggle indicators
-        val execIcon = if (state.executionMode == "AUTO") "⚡" else "🤚"
-        val thinkIcon = if (state.reasoningEffort.isOn) "🧠${state.reasoningEffort.name.take(1)}" else ""
-        val egressIcon = if (state.noEgressEnabled) "🔒" else ""
-        val toggles = listOfNotNull(
-            execIcon,
-            thinkIcon.ifEmpty { null },
-            egressIcon.ifEmpty { null }
-        ).joinToString("")
-        val togglesPart = if (toggles.isNotEmpty()) TuiColors.muted(" $toggles") else ""
-
-        // Metrics (mirrors plugin StatusBar: context, tokens, cost, requests)
-        val ctxBar = renderContextBar(state)
-        val tokIn = formatTokensShort(state.sessionTokensIn)
-        val tokOut = formatTokensShort(state.sessionTokensOut)
-        val cost = String.format(java.util.Locale.US, "%.4f", state.totalCostUsd)
-        val reqCount = state.apiLogs.size
-        // Cache-read tokens (💾) shown only when the model served part of the context from cache.
-        val cachedPart = if (state.sessionCachedTokens > 0) " 💾${formatTokensShort(state.sessionCachedTokens)}" else ""
-        val metrics = " $ctxBar ${TuiColors.muted("⬇${tokIn}$cachedPart ⬆${tokOut} ${reqCount}req \$${cost}")}"
-
-        if (state.pendingQuestionId != null) {
-            val questionHint = TuiColors.statusPending(" [?] Awaiting answer")
-            result.add("$mode$model$togglesPart$questionHint$metrics")
-        } else if (state.isStreaming) {
-            val streaming = TuiColors.statusRunning(" streaming...")
-            result.add("$mode$model$togglesPart$streaming$metrics")
-        } else {
-            result.add("$mode$model$togglesPart$metrics")
-        }
+        // Long task: which round, how much of the time limit, how the last check went
+        state.longTaskLine?.let { result.add(TuiColors.accent("⟳ ") + TuiColors.muted(it)) }
 
         // Input lines — expand up to MAX_INPUT_LINES based on content
         val inputBuffer = state.inputBuffer
@@ -113,9 +77,11 @@ object TuiPromptInput {
             result.add(TuiColors.muted("  ↓ ${inputLines.size - MAX_INPUT_LINES} more lines..."))
         }
 
-        // Ensure at least one input line
-        if (visibleLines.isEmpty()) {
-            result.add(TuiColors.accent(prefix))
+        // Ensure at least one input line; an empty prompt shows the reference syntax
+        if (visibleLines.isEmpty() || inputBuffer.isEmpty()) {
+            if (visibleLines.isNotEmpty()) result.removeAt(result.lastIndex)
+            val hint = if (state.pendingToolApproval != null) "answer the approval above first" else PLACEHOLDER
+            result.add(TuiColors.accent(prefix) + TuiColors.muted(hint))
         }
 
         return result
@@ -217,28 +183,4 @@ object TuiPromptInput {
         else -> "${tokens}"
     }
 
-    /** Compact context bar [████░░ 45%] */
-    private fun renderContextBar(state: TuiState): String {
-        val used = state.contextUsedTokens
-        val max = state.contextMaxTokens
-        if (max <= 0) return ""
-
-        val pct = (used.toDouble() / max * 100).toInt().coerceIn(0, 100)
-        val barWidth = 8
-        val filled = (barWidth * pct / 100).coerceIn(0, barWidth)
-        val empty = barWidth - filled
-
-        val barColor = when {
-            pct >= 90 -> TuiColors.statusFailed
-            pct >= 75 -> TuiColors.statusPending
-            else -> TuiColors.statusSuccess
-        }
-        return "[${barColor("█".repeat(filled))}${TuiColors.muted("░".repeat(empty))}${pct}%]"
-    }
-
-    private fun formatTokensShort(tokens: Long): String = when {
-        tokens >= 1_000_000 -> String.format(java.util.Locale.US, "%.1fM", tokens / 1_000_000.0)
-        tokens >= 1_000 -> String.format(java.util.Locale.US, "%.1fK", tokens / 1_000.0)
-        else -> tokens.toString()
-    }
 }

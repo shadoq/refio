@@ -1,0 +1,25 @@
+{
+  "id": "ab-think-classic-puzzles",
+  "mode": "AGENT",
+  "description": "AgentBench lateral-thinking style with deterministic gates: solve the river crossing (7 optimal crossings, nothing unsupervised with its predator/food) and the bridge-and-torch (exactly 17 minutes); the gate simulates both plans step by step.",
+  "category": "agentbench-games",
+  "max_iterations": 20,
+  "fixture": "fixtures/ab-think-puzzles",
+  "prompt_file": "prompts/ab-think-classic-puzzles.md",
+  "assert": {
+    "needle_in_file": { "path": "plan/wolf.json", "text": "\"goat\"" },
+    "needles_in_file": [
+      { "path": "plan/wolf.json", "text": "\"wolf\"" },
+      { "path": "plan/bridge.json", "text": "\"10\"" },
+      { "path": "plan/bridge.json", "text": "\"5\"" }
+    ],
+    "file_unchanged": ["checks.py", "docs/puzzles.md", "README.md"],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "Both plans are legal and optimal: exactly 7 crossings with nothing eaten, and a 17-minute torch schedule; the docs and gate untouched."
+    ]
+  }
+}

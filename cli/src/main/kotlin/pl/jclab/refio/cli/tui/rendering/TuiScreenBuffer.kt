@@ -25,6 +25,9 @@ class TuiScreenBuffer(val width: Int, val height: Int) {
     private val rows = Array(height) { " ".repeat(width) }
 
     /** Set a single row (will be padded/truncated to width). */
+    /** Current rows, top to bottom; used to compare a composed frame without a terminal. */
+    fun snapshot(): List<String> = rows.toList()
+
     fun setRow(row: Int, text: String) {
         if (row in 0 until height) {
             rows[row] = TuiRenderBuffer.fitToWidth(text, width)
@@ -69,7 +72,8 @@ class TuiScreenBuffer(val width: Int, val height: Int) {
         for (i in 0 until height) {
             // Absolute cursor positioning per row (1-based ANSI coordinates)
             sb.append("\u001b[${i + 1};1H")
-            sb.append(rows[i])
+            // Last line of defence: nothing drawn may reach the terminal as a command, only as text and colour.
+            sb.append(TuiRenderBuffer.keepOnlyColours(rows[i]))
             sb.append("\u001b[K") // clear to end of line
         }
         output.write(sb.toString())

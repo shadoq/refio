@@ -367,17 +367,23 @@ class SessionManager(private val project: Project) {
         lifecycleService.switchModeSafely(newMode)
     }
 
+    /**
+     * Sends [input] as a turn, or as rounds of a long task. With [resumeLongTask] a long task that
+     * stopped short of its condition continues with its next round instead; [input] is sent only
+     * when there is no such task.
+     */
     suspend fun sendMessage(
         input: String,
         contextRefs: List<ContextReference> = emptyList(),
         model: String? = null,
-        provider: String? = null
+        provider: String? = null,
+        resumeLongTask: Boolean = false
     ): Message {
         // Register the coroutine the turn runs in, so Stop aborts the in-flight LLM call instead of
         // only setting the cancellation flag. Doing it here covers every entry point - the prompt
         // box, Re-plan, and rewind-and-resend all reach the turn through this method.
         currentCoroutineContext()[Job]?.let { registerTurnJob(it) }
-        return coreSessionService.sendMessage(input, contextRefs, model, provider)
+        return coreSessionService.sendMessage(input, contextRefs, model, provider, resumeLongTask)
     }
 
     /** Expose the running turn's coroutine to [cancelStreaming]. */

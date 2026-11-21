@@ -1,0 +1,29 @@
+{
+  "id": "pg-cpp-operator-overload",
+  "mode": "AGENT",
+  "description": "Bring a C++ Vector2 class up to modern value-type style: add operator+ operator- operator* == != and a friend operator<< to include/vector2.hpp, make every method and parameter const-correct, add dot() and length(), and drop the memcmp equality while keeping the legacy API so src/main.cpp compiles unchanged.",
+  "category": "polyglot-editing",
+  "max_iterations": 30,
+  "fixture": "fixtures/pg-cpp-operator-overload",
+  "prompt_file": "prompts/pg-cpp-operator-overload.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": ["advance_code_editing"],
+    "needles_in_file": [
+      { "path": "include/vector2.hpp", "regex": "operator\\+" },
+      { "path": "include/vector2.hpp", "regex": "operator==" },
+      { "path": "include/vector2.hpp", "regex": "operator<<" },
+      { "path": "include/vector2.hpp", "regex": "const" },
+      { "path": "include/vector2.hpp", "regex": "memcmp", "absent": true }
+    ],
+    "file_unchanged": [
+      "README.md",
+      "src/main.cpp"
+    ]
+  },
+  "judge": {
+    "criteria": [
+      "include/vector2.hpp declares operator+ operator- operator* (scalar) operator== operator!= and a friend operator<< plus const dot(const Vector2&) and length() members, takes Vector2 parameters as const references, marks every non-mutating method const, compares equality through the components with no memcmp anywhere, and keeps add/scaled/equals/print delegating to the new operators so the unchanged src/main.cpp still compiles, with the README untouched."
+    ]
+  }
+}

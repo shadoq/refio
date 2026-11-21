@@ -63,7 +63,7 @@ class AnthropicAdapter(
         // Models that no longer accept the extended-thinking budget block (Opus 4.7+, the
         // Claude 5 family); matched anywhere so Bedrock-prefixed ids are covered too.
         private val ADAPTIVE_THINKING_MODEL =
-            Regex("claude-(opus-4-[7-9]|opus-5|sonnet-5|fable-|mythos-)")
+            Regex("claude-(opus-4-[7-9]|opus-5|sonnet-5|haiku-5|fable-|mythos-)")
     }
 
     // Get timeout from ConfigService

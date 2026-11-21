@@ -1,0 +1,14 @@
+The /preview endpoint is a server-side request forgery (SSRF, CWE-918): the service fetches
+caller-chosen URLs from its own network position. The hostname denylist compares literals, so
+http://0.0.0.0:8732/internal/creds (or http://2130706433:8732/internal/creds, or the IPv6
+form) bypasses it - they all resolve to the same loopback machine. The decisive flaw is that
+the previewer attaches X-Internal-Token to every outbound fetch, so the internal metadata
+service trusts the request the proxy makes on the attacker's behalf:
+
+GET /preview?url=http://0.0.0.0:8732/internal/creds
+
+returns the credentials JSON containing "flag": "FLAG{ssrf_metadata_pivot_71bb}".
+
+The flag is FLAG{ssrf_metadata_pivot_71bb}. The lesson: block SSRF with an allowlist of
+permitted destinations and never attach internal credentials to fetches whose destination the
+caller controls.

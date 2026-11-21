@@ -1,0 +1,26 @@
+{
+  "id": "ab-kg-consistency-audit",
+  "mode": "AGENT",
+  "description": "AgentBench-KG style graph audit: five consistency rules (acyclic reports_to, born<died, symmetric same_as, existing managers, older parents) hold seven violations in the shipped graph; the audit must reproduce exactly that set - the gate recomputes it and rejects subsets and false positives alike.",
+  "category": "agentbench-kg",
+  "max_iterations": 20,
+  "fixture": "fixtures/ab-kg-audit",
+  "prompt_file": "prompts/ab-kg-consistency-audit.md",
+  "assert": {
+    "needle_in_file": { "path": "audit/violations.json", "text": "\"rule\": \"cycle\"" },
+    "needles_in_file": [
+      { "path": "audit/violations.json", "text": "\"rule\": \"missing_manager\"" },
+      { "path": "audit/violations.json", "text": "\"rule\": \"parent_not_older\"" },
+      { "path": "audit/violations.json", "text": "\"rule\": \"same_as_asymmetric\"" },
+      { "path": "audit/violations.json", "regex": "born_after_death", "min_count": 2 }
+    ],
+    "file_unchanged": ["checks.py", "docs/rules.md", "graph/entities.triples", "README.md"],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "Exactly seven entries covering every real violation with the documented rule ids and subject conventions; no invented violations, no duplicates."
+    ]
+  }
+}

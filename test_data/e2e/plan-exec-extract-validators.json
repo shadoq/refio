@@ -1,0 +1,46 @@
+{
+  "id": "plan-exec-extract-validators",
+  "mode": "AGENT",
+  "description": "A planner plans moving isEmail and isPhone from src/form.js into a new src/validators.js and a coder carries it out: only the planned files change, src/form.js keeps no copies, and the tests pass.",
+  "category": "planning",
+  "max_iterations": 30,
+  "fixture": "fixtures/plan-exec-extract-validators",
+  "multi_agent": "multi-agent/plan-exec-extract-validators.yaml",
+  "assert": {
+    "agent_order": [
+      "planner",
+      "coder"
+    ],
+    "plan": {
+      "min_steps": 2,
+      "max_steps": 7,
+      "covers": [
+        {
+          "label": "src/validators.js",
+          "regex": "validators\\.js"
+        },
+        {
+          "label": "src/form.js",
+          "regex": "form\\.js"
+        }
+      ],
+      "paths_exist": true,
+      "new_paths": [
+        "^src/validators\\.js$"
+      ],
+      "agent": "planner"
+    },
+    "plan_followed": {},
+    "file_unchanged": [
+      "tests/run.js",
+      "src/api.js"
+    ],
+    "build_cmd": "node tests/run.js",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The planner creates src/validators.js and switches src/form.js to it; the coder moves isEmail and isPhone there, leaves no copies in src/form.js, changes nothing else, and node tests/run.js prints ok."
+    ]
+  }
+}

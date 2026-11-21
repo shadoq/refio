@@ -1,0 +1,30 @@
+{
+  "id": "bfcl-exact-args-crlf",
+  "mode": "AGENT",
+  "description": "BFCL style tool-call precision (exact arguments), complex: a one-token rounding fix in a legacy Python file with CRLF line endings, tab indentation and Polish diacritics in string literals. Edit tools with imprecise arguments typically fail to match the tabs or the CRLF, or rewrite the whole file with LF endings, spaces or mangled UTF-8. A checks script requires every line outside the money() function to be byte-identical (sha1 per line), CRLF everywhere, no byte order mark and valid UTF-8, then runs the unit tests. The change must go through Refio edit tools: run_code is off, writing a helper script is rejected (create_new_file absent), and an edit made only from the terminal never triggers the post-turn verifier, which self_verified requires.",
+  "category": "bfcl-tools",
+  "max_iterations": 30,
+  "fixture": "fixtures/bfcl-exact-args-crlf",
+  "prompt_file": "prompts/bfcl-exact-args-crlf.md",
+  "config": [
+    "verify.command=python checks/check_bytes.py",
+    "tools.permissions={\"run_code\":{\"planMode\":\"OFF\",\"agentMode\":\"OFF\"}}"
+  ],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": [
+      "tests/test_faktura.py",
+      "tests/__init__.py",
+      "checks/check_bytes.py",
+      "checks/baseline.json"
+    ],
+    "build_cmd": "python checks/check_bytes.py",
+    "self_verified": true,
+    "tool_invoked": [
+      {
+        "name": "create_new_file",
+        "absent": true
+      }
+    ]
+  }
+}

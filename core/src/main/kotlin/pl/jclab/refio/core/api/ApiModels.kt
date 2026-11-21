@@ -125,7 +125,13 @@ data class TurnRequest(
      * Threaded into `ToolInternalParams.AGENT_NAME` so `send_message` / `answer_message` and the
      * inbox lookup all key by the same identifier the YAML spec / LLM use. Null for single-agent runs.
      */
-    val agentName: String? = null
+    val agentName: String? = null,
+    /**
+     * Harness message type of [userInput] (see `HarnessMessageTypes`), when the harness rather than
+     * the user wrote it, such as the start of a long task's next round. Null stores it as the user's
+     * message.
+     */
+    val inputType: String? = null
 )
 
 data class ToolDefinitionInfo(
@@ -545,5 +551,9 @@ data class MultiAgentInstanceResponse(
     val error: String? = null,
     /** Absolute epoch-ms turn bounds, so consumers can order agents by real execution time. */
     val startedAt: Long? = null,
-    val completedAt: Long? = null
+    val completedAt: Long? = null,
+    /** The agent's own task, so its conversation can be exported. Null when it never ran a turn. */
+    val taskId: String? = null,
+    /** Files the agent's turn changed. */
+    val filesChanged: List<String> = emptyList(),
 )

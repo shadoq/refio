@@ -29,7 +29,8 @@ private const val MAX_SUBAGENT_DEPTH = 3
 class InvokeSubagentTool(
     private val subagentRouterProvider: () -> SubagentRouter?,
     private val runTurnCallback: suspend (TurnRequest, TurnEventListener?, StreamCallback?) -> TurnResult,
-    private val configServiceProvider: () -> ConfigService
+    private val configServiceProvider: () -> ConfigService,
+    private val clock: () -> Long = System::currentTimeMillis,
 ) : Tool {
 
     override val name = "invoke_subagent"
@@ -142,52 +143,9 @@ class InvokeSubagentTool(
         )
 
         return try {
+            val startedAt = clock()
             val result = runTurnCallback(request, turnListener, streamCallback)
-            if (!result.success) {
-                ToolResult.error("Subagent '$subagentName' failed: ${result.response}")
-            } else {
-                // Include any unanswered questions from the child in the output
-                val unansweredQuestions = result.unansweredQuestions.orEmpty()
-                var output = if (unansweredQuestions.isNotEmpty()) {
-                    val questionsSummary = unansweredQuestions.joinToString("\n") { "  - $it" }
-                    "${result.response}\n\n[Subagent '$subagentName' had unanswered questions:]\n$questionsSummary"
-                } else {
-                    result.response
-                }
-
-                // A subagent that called NO tool inspected nothing and changed nothing, so whatever
-                // it reports about the project is a claim, not an observation. Passing that up as a
-                // plain success is how a delegated step gets silently skipped: a subagent answered
-                // "already fixed in a prior iteration" (it was not), the caller believed it and
-                // finished the turn SUCCESS with the file untouched (observed 2026-09-07 e2e run).
-                // Still a success — a purely reasoning delegation legitimately needs no tool — but
-                // the caller is told the claim is unverified so it can check before relying on it.
-                val madeNoToolCalls = result.toolsUsed.isEmpty()
-                if (madeNoToolCalls) {
-                    logger.warn {
-                        "Subagent '$subagentName' returned success with no tool calls " +
-                            "(iterations=${result.iterations}) - its answer is unverified"
-                    }
-                    output += "\n\n[Subagent '$subagentName' made no tool calls: it read nothing and " +
-                        "changed nothing, so the answer above is its claim, not a verified result. " +
-                        "If it reports a file as already correct, verify that yourself before " +
-                        "relying on it, or delegate again with a concrete instruction.]"
-                }
-
-                ToolResult.success(
-                    output = output,
-                    metadata = mapOf(
-                        "subagent_name" to subagentName,
-                        "depth" to childDepth,
-                        "iterations" to result.iterations,
-                        "tokens_in" to result.tokensIn,
-                        "tokens_out" to result.tokensOut,
-                        "cost" to result.cost,
-                        "unanswered_questions" to unansweredQuestions.size,
-                        "made_no_tool_calls" to madeNoToolCalls
-                    )
-                )
-            }
+            subagentResult(subagentName, childDepth, result, durationMs = clock() - startedAt)
         } catch (e: kotlinx.coroutines.CancellationException) {
             // Stop is not a subagent failure - handing it back as a tool error would let the parent
             // model keep working on a turn the user already interrupted.
@@ -195,6 +153,105 @@ class InvokeSubagentTool(
         } catch (e: Exception) {
             ToolResult.error("Subagent '$subagentName' error: ${e.message}")
         }
+    }
+
+    /**
+     * The subagent's answer in a fixed shape the caller can rely on: one line with the outcome, then
+     * the files it changed, the questions it left open and its own report. A subagent that stopped
+     * on a limit still hands over what it did (its report ends with its handoff note); only a stop
+     * on an error is a tool error, and even then the files and the report go with it.
+     */
+    private fun subagentResult(subagentName: String, depth: Int, result: TurnResult, durationMs: Long): ToolResult {
+        val status = when {
+            result.success -> STATUS_DONE
+            result.stopReason.isPartial -> STATUS_PARTIAL
+            else -> STATUS_FAILED
+        }
+        val stopReason = result.stopReason.name.lowercase()
+        val questions = result.unansweredQuestions.orEmpty()
+
+        // A subagent that called NO tool inspected nothing and changed nothing, so whatever it
+        // reports about the project is a claim, not an observation. Passing that up as a plain
+        // success is how a delegated step gets silently skipped: a subagent answered "already
+        // fixed in a prior iteration" (it was not), the caller believed it and finished the turn
+        // SUCCESS with the file untouched (observed 2026-09-07 e2e run). Still a success - a purely
+        // reasoning delegation legitimately needs no tool - but the caller is told the claim is
+        // unverified so it can check before relying on it.
+        val madeNoToolCalls = result.toolsUsed.isEmpty()
+        if (madeNoToolCalls && result.success) {
+            logger.warn {
+                "Subagent '$subagentName' returned success with no tool calls " +
+                    "(iterations=${result.iterations}) - its answer is unverified"
+            }
+        }
+
+        val report = buildString {
+            append("[subagent ").append(subagentName)
+            append(" · status: ").append(status)
+            append(" · stop: ").append(stopReason)
+            append(" · iterations: ").append(result.iterations)
+            append(" · tokens: ").append(result.tokensIn).append('/').append(result.tokensOut)
+            append(" · time: ").append(formatDuration(durationMs)).append("]\n")
+            appendSection("Files changed", result.filesChanged)
+            appendSection("Open questions", questions)
+            append("Report:\n").append(capReport(result.response))
+            if (madeNoToolCalls && result.success) {
+                append(
+                    "\n\n[Subagent '$subagentName' made no tool calls: it read nothing and " +
+                        "changed nothing, so the answer above is its claim, not a verified result. " +
+                        "If it reports a file as already correct, verify that yourself before " +
+                        "relying on it, or delegate again with a concrete instruction.]"
+                )
+            }
+        }
+
+        val metadata = mapOf(
+            "subagent_name" to subagentName,
+            "depth" to depth,
+            "iterations" to result.iterations,
+            // The subagent's turn already stored this usage on its own replies in this task.
+            // Under tokens_in/tokens_out/cost_usd the tool message would carry it as well and
+            // the task totals would count it twice.
+            "delegated_tokens_in" to result.tokensIn,
+            "delegated_tokens_out" to result.tokensOut,
+            "delegated_cost_usd" to result.cost,
+            "unanswered_questions" to questions.size,
+            "made_no_tool_calls" to madeNoToolCalls,
+            "status" to status,
+            "stop_reason" to stopReason,
+            "files_changed" to result.filesChanged,
+            "duration_ms" to durationMs,
+        )
+        val filesChanged = result.filesChanged.takeIf { it.isNotEmpty() }
+        return if (status == STATUS_FAILED) {
+            ToolResult(success = false, error = report, filesChanged = filesChanged, metadata = metadata)
+        } else {
+            ToolResult(success = true, output = report, filesChanged = filesChanged, metadata = metadata)
+        }
+    }
+
+    private fun StringBuilder.appendSection(title: String, items: List<String>) {
+        if (items.isEmpty()) {
+            append(title).append(": none\n")
+            return
+        }
+        append(title).append(":\n")
+        items.forEach { append("- ").append(it).append('\n') }
+    }
+
+    /** Keeps the start (what it set out to do) and the longer end (where it got, its handoff note). */
+    private fun capReport(text: String): String {
+        if (text.length <= MAX_REPORT_CHARS) {
+            return text
+        }
+        val tail = MAX_REPORT_CHARS - REPORT_HEAD_CHARS
+        val omitted = text.length - REPORT_HEAD_CHARS - tail
+        return text.take(REPORT_HEAD_CHARS) + "\n[... $omitted characters of the report left out ...]\n" + text.takeLast(tail)
+    }
+
+    private fun formatDuration(durationMs: Long): String {
+        val seconds = durationMs.coerceAtLeast(0) / 1000
+        return "%d:%02d".format(seconds / 60, seconds % 60)
     }
 
     override fun getParameterSchema(): Map<String, Any> {
@@ -278,6 +335,14 @@ class InvokeSubagentTool(
     }
 
     private companion object {
+        const val STATUS_DONE = "done"
+        const val STATUS_PARTIAL = "partial"
+        const val STATUS_FAILED = "failed"
+
+        /** A subagent's report in the parent's history; longer ones keep their start and end. */
+        const val MAX_REPORT_CHARS = 16_384
+        const val REPORT_HEAD_CHARS = 4_096
+
         /**
          * Upper bound for context_refs per `invoke_subagent` call. Generous enough
          * for real multi-file investigations (a code review across 30 modules) but
@@ -293,6 +358,16 @@ class InvokeSubagentTool(
      * has nothing to correct against. List the real names and, for a plausible typo, point at the
      * nearest one (observed: `architecture-reviewer` -> `architect-reviewer`).
      */
+    /** What decides whether a subagent may run next to others: its provider and its tool lists. */
+    data class RunShape(val provider: String, val allowedTools: List<String>?, val disallowedTools: List<String>?)
+
+    /** How [subagentName] would run, or null when no such subagent is defined. */
+    fun runShape(subagentName: String): RunShape? {
+        val definition = subagentRouterProvider()?.getSubagent(subagentName) ?: return null
+        val (_, provider) = definition.resolveModel(configServiceProvider())
+        return RunShape(provider, definition.allowedTools, definition.disallowedTools)
+    }
+
     private fun subagentNotFoundMessage(router: SubagentRouter, requested: String): String {
         val names = runCatching { router.listSubagents(includeDisabled = false).map { it.name } }
             .getOrElse {

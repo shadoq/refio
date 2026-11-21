@@ -1,0 +1,16 @@
+{
+  "id": "refactorbench-extract-module",
+  "mode": "AGENT",
+  "description": "RefactorBench style (extract module): move a cohesive group of four date helper functions out of report.py into a new datecalc.py, keep the old names importable from report (as the very same function objects, existing callers and tests import them from there), leave the invoice functions in place and keep all tests green. A check script runs the unit tests and verifies by AST that datecalc.py defines the helpers and report.py no longer does.",
+  "category": "refactorbench",
+  "max_iterations": 25,
+  "fixture": "fixtures/refactorbench-extract-module",
+  "prompt_file": "prompts/refactorbench-extract-module.md",
+  "config": ["verify.command=python check_refactor.py"],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": ["test_report.py", "check_refactor.py"],
+    "build_cmd": "python check_refactor.py",
+    "self_verified": true
+  }
+}

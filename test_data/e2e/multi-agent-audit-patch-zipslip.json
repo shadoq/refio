@@ -1,0 +1,36 @@
+{
+  "id": "multi-agent-audit-patch-zipslip",
+  "mode": "AGENT",
+  "description": "Two-agent audit-and-patch pipeline: an auditor (read-only) documents the zip-slip weakness in the archive extractor (CWE-22), then a patcher (depends_on auditor) contains extraction to the destination directory while the clean archive keeps working - proven by a gate that replays the malicious archive.",
+  "category": "orchestration",
+  "max_iterations": 50,
+  "fixture": "fixtures/zipslip-team",
+  "multi_agent": "multi-agent/zipslip-audit-patch.yaml",
+  "assert": {
+    "agent_order": [
+      "auditor",
+      "patcher"
+    ],
+    "needle_in_file": { "path": "audit/findings.md", "text": "CWE-22" },
+    "needles_in_file": [
+      { "path": "audit/findings.md", "regex": "extract_archive" },
+      { "path": "src/extractor.py", "regex": "realpath|resolve|normpath|commonpath", "min_count": 1 }
+    ],
+    "file_unchanged": [
+      "verify_attack.py",
+      "samples/evil.zip",
+      "samples/legit.zip",
+      "canary/.gitkeep",
+      ".refio/agents/auditor.md",
+      ".refio/agents/patcher.md",
+      "README.md"
+    ],
+    "build_cmd": "python3 verify_attack.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The auditor's findings name extract_archive, the ../ zip-slip path and CWE-22; the patcher's fix validates that every entry resolves inside the destination (realpath/commonpath-style containment) so the malicious archive can no longer write into canary/ while the clean archive extracts correctly - verified by replaying both archives through the gate."
+    ]
+  }
+}

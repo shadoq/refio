@@ -1,0 +1,28 @@
+{
+  "id": "crux-predict-output",
+  "mode": "PLAN",
+  "description": "CRUXEval-O style: predict the exact output of a short Python program without running it. The program packs the classic traps (mutable default argument shared between calls, closure late binding vs default-argument binding, dict insertion order after delete and reinsert, floor division and modulo of negatives vs int() truncation, banker's rounding, += aliasing vs rebinding, a shared inner list from list multiplication). The last printed line repeats every earlier line, so a single exact needle pins the whole output. Running the program with a tool is a failure of the task.",
+  "category": "cruxeval",
+  "max_iterations": 20,
+  "fixture": "fixtures/crux-predict-output",
+  "prompt_file": "prompts/crux-predict-output.md",
+  "assert": {
+    "needle_in_output": {
+      "regex": "\\[1, 2\\] \\[1, 2\\] \\[3\\] True ## \\[12, 12, 12\\] \\[0, 10, 20\\] ## \\[\\('apple', 3\\), \\('fig', 1\\), \\('pear', 9\\)\\] ## -4 2 -4 -2 -3 ## 2 4 0 1\\.23 ## \\[1, 2, 3\\] \\[1, 2, 3\\] \\[1, 2, 3, 4\\] ## \\[\\[0, 5\\], \\[0, 5\\]\\] abab 3x2x1 ## 2 empty None"
+    },
+    "file_unchanged": [
+      "program.py"
+    ],
+    "tool_invoked": [
+      {
+        "name": "run_terminal_command",
+        "absent": true
+      },
+      {
+        "name": "run_code",
+        "absent": true
+      }
+    ],
+    "no_context_overflow": true
+  }
+}

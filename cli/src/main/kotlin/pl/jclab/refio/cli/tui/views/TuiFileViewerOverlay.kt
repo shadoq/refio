@@ -29,7 +29,7 @@ object TuiFileViewerOverlay {
         }
 
         // Soft-wrap lines to fit width
-        val rawLines = content.lines()
+        val rawLines = content.lines().map(TuiRenderBuffer::cleanText)
         val maxLineWidth = if (showLineNums) {
             val lineNumWidth = rawLines.size.toString().length
             (width - lineNumWidth - 4).coerceAtLeast(10)

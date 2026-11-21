@@ -1,0 +1,3 @@
+`python main.py` crashes. We use two vendored tools, `routeplan` and `heatmap`, and both import `geomlib`, but they were written against different major versions of it: `routeplan` expects the 1.x API, `heatmap` the 2.x API. Both versions of `geomlib` are available locally under `vendor_pkgs/`.
+
+There is no network and nothing can be installed (no pip), and the code under `vendor_pkgs/` is vendored third-party code that we must not edit. Make `main.py` work by changing only our own glue (for example `bootstrap.py`, or new files outside `vendor_pkgs/`). `python checks.py` runs `main.py` and compares its output; do not edit `main.py` or the checks.

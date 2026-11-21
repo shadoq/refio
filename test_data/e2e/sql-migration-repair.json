@@ -1,0 +1,27 @@
+{
+  "id": "sql-migration-repair",
+  "mode": "AGENT",
+  "description": "Database drift repair: production's schema_migrations says 003 ran, but the tags table it creates is missing. Write an idempotent repair migration that converges the drifted database without touching the recorded history - the gate proves convergence, data preservation and a clean fresh install.",
+  "category": "linux-ops",
+  "max_iterations": 30,
+  "fixture": "fixtures/db-drift",
+  "prompt_file": "prompts/sql-migration-repair.md",
+  "assert": {
+    "file_unchanged": [
+      "db.py",
+      "db.sqlite.drifted",
+      "migrations/001_init.sql",
+      "migrations/002_seed.sql",
+      "migrations/003_add_tags.sql",
+      "checks.py",
+      "README.md"
+    ],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "A new migration (004+) converges the drifted database to the full schema - tags table present with the columns 003 defines - while the existing rows survive (no drop-and-recreate of user tables), a fresh database migrates cleanly past the repair, and the recorded history 001-003 plus the drifted snapshot and the runner stay untouched."
+    ]
+  }
+}

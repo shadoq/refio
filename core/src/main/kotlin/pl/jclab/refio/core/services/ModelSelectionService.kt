@@ -35,6 +35,11 @@ internal class ModelSelectionService(private val configService: ConfigService) {
         taskId: String? = null,
         projectId: String? = null
     ): Pair<String, String> {
+        if (operation == ModelOperation.DECISION) {
+            // The chat-model override must not leak into the decision slot: a chat model cannot
+            // answer the decision API.
+            return getDefaultModel(operation, taskId, projectId)
+        }
         val selectedModel = configService.get(
             key = ConfigKeys.UI_SELECTED_MODEL.key,
             taskId = taskId,
@@ -58,6 +63,10 @@ internal class ModelSelectionService(private val configService: ConfigService) {
         taskId: String? = null,
         projectId: String? = null
     ): Pair<String, String> {
+        if (operation == ModelOperation.DECISION) {
+            return getDecisionModel(taskId, projectId)
+                ?: throw IllegalStateException("DECISION model not configured and has no fallback")
+        }
         val key = configKeyForOperation(operation)
         val config = configService.getConfigWithPrecedence(key = key, taskId = taskId, projectId = projectId)
         val label = operation.name.lowercase()
@@ -95,7 +104,7 @@ internal class ModelSelectionService(private val configService: ConfigService) {
             ModelOperation.CODING -> configService.yamlLoader.getDefaultCodingModel()
             ModelOperation.WEAK -> configService.yamlLoader.getDefaultWeakModel()
             ModelOperation.STRONG -> configService.yamlLoader.getDefaultStrongModel()
-            ModelOperation.EMBEDDING -> error("unreachable")
+            ModelOperation.EMBEDDING, ModelOperation.DECISION -> error("unreachable")
         }
         if (yamlModel != null) {
             val (provider, model) = parseModelString(yamlModel)
@@ -139,6 +148,40 @@ internal class ModelSelectionService(private val configService: ConfigService) {
         return null
     }
 
+    /**
+     * The decision model for the completion judge, or null when none is configured. `inherit`
+     * (what the settings UI stores for "Not configured") also means none: unlike the chat slots,
+     * this slot must never fall back to the chat model.
+     */
+    fun getDecisionModel(
+        taskId: String? = null,
+        projectId: String? = null
+    ): Pair<String, String>? {
+        val config = configService.getConfigWithPrecedence(key = ConfigKeys.DECISION_MODEL.key, taskId = taskId, projectId = projectId)
+        val raw = config?.value?.trim()
+        if (raw != null && raw.isNotEmpty() && !raw.startsWith("{")) {
+            // The typed form, e.g. `--config default_model.decision=ollama/nimble:9b`.
+            if (raw.equals(INHERIT_MODEL_VALUE, ignoreCase = true)) {
+                return null
+            }
+            val (provider, model) = parseModelString(raw)
+            return Pair(model, provider)
+        }
+        val data = raw?.let { parseModelConfig(it, "decision") }
+        if (data != null) {
+            if (isInheritedModelConfig(data)) {
+                return null
+            }
+            if (data.modelId != null && data.provider != null) {
+                return Pair(data.modelId, data.provider)
+            }
+        }
+        val yamlModel = configService.yamlLoader.getDefaultDecisionModel()?.takeIf { it.isNotBlank() }
+            ?: return null
+        val (provider, model) = parseModelString(yamlModel)
+        return Pair(model, provider)
+    }
+
     @Suppress("UNUSED_PARAMETER")
     fun setDefaultModel(
         operation: ModelOperation,
@@ -161,10 +204,16 @@ internal class ModelSelectionService(private val configService: ConfigService) {
         }
 
         val key = configKeyForOperation(operation)
-        val scope = if (operation != ModelOperation.WEAK && taskId != null) ConfigScope.TASK else ConfigScope.APP
+        val scope = if (operation != ModelOperation.WEAK && operation != ModelOperation.DECISION && taskId != null) {
+            ConfigScope.TASK
+        } else {
+            ConfigScope.APP
+        }
         val effectiveTaskId = if (scope == ConfigScope.TASK) taskId else null
         val description = if (operation == ModelOperation.WEAK) {
             "Cheap model for auxiliary operations"
+        } else if (operation == ModelOperation.DECISION) {
+            "Decision model for the completion judge"
         } else {
             "Default model for $operation operation"
         }
@@ -294,6 +343,7 @@ internal class ModelSelectionService(private val configService: ConfigService) {
         ModelOperation.WEAK -> ConfigKeys.WEAK_MODEL.key
         ModelOperation.EMBEDDING -> ConfigKeys.EMBEDDING_MODEL.key
         ModelOperation.STRONG -> ConfigKeys.STRONG_MODEL.key
+        ModelOperation.DECISION -> ConfigKeys.DECISION_MODEL.key
     }
 
     /**
@@ -318,6 +368,7 @@ internal class ModelSelectionService(private val configService: ConfigService) {
         ModelOperation.WEAK -> Pair(FALLBACK_WEAK_MODEL, FALLBACK_WEAK_PROVIDER)
         ModelOperation.EMBEDDING -> Pair(FALLBACK_EMBEDDING_MODEL, FALLBACK_EMBEDDING_PROVIDER)
         ModelOperation.STRONG -> throw IllegalStateException("STRONG model has no fallback — must be explicitly configured")
+        ModelOperation.DECISION -> throw IllegalStateException("DECISION model has no fallback - must be explicitly configured")
     }
 
     /** JSON storage format for model selection entries in DB. */

@@ -12,6 +12,7 @@ import com.intellij.util.Alarm
 import com.intellij.util.ui.AsyncProcessIcon
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
+import pl.jclab.refio.core.api.routers.LongTaskProgress
 import pl.jclab.refio.core.services.turn.TurnStateSnapshot
 import java.awt.BorderLayout
 import java.awt.Dimension
@@ -35,6 +36,12 @@ class NowRunningBar(
     private val detailLabel = JBLabel().apply {
         font = JBUI.Fonts.create(Font.MONOSPACED, 11)
         foreground = JBColor.namedColor("Plugins.tagForeground", JBColor.GRAY)
+    }
+    private val roundLabel = JBLabel().apply {
+        font = JBUI.Fonts.smallFont()
+        foreground = UIUtil.getInactiveTextColor()
+        border = JBUI.Borders.empty(0, 8, 4, 8)
+        isVisible = false
     }
     private val elapsedLabel = JBLabel().apply {
         font = JBUI.Fonts.smallFont()
@@ -73,7 +80,11 @@ class NowRunningBar(
         border = JBUI.Borders.customLineBottom(JBColor.border())
         add(row, BorderLayout.WEST)
         add(trailing, BorderLayout.EAST)
-        add(progress, BorderLayout.SOUTH)
+        add(JPanel(BorderLayout()).apply {
+            isOpaque = false
+            add(roundLabel, BorderLayout.NORTH)
+            add(progress, BorderLayout.SOUTH)
+        }, BorderLayout.SOUTH)
         isVisible = false
 
         Disposer.register(parent, this)
@@ -90,9 +101,12 @@ class NowRunningBar(
         if (suppressed) spinner.suspend() else if (state.busy) spinner.resume()
     }
 
-    /** Applies a turn snapshot. Safe to call on every emission; only real changes touch the UI. */
-    fun update(snapshot: TurnStateSnapshot) {
-        val next = NowRunningState.from(snapshot)
+    /**
+     * Applies a turn snapshot and the session's long task, if any. Safe to call on every emission;
+     * only real changes touch the UI.
+     */
+    fun update(snapshot: TurnStateSnapshot, longTask: LongTaskProgress? = null) {
+        val next = NowRunningState.from(snapshot, longTask)
 
         if (next.visible && !state.visible) {
             startedAt = System.currentTimeMillis()
@@ -110,6 +124,9 @@ class NowRunningBar(
 
         stepLabel.text = next.stepText
         detailLabel.text = next.detailText
+        roundLabel.text = next.roundText
+        roundLabel.toolTipText = next.roundText.ifEmpty { null }
+        roundLabel.isVisible = next.roundText.isNotEmpty()
         progress.isIndeterminate = next.busy
         if (next.busy && !suppressed) spinner.resume() else spinner.suspend()
         spinner.isVisible = next.busy

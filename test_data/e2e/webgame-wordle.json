@@ -1,0 +1,46 @@
+{
+  "id": "webgame-wordle",
+  "mode": "AGENT",
+  "description": "Single-file Wordle clone: embedded dictionary of 5-letter answers and larger valid-guess list, 6 guesses, green/yellow/gray feedback with duplicate-letter rules, on-screen keyboard, hard mode, stats with streak in localStorage, emoji-grid share text.",
+  "category": "browser-game",
+  "max_iterations": 40,
+  "fixture": "fixtures/webgame-wordle",
+  "prompt_file": "prompts/webgame-wordle.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": [
+      "advance_code_editing"
+    ],
+    "needles_in_file": [
+      {
+        "path": "wordle_model_01.html",
+        "regex": "localStorage"
+      },
+      {
+        "path": "wordle_model_01.html",
+        "regex": "keyboard|keydown"
+      },
+      {
+        "path": "wordle_model_01.html",
+        "regex": "duplicate|yellow|gray|grey"
+      },
+      {
+        "path": "wordle_model_01.html",
+        "regex": "hard.?mode|streak"
+      },
+      {
+        "path": "wordle_model_01.html",
+        "regex": "share|clipboard|emoji"
+      }
+    ],
+    "smoke": {
+      "entry": "wordle_model_01.html",
+      "dom_present": []
+    }
+  },
+  "judge": {
+    "criteria": [
+      "wordle_model_01.html is one self-contained Wordle clone (no libraries): an embedded answer list of at least 200 common 5-letter words plus a larger valid-guess dictionary or permissive validation, exactly 6 guesses with green/yellow/gray coloring that handles duplicated letters correctly (consumed left-to-right), a physical and on-screen keyboard that reflects the best known state per letter, rejected invalid guesses with a message, hard mode that forces revealed hints, game-over reveal of the answer, per-played/win-rate/streak statistics in localStorage, and a copy-to-clipboard emoji grid share. No random colorings."
+    ]
+  }
+}

@@ -1,0 +1,25 @@
+name: "WebShop plan-then-buy"
+description: "A planner agent computes the optimal cart from the live catalog, a buyer agent materializes it."
+on_failure: stop
+max_minutes: 30
+agents:
+  - name: planner
+    profile: planner
+    mode: plan
+    max_iterations: 15
+    task: >
+      The team shop is running at http://127.0.0.1:8743. Fetch /catalog over HTTP and
+      apply the mission rules from docs/mission.md (hard budget 60.00 EUR, exactly one
+      item per list category, maximal total rating; the optimum is unique). Write
+      plan/plan.md with the chosen ids, their prices and the total - and why the
+      tempting high-rated items were rejected. Do not write the cart file and do not
+      edit anything else.
+  - name: buyer
+    profile: buyer
+    mode: agent
+    depends_on: [planner]
+    max_iterations: 12
+    task: >
+      Read the planner's plan/plan.md and write cart/cart.json exactly per
+      docs/mission.md ({"items": [...]}, one id per list category, sorted). Do not
+      recompute the selection and do not edit any other file.

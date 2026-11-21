@@ -35,11 +35,13 @@ import pl.jclab.refio.core.services.turn.TurnSubagentValidator
 import pl.jclab.refio.core.services.turn.ToolCallParser
 import pl.jclab.refio.core.services.turn.TurnToolExecutor
 import pl.jclab.refio.core.config.ConfigKey
+import pl.jclab.refio.core.config.ConfigKeys
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.assertFalse
+import pl.jclab.refio.core.debug.TurnStopReason
 
 /**
  * Testy dla AgentTurnLoop — główna silnik wykonawczy dla trybów PLAN/AGENT.
@@ -116,6 +118,9 @@ class AgentTurnLoopTest {
         every { promptsService.getSystemPrompt(any(), any()) } returns "System prompt"
         every { configService.getModel(any(), any()) } returns Pair("gpt-4", "openai")
         every { configService.getTyped(any<ConfigKey<Any>>(), any()) } answers { firstArg<ConfigKey<Any>>().default }
+        // The note after a stopped turn is one more model call and one more row; tests that count those
+        // pin other behavior, so it is switched on only where it is under test.
+        every { configService.getTyped(ConfigKeys.AGENT_HANDOFF_NOTE, any()) } returns false
 
         val mockTask = createMockTask()
         every { taskRepository.findById(testTaskId) } returns mockTask
@@ -135,7 +140,8 @@ class AgentTurnLoopTest {
         taskVerifier: TaskVerifier,
         completionGuardians: GuardianRegistry = GuardianRegistry(),
         turnVerifier: pl.jclab.refio.core.services.turn.TurnVerifier? = null,
-        agentEventBus: pl.jclab.refio.core.agents.events.AgentEventBus? = null
+        agentEventBus: pl.jclab.refio.core.agents.events.AgentEventBus? = null,
+        taskLease: pl.jclab.refio.core.services.maintenance.TaskLease? = null
     ): AgentTurnLoop {
         val tokenEstimator = pl.jclab.refio.core.services.PromptTokenEstimator()
 
@@ -205,7 +211,8 @@ class AgentTurnLoopTest {
             workingMemoryIntegration = null,
             completionGuardians = completionGuardians,
             turnVerifier = turnVerifier,
-            agentEventBus = agentEventBus
+            agentEventBus = agentEventBus,
+            taskLease = taskLease
         )
     }
 
@@ -349,6 +356,46 @@ class AgentTurnLoopTest {
             val boundary = kwargsPerCall.firstOrNull()?.get("cacheable_system_length") as? Int
             assertNotNull(boundary, "the turn call lost the stable-prefix boundary: ${kwargsPerCall.firstOrNull()}")
             assertTrue(boundary > 0)
+        }
+
+        @Test
+        fun `a main turn holds the task lease while it runs`() = runTest {
+            // A crash in the middle of the turn must leave a lease behind for the next process to
+            // find; a lease left after the turn would make the next process think it still runs.
+            val events = mutableListOf<String>()
+            val leases = object : pl.jclab.refio.core.services.maintenance.LeaseStore {
+                override fun claimLease(taskId: String, pid: Long, startedAt: Long) {
+                    events += "claim $taskId"
+                }
+
+                override fun releaseLease(taskId: String) {
+                    events += "release $taskId"
+                }
+            }
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            } coAnswers {
+                events += "model call"
+                createLLMResponse("""{"response": "Done."}""")
+            }
+            val loop = buildAgentTurnLoop(
+                NoopTaskVerifier(),
+                taskLease = pl.jclab.refio.core.services.maintenance.TaskLease(
+                    leases,
+                    pl.jclab.refio.core.services.maintenance.ProcessOwner(pid = 7, startedAt = 1)
+                )
+            )
+
+            loop.runTurn(taskId = testTaskId, userInput = "Hello", mode = TaskMode.AGENT)
+
+            assertEquals("claim $testTaskId", events.first())
+            assertTrue("model call" in events)
+            assertEquals("release $testTaskId", events.last())
         }
 
         @Test
@@ -667,7 +714,9 @@ class AgentTurnLoopTest {
 
         @Test
         fun `should handle LLM exceptions gracefully`() = runTest {
-            // Given
+            // Given - a server that stays unavailable; the minutes of retries it would get are
+            // covered elsewhere, this is about what the turn does once they are given up.
+            every { configService.getTyped(pl.jclab.refio.core.config.ConfigKeys.LLM_RETRY_MAX_SECONDS, any()) } returns 0L
             coEvery {
                 llmClient.complete(
                     provider = any(),
@@ -696,6 +745,222 @@ class AgentTurnLoopTest {
                     mode = TaskMode.AGENT
                 )
             }
+        }
+
+        @Test
+        fun `one reply with six failed reads lets the model see the errors before any abort`() = runTest {
+            // Six parallel reads of paths that do not exist are one decision of the model. The turn
+            // must hand the six errors back to it instead of ending on a 6/6 error rate.
+            val readTool = mockk<pl.jclab.refio.core.tools.base.Tool>(relaxed = true) {
+                every { name } returns "read_file"
+                every { mode } returns pl.jclab.refio.core.tools.base.ToolMode.READ_ONLY
+            }
+            every { toolRegistry.getTool("read_file") } returns readTool
+            coEvery { toolExecutor.executeTool(any(), any()) } returns
+                ToolResult(success = false, error = "File not found")
+            val reads = (1..6).joinToString(",") { """{"tool":"read_file","arguments":{"path":"src/missing$it.kt"}}""" }
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            } returnsMany listOf(
+                createLLMResponse("""{"response":"reading","actions":[$reads]}"""),
+                createLLMResponse("""{"actions":[],"response":"None of those files exist in this project."}""")
+            )
+
+            val result = agentTurnLoop.runTurn(taskId = testTaskId, userInput = "Read the config files", mode = TaskMode.PLAN)
+
+            assertFalse(result.response.contains("Too many tool errors"), "turn ended before the model saw the errors: ${result.response}")
+            assertEquals(2, result.iterations)
+        }
+    }
+
+    @Nested
+    inner class LongTaskInputTests {
+
+        @Test
+        fun `round message of a long task is stored as a harness row`() = runTest {
+            val rows = mutableListOf<Triple<MessageRole, String, String?>>()
+            every {
+                chatMessageRepository.create(
+                    taskId = any(), role = any(), content = any(), thinking = any(), metadata = any(),
+                    toolCalls = any(), toolCallId = any(), subtaskId = any(), isSummarized = any(),
+                    rawOutput = any(), tokensIn = any(), tokensOut = any(), cost = any(),
+                    agentInstanceId = any(), agentName = any(), agentDepth = any()
+                )
+            } answers {
+                rows += Triple(arg<MessageRole>(1), arg<String>(2), arg<String?>(4))
+                createMockMessage()
+            }
+
+            agentTurnLoop.runTurn(
+                taskId = testTaskId, userInput = "Round 2 of 12. The check failed: 5 tests.", mode = TaskMode.PLAN,
+                inputType = pl.jclab.refio.core.services.turn.HarnessMessageTypes.LONG_TASK_ROUND
+            )
+
+            val first = rows.first()
+            assertEquals(MessageRole.SYSTEM, first.first)
+            assertEquals("long_task_round", pl.jclab.refio.core.services.turn.HarnessMessageTypes.typeOf(first.third))
+            assertTrue(rows.none { it.first == MessageRole.USER }, "the harness must not speak as the user")
+        }
+    }
+
+    @Nested
+    inner class HandoffNoteTests {
+
+        private var noteRequests = 0
+
+        /** A model that reads a new file on every step, so only the iteration limit ends the turn. */
+        private fun modelThatKeepsReading(noteReply: () -> LLMResponse) {
+            val readTool = mockk<pl.jclab.refio.core.tools.base.Tool>(relaxed = true) {
+                every { name } returns "read_file"
+                every { mode } returns pl.jclab.refio.core.tools.base.ToolMode.READ_ONLY
+            }
+            every { toolRegistry.getTool("read_file") } returns readTool
+            coEvery { toolExecutor.executeTool(any(), any()) } returns ToolResult(success = true, output = "fun main() {}")
+            every { configService.getTyped(ConfigKeys.AGENT_HANDOFF_NOTE, any()) } returns true
+            var step = 0
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            } answers {
+                step++
+                createLLMResponse("""{"response":"reading","actions":[{"tool":"read_file","arguments":{"path":"src/file$step.kt"}}]}""")
+            }
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = "HandoffNote", kwargs = any()
+                )
+            } answers {
+                noteRequests++
+                noteReply()
+            }
+        }
+
+        @Test
+        fun `max iterations ends as incomplete`() = runTest {
+            modelThatKeepsReading { createLLMResponse("Done: read two files.\nLeft: the rest of src.") }
+            val rows = mutableListOf<Pair<String, String?>>()
+            every {
+                chatMessageRepository.create(
+                    taskId = any(), role = MessageRole.SYSTEM, content = any(), thinking = any(), metadata = any(),
+                    toolCalls = any(), toolCallId = any(), subtaskId = any(), isSummarized = any(),
+                    rawOutput = any(), tokensIn = any(), tokensOut = any(), cost = any(),
+                    agentInstanceId = any(), agentName = any(), agentDepth = any()
+                )
+            } answers {
+                rows += arg<String>(2) to arg<String?>(4)
+                createMockMessage()
+            }
+
+            val result = agentTurnLoop.runTurn(
+                taskId = testTaskId, userInput = "Read every source file", mode = TaskMode.PLAN,
+                profileOverrides = TurnProfileOverrides(maxIterationsOverride = 2)
+            )
+
+            assertEquals(pl.jclab.refio.core.debug.TurnStopReason.MAX_ITERATIONS, result.stopReason)
+            assertTrue(result.incomplete, "a turn that ran out of steps did not deliver, it is not an error either")
+            assertEquals(1, noteRequests, "one note request after the turn stopped")
+            val note = rows.single { pl.jclab.refio.core.services.turn.HarnessMessageTypes.typeOf(it.second) == "handoff_note" }
+            assertTrue(note.first.contains("Left: the rest of src."), note.first)
+        }
+
+        @Test
+        fun `failed note does not fail the turn`() = runTest {
+            modelThatKeepsReading { throw RuntimeException("Connection refused") }
+
+            val result = agentTurnLoop.runTurn(
+                taskId = testTaskId, userInput = "Read every source file", mode = TaskMode.PLAN,
+                profileOverrides = TurnProfileOverrides(maxIterationsOverride = 2)
+            )
+
+            assertEquals(1, noteRequests, "the note was asked for")
+            assertEquals(pl.jclab.refio.core.debug.TurnStopReason.MAX_ITERATIONS, result.stopReason)
+            assertTrue(result.incomplete)
+        }
+    }
+
+    @Nested
+    inner class SubagentThreadTests {
+
+        @Test
+        fun `a delegated run without an instance id keeps its prompt and replies in one thread of its own`() = runTest {
+            // delegate_to_strong_model names the run but assigns no instance id. The id the run gets
+            // must already be on its first row, the prompt; otherwise the prompt lands in the parent
+            // thread as if the user had written it, and the delegated run starts without its task.
+            val rows = mutableListOf<Pair<MessageRole, String?>>()
+            every {
+                chatMessageRepository.create(
+                    taskId = any(), role = any(), content = any(), thinking = any(), metadata = any(),
+                    toolCalls = any(), toolCallId = any(), subtaskId = any(), isSummarized = any(),
+                    rawOutput = any(), tokensIn = any(), tokensOut = any(), cost = any(),
+                    agentInstanceId = any(), agentName = any(), agentDepth = any()
+                )
+            } answers {
+                rows += secondArg<MessageRole>() to arg<String?>(13)
+                createMockMessage()
+            }
+
+            agentTurnLoop.runTurn(
+                taskId = testTaskId, userInput = "Explain why the cache test is flaky", mode = TaskMode.PLAN,
+                runProfile = TurnRunProfile.SUBAGENT,
+                profileOverrides = TurnProfileOverrides(subagentName = "strong-model", depth = 0)
+            )
+
+            val promptThread = rows.first { it.first == MessageRole.USER }.second
+            assertNotNull(promptThread, "the delegated prompt was stored in the parent thread")
+            val replyThreads = rows.filter { it.first == MessageRole.ASSISTANT }.map { it.second }
+            assertTrue(replyThreads.isNotEmpty())
+            assertTrue(replyThreads.all { it == promptThread }, "prompt in $promptThread, replies in $replyThreads")
+        }
+
+        /** Depth stored on every row of one subagent run; the chat view indents a row by it (0 main agent, 1 subagent). */
+        private suspend fun storedDepthsOf(overrides: TurnProfileOverrides): List<Int?> {
+            val depths = mutableListOf<Int?>()
+            every {
+                chatMessageRepository.create(
+                    taskId = any(), role = any(), content = any(), thinking = any(), metadata = any(),
+                    toolCalls = any(), toolCallId = any(), subtaskId = any(), isSummarized = any(),
+                    rawOutput = any(), tokensIn = any(), tokensOut = any(), cost = any(),
+                    agentInstanceId = any(), agentName = any(), agentDepth = any()
+                )
+            } answers {
+                depths += arg<Int?>(15)
+                createMockMessage()
+            }
+            agentTurnLoop.runTurn(
+                taskId = testTaskId, userInput = "Find every caller of TurnVerifier", mode = TaskMode.PLAN,
+                runProfile = TurnRunProfile.SUBAGENT, profileOverrides = overrides
+            )
+            return depths
+        }
+
+        @Test
+        fun `first-level subagent is stored with depth 1`() = runTest {
+            // invoke_subagent called by the main agent passes depth 1 (its own 0 plus one).
+            val depths = storedDepthsOf(TurnProfileOverrides(subagentName = "explorer", depth = 1, agentInstanceId = "i1"))
+
+            assertTrue(depths.isNotEmpty())
+            assertTrue(depths.all { it == 1 }, "a direct subagent must be shown one level in, stored depths: $depths")
+        }
+
+        @Test
+        fun `subagent picked by the user is still stored with depth 1`() = runTest {
+            // A subagent started from the prompt runs at depth 0, yet it is a subagent, not the main agent.
+            val depths = storedDepthsOf(TurnProfileOverrides(subagentName = "explorer", depth = 0, agentInstanceId = "i2"))
+
+            assertTrue(depths.isNotEmpty())
+            assertTrue(depths.all { it == 1 }, "stored depths: $depths")
         }
     }
 
@@ -737,6 +1002,45 @@ class AgentTurnLoopTest {
             // Should succeed in a single iteration: empty content but thinking carried valid JSON.
             assertTrue(result.success, "expected recovery from thinking field, got: ${result.response}")
             assertEquals(1, result.iterations)
+        }
+
+        @Test
+        fun `a model refusal ends the turn at once with a plain message instead of format retries`() = runTest {
+            // Asking again cannot change a provider's refusal; every retry is paid for and refused
+            // the same way (seen on a defensive CTF task: four retries, four refusals).
+            coEvery {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            } returns LLMResponse(
+                content = "",
+                usage = LLMUsage(inputTokens = 100, outputTokens = 0, totalTokens = 100),
+                model = "claude-sonnet-5-5",
+                provider = "anthropic",
+                cost = 0.04,
+                finishReason = "refusal"
+            )
+
+            val result = agentTurnLoop.runTurn(
+                taskId = testTaskId,
+                userInput = "Read the flag through the path traversal bug",
+                mode = TaskMode.AGENT
+            )
+
+            assertFalse(result.success)
+            assertEquals(TurnStopReason.MODEL_REFUSED, result.stopReason)
+            assertTrue(result.response.contains("declined"), "got: ${result.response}")
+            coVerify(exactly = 1) {
+                llmClient.complete(
+                    provider = any(), model = any(), messages = any(), systemPrompt = any(),
+                    maxTokens = any(), temperature = any(), responseFormat = any(), thinking = any(),
+                    noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(),
+                    subtaskId = any(), source = any(), kwargs = any()
+                )
+            }
         }
 
         @Test
@@ -2402,6 +2706,84 @@ class AgentTurnLoopTest {
         }
 
         private val editCall = """{"response":"editing","actions":[{"tool":"advance_code_editing","arguments":{"path":"Config.kt","instructions":"set MAX_RETRIES to 5"}}]}"""
+
+        @Test
+        fun `parent verification runs after subagent writes`() = runTest {
+            // A parent that hands all the writing to a subagent wrote nothing itself, so its
+            // finalization skipped the build although the subagent changed files.
+            val subagentTool = mockk<pl.jclab.refio.core.tools.base.Tool>(relaxed = true) {
+                every { name } returns "invoke_subagent"
+                every { mode } returns pl.jclab.refio.core.tools.base.ToolMode.READ_ONLY
+            }
+            every { toolRegistry.getTool("invoke_subagent") } returns subagentTool
+            coEvery { toolExecutor.executeTool(any(), any()) } returns ToolResult(
+                success = true,
+                output = "[subagent coder · status: done · stop: completed · iterations: 4 · tokens: 900/200 · time: 0:42]",
+                filesChanged = listOf("Config.kt")
+            )
+            val runner = RecordingRunner(
+                pl.jclab.refio.core.services.turn.VerificationExecution(exitCode = 0, output = "BUILD SUCCESSFUL")
+            )
+            val loop = buildAgentTurnLoop(NoopTaskVerifier(), turnVerifier = verifierWith(runner))
+            stubLlmResponses(
+                createLLMResponse("""{"response":"delegating","actions":[{"tool":"invoke_subagent","arguments":{"subagent_name":"coder","goal":"set MAX_RETRIES to 5 in Config.kt"}}]}"""),
+                createLLMResponse("""{"actions":[],"response":"The subagent applied the change."}""")
+            )
+
+            val result = loop.runTurn(taskId = testTaskId, userInput = "Set MAX_RETRIES to 5", mode = TaskMode.AGENT)
+
+            assertTrue(result.success, result.response)
+            assertEquals(2, runner.invocations.size, "baseline before the subagent + verify at the end")
+            assertTrue(result.verification?.ran == true)
+        }
+
+        private fun stubVerificationLoopAfterEdit() {
+            stubWriteTool()
+            val cmdTool = mockk<pl.jclab.refio.core.tools.base.Tool>(relaxed = true) {
+                every { name } returns "run_terminal_command"
+                every { mode } returns pl.jclab.refio.core.tools.base.ToolMode.WRITE
+            }
+            every { toolRegistry.getTool("run_terminal_command") } returns cmdTool
+            val runTests = createLLMResponse("""{"response":"checking","actions":[{"tool":"run_terminal_command","arguments":{"command":"python -m unittest"}}]}""")
+            // An edit, then the same test command with byte-identical output until the repetition guard stops it.
+            stubLlmResponses(createLLMResponse(editCall), runTests, runTests, runTests, runTests, runTests, runTests)
+        }
+
+        @Test
+        fun `a stopped loop is not reported as success while the project's tests still fail`() = runTest {
+            // e2e (qwen3.5:9b, aider-py-league-table): the model edited the code, then looped on
+            // re-reading it; the loop guard declared the turn a success without running the tests,
+            // which still failed. Here the model never said it was done - Refio would be the one
+            // claiming it, so a failing check rules success out even if it was failing before.
+            stubVerificationLoopAfterEdit()
+            val runner = RecordingRunner(
+                pl.jclab.refio.core.services.turn.VerificationExecution(exitCode = 1, output = "FAILED (failures=3)"),
+                pl.jclab.refio.core.services.turn.VerificationExecution(exitCode = 1, output = "FAILED (failures=1)")
+            )
+            val loop = buildAgentTurnLoop(NoopTaskVerifier(), turnVerifier = verifierWith(runner))
+
+            val result = loop.runTurn(taskId = testTaskId, userInput = "Make the tests pass", mode = TaskMode.AGENT)
+
+            assertFalse(result.success, "tests still fail, got: ${result.response}")
+            assertEquals(pl.jclab.refio.core.debug.TurnStopReason.VERIFICATION_FAILED, result.stopReason)
+            assertEquals(2, runner.invocations.size, "baseline before the edit + one check after the loop, no repair rounds")
+            assertTrue(result.verification?.ran == true)
+        }
+
+        @Test
+        fun `a stopped loop after an edit is still a success when the project's tests pass`() = runTest {
+            stubVerificationLoopAfterEdit()
+            val runner = RecordingRunner(
+                pl.jclab.refio.core.services.turn.VerificationExecution(exitCode = 1, output = "FAILED (failures=3)"),
+                pl.jclab.refio.core.services.turn.VerificationExecution(exitCode = 0, output = "OK")
+            )
+            val loop = buildAgentTurnLoop(NoopTaskVerifier(), turnVerifier = verifierWith(runner))
+
+            val result = loop.runTurn(taskId = testTaskId, userInput = "Make the tests pass", mode = TaskMode.AGENT)
+
+            assertTrue(result.success, result.response)
+            assertEquals("PASSED", result.verification?.result)
+        }
 
         @Test
         fun `a turn without file writes is never verified`() = runTest {

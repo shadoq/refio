@@ -17,6 +17,7 @@ import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolRegistry
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.test.assertFailsWith
 
 class ToolPermissionsServiceTest {
 
@@ -457,6 +458,56 @@ class ToolPermissionsServiceTest {
                 PermissionLevel.OFF,
                 serviceWithRenameTool().getPermission("rename_symbol", TaskMode.PLAN)
             )
+        }
+    }
+
+    @Nested
+    inner class RunScopeOverrideTests {
+
+        private fun stored(json: String) = Config(
+            key = "tools.permissions",
+            value = json,
+            scope = ConfigScope.APP,
+            projectId = null,
+            taskId = null,
+            description = null,
+            createdAt = 0L,
+            updatedAt = 0L
+        )
+
+        @Test
+        fun `a --config override switches a tool off even when the user's stored config has it on`() {
+            every { configRepository.getWithPrecedence(any(), any()) } returns
+                stored("""{"tools":{"run_terminal_command":{"planMode":"ON","agentMode":"ON"}}}""")
+            val overridden = ToolPermissionsService(
+                configRepository, toolRegistry,
+                runOverride = """{"run_terminal_command":{"planMode":"OFF","agentMode":"OFF"}}"""
+            )
+
+            assertEquals(PermissionLevel.OFF, overridden.getPermission("run_terminal_command", TaskMode.AGENT))
+        }
+
+        @Test
+        fun `tools the override does not name keep their stored permission`() {
+            every { configRepository.getWithPrecedence(any(), any()) } returns
+                stored("""{"tools":{"code_editing":{"planMode":"OFF","agentMode":"ASK"}}}""")
+            val overridden = ToolPermissionsService(
+                configRepository, toolRegistry,
+                runOverride = """{"tools":{"run_terminal_command":{"planMode":"OFF","agentMode":"OFF"}}}"""
+            )
+
+            assertEquals(PermissionLevel.ASK, overridden.getPermission("code_editing", TaskMode.AGENT))
+            assertEquals(PermissionLevel.OFF, overridden.getPermission("run_terminal_command", TaskMode.AGENT))
+        }
+
+        @Test
+        fun `a malformed override fails loud instead of being ignored`() {
+            assertFailsWith<IllegalArgumentException> {
+                ToolPermissionsService(configRepository, toolRegistry, runOverride = """{"run_code":{"agentMode":"MAYBE"}}""")
+            }
+            assertFailsWith<IllegalArgumentException> {
+                ToolPermissionsService(configRepository, toolRegistry, runOverride = "not json")
+            }
         }
     }
 }

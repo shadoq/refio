@@ -1,0 +1,30 @@
+{
+  "id": "sw-canvas-leak",
+  "mode": "AGENT",
+  "description": "Fix the Star Dodger lifecycle leaks: start() registers a fresh keydown listener on every restart and stop() never cancels the requestAnimationFrame loop, so handlers and frames accumulate and the ship keeps steering from the menu; the hidden gate drives start/stop cycles against stubbed browser APIs and counts listeners, frames and post-stop input.",
+  "category": "swe-bench",
+  "max_iterations": 30,
+  "fixture": "fixtures/sw-canvas-leak",
+  "prompt_file": "prompts/sw-canvas-leak.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": ["advance_code_editing"],
+    "needles_in_file": [
+      { "path": "game.js", "regex": "removeEventListener" },
+      { "path": "game.js", "regex": "cancelAnimationFrame" },
+      { "path": "game.js", "regex": "addEventListener" },
+      { "path": "game.js", "regex": "this\\.handleKeyDown" },
+      { "path": "game.js", "regex": "addEventListener\\('keydown', \\(", "absent": true }
+    ],
+    "file_unchanged": [
+      "README.md",
+      "checks.js"
+    ],
+    "build_cmd": "node checks.js"
+  },
+  "judge": {
+    "criteria": [
+      "game.js tears a round down completely in stop(): the keydown handler registered in start() is removed again using the same bound function reference, the pending animation frame is cancelled, no frames are scheduled or handled once the game is stopped, and a running round still animates, steers and scores exactly as before across any number of restarts - without touching the gate or the README."
+    ]
+  }
+}

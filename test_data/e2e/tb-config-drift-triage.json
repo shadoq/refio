@@ -1,0 +1,25 @@
+{
+  "id": "tb-config-drift-triage",
+  "mode": "AGENT",
+  "description": "Terminal-Bench style config drift: staging leaked an incident hot-patch as a bogus feature-flag block; the invariant (staging = prod + exactly the documented overrides) is enforced key-by-key by a gate that recomputes the expected document.",
+  "category": "terminal-bench",
+  "max_iterations": 15,
+  "fixture": "fixtures/tb-drift",
+  "prompt_file": "prompts/tb-config-drift-triage.md",
+  "assert": {
+    "needle_in_file": { "path": "envs/staging/app.json", "text": "\"pool_size\": 5" },
+    "needles_in_file": [
+      { "path": "envs/staging/app.json", "text": "\"feature_flags_tuning\"", "absent": true },
+      { "path": "envs/staging/app.json", "text": "\"log_level\": \"debug\"" },
+      { "path": "envs/staging/app.json", "text": "\"new_billing\": false" }
+    ],
+    "file_unchanged": ["envs/prod/app.json", "envs/dev/app.json", "checks.py", "docs/allowed-overrides.json", "docs/invariant.md", "README.md"],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "Staging equals prod plus exactly the two allowed overrides; the leaked tuning block is gone; prod and dev untouched."
+    ]
+  }
+}

@@ -49,6 +49,32 @@ class SupportedModelsTest {
     }
 
     @Test
+    fun `current coding models are both defined and offered in the model picker`() {
+        // The whitelist filters the provider's live model list, so a model defined in
+        // ModelDefinitions but missing here never shows up for the user to select.
+        val providers = mapOf(
+            "openai" to ModelDefinitions.OPENAI_MODELS,
+            "anthropic" to ModelDefinitions.ANTHROPIC_MODELS,
+            "gemini" to ModelDefinitions.GEMINI_MODELS,
+        )
+        val newModels = mapOf(
+            "openai" to listOf("gpt-6.2-astra", "gpt-6.2-sol", "gpt-6.1-terra"),
+            "anthropic" to listOf("claude-fable-5-2", "claude-fable-5-1", "claude-fable-5", "claude-haiku-5-5"),
+            "gemini" to listOf(
+                "gemini-4-neon", "gemini-4-hydrogen", "gemini-4-carbon", "gemini-4-argon",
+                "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite",
+                "gemini-3.5-flash", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite", "gemini-3-flash-preview",
+            ),
+        )
+        val hidden = newModels.flatMap { (provider, ids) ->
+            ids.filter { it !in providers.getValue(provider) || !SupportedModels.isSupported(provider, it) }
+                .map { "$provider/$it" }
+        }
+
+        assertTrue(hidden.isEmpty(), "defined but not selectable: $hidden")
+    }
+
+    @Test
     fun `a live non-codex openai model stays supported`() {
         // Guard against over-removal: the non-codex siblings of the removed ids remain whitelisted.
         assertTrue(SupportedModels.isSupported("openai", "gpt-5.2"))

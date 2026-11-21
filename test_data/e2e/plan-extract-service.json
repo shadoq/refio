@@ -1,0 +1,50 @@
+{
+  "id": "plan-extract-service",
+  "mode": "PLAN",
+  "description": "Plan extracting the duplicated price calculation from two views into app/pricing.py: tests that pin today's totals come before the code moves, both views are switched over, and only real files are named.",
+  "category": "planning",
+  "max_iterations": 30,
+  "fixture": "fixtures/plan-extract-service",
+  "prompt_file": "prompts/plan-extract-service.md",
+  "assert": {
+    "plan": {
+      "min_steps": 3,
+      "max_steps": 9,
+      "covers": [
+        {
+          "label": "the new module",
+          "regex": "pricing\\.py"
+        },
+        {
+          "label": "checkout_view",
+          "regex": "checkout_view|checkout"
+        },
+        {
+          "label": "invoice_view",
+          "regex": "invoice_view|invoice"
+        },
+        {
+          "label": "tests",
+          "regex": "test"
+        }
+      ],
+      "order": [
+        {
+          "before": "test",
+          "after": "app/pricing\\.py|pricing module|\\bextract"
+        }
+      ],
+      "paths_exist": true,
+      "new_paths": [
+        "^app/pricing\\.py$",
+        "^tests/"
+      ]
+    },
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The plan first adds tests that pin the current totals of checkout_view and invoice_view, then creates app/pricing.py, switches both views in app/views.py to it, and re-runs the tests."
+    ]
+  }
+}

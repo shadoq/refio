@@ -1,0 +1,23 @@
+{
+  "id": "he-pure-total-cost",
+  "mode": "AGENT",
+  "description": "HumanEval-style completion with a purity gate: implement the basket pricing function correctly AND purely - the untouched tests assert both the arithmetic and that the input list is never mutated across calls.",
+  "category": "humaneval",
+  "max_iterations": 15,
+  "fixture": "fixtures/he-pure-cost",
+  "prompt_file": "prompts/he-pure-total-cost.md",
+  "assert": {
+    "needle_in_file": { "path": "pricing.py", "regex": "def total_cost" },
+    "needles_in_file": [
+      { "path": "pricing.py", "regex": "NotImplementedError", "absent": true }
+    ],
+    "file_unchanged": ["test_total_cost.py", "README.md"],
+    "build_cmd": "python3 -m unittest discover -p \"test_*.py\"",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "All eight tests pass, including the two purity assertions; tests untouched."
+    ]
+  }
+}

@@ -20,7 +20,10 @@
 #
 # Usage:
 #   e2e-run.sh --self-test
-#   e2e-run.sh --list                         # show selectable scenarios (id + mode + file), then exit
+#   e2e-run.sh --list [--json]                # show selectable scenarios (id + category + mode + file), then exit
+#   e2e-run.sh --catalog [--category C] [--filter ERE]   # Markdown table of the corpus (golden/negative/asserts), then exit
+#   e2e-run.sh --list --category bugfix      # --category (exact) and --filter (ERE on the id) narrow --list
+#   e2e-run.sh [opts] --all --filter '^sw-'   #   and any --all run alike
 #   e2e-run.sh [opts] --all                   # run every scenario under test_data/e2e/
 #   e2e-run.sh [opts] <id|scenario.json> ...  # run selected scenarios (by id OR by file path)
 #     opts: [--cli <path>] [--max-cost <usd>] [--model <provider/model>] [--ollama-host <h>]
@@ -62,6 +65,14 @@
 # best effort and never fails a run. results.jsonl records carry the same `batch` id
 # (E2E_BATCH_ID, generated when unset). run.json is not changed.
 #
+# Long tasks and part-way scores: a scenario with `until` runs as a long task (--until <cmd>, plus
+# --max-rounds from `max_rounds`): rounds of AGENT turns until the command exits 0 in the project
+# after a round. Cap its time with the scenario's own config, e.g. "long_task.max_minutes=30". An
+# optional `score` {cmd, regex} runs in the project after the run, also when the run failed, and the
+# first capture group of `regex` (POSIX ERE) is printed as score=... and written to results.jsonl as
+# `score`, next to the long task's `rounds` - e.g. "9/12" from "SUMMARY passed 9/12". The score never
+# changes the verdict. `until` cannot be combined with `multi_agent`.
+#
 # LLM judge (SOFT tier): set JUDGE_MODEL=<provider/model> to run an external judge after each
 # scenario. The judge is the headless CLI itself in CHAT mode; it gets the task text, the diff of
 # the fixture project after the run, the build/test output, and the scenario's optional
@@ -90,6 +101,10 @@ KEEP=0
 SELF_TEST=0
 LIST=0
 ALL=0
+JSON=0
+CATALOG=0
+CATEGORY=""
+FILTER=""
 SCENARIOS=()
 CONFIG_OVERRIDES=()
 # Headless auto-approval for verification commands. Without it, run_terminal_command (a
@@ -121,20 +136,56 @@ require_cmd() { command -v "$1" >/dev/null 2>&1 || die "'$1' not found on PATH (
 
 # --- scenario discovery & selection -----------------------------------------
 # Top-level *.json under E2E_DIR are scenarios; examples/ is a subdir (samples), so it is skipped.
+# One jq process for the whole directory: spawning jq per file costs ~0.3 s each on Windows.
+# Rows are "file<TAB>id<TAB>mode<TAB>category", narrowed by --category (exact) and --filter (ERE on id).
+scenario_rows() {
+    local f
+    for f in "$E2E_DIR"/*.json; do [[ -e "$f" ]] && break; return 0; done
+    jq -r '[(input_filename | split("/") | last), (.id // "?"), (.mode // "AGENT"), (.category // "-")] | @tsv' "$E2E_DIR"/*.json \
+        | tr -d '\r' \
+        | while IFS=$'\t' read -r f id mode cat; do
+            [[ -z "$CATEGORY" || "$cat" == "$CATEGORY" ]] || continue
+            [[ -z "$FILTER" || "$id" =~ $FILTER ]] || continue
+            printf '%s\t%s\t%s\t%s\n' "$E2E_DIR/$f" "$id" "$mode" "$cat"
+        done
+}
+
 discover_scenarios() {
     local f
-    for f in "$E2E_DIR"/*.json; do [[ -e "$f" ]] && echo "$f"; done
+    if [[ -n "$CATEGORY$FILTER" ]]; then
+        scenario_rows | cut -f1
+    else
+        for f in "$E2E_DIR"/*.json; do [[ -e "$f" ]] && echo "$f"; done
+    fi
+}
+
+# Markdown catalog of the corpus (id, category, mode, golden/negative present, assert keys), read from the
+# scenario files themselves so the table cannot drift. Honours --category / --filter. Paste into the docs.
+catalog_scenarios() {
+    local ids id g n
+    echo "| id | category | mode | golden | negative | asserts |"
+    echo "|---|---|---|---|---|---|"
+    scenario_rows | cut -f1 | tr '\n' '\0' | xargs -0 jq -r '[(input_filename | split("/") | last), (.id // "?"), (.category // "-"), (.mode // "AGENT"), ((.assert // {}) | keys | join(", "))] | @tsv' \
+        | tr -d '\r' \
+        | while IFS=$'\t' read -r _ id cat mode asserts; do
+            g="-"; n="-"
+            [[ -d "$E2E_DIR/golden/$id" ]] && g="yes"
+            [[ -d "$E2E_DIR/negative/$id" ]] && n="yes"
+            echo "| $id | $cat | $mode | $g | $n | $asserts |"
+        done
 }
 
 list_scenarios() {
+    local f id mode cat
+    if [[ $JSON -eq 1 ]]; then
+        scenario_rows | jq -Rn \
+            '[inputs | split("\t") | {id: .[1], mode: .[2], category: .[3], file: (.[0] | split("/") | last | "test_data/e2e/" + .)}]'
+        return 0
+    fi
     echo "Selectable e2e scenarios in ${E2E_DIR#"$REPO_ROOT"/}:" >&2
-    local f id mode
-    while IFS= read -r f; do
-        [[ -n "$f" ]] || continue
-        id="$(jq -r '.id // "?"' "$f" 2>/dev/null)"
-        mode="$(jq -r '.mode // "AGENT"' "$f" 2>/dev/null)"
-        printf '  %-24s mode=%-6s %s\n' "$id" "$mode" "${f#"$REPO_ROOT"/}" >&2
-    done < <(discover_scenarios)
+    while IFS=$'\t' read -r f id mode cat; do
+        printf '  %-24s %-14s mode=%-6s %s\n' "$id" "$cat" "$mode" "${f#"$REPO_ROOT"/}" >&2
+    done < <(scenario_rows)
 }
 
 # Resolve a positional arg to a scenario path: existing file → that file; else <E2E_DIR>/<arg>.json;
@@ -164,7 +215,11 @@ while [[ $# -gt 0 ]]; do
         --self-test) SELF_TEST=1; shift ;;
         --list)      LIST=1; shift ;;
         --all)       ALL=1; shift ;;
-        -h|--help)   sed -n '2,34p' "$0"; exit 0 ;;
+        --json)      JSON=1; shift ;;
+        --catalog)   CATALOG=1; shift ;;
+        --category)  CATEGORY="$2"; shift 2 ;;
+        --filter)    FILTER="$2"; shift 2 ;;
+        -h|--help)   sed -n '2,38p' "$0"; exit 0 ;;
         -*)          die "unknown flag: $1" ;;
         *)           SCENARIOS+=("$1"); shift ;;
     esac
@@ -342,6 +397,25 @@ assert_run() {
         fi
     fi
 
+    # HARD 1c4 - plan / plan_followed / rounds: how the agent planned the work. The plan is read from
+    # the run (the `tasks` tool calls, else the answer's numbered steps) by a script in this harness
+    # directory; see lib/plan-check.mjs for each rule.
+    local pc_out pc_exit pc_line
+    if [[ "$(jq '.assert | has("plan") or has("plan_followed") or has("rounds")' "$scenario")" == "true" ]]; then
+        if ! command -v node >/dev/null 2>&1; then
+            hard_fail=1; reasons+=("plan checks need node on PATH")
+        else
+            pc_exit=0
+            pc_out="$(node "$SCRIPT_DIR/lib/plan-check.mjs" "$scenario" "${fx_dir:-$project_dir}" "$project_dir" --run "$run_json" 2>&1)" || pc_exit=$?
+            if (( pc_exit != 0 )); then
+                hard_fail=1
+                while IFS= read -r pc_line; do
+                    pc_line="${pc_line%$'\r'}"; [[ -n "$pc_line" ]] && reasons+=("$pc_line")
+                done <<<"$pc_out"
+            fi
+        fi
+    fi
+
     # HARD 1d — tool_invoked: a named tool MUST (or, with absent:true, must NOT) have been called.
     # Each entry is {name, args_regex?, absent?}. Name presence is read from the always-present
     # conversation[].toolCalls[] (bare names). With args_regex it matches the raw arguments JSON in
@@ -487,7 +561,8 @@ assert_run() {
     # cannot see an agent that called the same tool twelve times; this can.
     local tb_json tb_names tb_name tb_max tb_used
     tb_json="$(jq -c '.assert.tool_budget // {}' "$scenario")"
-    tb_names="$(jq -r 'keys[]?' <<<"$tb_json")"
+    # tr: jq on Windows ends lines with CRLF, and a key left as "read_file\r" looks up null.
+    tb_names="$(jq -r 'keys[]?' <<<"$tb_json" | tr -d '\r')"
     while IFS= read -r tb_name; do
         [[ -n "$tb_name" ]] || continue
         tb_max="$(jq -r --arg k "$tb_name" '.[$k]' <<<"$tb_json")"
@@ -684,7 +759,7 @@ run_judge() {
 # record. Never aborts the caller (all failure paths swallowed) - the gate is observ-only.
 emit_result_record() {
     [[ -n "${E2E_OUT_DIR:-}" ]] || return 0
-    local id="$1" verdict="$2" run_json="$3" judge="${4:-}" build_cmd="${5:-}"
+    local id="$1" verdict="$2" run_json="$3" judge="${4:-}" build_cmd="${5:-}" score="${6:-}"
     # Judge object is optional and SOFT; a missing/invalid value serializes as null.
     jq -e . >/dev/null 2>&1 <<<"$judge" || judge="null"
     [[ -n "$judge" ]] || judge="null"
@@ -697,7 +772,7 @@ emit_result_record() {
     # Additive: the Kotlin gate parser (GateRunRecord via Gson) ignores unknown fields, so enriching
     # the record never breaks `cli --gate`; the aggregator (e2e-stats.sh) reads these back.
     local mode="" provider="" tokens_in="0" iters="0" apicalls="0" duration="0"
-    local tools_json="{}" apierr_json="{}" subtasks=0 ran_build="null"
+    local tools_json="{}" apierr_json="{}" subtasks=0 ran_build="null" rounds="null"
     if [[ -f "$run_json" ]]; then
         status="$(jq -r '.session.status // "UNKNOWN"' "$run_json" 2>/dev/null || echo UNKNOWN)"
         cost="$(jq -r '.metrics.costUsd // 0' "$run_json" 2>/dev/null || echo 0)"
@@ -712,6 +787,9 @@ emit_result_record() {
         subtasks="$(jq -r '.metrics.toolCallCount // 0' "$run_json" 2>/dev/null || echo 0)"
         apicalls="$(jq -r '.metrics.apiCallCount // 0' "$run_json" 2>/dev/null || echo 0)"
         duration="$(jq -r '.metrics.durationMs // (.run.durationMs // 0)' "$run_json" 2>/dev/null || echo 0)"
+        # Rounds of a long task; null for a single turn.
+        rounds="$(jq '.longTask.roundsDone // null' "$run_json" 2>/dev/null || echo null)"
+        [[ -n "$rounds" ]] || rounds="null"
         # Tool-use histogram (tool name -> call count) across every message in the run.
         tools_json="$(jq -c '[.conversation[]?.toolCalls[]?] | reduce .[] as $t ({}; .[$t] = ((.[$t]//0)+1))' "$run_json" 2>/dev/null || echo '{}')"
         [[ -n "$tools_json" && "$tools_json" != "null" ]] || tools_json="{}"
@@ -751,15 +829,27 @@ emit_result_record() {
         --argjson apiCalls "$apicalls" --argjson durationMs "$duration" \
         --argjson tools "$tools_json" --argjson apiErrors "$apierr_json" \
         --argjson judge "$judge" --arg batch "${E2E_BATCH_ID:-}" --argjson ranBuild "$ran_build" \
+        --arg score "$score" --argjson rounds "$rounds" \
         '{scenario:$scenario, model:$model, run:$run, verdict:$verdict, failure_mode:$fmode,
           status:$status, costUsd:$cost, tokensOut:$tokens,
           mode:$mode, provider:$provider, tokensIn:$tokensIn, iterations:$iterations,
           subtasks:$subtasks,
           apiCalls:$apiCalls, durationMs:$durationMs, tools:$tools, apiErrors:$apiErrors,
           judge:$judge, modelRanBuildCmd:$ranBuild,
+          score: (if $score == "" then null else $score end), rounds:$rounds,
           batch: (if $batch == "" then null else $batch end),
           reasons: ($reasons | if . == "" then [] else split("; ") end)}' \
         >>"$E2E_OUT_DIR/results.jsonl" 2>/dev/null || true
+}
+
+# How far a run got, from the output of the scenario's score command: the first capture group of the
+# POSIX ERE pattern, or the whole match; nothing when it does not match. E.g. "9/12" from
+# "SUMMARY passed 9/12".
+scenario_score() {
+    local out="$1" regex="$2"
+    if [[ -n "$regex" && "$out" =~ $regex ]]; then
+        echo "${BASH_REMATCH[1]:-${BASH_REMATCH[0]}}"
+    fi
 }
 
 # Append the batch manifest line (see the header). No-op unless E2E_OUT_DIR is set. Best effort:
@@ -829,6 +919,11 @@ run_scenario() {
     else
         [[ -f "$prompt_file" ]] || die "prompt_file not found: $prompt_file"
     fi
+    # A long task: rounds of AGENT turns until this command exits 0 in the project after a round.
+    local until_cmd max_rounds
+    until_cmd="$(jq -r '.until // empty' "$scenario")"
+    max_rounds="$(jq -r '.max_rounds // empty' "$scenario")"
+    [[ -n "$until_cmd" && -n "$multi_agent_file" ]] && die "until cannot be combined with multi_agent: $scenario"
     [[ -d "$fixture" ]] || die "fixture dir not found: $fixture"
     [[ -x "$CLI" ]] || die "CLI not found/executable: $CLI (build it: ./gradlew :cli:installDist)"
 
@@ -941,10 +1036,14 @@ run_scenario() {
         fi
     fi
 
+    # A plan is judged from the answer text, which `standard` cuts at 2000 characters: a longer plan
+    # would lose its last steps and fail for a reason that is not the model's. `full` keeps 20000.
+    local debug_level=standard
+    if [[ "$(jq '.assert | has("plan") or has("plan_followed")' "$scenario")" == "true" ]]; then debug_level=full; fi
     local -a cli_args=(
         --headless -p "$work" --mode "$mode"
         --output json --output-file "$run_json"
-        --debug-level standard            # docs/0061: tool names live in run.json.conversation[]
+        --debug-level "$debug_level"      # tool names live in run.json.conversation[]
         --max-cost "$MAX_COST"
     )
     # Single-agent scenarios pass --prompt-file; multi-agent ones pass --multi-agent <yaml> instead.
@@ -952,6 +1051,12 @@ run_scenario() {
         cli_args+=(--multi-agent "$multi_agent_file")
     else
         cli_args+=(--prompt-file "$effective_prompt")
+    fi
+    if [[ -n "$until_cmd" ]]; then
+        cli_args+=(--until "$until_cmd")
+        if [[ -n "$max_rounds" ]]; then
+            cli_args+=(--max-rounds "$max_rounds")
+        fi
     fi
     [[ -n "$fs_dir" && -n "$fs_port" ]] && cli_args+=(--config "security.allow_loopback=true")
     [[ -n "$mcp_rendered" ]] && cli_args+=(--mcp-server "$mcp_rendered")
@@ -1000,6 +1105,16 @@ run_scenario() {
         return 1
     fi
 
+    # How far the run got, for a scenario that can end part-way (a long task at its round or time
+    # limit). Read before the exit-code gate below, because "9 of 12 when the limit hit" is what such
+    # a scenario measures. Never changes the verdict.
+    local score="" score_cmd score_regex
+    score_cmd="$(jq -r '.score.cmd // empty' "$scenario")"
+    score_regex="$(jq -r '.score.regex // empty' "$scenario")"
+    if [[ -n "$score_cmd" ]]; then
+        score="$(scenario_score "$( (cd "$work" && eval "$score_cmd") 2>&1 || true)" "$score_regex")"
+    fi
+
     # A non-zero CLI exit is a HARD failure: the headless turn aborted (e.g. cost ceiling, crash). It
     # must never be papered over by deterministic assertions that the starting fixture happens to
     # satisfy (docs/0061). The status gate in assert_run is the in-run.json equivalent; this catches
@@ -1008,8 +1123,8 @@ run_scenario() {
         local st co
         st="$(jq -r '.session.status // "?"' "$run_json")"
         co="$(jq -r '.metrics.costUsd // 0' "$run_json")"
-        echo "| $id | FAIL (headless CLI exit=$cli_exit) | status=$st cli_exit=$cli_exit cost=\$$co |"
-        emit_result_record "$id" "FAIL (headless CLI exit=$cli_exit)" "$run_json"
+        echo "| $id | FAIL (headless CLI exit=$cli_exit) | status=$st cli_exit=$cli_exit cost=\$$co${score:+ score=$score} |"
+        emit_result_record "$id" "FAIL (headless CLI exit=$cli_exit)" "$run_json" "" "" "$score"
         [[ $KEEP -eq 1 ]] || rm -rf "$work"
         return 1
     fi
@@ -1035,7 +1150,7 @@ run_scenario() {
     verdict="$(assert_run "$scenario" "$run_json" "$work" "$build_exit" "$smoke_exit" || true)"
     status="$(jq -r '.session.status // "?"' "$run_json")"
     cost="$(jq -r '.metrics.costUsd // 0' "$run_json")"
-    echo "| $id | $verdict | status=$status build_exit=$build_exit cost=\$$cost |"
+    echo "| $id | $verdict | status=$status build_exit=$build_exit cost=\$$cost${score:+ score=$score} |"
 
     # SOFT judge tier: runs only when JUDGE_MODEL is set; never changes the HARD verdict.
     local judge_json=""
@@ -1050,7 +1165,7 @@ run_scenario() {
         fi
     fi
 
-    emit_result_record "$id" "$verdict" "$run_json" "$judge_json" "$build_cmd"
+    emit_result_record "$id" "$verdict" "$run_json" "$judge_json" "$build_cmd" "$score"
     [[ $KEEP -eq 1 ]] || rm -rf "$work"
     [[ "$verdict" == PASS* ]]
 }
@@ -1518,6 +1633,33 @@ JSON
         echo "  case preserve-*      -> skipped: node not found on PATH" >&2
     fi
 
+    # plan: the order of the plan's steps and the files it names are judged from run.json through
+    # lib/plan-check.mjs; the unit tests in tools/e2e/__tests__ cover each rule.
+    if command -v node >/dev/null 2>&1; then
+        local plfx="$proj/plfx"; mkdir -p "$plfx/app"
+        printf 'x = 1\n' > "$plfx/app/models.py"; printf 'y = 2\n' > "$plfx/app/routes.py"
+        local plscen="$proj/plan.scenario.json"
+        cat > "$plscen" <<'JSON'
+{ "id":"plan", "fixture":"plfx", "assert": { "plan": { "min_steps": 2, "paths_exist": true,
+    "order": [ { "before": "models", "after": "routes" } ] } } }
+JSON
+        local plproj="$proj/plp"; mkdir -p "$plproj"; cp -R "$plfx/." "$plproj/"
+        jq '.finalOutput = "1. Add the field in app/models.py\n2. Expose it in app/routes.py\n"' "$sample/sample-run.pass.json" > "$proj/plan-ok.json"
+        v="$(assert_run "$plscen" "$proj/plan-ok.json" "$plproj" 0 2>/dev/null || true)"
+        echo "  case plan-ok         -> $v" >&2
+        [[ "$v" == PASS* ]] || { echo "  !! a plan in the right order naming real files must PASS" >&2; fails=1; }
+        jq '.finalOutput = "1. Expose it in app/routes.py\n2. Add the field in app/models.py\n"' "$sample/sample-run.pass.json" > "$proj/plan-order.json"
+        v="$(assert_run "$plscen" "$proj/plan-order.json" "$plproj" 0 2>/dev/null || true)"
+        echo "  case plan-order      -> $v" >&2
+        [[ "$v" == *"comes before"* ]] || { echo "  !! a plan with the steps swapped must FAIL on order" >&2; fails=1; }
+        jq '.finalOutput = "1. Add the field in app/models.py\n2. Expose it in app/api/users.py\n"' "$sample/sample-run.pass.json" > "$proj/plan-path.json"
+        v="$(assert_run "$plscen" "$proj/plan-path.json" "$plproj" 0 2>/dev/null || true)"
+        echo "  case plan-path       -> $v" >&2
+        [[ "$v" == *"app/api/users.py"* ]] || { echo "  !! a plan naming a file that does not exist must FAIL and name it" >&2; fails=1; }
+    else
+        echo "  case plan-*          -> skipped: node not found on PATH" >&2
+    fi
+
     # Batch manifest: written next to results, secrets masked, and an unreachable server or a
     # missing CLI recorded as a reason instead of failing. CLI points nowhere so nothing runs, and
     # the Ollama endpoint is a closed loopback port.
@@ -1538,12 +1680,25 @@ JSON
         echo "  case batch-manifest  -> skipped: node not found on PATH" >&2
     fi
 
+    # Case: score - how far a part-way run got, read from its score command's output.
+    v="$(scenario_score $'PASS rle\nFAIL chunk: not implemented\nSUMMARY passed 9/12' 'SUMMARY passed ([0-9]+/[0-9]+)')"
+    echo "  case score          -> ${v:-none}" >&2
+    [[ "$v" == "9/12" ]] || { echo "  !! expected score 9/12" >&2; fails=1; }
+    v="$(scenario_score 'Error: Cannot find module' 'SUMMARY passed ([0-9]+/[0-9]+)')"
+    echo "  case score-missing  -> ${v:-none}" >&2
+    [[ -z "$v" ]] || { echo "  !! output without the summary line must give no score" >&2; fails=1; }
+
     rm -rf "$proj" "$empty"
     if [[ $fails -eq 0 ]]; then echo "self-test OK" >&2; else die "self-test FAILED"; fi
 }
 
 if [[ $SELF_TEST -eq 1 ]]; then
     self_test
+    exit 0
+fi
+
+if [[ $CATALOG -eq 1 ]]; then
+    catalog_scenarios
     exit 0
 fi
 

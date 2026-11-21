@@ -1,0 +1,31 @@
+{
+  "id": "container-sec-audit",
+  "mode": "AGENT",
+  "description": "Audit a Dockerfile and compose file for security misconfiguration: hardcoded secret, running as root, untagged images, privileged sidecar and host-wide port binding - structured findings report with CWEs and severities.",
+  "category": "security",
+  "max_iterations": 30,
+  "fixture": "fixtures/container-audit",
+  "prompt_file": "prompts/container-sec-audit.md",
+  "assert": {
+    "tool_order": ["read_file"],
+    "needle_in_file": { "path": "report/container-findings.md", "regex": "CWE-798" },
+    "needles_in_file": [
+      { "path": "report/container-findings.md", "regex": "(^|[^[:alpha:]])privileged" },
+      { "path": "report/container-findings.md", "regex": "USER[[:space:]]+root|running as root|runs as root" },
+      { "path": "report/container-findings.md", "regex": "latest" },
+      { "path": "report/container-findings.md", "regex": "0\\.0\\.0\\.0|all interfaces|every interface" }
+    ],
+    "file_unchanged": [
+      "Dockerfile",
+      "docker-compose.yml",
+      ".env.example",
+      "README.md"
+    ],
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The report confirms the hardcoded API key (CWE-798), the container running as root, the unpinned :latest images, the privileged redis sidecar and the 0.0.0.0 port publish - each with a concrete location and severity - and modifies nothing."
+    ]
+  }
+}

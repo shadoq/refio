@@ -1,0 +1,57 @@
+{
+  "id": "plan-exec-config-constants",
+  "mode": "AGENT",
+  "description": "A planner plans moving the magic numbers of shipping and tax into a new app/config.py and a coder carries it out: behaviour is unchanged, no number stays hard-coded, and nothing outside the plan is edited.",
+  "category": "planning",
+  "max_iterations": 30,
+  "fixture": "fixtures/plan-exec-config-constants",
+  "multi_agent": "multi-agent/plan-exec-config-constants.yaml",
+  "assert": {
+    "agent_order": [
+      "planner",
+      "coder"
+    ],
+    "plan": {
+      "min_steps": 2,
+      "max_steps": 7,
+      "covers": [
+        {
+          "label": "app/config.py",
+          "regex": "config\\.py"
+        },
+        {
+          "label": "app/shipping.py",
+          "regex": "shipping\\.py"
+        },
+        {
+          "label": "app/tax.py",
+          "regex": "tax\\.py"
+        }
+      ],
+      "order": [
+        {
+          "before": "config\\.py",
+          "after": "shipping\\.py"
+        }
+      ],
+      "paths_exist": true,
+      "new_paths": [
+        "^app/config\\.py$",
+        "^tests/"
+      ],
+      "agent": "planner"
+    },
+    "plan_followed": {},
+    "file_unchanged": [
+      "checks.py",
+      "app/cli.py"
+    ],
+    "build_cmd": "python checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The planner creates app/config.py before switching app/shipping.py and app/tax.py to it; the coder does exactly that, changes nothing else, and python checks.py prints ok."
+    ]
+  }
+}

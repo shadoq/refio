@@ -1,0 +1,46 @@
+{
+  "id": "webapp-flowdraw",
+  "mode": "AGENT",
+  "description": "Single-file flowchart editor on SVG: draggable node palette (start/process/decision/io/end), port-to-port bezier edges with delete, drag to move, pan/zoom, undo/redo, selection, JSON save/load, export SVG, validation of dangling nodes.",
+  "category": "browser-app",
+  "max_iterations": 40,
+  "fixture": "fixtures/webapp-flowdraw",
+  "prompt_file": "prompts/webapp-flowdraw.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": [
+      "advance_code_editing"
+    ],
+    "needles_in_file": [
+      {
+        "path": "flowdraw_model_01.html",
+        "regex": "<svg|SVG"
+      },
+      {
+        "path": "flowdraw_model_01.html",
+        "regex": "bezier|path|C[0-9 ]"
+      },
+      {
+        "path": "flowdraw_model_01.html",
+        "regex": "undo|redo"
+      },
+      {
+        "path": "flowdraw_model_01.html",
+        "regex": "zoom|pan"
+      },
+      {
+        "path": "flowdraw_model_01.html",
+        "regex": "localStorage|JSON|Blob"
+      }
+    ],
+    "smoke": {
+      "entry": "flowdraw_model_01.html",
+      "dom_present": []
+    }
+  },
+  "judge": {
+    "criteria": [
+      "flowdraw_model_01.html is one self-contained flowchart editor (no libraries): a palette of at least five node shapes (terminal, process, decision, I/O, database or note), nodes that drag on a grid with snapping, edges drawn as bezier curves from output port to input port with arrowheads that stay attached while nodes move, edge selection and deletion, marquee or multi-selection, delete/copy/paste, undo and redo of at least node/edge add-move-delete operations, pan and zoom with mouse wheel, decision nodes requiring one incoming and two outgoing edges in the validation report, JSON export/import, and SVG export of the diagram. No disconnected invisible state."
+    ]
+  }
+}

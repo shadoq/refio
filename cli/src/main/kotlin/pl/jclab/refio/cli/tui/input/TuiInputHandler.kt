@@ -1,10 +1,16 @@
 package pl.jclab.refio.cli.tui.input
 
+import pl.jclab.refio.cli.tui.rendering.LayoutMode
+import pl.jclab.refio.core.services.longtask.LongTaskCommand
 import com.github.ajalt.mordant.terminal.Terminal
 import mu.KotlinLogging
 import org.jline.keymap.BindingReader
 import pl.jclab.refio.cli.tui.screens.TuiSettingsScreen
 import pl.jclab.refio.cli.tui.state.TuiScreen
+import pl.jclab.refio.cli.tui.components.ApprovalFrame
+import pl.jclab.refio.cli.tui.components.OutputLimitNotice
+import pl.jclab.refio.cli.tui.state.TranscriptUnit
+import pl.jclab.refio.cli.tui.state.TuiState
 import pl.jclab.refio.cli.tui.state.TuiTab
 import pl.jclab.refio.cli.tui.state.TuiViewModel
 
@@ -133,8 +139,19 @@ class TuiInputHandler(private val terminal: Terminal) {
         running = false
     }
 
+    /** Layout currently on screen; set by the app once the terminal exists, so keys never target a hidden pane. */
+    @Volatile
+    var layoutMode: () -> LayoutMode = { LayoutMode.Wide }
+
     internal fun dispatchAction(action: TuiAction, viewModel: TuiViewModel) {
-        val state = viewModel.stateFlow.value
+        val rawState = viewModel.stateFlow.value
+        // In the narrow layout an open panel is the only pane on screen, so it receives the keys.
+        val narrowPanel = layoutMode() == LayoutMode.Narrow && rawState.screen == TuiScreen.MAIN && rawState.activeTab != TuiTab.CHAT
+        val state = if (narrowPanel && !rawState.panelFocused) rawState.copy(panelFocused = true) else rawState
+
+        // Clearing the RAG index waits for a second `c`; any other key cancels it.
+        val secondClear = state.activeTab == TuiTab.RAG && action is TuiAction.TypeChar && action.char.lowercaseChar() == 'c'
+        if (state.ragClearArmed && !secondClear) viewModel.disarmRagClear()
 
         // If plan approval dialog is visible, intercept y/n keys
         if (state.pendingPlanApproval != null) {
@@ -146,38 +163,6 @@ class TuiInputHandler(private val terminal: Terminal) {
                 }
                 is TuiAction.SendMessage -> { viewModel.approvePlan(); return }
                 is TuiAction.BackToMain -> { viewModel.rejectPlan(); return }
-                else -> return
-            }
-        }
-
-        // If approval dialog is visible, intercept y/n/t keys
-        if (state.pendingApprovals.isNotEmpty()) {
-            val approval = state.pendingApprovals.first()
-            when (action) {
-                is TuiAction.TypeChar -> when (action.char.lowercaseChar()) {
-                    'y' -> { viewModel.approve(approval.id); return }
-                    'n' -> { viewModel.reject(approval.id); return }
-                    't' -> { viewModel.trustAgent(approval.agentId); viewModel.approve(approval.id); return }
-                    else -> return // ignore other keys
-                }
-                is TuiAction.BackToMain -> { viewModel.reject(approval.id); return }
-                is TuiAction.SendMessage -> { viewModel.approve(approval.id); return }
-                else -> return // block all other actions while approval visible
-            }
-        }
-
-        // If tool approval is pending (PermissionLevel.ASK), intercept y/t/n keys
-        if (state.pendingToolApproval != null) {
-            val req = state.pendingToolApproval
-            when (action) {
-                is TuiAction.TypeChar -> when (action.char.lowercaseChar()) {
-                    'y' -> { viewModel.approveToolExecution(req.requestId); return }
-                    't' -> { viewModel.trustToolExecution(req.requestId, req.toolName); return }
-                    'n' -> { viewModel.rejectToolExecution(req.requestId); return }
-                    else -> return
-                }
-                is TuiAction.BackToMain -> { viewModel.rejectToolExecution(req.requestId); return }
-                is TuiAction.SendMessage -> { viewModel.approveToolExecution(req.requestId); return }
                 else -> return
             }
         }
@@ -205,6 +190,15 @@ class TuiInputHandler(private val terminal: Terminal) {
                 is TuiAction.Quit -> { viewModel.shutdown(); stop(); return }
                 else -> return // block other actions while viewer is open
             }
+        }
+
+        // An approval waits at the end of the chat: its keys act while the chat has the keys and the prompt is
+        // empty, so a reply being typed when it appears is never taken as a choice. The prompt is read live: the
+        // state snapshot lags a few milliseconds, and pasted text arrives faster than that, one key at a time.
+        if (ApprovalFrame.isPending(state) && state.screen == TuiScreen.MAIN && ApprovalFrame.keysActive(state) &&
+            viewModel.liveInputBuffer().isEmpty() && handleApprovalKey(action, state, viewModel)
+        ) {
+            return
         }
 
         // Settings screen: intercept keys for interactive editing
@@ -297,7 +291,29 @@ class TuiInputHandler(private val terminal: Terminal) {
                     }
                     return
                 }
+                is TuiAction.TogglePanelFocus -> {
+                    // Tab: first field of the next group (frame).
+                    TuiSettingsScreen.nextGroupField(state.settingsTab, state.settingsSelectedField)?.let { viewModel.settingsSelectField(it) }
+                    return
+                }
                 is TuiAction.TypeChar -> {
+                    if (action.char == '-') {
+                        viewModel.setSettingsTab(10)
+                        return
+                    }
+                    // a/k/x on the Tools tab: ON/ASK/OFF for the whole group in the focused column.
+                    val groupValue = when (action.char) {
+                        'a' -> "ON"
+                        'k' -> "ASK"
+                        'x' -> "OFF"
+                        else -> null
+                    }
+                    if (groupValue != null && TuiSettingsScreen.tabTitle(state.settingsTab) == "Tools") {
+                        TuiSettingsScreen.toolGroupAt(state.settingsTab, state.settingsSelectedField)?.let { (tools, agentColumn) ->
+                            viewModel.setToolGroupPermission(tools, agentColumn, groupValue)
+                        }
+                        return
+                    }
                     // Tab switching: 1-9, 0
                     val tabNum = action.char.toString().toIntOrNull()
                     if (tabNum != null) {
@@ -313,7 +329,6 @@ class TuiInputHandler(private val terminal: Terminal) {
                             if (viewModel.isSettingsResetArmed()) {
                                 viewModel.disarmSettingsReset()
                                 viewModel.resetAllSettings()
-                                viewModel.addSystemMessage("Settings reset to defaults.")
                             } else {
                                 // First press only arms the reset; the footer asks for a second R.
                                 viewModel.armSettingsReset()
@@ -343,6 +358,18 @@ class TuiInputHandler(private val terminal: Terminal) {
 
         // Help screen: scroll with arrows/PgUp/PgDn, Esc or F1 to close
         if (state.screen == TuiScreen.HELP) {
+            // `/` starts a filter; while it is open, typing edits it and Esc clears it before closing help.
+            if (state.helpFilter != null) {
+                when (action) {
+                    is TuiAction.TypeChar -> { viewModel.setHelpFilter(state.helpFilter + action.char); return }
+                    is TuiAction.Backspace -> { viewModel.setHelpFilter(state.helpFilter.dropLast(1)); return }
+                    is TuiAction.BackToMain -> { viewModel.setHelpFilter(null); return }
+                    else -> {}
+                }
+            } else if (action is TuiAction.TypeChar && action.char == '/') {
+                viewModel.setHelpFilter("")
+                return
+            }
             when (action) {
                 is TuiAction.ScrollUp -> { viewModel.helpScrollUp(); return }
                 is TuiAction.ScrollDown -> { viewModel.helpScrollDown(); return }
@@ -409,7 +436,7 @@ class TuiInputHandler(private val terminal: Terminal) {
                             'r' -> { viewModel.ragReindex(); return }
                             'e' -> { viewModel.ragGenerateEmbeddings(); return }
                             's' -> { viewModel.ragStopIndexing(); return }
-                            'c' -> { viewModel.ragClearIndex(); return }
+                            'c' -> { viewModel.ragClearPressed(); return }
                             'v' -> { viewModel.ragViewSelectedChunks(); return }
                             'q' -> {
                                 viewModel.addSystemMessage("Type search query in the chat input and press Enter, or use /rag-search <query>")
@@ -539,7 +566,8 @@ class TuiInputHandler(private val terminal: Terminal) {
                             'u' -> { viewModel.moveStepUp(idx); return }
                             'j' -> { viewModel.moveStepDown(idx); return }
                             'p' -> { viewModel.togglePause(); return }
-                            'r' -> { viewModel.replanSteps(); return }
+                            // Only a lower-case r replans: R is not an action here and must not replan by accident.
+                            'r' -> if (action.char == 'r') { viewModel.replanSteps(); return }
                             else -> {} // fall through for other chars (typing in input)
                         }
                         if (action.char == 'C') { viewModel.cancelAllPending(); return }
@@ -570,7 +598,18 @@ class TuiInputHandler(private val terminal: Terminal) {
                 is TuiAction.ScrollUp, is TuiAction.AutocompletePrev -> {
                     viewModel.autocompletePrev(); return
                 }
-                is TuiAction.SendMessage, is TuiAction.AutocompleteAccept -> {
+                is TuiAction.SendMessage -> {
+                    // Enter runs a slash action at once; anything else is completed into the prompt.
+                    val selected = state.autocompleteCandidates.getOrNull(state.autocompleteSelectedIndex)
+                    if (selected != null && SlashActions.find(selected, viewModel.slashTemplateNames()) != null) {
+                        viewModel.autocompleteDismiss()
+                        handleCommand(selected, viewModel)
+                    } else {
+                        viewModel.autocompleteAccept()
+                    }
+                    return
+                }
+                is TuiAction.TogglePanelFocus, is TuiAction.AutocompleteAccept -> {
                     viewModel.autocompleteAccept(); return
                 }
                 is TuiAction.BackToMain, is TuiAction.AutocompleteDismiss -> {
@@ -596,6 +635,21 @@ class TuiInputHandler(private val terminal: Terminal) {
                     // Fall through to normal handling
                 }
             }
+        }
+
+        val chatVisible = state.screen == TuiScreen.MAIN && !narrowPanel && !(state.panelFocused && state.activeTab != TuiTab.CHAT)
+        if (chatVisible && state.selectedMessageIndex >= 0 && handleSelectionKey(action, viewModel)) {
+            return
+        }
+        if (chatVisible && action is TuiAction.TypeChar && OutputLimitNotice.isActive(state) && viewModel.liveInputBuffer().isEmpty() &&
+            handleNoticeKey(action.char, state, viewModel)
+        ) {
+            return
+        }
+        // Esc closes the open panel and the right column with it; a selection in the chat is cleared first (above).
+        if (action is TuiAction.BackToMain && state.screen == TuiScreen.MAIN && state.activeTab != TuiTab.CHAT) {
+            viewModel.setActiveTab(TuiTab.CHAT)
+            return
         }
 
         when (action) {
@@ -707,12 +761,92 @@ class TuiInputHandler(private val terminal: Terminal) {
             is TuiAction.NewLine -> viewModel.updateInputBuffer(
                 state.inputBuffer + "\n"
             )
-            is TuiAction.TogglePanelFocus -> viewModel.togglePanelFocus()
+            is TuiAction.TogglePanelFocus -> {
+                // Tab moves between the prompt and an open panel beside it; with no panel beside the
+                // prompt there is nothing to move to (a stale focus flag is still cleared).
+                val panelBeside = state.activeTab != TuiTab.CHAT && layoutMode() != LayoutMode.Narrow
+                if (panelBeside || rawState.panelFocused) viewModel.togglePanelFocus()
+            }
             is TuiAction.AutocompleteNext -> { /* handled above */ }
             is TuiAction.AutocompletePrev -> { /* handled above */ }
             is TuiAction.AutocompleteAccept -> { /* handled above */ }
             is TuiAction.AutocompleteDismiss -> { /* handled above */ }
         }
+    }
+
+    /**
+     * Keys while a message or tool row is selected in the chat: Space/Enter expand a tool row, `o` opens its
+     * whole output, `v` shows a whole message, Esc returns to the prompt. Any other letter also returns to
+     * the prompt and is typed there. Returns true when the key was used here.
+     */
+    /** Keys of the approval frame: a choice by its letter (`t` = `a`), ↑↓ and Enter, Esc = no. */
+    private fun handleApprovalKey(action: TuiAction, state: TuiState, viewModel: TuiViewModel): Boolean {
+        val choices = ApprovalFrame.choices(state)
+        if (choices.isEmpty()) return false
+        val choose: (Char) -> Boolean = { key -> choices.any { it.key == key } && runApprovalChoice(key, state, viewModel) }
+        return when (action) {
+            is TuiAction.TypeChar -> action.char.lowercaseChar().let { choose(if (it == 't') 'a' else it) }
+            is TuiAction.ScrollUp -> { viewModel.approvalChoiceUp(); true }
+            is TuiAction.ScrollDown -> { viewModel.approvalChoiceDown(choices.size); true }
+            is TuiAction.SendMessage -> choose(choices[state.approvalChoice.coerceIn(0, choices.lastIndex)].key)
+            // Esc is not "no": keys the terminal map does not know (Delete, Home, Alt+letter) arrive as Esc.
+            else -> false
+        }
+    }
+
+    private fun runApprovalChoice(key: Char, state: TuiState, viewModel: TuiViewModel): Boolean {
+        val agent = state.pendingApprovals.firstOrNull()
+        if (agent != null) {
+            when (key) {
+                'y' -> viewModel.approve(agent.id)
+                'a' -> { viewModel.trustAgent(agent.agentId); viewModel.approve(agent.id) }
+                'n' -> viewModel.reject(agent.id)
+                else -> return false
+            }
+            return true
+        }
+        val req = state.pendingToolApproval ?: return false
+        when (key) {
+            'y' -> viewModel.approveToolExecution(req.requestId)
+            'a' -> viewModel.trustToolExecution(req.requestId, req.toolName)
+            'd' -> viewModel.openApprovalDiff()
+            'n' -> viewModel.rejectWithChangeRequest(req.requestId)
+            else -> return false
+        }
+        return true
+    }
+
+    private fun handleSelectionKey(action: TuiAction, viewModel: TuiViewModel): Boolean {
+        val unit = viewModel.selectedTranscriptUnit() ?: return false
+        return when (action) {
+            is TuiAction.BackToMain -> {
+                viewModel.clearMessageSelection()
+                true
+            }
+            is TuiAction.SendMessage -> {
+                if (unit is TranscriptUnit.Tool) viewModel.toggleToolRowExpanded(unit.key)
+                unit is TranscriptUnit.Tool
+            }
+            is TuiAction.TypeChar -> when {
+                action.char == ' ' && unit is TranscriptUnit.Tool -> { viewModel.toggleToolRowExpanded(unit.key); true }
+                action.char == 'o' && unit is TranscriptUnit.Tool -> { viewModel.openToolOutput(unit.row); true }
+                action.char == 'v' && unit is TranscriptUnit.Message -> { viewModel.viewFullMessage(unit.message); true }
+                else -> { viewModel.clearMessageSelection(); false }
+            }
+            else -> false
+        }
+    }
+
+    /** Keys of the output-limit notice while it is the last item and the prompt is empty. */
+    private fun handleNoticeKey(char: Char, state: TuiState, viewModel: TuiViewModel): Boolean {
+        when (char) {
+            'c' -> viewModel.continueConversation()
+            's' -> viewModel.splitIntoSteps()
+            'l' -> if (OutputLimitNotice.windowIsTheCap(state)) return false else viewModel.raiseOutputLimitAndContinue()
+            'm' -> viewModel.showModelSelector()
+            else -> return false
+        }
+        return true
     }
 
     /**
@@ -723,13 +857,25 @@ class TuiInputHandler(private val terminal: Terminal) {
      * through GUI keybindings and screens, not slash prompts.
      * Slash prompts: /explain, /refactor, etc. — prompt templates from SlashPrompt.BUILTINS
      *
-     * One control-style exception: `/goal …` sets/clears/inspects the per-task completion
-     * condition consumed by `NextSpeakerJudgeGuardian`. Treated here rather than expanded as
-     * a prompt template because it mutates persistent task state instead of producing a
-     * user message.
+     * Control-style exceptions: `/goal …` sets/clears/inspects the per-task completion
+     * condition consumed by `NextSpeakerJudgeGuardian`, and `/until …` / `/long …` set how the
+     * task runs in rounds. Treated here rather than expanded as a prompt template because they
+     * change persistent task state instead of producing a user message.
      */
     internal fun handleCommand(input: String, viewModel: TuiViewModel): Boolean {
+        SlashActions.find(input, viewModel.slashTemplateNames())?.let { action ->
+            viewModel.updateInputBuffer("")
+            val keyAction = action.action
+            if (keyAction == null) viewModel.switchMode("PLAN") else dispatchAction(keyAction, viewModel)
+            return true
+        }
+        LongTaskCommand.parse(input)?.let { command ->
+            viewModel.updateInputBuffer("")
+            viewModel.applyLongTaskCommand(command)
+            return true
+        }
         if (!input.startsWith("/goal")) return false
+        viewModel.updateInputBuffer("")
         val args = input.removePrefix("/goal").trim()
         when {
             args.isEmpty() -> viewModel.showGoalStatus()

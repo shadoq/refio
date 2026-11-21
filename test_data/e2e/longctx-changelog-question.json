@@ -1,0 +1,22 @@
+{
+  "id": "longctx-changelog-question",
+  "mode": "PLAN",
+  "description": "LongBench-Code style long-context question: a ~3000 line CHANGELOG plus a small retry module. The answer needs the current retry tick length from the right changelog entry (7.9.4, not the 6.2.0 value, the yanked 7.5.0, a docs-only 5.2.1 mention or the planned Unreleased value) combined with what the code actually does (4 waits, exponential delays clipped by MAX_DELAY_TICKS). PLAN mode, read-only; the exact number must appear in the answer.",
+  "category": "longbench-code",
+  "max_iterations": 25,
+  "fixture": "fixtures/longctx-changelog-question",
+  "prompt_file": "prompts/longctx-changelog-question.md",
+  "assert": {
+    "needle_in_output": {
+      "regex": "4[ ,.]?750"
+    },
+    "file_unchanged": [
+      "CHANGELOG.md",
+      "src/settings.py",
+      "src/retry.py",
+      "src/clock.py",
+      "README.md"
+    ],
+    "no_context_overflow": true
+  }
+}

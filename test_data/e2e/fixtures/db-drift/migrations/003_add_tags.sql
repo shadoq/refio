@@ -1,0 +1,5 @@
+CREATE TABLE tags (
+    id INTEGER PRIMARY KEY,
+    item_id INTEGER NOT NULL,
+    tag TEXT NOT NULL
+);

@@ -1,5 +1,6 @@
 package pl.jclab.refio.core.services.turn
 
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import pl.jclab.refio.core.api.ModelOperation
@@ -31,6 +32,7 @@ class TurnLLMCaller(
     private val llmClient: LLMClient,
     private val configService: ConfigService,
     private val retryHandler: LLMRetryHandler = LLMRetryHandler(llmClient),
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
     /**
      * Call LLM with prompt.
@@ -75,6 +77,9 @@ class TurnLLMCaller(
         // / limits.retry_delay_ms settings changed nothing.
         val maxAttempts = configService.getTyped(ConfigKeys.MAX_RETRIES, taskId)
         val retryDelayMs = configService.getTyped(ConfigKeys.RETRY_DELAY_MS, taskId)
+        // A long task outlives model server restarts and model reloads: keep retrying for this
+        // long instead of a fixed number of attempts. 0 brings back the attempt count above.
+        val retryBudgetMs = configService.getTyped(ConfigKeys.LLM_RETRY_MAX_SECONDS, taskId) * 1000
         // Subagent override (if any) wins over the global level; otherwise the global effort
         // string flows only when thinking survived the capability gate.
         val reasoningEffortOverride = profileOverrides?.reasoningEffort
@@ -86,19 +91,12 @@ class TurnLLMCaller(
             }
         }
 
-        val extraKwargs: Map<String, Any> = buildMap {
-            if (nativeToolsActive) {
-                logger.info { "[NATIVE_TOOLS] Requesting: model=$modelId, tools=${nativeToolSchemas!!.size}, mode=$mode (response_format suppressed)" }
-                put("native_tools", nativeToolSchemas!!)
-            }
-            // Forward the prompt-prefix cache boundary so adapters that support
-            // it (currently Anthropic) can place a `cache_control` marker at the
-            // stable/volatile boundary. Adapters that don't recognize the key
-            // ignore it, so this is safe to send to every provider.
-            prompt.cacheableSystemLength?.takeIf { it > 0 }?.let { put("cacheable_system_length", it) }
+        if (nativeToolsActive) {
+            logger.info { "[NATIVE_TOOLS] Requesting: model=$modelId, tools=${nativeToolSchemas!!.size}, mode=$mode (response_format suppressed)" }
         }
+        val extraKwargs = requestKwargs(nativeToolSchemas, prompt.cacheableSystemLength)
 
-        return withContext(Dispatchers.IO) {
+        return withContext(ioDispatcher) {
             // Route through the retry handler so a transient failure on the decision call - most
             // importantly an Ollama stream that aborts before the first token (contentBytes=0) on a
             // cold/slow model - is retried instead of killing the whole turn. The handler only
@@ -128,7 +126,8 @@ class TurnLLMCaller(
                 noEgressEnabled = noEgressEnabled,
                 stream = streamCallback != null,
                 onChunk = streamCallback,
-                kwargs = extraKwargs
+                kwargs = extraKwargs,
+                retryBudgetMs = retryBudgetMs
             )
         }
     }
@@ -220,6 +219,22 @@ class TurnLLMCaller(
     ): Int {
         val override = profileOverrides?.maxIterationsOverride
         return if (override != null && override > 0) override else config.maxIterations
+    }
+
+    companion object {
+        /**
+         * Extra request fields of a turn's model call. Shared with the handoff note, which repeats
+         * the turn's last request and must send the same fields to hit the same cached prefix.
+         * The prompt-prefix cache boundary lets adapters that support it (currently Anthropic) place
+         * a `cache_control` marker at the stable/volatile boundary; adapters that don't recognize
+         * the key ignore it, so it is safe to send to every provider.
+         */
+        fun requestKwargs(nativeToolSchemas: List<ToolSchema>?, cacheableSystemLength: Int?): Map<String, Any> = buildMap {
+            if (!nativeToolSchemas.isNullOrEmpty()) {
+                put("native_tools", nativeToolSchemas)
+            }
+            cacheableSystemLength?.takeIf { it > 0 }?.let { put("cacheable_system_length", it) }
+        }
     }
 }
 

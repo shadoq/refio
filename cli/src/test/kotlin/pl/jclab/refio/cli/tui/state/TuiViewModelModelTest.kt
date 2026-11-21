@@ -67,7 +67,8 @@ class TuiViewModelModelTest {
     fun `TuiState context metrics should have defaults`() {
         val state = TuiState()
         assertEquals(0, state.contextUsedTokens)
-        assertEquals(128000, state.contextMaxTokens)
+        // 0 = window not known yet; the real one comes from the core once the model is resolved.
+        assertEquals(0, state.contextMaxTokens)
         assertEquals(0L, state.sessionTokensIn)
         assertEquals(0L, state.sessionTokensOut)
     }

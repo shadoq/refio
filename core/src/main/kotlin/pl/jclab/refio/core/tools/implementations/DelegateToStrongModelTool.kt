@@ -132,7 +132,7 @@ class DelegateToStrongModelTool(
                 "model" to modelId,
                 "tokens_in" to response.usage.inputTokens,
                 "tokens_out" to response.usage.outputTokens,
-                "cost" to response.cost
+                "cost_usd" to response.cost
             )
         )
     }
@@ -214,9 +214,11 @@ class DelegateToStrongModelTool(
                         "model" to modelId,
                         "depth" to childDepth,
                         "iterations" to result.iterations,
-                        "tokens_in" to result.tokensIn,
-                        "tokens_out" to result.tokensOut,
-                        "cost" to result.cost
+                        // The strong model's turn already stored this usage on its own replies in this
+                        // task; under the plain usage keys the task totals would count it twice.
+                        "delegated_tokens_in" to result.tokensIn,
+                        "delegated_tokens_out" to result.tokensOut,
+                        "delegated_cost_usd" to result.cost
                     )
                 )
             }

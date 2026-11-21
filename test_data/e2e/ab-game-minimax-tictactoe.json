@@ -1,0 +1,23 @@
+{
+  "id": "ab-game-minimax-tictactoe",
+  "mode": "AGENT",
+  "description": "AgentBench digital-games style: an unbeatable tic-tac-toe move selector with a depth-aware optimality rule (fastest win, slowest loss) so every test position has exactly one correct answer - win-now, blocking, fork creation, fork blocking, double-threat setup and the opening center.",
+  "category": "agentbench-games",
+  "max_iterations": 20,
+  "fixture": "fixtures/ab-game-tictactoe",
+  "prompt_file": "prompts/ab-game-minimax-tictactoe.md",
+  "assert": {
+    "needle_in_file": { "path": "ttt.py", "regex": "def best_move" },
+    "needles_in_file": [
+      { "path": "ttt.py", "regex": "NotImplementedError", "absent": true }
+    ],
+    "file_unchanged": ["engine.py", "test_ttt.py", "README.md"],
+    "build_cmd": "python3 -m unittest discover -p \"test_*.py\"",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "All six positions answered with the unique depth-optimal move; a real search (or equivalent reasoning) rather than a lookup table for the test boards; tests and engine untouched."
+    ]
+  }
+}

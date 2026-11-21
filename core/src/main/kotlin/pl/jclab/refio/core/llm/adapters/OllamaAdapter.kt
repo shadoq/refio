@@ -5,6 +5,7 @@ import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.llm.LLMResponse
 import pl.jclab.refio.core.llm.LLMUsage
 import pl.jclab.refio.core.llm.ReasoningEffort
+import pl.jclab.refio.core.llm.ModelCapability
 import pl.jclab.refio.core.llm.ModelConfig
 import pl.jclab.refio.core.llm.NativeToolCall
 import pl.jclab.refio.core.llm.NativeToolCallDelta
@@ -82,6 +83,25 @@ class OllamaAdapter(
          * is a different answer from "the server said no", and only the first one should leave the
          * decision to fall back to something else.
          */
+        /**
+         * Marks decision models from the capabilities `/api/tags` reports. A model with `decision`
+         * but no `completion` cannot chat at all, so it keeps only [ModelCapability.DECISION] and
+         * stays out of every chat list; a model with both gains the flag. Without a server list
+         * nothing changes.
+         */
+        internal fun withServerDecisionCapability(
+            known: List<ModelCapability>,
+            server: Set<String>?
+        ): List<ModelCapability> {
+            if (server == null || "decision" !in server) {
+                return known
+            }
+            if ("completion" !in server) {
+                return listOf(ModelCapability.DECISION)
+            }
+            return (known + ModelCapability.DECISION).distinct()
+        }
+
         fun parseCapabilities(body: Map<String, Any?>): Set<String>? {
             val raw = body["capabilities"] as? List<*> ?: return null
             return raw.mapNotNull { (it as? String)?.trim()?.lowercase()?.takeIf(String::isNotEmpty) }.toSet()
@@ -982,8 +1002,9 @@ class OllamaAdapter(
      * Ask the server what [model] can do. Returns null when the question could not be answered -
      * the server is unreachable, too old to have `/api/show`, or replied without a capability list.
      *
-     * `/api/tags` does not carry this, which is why the model list cannot answer it: a locally
-     * built model shows up there with nothing but a name and a size.
+     * Newer servers also list capabilities in `/api/tags`, but older ones and some locally built
+     * models show up there with nothing but a name and a size, so this per-model call stays the
+     * reliable answer.
      */
     suspend fun fetchCapabilities(model: String): Set<String>? = withContext(Dispatchers.IO) {
         try {
@@ -1044,7 +1065,10 @@ class OllamaAdapter(
                     }
 
                 // Always override maxContext with configured value for Ollama models
-                val definition = baseDefinition.copy(maxContext = contextSize)
+                val definition = baseDefinition.copy(
+                    maxContext = contextSize,
+                    capabilities = withServerDecisionCapability(baseDefinition.capabilities, parseCapabilities(modelData))
+                )
 
                 logger.debug { "[OLLAMA] Found model: $modelName (context: ${definition.maxContext})" }
 

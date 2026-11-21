@@ -1,0 +1,3 @@
+Customer service reports odd quotes from the shipping calculator in `rates.py`: the same basket sometimes costs different amounts depending on what was quoted before it. An express quote right before a normal one makes the normal one expensive, and after a big order, small orders seem to carry a fee they should not have. Restarting the service makes it go away for a while, which is why nobody has been able to reproduce it by hand.
+
+`tests/test_rates.py` reproduces it deterministically (several of its tests fail). Find the root causes and fix them so `python -m unittest discover -s tests` passes. Keep the public API (`RateCalculator.rate`, `RateCalculator.quote`, `weight_band`) and do not edit the tests.

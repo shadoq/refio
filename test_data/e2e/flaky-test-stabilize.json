@@ -1,0 +1,23 @@
+{
+  "id": "flaky-test-stabilize",
+  "mode": "AGENT",
+  "description": "Stabilise a flaky test suite without touching the production code: one test asserts an exact outcome of an unseeded random sample, another depends on a scratch file a sibling test leaves behind. The gate runs the suite in four deterministic orderings/seedings and forbids skips and deletions.",
+  "category": "testing",
+  "max_iterations": 30,
+  "fixture": "fixtures/flaky-suite",
+  "prompt_file": "prompts/flaky-test-stabilize.md",
+  "assert": {
+    "file_unchanged": [
+      "src/pricing.py",
+      "checks.py",
+      "README.md"
+    ],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "Both flakes are fixed in the tests only - the exact-list assertion against the unseeded random sample is made deterministic (seeding or a property-based assertion), and the scratch-file dependency is removed (each test arranges its own preconditions) - with no test skipped or deleted, the production module untouched, and all four gate orderings green."
+    ]
+  }
+}

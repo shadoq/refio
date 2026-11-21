@@ -1,0 +1,24 @@
+{
+  "id": "disk-quota-cleanup",
+  "mode": "AGENT",
+  "description": "AgentBench-OS style policy application: derive the expired-file set from filename dates and a dated retention policy (keep 10 newest logs, caches older than 7 days, reports never), and emit the exact operator manifest the gate recomputes and compares.",
+  "category": "agentbench-os",
+  "max_iterations": 20,
+  "fixture": "fixtures/disk-quota",
+  "prompt_file": "prompts/disk-quota-cleanup.md",
+  "assert": {
+    "needle_in_file": { "path": "report/cleanup-plan.txt", "text": "data/logs/app-2026-04-01.log" },
+    "needles_in_file": [
+      { "path": "report/cleanup-plan.txt", "text": "data/tmp/cache-2026-06-22-1.tmp" },
+      { "path": "report/cleanup-plan.txt", "regex": "^data/", "min_count": 9 }
+    ],
+    "file_unchanged": ["checks.py", "docs/retention-policy.md", "README.md"],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The manifest is exactly the policy-derived set (5 expired logs, 4 expired caches), sorted, with no kept file or report listed."
+    ]
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "id": "touch-finish-user-refactor",
+  "mode": "AGENT",
+  "description": "SWE-Touch style (Python), complex: the user renamed customer to client in two of four modules and left a note with the naming style. The agent must finish the rename in the other two modules (identifiers, dict keys, printed text, docstrings) without reverting or adding compatibility aliases to the user's finished files. Tests already use the new names and fail on import; the user's files and the tests are checked byte for byte, and the old word must not appear anywhere in the two remaining modules.",
+  "category": "swe-touch",
+  "max_iterations": 40,
+  "fixture": "fixtures/touch-finish-user-refactor",
+  "prompt_file": "prompts/touch-finish-user-refactor.md",
+  "config": [
+    "verify.command=python -m unittest discover -s tests -t ."
+  ],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": [
+      "shop/clients.py",
+      "shop/orders.py",
+      "tests/test_shop.py",
+      "tests/__init__.py",
+      "TODO_RENAME.md"
+    ],
+    "needles_in_file": [
+      {
+        "path": "shop/invoices.py",
+        "regex": "[Cc]ustomer",
+        "absent": true
+      },
+      {
+        "path": "shop/reports.py",
+        "regex": "[Cc]ustomer",
+        "absent": true
+      }
+    ],
+    "build_cmd": "python -m unittest discover -s tests -t .",
+    "self_verified": true
+  }
+}

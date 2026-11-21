@@ -419,7 +419,8 @@ class AgentRouter(
             profileOverrides = request.profileOverrides,
             emitSessionId = request.emitSessionId,
             emitSourceAgentId = request.emitSourceAgentId,
-            agentName = request.agentName
+            agentName = request.agentName,
+            inputType = request.inputType
         )
     }
 

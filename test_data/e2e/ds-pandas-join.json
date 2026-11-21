@@ -1,0 +1,20 @@
+{
+  "id": "ds-pandas-join",
+  "mode": "AGENT",
+  "description": "DS-1000 style (pandas): a per-customer revenue report crashes on a join between an integer key and a zero-padded string key, and once that is fixed an inner join silently drops customers without counted orders. The tests compare the full output DataFrame including dtypes (int order_count, float revenue, string ids), so a left join that leaves NaN-floats in order_count is rejected.",
+  "category": "ds-1000",
+  "max_iterations": 25,
+  "fixture": "fixtures/ds-pandas-join",
+  "prompt_file": "prompts/ds-pandas-join.md",
+  "config": ["verify.command=python -m unittest discover -s tests"],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": [
+      "tests/test_report.py",
+      "data/orders.csv",
+      "data/customers.csv"
+    ],
+    "build_cmd": "python -m unittest discover -s tests",
+    "self_verified": true
+  }
+}

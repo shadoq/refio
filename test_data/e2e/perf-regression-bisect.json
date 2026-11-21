@@ -1,0 +1,31 @@
+{
+  "id": "perf-regression-bisect",
+  "mode": "AGENT",
+  "description": "Terminal-Bench style regression hunt: restore the packed git history from a bundle, then bisect the deterministic operation-count benchmark to the first bad commit and write commit=<sha> plus a reason line. Needs git on PATH.",
+  "category": "terminal-bench",
+  "max_iterations": 30,
+  "fixture": "fixtures/bisect-regress",
+  "prompt_file": "prompts/perf-regression-bisect.md",
+  "assert": {
+    "needle_in_file": { "path": "report/bad-commit.txt", "regex": "commit[[:space:]]*=[[:space:]]*[0-9a-f]{7,40}" },
+    "needles_in_file": [
+      { "path": "report/bad-commit.txt", "regex": "reason[[:space:]]*=[[:space:]]*[^[:space:]]" }
+    ],
+    "file_unchanged": [
+      "bench.py",
+      "bisect-test.sh",
+      "restore-history.sh",
+      "history.git.bundle",
+      "src/index.py",
+      "check_answer.py",
+      "README.md"
+    ],
+    "build_cmd": "python3 check_answer.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The report names exactly the commit that switched lookup from the dict index to a linear scan (the first commit where the operation-count benchmark fails) with a reason line, found via git bisect or history analysis, with the repo left on main at HEAD and no history rewrite."
+    ]
+  }
+}

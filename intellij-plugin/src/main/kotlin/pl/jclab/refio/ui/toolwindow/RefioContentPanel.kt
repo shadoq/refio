@@ -123,14 +123,17 @@ class RefioContentPanel(
 
         cs.launch {
             var turnStateJob: kotlinx.coroutines.Job? = null
-            sessionManager.activeSession.collect { _ ->
+            sessionManager.activeSession.collect { session ->
                 turnStateJob?.cancel()
                 val turnStateFlow = sessionManager.turnState
                 if (turnStateFlow != null) {
                     turnStateJob = cs.launch {
-                        turnStateFlow.collect { snapshot ->
+                        // A long task's round keeps the bar up between turns while its end condition is checked.
+                        kotlinx.coroutines.flow.combine(turnStateFlow, coreApiClient.longTaskRouter.progress) { snapshot, rounds ->
+                            snapshot to session?.id?.let { rounds[it] }
+                        }.collect { (snapshot, longTask) ->
                             SwingUtilities.invokeLater {
-                                nowRunningBar.update(snapshot)
+                                nowRunningBar.update(snapshot, longTask)
                             }
                         }
                     }

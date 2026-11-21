@@ -9,6 +9,8 @@ import pl.jclab.refio.core.db.repositories.ConfigRepository
 import pl.jclab.refio.core.errors.RefioError
 import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.llm.ModelConfig
+import pl.jclab.refio.core.llm.ModelWindow
+import pl.jclab.refio.core.llm.ResolvedContextWindow
 import pl.jclab.refio.core.llm.clearModelsCache
 import pl.jclab.refio.core.llm.clearModelsCacheForProvider
 import pl.jclab.refio.core.llm.getAllModels
@@ -19,6 +21,12 @@ import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.logging.dualLogger
 
 private val logger = dualLogger("ConfigRouter")
+
+/** The model choice that means "no specific model, use the configured default". */
+private const val AUTO_MODEL = "auto"
+
+/** Providers served from the user's own machine, where listing models proves the server is up. */
+private val LOCAL_PROVIDERS = setOf("ollama", "lmstudio")
 
 /**
  * Router for configuration operations.
@@ -223,6 +231,25 @@ class ConfigRouter(
         )
     }
 
+    /**
+     * The context window a UI shows for [taskId], with the step that produced the number.
+     *
+     * Same resolution as the plugin's status bar: the DEFAULT slot model (a user-selected model
+     * wins over the configured default), then [ModelWindow]. [model] ("provider/model") stands in
+     * for that lookup when the UI holds a model choice that config does not have yet; blank or
+     * "auto" is ignored. Errors are not swallowed: the caller decides what to show instead.
+     */
+    fun resolveContextWindow(taskId: String?, model: String? = null): ResolvedContextWindow {
+        val modelOverride = model?.takeIf { it.isNotBlank() && !it.equals(AUTO_MODEL, ignoreCase = true) }
+        val (modelId, provider) = if (modelOverride != null) {
+            val (parsedProvider, parsedModel) = configService.parseModelString(modelOverride)
+            parsedModel to parsedProvider
+        } else {
+            configService.getModel(ModelOperation.DEFAULT, taskId)
+        }
+        return ModelWindow.resolveWithSource(provider, modelId, configService, taskId)
+    }
+
     // ===== Provider Management =====
 
     /**
@@ -367,9 +394,22 @@ class ConfigRouter(
                         )
                     }
 
-                    val testModel = chatModels.first().id
-
                     val latency = (System.currentTimeMillis() - startTime).toInt()
+
+                    // A local server that answered the model list is reachable. A chat probe would
+                    // load the first listed model into GPU memory, and a cold load of a large model
+                    // can alone outlast the 30 s budget and report a running server as unreachable.
+                    if (provider.lowercase() in LOCAL_PROVIDERS) {
+                        logger.info { "Connection test successful for $provider (model list): latency=${latency}ms, models=${models.size}" }
+                        return@withTimeout TestConnectionResult(
+                            success = true,
+                            latencyMs = latency,
+                            message = "Connected successfully",
+                            details = mapOf("models_available" to models.map { it.id })
+                        )
+                    }
+
+                    val testModel = chatModels.first().id
                     val probeResult = runCatching {
                         llmClient.complete(
                             provider = provider.lowercase(),

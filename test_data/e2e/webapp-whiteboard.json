@@ -1,0 +1,46 @@
+{
+  "id": "webapp-whiteboard",
+  "mode": "AGENT",
+  "description": "Single-file collaborative-style whiteboard: pen/marker/eraser with pressure-like width, shapes (line/rect/ellipse/arrow) with live preview, text tool, layers with visibility/opacity, undo/redo stack, color picker, PNG export, pan/zoom.",
+  "category": "browser-app",
+  "max_iterations": 40,
+  "fixture": "fixtures/webapp-whiteboard",
+  "prompt_file": "prompts/webapp-whiteboard.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": [
+      "advance_code_editing"
+    ],
+    "needles_in_file": [
+      {
+        "path": "whiteboard_model_01.html",
+        "regex": "undo|redo"
+      },
+      {
+        "path": "whiteboard_model_01.html",
+        "regex": "layer|Layer"
+      },
+      {
+        "path": "whiteboard_model_01.html",
+        "regex": "rect|ellipse|arrow"
+      },
+      {
+        "path": "whiteboard_model_01.html",
+        "regex": "toDataURL|export|Blob"
+      },
+      {
+        "path": "whiteboard_model_01.html",
+        "regex": "zoom|pan"
+      }
+    ],
+    "smoke": {
+      "entry": "whiteboard_model_01.html",
+      "dom_present": []
+    }
+  },
+  "judge": {
+    "criteria": [
+      "whiteboard_model_01.html is one self-contained drawing whiteboard (no libraries): freehand pen and marker with smooth strokes (quadratic smoothing, not raw 1px lines), eraser, shape tools for line, rectangle, ellipse and arrow with live preview while dragging, a text tool placed by click, at least 3 layers with reorder, visibility toggle and opacity, an undo/redo stack that survives at least 50 operations, a color palette with recent colors, adjustable brush width, pan and zoom of the board, clear layer, and PNG export of the composed board. Strokes must be vector-like objects, not a single flattened canvas you cannot undo."
+    ]
+  }
+}

@@ -243,6 +243,58 @@ object ConfigKeys {
         default = true
     )
 
+    const val JUDGE_BACKEND_LLM = "llm"
+    const val JUDGE_BACKEND_DECISION = "decision"
+    const val JUDGE_BACKEND_HYBRID = "hybrid"
+    val JUDGE_BACKENDS = listOf(JUDGE_BACKEND_LLM, JUDGE_BACKEND_DECISION, JUDGE_BACKEND_HYBRID)
+
+    /**
+     * What answers the "is the agent done?" question of
+     * [pl.jclab.refio.core.services.turn.NextSpeakerJudgeGuardian]:
+     * - `llm` (default): the WEAK chat model with the full rule prompt.
+     * - `decision`: the model in [DECISION_MODEL] answers three yes/no questions (missing
+     *   deliverable, intent without action, claim without evidence) in about a second. The LLM judge
+     *   takes over when no decision model is configured or the call fails, so the safety net stays.
+     * - `hybrid`: the decision model first; the LLM judge is asked only when the decision model's
+     *   "continue" probability falls inside [GENERAL_JUDGE_HYBRID_BAND_LOW]..[GENERAL_JUDGE_HYBRID_BAND_HIGH].
+     * The goal-aware judge (`/goal`) always uses the LLM: a free-form condition cannot be turned
+     * into fixed yes/no questions.
+     */
+    val GENERAL_JUDGE_BACKEND = ConfigKey(
+        key = "general.judge_backend",
+        parser = { raw -> raw.trim().lowercase().takeIf { it in JUDGE_BACKENDS } },
+        default = JUDGE_BACKEND_LLM
+    )
+
+    /**
+     * "Continue" probability at or above which the decision-model judge sends the agent back to
+     * work. Decision models are calibrated differently, so this is per installation, not a constant:
+     * on the same cases `nimble:9b` separated done/not-done at almost any value while `tev1:4b`
+     * put finished turns around 0.5.
+     */
+    val GENERAL_JUDGE_DECISION_THRESHOLD = ConfigKey(
+        key = "general.judge_decision_threshold",
+        parser = String::toDoubleOrNull,
+        default = 0.5,
+        validator = { it in 0.0..1.0 }
+    )
+
+    /** Lower edge of the hybrid judge's "unsure" band (inclusive), on the "continue" probability. */
+    val GENERAL_JUDGE_HYBRID_BAND_LOW = ConfigKey(
+        key = "general.judge_hybrid_band_low",
+        parser = String::toDoubleOrNull,
+        default = 0.15,
+        validator = { it in 0.0..1.0 }
+    )
+
+    /** Upper edge of the hybrid judge's "unsure" band (inclusive), on the "continue" probability. */
+    val GENERAL_JUDGE_HYBRID_BAND_HIGH = ConfigKey(
+        key = "general.judge_hybrid_band_high",
+        parser = String::toDoubleOrNull,
+        default = 0.85,
+        validator = { it in 0.0..1.0 }
+    )
+
     val UI_INTENT_CLASSIFICATION_ENABLED = ConfigKey(
         key = "ui.intent_classification_enabled",
         parser = String::toBooleanStrictOrNull,
@@ -347,6 +399,18 @@ object ConfigKeys {
         key = "default_model.strong",
         parser = { it.takeIf { s -> s.isNotBlank() } },
         default = null
+    )
+
+    /**
+     * Decision model for the completion judge (see [GENERAL_JUDGE_BACKEND]). Optional with no
+     * fallback: a chat model cannot answer the decision API. Stored like the other slots, as
+     * `{"modelId","provider"}`; YAML `models.defaults.decision` takes `provider/model`.
+     */
+    val DECISION_MODEL = ConfigKey<String?>(
+        key = "default_model.decision",
+        parser = { it.takeIf { s -> s.isNotBlank() } },
+        default = null,
+        yamlAccessor = { it.getDefaultDecisionModel() }
     )
 
     val OLLAMA_MAX_CONCURRENT = ConfigKey(
@@ -872,6 +936,91 @@ object ConfigKeys {
     )
 
     /**
+     * When a turn stops on a limit or a guardrail (iterations, time, repeated errors, a loop), ask
+     * the model for a short note on what is done and what is left and store it in the task, so the
+     * next turn or the next round of a long task starts from it instead of from scratch.
+     * Not written after the cost ceiling: the note would be one more paid call over it.
+     */
+    val AGENT_HANDOFF_NOTE = ConfigKey(
+        key = "agent.handoff_note",
+        parser = String::toBooleanStrictOrNull,
+        default = true
+    )
+
+    /** How long the handoff note may take before the turn ends without it. */
+    val AGENT_HANDOFF_NOTE_TIMEOUT_SECONDS = ConfigKey(
+        key = "agent.handoff_note_timeout_seconds",
+        parser = String::toIntOrNull,
+        default = 120,
+        validator = { it > 0 }
+    )
+
+    /** Default round limit of a long task (`/until`, `/long`, `--until`); `/long rounds N` overrides it per task. */
+    val LONG_TASK_MAX_ROUNDS = ConfigKey(
+        key = "long_task.max_rounds",
+        parser = String::toIntOrNull,
+        default = 12,
+        validator = { it in 1..1_000 }
+    )
+
+    /**
+     * Default limit of working time of a long task, in minutes; `/long hours H` overrides it per task.
+     * Only time spent in rounds counts, not time with the application closed. 0 turns the limit off.
+     */
+    val LONG_TASK_MAX_MINUTES = ConfigKey(
+        key = "long_task.max_minutes",
+        parser = String::toLongOrNull,
+        default = 240L,
+        validator = { it >= 0 }
+    )
+
+    /** A long task ends after this many rounds in a row with no file written, no plan step done and no fewer errors. */
+    val LONG_TASK_MAX_NO_PROGRESS_ROUNDS = ConfigKey(
+        key = "long_task.max_no_progress_rounds",
+        parser = String::toIntOrNull,
+        default = 3,
+        validator = { it > 0 }
+    )
+
+    /** How long the `/until` command may run after a round before it is killed and the round counts as failed. */
+    val LONG_TASK_CHECK_TIMEOUT_SECONDS = ConfigKey(
+        key = "long_task.check_timeout_seconds",
+        parser = String::toIntOrNull,
+        default = 600,
+        validator = { it > 0 }
+    )
+
+    /** Write `.refio/progress.md` in the project after every round of a long task. */
+    val LONG_TASK_PROGRESS_FILE = ConfigKey(
+        key = "long_task.progress_file",
+        parser = String::toBooleanStrictOrNull,
+        default = true
+    )
+
+    /**
+     * How long, in seconds counted from the first failure (the failed attempts included), the
+     * agent's model call is retried after a passing failure (connection refused, 5xx, 429), with pauses of 2, 4, 8, 16 and then 30 seconds.
+     * 0 turns it off: the call then retries `limits.max_retries` times from `limits.retry_delay_ms`.
+     */
+    val LLM_RETRY_MAX_SECONDS = ConfigKey(
+        key = "llm.retry_max_seconds",
+        parser = String::toLongOrNull,
+        default = 300L,
+        validator = { it >= 0 }
+    )
+
+    /**
+     * Days to keep API call logs, agent events and rolled CLI log files. Older ones are deleted at
+     * start and then every 12 hours. 0 keeps everything.
+     */
+    val LOGS_RETENTION_DAYS = ConfigKey(
+        key = "logs.retention_days",
+        parser = String::toIntOrNull,
+        default = 7,
+        validator = { it >= 0 }
+    )
+
+    /**
      * How many times the loop may ask the model to answer in the required shape before giving up.
      * `0` gives up on the first malformed answer.
      *
@@ -911,7 +1060,8 @@ object ConfigKeys {
     const val PROMPT_LAYOUT_TRAILING = "trailing"
 
     /**
-     * Where the decision prompt of a top-level PLAN/AGENT turn carries the per-iteration work state.
+     * Where the decision prompt of a PLAN/AGENT turn, the main agent's or a subagent's, carries the
+     * per-iteration work state.
      * - "system": WORKING_MEMORY, RECENT_WORK and CONVERSATION_HISTORY sit inside the
      *   system prompt's `<context>`, after the task requirements.
      * - "trailing" (default): CONVERSATION_HISTORY is not built (the message list already carries the same
@@ -922,7 +1072,7 @@ object ConfigKeys {
      * server-side prefix cache (Ollama) re-reads everything after it, the whole conversation included.
      * In the trailing layout the system prompt and the earlier messages stay byte-identical between
      * iterations and only the tail is re-read; the state also sits where models attend most, at the end.
-     * Subagent turns always use the system layout.
+     * A subagent's context profile still trims the final message as it trims the system prompt.
      */
     val AGENT_PROMPT_LAYOUT = ConfigKey(
         key = "agent.prompt_layout",
@@ -1013,6 +1163,10 @@ object ConfigKeys {
             GENERAL_NO_EGRESS_ENABLED,
             GENERAL_EXECUTION_ISOLATION,
             GENERAL_EXECUTION_MODE,
+            GENERAL_JUDGE_BACKEND,
+            GENERAL_JUDGE_DECISION_THRESHOLD,
+            GENERAL_JUDGE_HYBRID_BAND_LOW,
+            GENERAL_JUDGE_HYBRID_BAND_HIGH,
             // UI
             UI_INTENT_CLASSIFICATION_ENABLED,
             UI_SELECTED_MODE,
@@ -1025,6 +1179,7 @@ object ConfigKeys {
             DEFAULT_MODEL_AGENT,
             WEAK_MODEL,
             STRONG_MODEL,
+            DECISION_MODEL,
             // RAG
             RAG_ENABLED,
             RAG_AUTO_INDEX_ON_CONTEXT,
@@ -1095,6 +1250,15 @@ object ConfigKeys {
             MAX_CONSECUTIVE_TOOL_ERRORS,
             AGENT_MAX_COST_USD,
             AGENT_MAX_TURN_MINUTES,
+            AGENT_HANDOFF_NOTE,
+            AGENT_HANDOFF_NOTE_TIMEOUT_SECONDS,
+            LONG_TASK_MAX_ROUNDS,
+            LONG_TASK_MAX_MINUTES,
+            LONG_TASK_MAX_NO_PROGRESS_ROUNDS,
+            LONG_TASK_CHECK_TIMEOUT_SECONDS,
+            LONG_TASK_PROGRESS_FILE,
+            LLM_RETRY_MAX_SECONDS,
+            LOGS_RETENTION_DAYS,
             AGENT_MAX_FORMAT_NUDGES,
             AGENT_DECISION_TEMPERATURE,
             AGENT_PROMPT_LAYOUT,

@@ -49,7 +49,7 @@ class TuiRagViewInteractiveTest {
         val state = TuiState(ragIndexingProgress = -1.0)
         val buf = TuiRagView.renderToBuffer(state, 80, 20)
         val output = buf.getLines().joinToString("\n")
-        assertFalse(output.contains("Progress"), "Should not show progress section")
+        assertFalse(output.contains("%"), "Should not show progress section")
     }
 
     @Test
@@ -57,7 +57,7 @@ class TuiRagViewInteractiveTest {
         val state = TuiState()
         val buf = TuiRagView.renderToBuffer(state, 80, 20)
         val output = buf.getLines().joinToString("\n")
-        assertTrue(output.contains("[r] Reindex"), "Should show reindex hint")
-        assertTrue(output.contains("[e] Embeddings"), "Should show embeddings hint")
+        assertTrue(output.contains("r reindex"), "Should show reindex hint")
+        assertTrue(output.contains("e embeddings"), "Should show embeddings hint")
     }
 }

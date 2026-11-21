@@ -14,6 +14,9 @@ import pl.jclab.refio.core.db.repositories.SnapshotGroupRepository
 import pl.jclab.refio.core.db.repositories.SnapshotRepository
 import pl.jclab.refio.core.db.repositories.SubtaskRepository
 import pl.jclab.refio.core.db.repositories.TaskRepository
+import pl.jclab.refio.core.db.repositories.TaskStateRepository
+import pl.jclab.refio.core.services.maintenance.ProcessOwner
+import pl.jclab.refio.core.services.maintenance.TaskLease
 
 /**
  * Persistence layer — all repositories in one place.
@@ -36,4 +39,8 @@ class PersistenceModule {
     val agentInstanceRepository = AgentInstanceRepository()
     val taskRepository = TaskRepository()
     val agentEventSqlRepository = AgentEventSqlRepository()
+    val taskStateRepository = TaskStateRepository()
+
+    /** Marks the tasks this process works on; shared by the long-task loop and the turn loop so holds nest. */
+    val taskLease = TaskLease(taskStateRepository, ProcessOwner.current())
 }

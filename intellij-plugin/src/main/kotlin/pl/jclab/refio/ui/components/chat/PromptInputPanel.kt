@@ -44,6 +44,7 @@ import pl.jclab.refio.core.context.ContextProviderRegistry
 import pl.jclab.refio.core.context.ContextSubmenuItem
 import pl.jclab.refio.core.context.LoadSubmenuItemsArgs
 import pl.jclab.refio.core.context.ProviderType
+import pl.jclab.refio.core.services.longtask.LongTaskCommand
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.monitoring.OperationInfo
 import pl.jclab.refio.services.execution.StepExecutionService
@@ -446,7 +447,7 @@ class PromptInputPanel(
         }
     }
 
-    private fun handleSendMessage() {
+    private fun handleSendMessage(resumeLongTask: Boolean = false) {
         val text = promptEditor.text.trim()
         if (text.isEmpty()) return
 
@@ -456,6 +457,14 @@ class PromptInputPanel(
         // being queued or sent as a chat message.
         if (text.startsWith("/goal") && (text.length == 5 || text[5].isWhitespace())) {
             handleGoalCommand(text.removePrefix("/goal").trim())
+            promptEditor.text = ""
+            return
+        }
+
+        // /until and /long set a long task's end command and limits; like /goal they work mid-run.
+        val longTaskCommand = LongTaskCommand.parse(text)
+        if (longTaskCommand != null) {
+            handleLongTaskCommand(longTaskCommand)
             promptEditor.text = ""
             return
         }
@@ -551,7 +560,8 @@ class PromptInputPanel(
                         } else {
                             null  // Use default from Settings
                         },
-                        provider = if (!isAutoMode) provider?.lowercase() else null
+                        provider = if (!isAutoMode) provider?.lowercase() else null,
+                        resumeLongTask = resumeLongTask
                     )
 
                     // Clear context and snippets after sending
@@ -584,19 +594,23 @@ class PromptInputPanel(
             notifyGoal("Refio core not connected — start a conversation first.", NotificationType.WARNING)
             return
         }
-        val taskId = sessionManager.activeSession.value?.id
-        if (taskId == null) {
-            notifyGoal("No active session — start a conversation first, then set a goal.", NotificationType.WARNING)
-            return
-        }
+        val activeTaskId = sessionManager.activeSession.value?.id
         val isClear = args.equals("clear", ignoreCase = true) ||
             args.equals("stop", ignoreCase = true) ||
             args.equals("off", ignoreCase = true) ||
             args.equals("reset", ignoreCase = true) ||
             args.equals("none", ignoreCase = true) ||
             args.equals("cancel", ignoreCase = true)
+        if (activeTaskId == null && (args.isEmpty() || isClear)) {
+            notifyGoal("(no goal set - use /goal <condition> to set one)", NotificationType.INFORMATION)
+            return
+        }
+        val mode = getSelectedMode()
+        val executionMode = getCurrentExecutionMode()
         cs.launch(Dispatchers.IO) {
             try {
+                // A goal set before the first message creates the session, so that message is judged against it.
+                val taskId = activeTaskId ?: sessionManager.createSession("Session (${mode.name})", mode, executionMode).id
                 when {
                     args.isEmpty() -> {
                         val current = api.taskRouter.getGoal(taskId)
@@ -629,6 +643,39 @@ class PromptInputPanel(
 
     private fun notifyGoal(content: String, type: NotificationType) {
         Notifications.Bus.notify(Notification("Refio", "Goal", content, type), project)
+    }
+
+    /**
+     * Handles `/until <command>`, `/until off`, `/long on|off`, `/long rounds N` and `/long hours H`.
+     * Setting a condition or a limit before the first message creates the session, so that message
+     * already runs in rounds. The reply comes from the core, shared with the terminal UI.
+     */
+    private fun handleLongTaskCommand(command: LongTaskCommand) {
+        val api = coreApiClient ?: sessionManager.apiRouter
+        val activeTaskId = sessionManager.activeSession.value?.id
+        val creates = command is LongTaskCommand.Until || command is LongTaskCommand.On ||
+            command is LongTaskCommand.Rounds || command is LongTaskCommand.Hours
+        if (activeTaskId == null && !creates) {
+            notifyLongTask(if (command is LongTaskCommand.Invalid) command.message else "Long task mode is off.", NotificationType.INFORMATION)
+            return
+        }
+        val mode = getSelectedMode()
+        val executionMode = getCurrentExecutionMode()
+        cs.launch(Dispatchers.IO) {
+            try {
+                val taskId = activeTaskId ?: sessionManager.createSession("Session (${mode.name})", mode, executionMode).id
+                val reply = api.longTaskRouter.handle(taskId, command)
+                val type = if (command is LongTaskCommand.Invalid) NotificationType.WARNING else NotificationType.INFORMATION
+                notifyLongTask("⟳ $reply", type)
+            } catch (e: Exception) {
+                logger.error(e) { "Failed to handle a long task command" }
+                notifyLongTask("Failed to change the long task settings: ${e.message}", NotificationType.ERROR)
+            }
+        }
+    }
+
+    private fun notifyLongTask(content: String, type: NotificationType) {
+        Notifications.Bus.notify(Notification("Refio", "Long task", content, type), project)
     }
 
     /**
@@ -974,11 +1021,12 @@ class PromptInputPanel(
 
     fun getPromptText(): String = promptEditor.text
 
+    /** Continues a stopped long task with its next round, or asks the agent to continue. */
     fun sendContinuePrompt() {
-        sendPrompt(continuePromptText)
+        sendPrompt(continuePromptText, resumeLongTask = true)
     }
 
-    fun sendPrompt(prompt: String) {
+    fun sendPrompt(prompt: String, resumeLongTask: Boolean = false) {
         val normalizedPrompt = prompt.trim()
         if (normalizedPrompt.isEmpty()) return
 
@@ -989,7 +1037,7 @@ class PromptInputPanel(
             }
 
             promptEditor.text = normalizedPrompt
-            handleSendMessage()
+            handleSendMessage(resumeLongTask)
         }
     }
 

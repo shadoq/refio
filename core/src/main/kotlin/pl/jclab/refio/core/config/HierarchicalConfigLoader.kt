@@ -156,6 +156,8 @@ class HierarchicalConfigLoader private constructor(
 
     fun getDefaultStrongModel(): String? = getConfig().models?.defaults?.strong
 
+    fun getDefaultDecisionModel(): String? = getConfig().models?.defaults?.decision
+
     fun getModelsVisibility(): Map<String, Boolean>? = getConfig().models?.visibility
 
     // ═══════════════════════════════════════════════════════════════════════════════

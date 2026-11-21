@@ -1,0 +1,46 @@
+{
+  "id": "webapp-image-editor",
+  "mode": "AGENT",
+  "description": "Single-file canvas image editor: load via file input/drag-drop, adjustments (brightness/contrast/saturation/gamma), filters (grayscale/invert/sepia/blur), crop with selection rectangle, rotate/flip, histogram, before/after compare, undo history, PNG/JPEG export.",
+  "category": "browser-app",
+  "max_iterations": 40,
+  "fixture": "fixtures/webapp-image-editor",
+  "prompt_file": "prompts/webapp-image-editor.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": [
+      "advance_code_editing"
+    ],
+    "needles_in_file": [
+      {
+        "path": "image_editor_model_01.html",
+        "regex": "ImageData|getImageData"
+      },
+      {
+        "path": "image_editor_model_01.html",
+        "regex": "brightness|contrast|saturation"
+      },
+      {
+        "path": "image_editor_model_01.html",
+        "regex": "crop|rotate|flip"
+      },
+      {
+        "path": "image_editor_model_01.html",
+        "regex": "histogram"
+      },
+      {
+        "path": "image_editor_model_01.html",
+        "regex": "undo|history|toDataURL"
+      }
+    ],
+    "smoke": {
+      "entry": "image_editor_model_01.html",
+      "dom_present": []
+    }
+  },
+  "judge": {
+    "criteria": [
+      "image_editor_model_01.html is one self-contained image editor (no libraries): images loaded from a file input or drag-and-drop and drawn to a canvas at real resolution, adjustment sliders for brightness, contrast, saturation and gamma implemented with real per-pixel or CSS-filter math, one-click filters (grayscale, invert, sepia, blur) that compose with adjustments, a crop tool with a draggable selection rectangle applied for real, rotate 90 and horizontal/vertical flip, a luminance or RGB histogram drawn on a canvas, an undo history of at least 10 operations, a before/after toggle, and export to PNG and JPEG. Pixel operations must be genuine ImageData math, no faked previews."
+    ]
+  }
+}

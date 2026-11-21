@@ -1,0 +1,23 @@
+{
+  "id": "bird-sql-dirty-data",
+  "mode": "AGENT",
+  "description": "BIRD style (Python + SQLite): five questions over deliberately dirty synthetic data - two date formats in one text column, padded and mixed-case names and statuses, exact duplicate rows (including a duplicated dimension row that inflates a join), NULL minutes to ignore and NULL fees to count as zero. The quirks are documented in a notes file; a checks script compares result sets on the data and on a larger copy with more dirty rows.",
+  "category": "bird",
+  "max_iterations": 40,
+  "fixture": "fixtures/bird-sql-dirty-data",
+  "prompt_file": "prompts/bird-sql-dirty-data.md",
+  "config": ["verify.command=python check_queries.py"],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": [
+      "check_queries.py",
+      "build_db.py",
+      "DATA_NOTES.md",
+      "data/members.csv",
+      "data/bikes.csv",
+      "data/rentals.csv"
+    ],
+    "build_cmd": "python check_queries.py",
+    "self_verified": true
+  }
+}

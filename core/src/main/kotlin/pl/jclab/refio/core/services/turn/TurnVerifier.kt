@@ -6,6 +6,8 @@ import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.debug.VerificationSummary
 import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.core.services.ConfigService
+import pl.jclab.refio.core.services.ProcessTreeTracker
+import pl.jclab.refio.core.tools.implementations.RunTerminalCommandTool
 import java.io.File
 import java.io.IOException
 import java.nio.file.Path
@@ -37,29 +39,69 @@ interface VerificationCommandRunner {
 }
 
 /**
- * Default [VerificationCommandRunner]: runs the command through the platform shell with the
+ * The end of a command's output, at most [capacity] characters of it, with a note at the start when
+ * the beginning was dropped.
+ */
+internal class OutputTail(private val capacity: Int) {
+    private val text = StringBuilder()
+    private var cut = false
+
+    @Synchronized
+    fun appendLine(line: String) {
+        text.append(line).append('\n')
+        // Trimmed in batches: dropping the start after every line would copy the whole tail each time.
+        if (text.length > 2 * capacity) {
+            trim()
+        }
+    }
+
+    @Synchronized
+    override fun toString(): String {
+        trim()
+        return if (cut) CUT_NOTE + text else text.toString()
+    }
+
+    private fun trim() {
+        if (text.length > capacity) {
+            text.delete(0, text.length - capacity)
+            cut = true
+        }
+    }
+
+    private companion object {
+        const val CUT_NOTE = "[... earlier output cut ...]\n"
+    }
+}
+
+/**
+ * Default [VerificationCommandRunner]: runs the command through the agent's terminal shell with the
  * project root as working directory, merged stdout/stderr, and a hard timeout after which the
  * process tree is killed.
  */
-class ProcessVerificationCommandRunner : VerificationCommandRunner {
+class ProcessVerificationCommandRunner(
+    /**
+     * Wraps the command in the shell it runs in. By default that is the agent's own terminal
+     * (PowerShell on Windows): a check must accept every command the agent runs without trouble,
+     * and cmd.exe rejected even `./gradlew build`.
+     */
+    private val shellCommand: (command: String) -> List<String> = { command -> RunTerminalCommandTool.shellCommand(command) },
+) : VerificationCommandRunner {
 
     override fun run(command: String, workingDir: File, timeoutSeconds: Int): VerificationExecution {
-        val isWindows = System.getProperty("os.name").lowercase().contains("win")
-        val shellCommand = if (isWindows) {
-            listOf("cmd.exe", "/c", command)
-        } else {
-            listOf("sh", "-c", command)
-        }
-        val process = ProcessBuilder(shellCommand)
+        val process = ProcessBuilder(shellCommand(command))
             .directory(workingDir)
             .redirectErrorStream(true)
             .start()
+        // A build tool may leave a daemon running with our output pipe inherited (Gradle does).
+        // Its handle has to be taken while the command is alive: once the shell exits, the
+        // daemon no longer shows up among its descendants and nothing could stop it.
+        val processTree = ProcessTreeTracker(process, threadName = "verify-descendants")
         // Drain output on a separate thread so a chatty build cannot deadlock on a full pipe
-        // buffer while we block in waitFor. StringBuffer, not StringBuilder: the reader may still
-        // be appending when this thread snapshots the text (see [awaitReader]), and Thread.join
-        // with a timeout neither reports success nor establishes happens-before, so a plain
-        // builder would be read unsynchronized and yield an arbitrarily mangled excerpt.
-        val output = StringBuffer()
+        // buffer while we block in waitFor. The tail is synchronized: the reader may still be
+        // appending when this thread snapshots the text (see [awaitReader]), and Thread.join with a
+        // timeout neither reports success nor establishes happens-before, so an unsynchronized
+        // builder would yield an arbitrarily mangled excerpt.
+        val output = OutputTail(MAX_OUTPUT_CHARS)
         val reader = Thread {
             try {
                 process.inputStream.bufferedReader().forEachLine { line ->
@@ -73,12 +115,20 @@ class ProcessVerificationCommandRunner : VerificationCommandRunner {
         }
         reader.isDaemon = true
         reader.start()
-        val finished = process.waitFor(timeoutSeconds.toLong(), TimeUnit.SECONDS)
+        val finished = try {
+            process.waitFor(timeoutSeconds.toLong(), TimeUnit.SECONDS)
+        } catch (e: InterruptedException) {
+            // The caller was stopped (a long task cancelled during its check): the command goes too.
+            processTree.close()
+            processTree.destroyTree()
+            throw e
+        }
+        processTree.close()
         if (!finished) {
-            process.destroyForcibly()
+            processTree.destroyTree()
             process.waitFor(KILL_GRACE_SECONDS, TimeUnit.SECONDS)
         }
-        val fullyDrained = awaitReader(reader, process)
+        val fullyDrained = awaitReader(reader, processTree)
         return VerificationExecution(
             exitCode = if (finished) process.exitValue() else -1,
             output = output.toString(),
@@ -92,33 +142,40 @@ class ProcessVerificationCommandRunner : VerificationCommandRunner {
      *
      * The process having exited does NOT close the pipe: a grandchild that inherited the write end
      * (a backgrounded server, a detached build daemon) keeps it open, and the reader then blocks in
-     * read() indefinitely. Closing our end is a best-effort attempt to release it - on some
-     * platforms a thread already blocked in read() is not woken - so we never wait on the second
-     * join for long, and report the output as incomplete rather than pretending it is whole.
+     * read() indefinitely. The surviving tree is killed so the pipe closes. Closing our end of the
+     * pipe instead is not an option: on Windows that close waits for the blocked read() and hung
+     * the check for as long as the Gradle daemon lived. We never wait on the second join for long,
+     * and report the output as incomplete rather than pretending it is whole.
      */
-    private fun awaitReader(reader: Thread, process: Process): Boolean {
+    private fun awaitReader(reader: Thread, processTree: ProcessTreeTracker): Boolean {
         reader.join(READER_JOIN_MS)
         if (!reader.isAlive) {
             return true
         }
-        runCatching { process.inputStream.close() }
-        reader.join(READER_CLOSE_JOIN_MS)
+        processTree.destroyTree()
+        reader.join(READER_KILL_JOIN_MS)
         logger.warn {
             "[VERIFY] output reader did not finish within ${READER_JOIN_MS}ms - the command left the " +
-                "pipe open (likely a surviving background child); reported output may be incomplete"
+                "pipe open (a surviving background child, now killed); reported output may be incomplete"
         }
         return false
     }
 
     companion object {
+        /**
+         * Most of a command's output kept in memory, its end. A hung test that logs in a loop can
+         * print gigabytes before the timeout, and callers only ever use the end of the output.
+         */
+        const val MAX_OUTPUT_CHARS = 1_000_000
+
         /** Grace period for a killed process to actually die before we stop waiting on it. */
         private const val KILL_GRACE_SECONDS = 5L
 
         /** How long to wait for the drain thread after the process exits. */
         private const val READER_JOIN_MS = 2000L
 
-        /** Extra wait after closing the pipe, only to let an unblocked reader publish its last line. */
-        private const val READER_CLOSE_JOIN_MS = 200L
+        /** Extra wait after killing the surviving tree, to let the unblocked reader publish its last line. */
+        private const val READER_KILL_JOIN_MS = 1000L
     }
 }
 

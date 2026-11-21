@@ -1,5 +1,6 @@
 package pl.jclab.refio.cli.tui.state
 
+import pl.jclab.refio.core.services.longtask.LongTaskCommand
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -28,6 +29,7 @@ import pl.jclab.refio.core.logging.LogSinkRegistry
 import pl.jclab.refio.core.models.api.SetToolPermissionRequest
 import pl.jclab.refio.core.models.api.ToolPermissionDto
 import pl.jclab.refio.core.services.ConfigService
+import pl.jclab.refio.core.services.turn.ToolApprovalService
 import pl.jclab.refio.core.utils.ProjectIdGenerator
 import pl.jclab.refio.cli.tui.screens.TuiSettingsScreen
 import java.io.File
@@ -35,6 +37,9 @@ import java.nio.file.Path
 import java.util.UUID
 
 private val logger = KotlinLogging.logger {}
+
+/** Clock time shown with a settings "saved" note. */
+private val NOTICE_TIME: java.time.format.DateTimeFormatter = java.time.format.DateTimeFormatter.ofPattern("HH:mm")
 
 /**
  * TUI ViewModel coordinator -- delegates to three sub-ViewModels:
@@ -68,9 +73,13 @@ class TuiViewModel(
     private val _settingsEditingField = MutableStateFlow<String?>(null)
     private val _settingsEditBuffer = MutableStateFlow("")
     private val _settingsResetArmed = MutableStateFlow(false)
+    private val _ragClearArmed = MutableStateFlow(false)
+    /** Result of the last settings change ("saved" or why it was not), shown in the status bar. */
+    private val _settingsNotice = MutableStateFlow<SettingsNotice?>(null)
     private val _isInitialized = MutableStateFlow(false)
     private val _error = MutableStateFlow<String?>(null)
-    private val _contextMaxTokens = MutableStateFlow(128_000)
+    private val _contextMaxTokens = MutableStateFlow(0)
+    private val _contextWindowSource = MutableStateFlow<pl.jclab.refio.core.llm.ContextWindowSource?>(null)
 
     // Settings render/input threads read only this cached snapshot; router/DB
     // reads run on Dispatchers.IO. The cache is refreshed on Settings screen
@@ -79,6 +88,7 @@ class TuiViewModel(
     private val configSectionCache = java.util.concurrent.ConcurrentHashMap<String, Map<String, String>>()
     @Volatile
     private var toolPermissionsCache: List<ToolPermissionDto> = emptyList()
+    private var toolDefinitionsCache: Map<String, pl.jclab.refio.core.api.ToolDefinitionInfo> = emptyMap()
     internal val _settingsCacheVersion = MutableStateFlow(0)
 
     val isInitialized: StateFlow<Boolean> = _isInitialized.asStateFlow()
@@ -175,8 +185,11 @@ class TuiViewModel(
         _settingsEditingField.map { Unit },
         _settingsEditBuffer.map { Unit },
         _settingsResetArmed.map { Unit },
+        _ragClearArmed.map { Unit },
+        _settingsNotice.map { Unit },
         _settingsCacheVersion.map { Unit },
         _contextMaxTokens.map { Unit },
+        _contextWindowSource.map { Unit },
         // Session execution flows
         sessionStateManager.toolCallProgress.map { Unit },
         // Chat sub-VM flows
@@ -186,8 +199,12 @@ class TuiViewModel(
         chat._cursorPosition.map { Unit },
         chat._scrollOffset.map { Unit },
         chat._selectedMessageIndex.map { Unit },
+        chat._expandedToolRows.map { Unit },
+        chat._approvalChoice.map { Unit },
+        chat._trustRules.map { Unit },
         chat._pastedContent.map { Unit },
         chat._pendingQuestionId.map { Unit },
+        chat._longTaskLine.map { Unit },
         chat._pendingQuestionOptions.map { Unit },
         chat._pendingApprovals.map { Unit },
         chat._pendingToolApproval.map { Unit },
@@ -253,6 +270,7 @@ class TuiViewModel(
         obs._fileViewerAllowAddContext.map { Unit },
         obs._fileViewerHintVisible.map { Unit },
         obs._helpScrollOffset.map { Unit },
+        obs._helpFilter.map { Unit },
     ).debounce(16)
     .map { buildCurrentState() }
     .stateIn(scope, SharingStarted.Eagerly, TuiState(mode = _mode.value, model = initialModel))
@@ -282,8 +300,14 @@ class TuiViewModel(
         settingsEditingField = _settingsEditingField.value,
         settingsEditBuffer = _settingsEditBuffer.value,
         settingsResetArmed = _settingsResetArmed.value,
+        ragClearArmed = _ragClearArmed.value,
+        settingsNotice = _settingsNotice.value,
         settingsCacheVersion = _settingsCacheVersion.value,
+        ragEnabled = configSectionCache["rag"]?.get("enabled")?.let { it.lowercase() in setOf("true", "1", "yes") },
         contextMaxTokens = _contextMaxTokens.value,
+        contextWindowSource = _contextWindowSource.value,
+        maxOutputTokens = configSectionCache["limits"]?.get("max_output_size")?.toIntOrNull()
+            ?: pl.jclab.refio.core.config.ConfigKeys.MAX_OUTPUT_SIZE.default,
         activeSessionId = taskId,
         // Chat sub-VM
         messages = chat._messages.value,
@@ -293,8 +317,12 @@ class TuiViewModel(
         cursorPosition = chat._cursorPosition.value,
         scrollOffset = chat._scrollOffset.value,
         selectedMessageIndex = chat._selectedMessageIndex.value,
+        expandedToolRows = chat._expandedToolRows.value,
+        approvalChoice = chat._approvalChoice.value,
+        trustRules = chat._trustRules.value,
         pastedContent = chat._pastedContent.value,
         pendingQuestionId = chat._pendingQuestionId.value,
+        longTaskLine = chat._longTaskLine.value,
         pendingQuestionOptions = chat._pendingQuestionOptions.value,
         pendingApprovals = chat._pendingApprovals.value,
         pendingToolApproval = chat._pendingToolApproval.value,
@@ -362,6 +390,7 @@ class TuiViewModel(
         fileViewerAllowAddContext = obs._fileViewerAllowAddContext.value,
         fileViewerHintVisible = obs._fileViewerHintVisible.value,
         helpScrollOffset = obs._helpScrollOffset.value,
+        helpFilter = obs._helpFilter.value,
     )
 
     // ========================================================================
@@ -553,10 +582,14 @@ class TuiViewModel(
 
     fun setActiveTab(tab: TuiTab) {
         _activeTab.value = if (_activeTab.value == tab && tab != TuiTab.CHAT) TuiTab.CHAT else tab
+        // A closed panel keeps no focus, or opening it again later would take the letters typed for the prompt.
+        if (_activeTab.value == TuiTab.CHAT) chat._panelFocused.value = false
     }
 
     fun setScreen(screen: TuiScreen) {
         _screen.value = if (_screen.value == screen && screen != TuiScreen.MAIN) TuiScreen.MAIN else screen
+        // Help opens without the last filter.
+        if (_screen.value != TuiScreen.HELP) obs.setHelpFilter(null)
         if (_screen.value == TuiScreen.SETTINGS) {
             refreshSettingsCache()
         }
@@ -568,6 +601,7 @@ class TuiViewModel(
         // Field indices are per-tab; keep the cursor on the first field of the new tab.
         _settingsSelectedField.value = 0
         _settingsResetArmed.value = false
+        _settingsNotice.value = null
     }
 
     // ========================================================================
@@ -605,47 +639,12 @@ class TuiViewModel(
         try {
             val response = r.chatRouter.getMessages(tid)
             if (response.messages.isNotEmpty()) {
-                chat._messages.value = response.messages.map { msg ->
-                    val msgType = detectMessageType(msg)
-                    val toolName = extractToolName(msg)
-                    TuiChatMessage(
-                        id = msg.id,
-                        timestamp = msg.createdAt,
-                        role = if (msg.role == "tool") "assistant" else msg.role,
-                        content = msg.content,
-                        tokensIn = msg.tokensIn ?: 0,
-                        tokensOut = msg.tokensOut ?: 0,
-                        costUsd = msg.cost ?: 0.0,
-                        messageType = msgType,
-                        toolName = toolName
-                    )
-                }
+                chat._messages.value = StoredChatMessages.toChatMessages(response.messages, chat.toolDurations)
                 logger.info { "Loaded ${response.messages.size} messages from DB" }
             }
         } catch (e: Exception) {
             logger.debug(e) { "Failed to load messages from DB" }
         }
-    }
-
-    private fun detectMessageType(msg: pl.jclab.refio.core.api.MessageResponse): TuiMessageType {
-        if (msg.role == "tool") return TuiMessageType.TOOL_CALL
-        val tcJson = msg.toolCallsJson
-        if (tcJson != null && tcJson.isNotBlank()) return TuiMessageType.TOOL_CALL
-        val meta = msg.metadata
-        if (meta != null) {
-            if (meta.contains("\"orchestrator_question\"")) return TuiMessageType.ORCHESTRATOR_QUESTION
-            if (meta.contains("\"execution_summary\"")) return TuiMessageType.EXECUTION_SUMMARY
-            if (meta.contains("\"plan\"")) return TuiMessageType.PLAN
-        }
-        return TuiMessageType.TEXT
-    }
-
-    private fun extractToolName(msg: pl.jclab.refio.core.api.MessageResponse): String? {
-        val tcJson = msg.toolCallsJson ?: return null
-        return try {
-            val nameRegex = Regex(""""name"\s*:\s*"([^"]+)"""")
-            nameRegex.find(tcJson)?.groupValues?.get(1)
-        } catch (_: Exception) { null }
     }
 
     internal fun loadSubtasksFromDb(r: CoreApiRouter, tid: String) {
@@ -695,6 +694,8 @@ class TuiViewModel(
         scope.launch {
             r.toolApprovalService.pendingRequests.collect { requests ->
                 val first = requests.firstOrNull()
+                if (first?.requestId != chat._pendingToolApproval.value?.requestId) chat._approvalChoice.value = 0
+                refreshTrustRules()
                 chat._pendingToolApproval.value = if (first != null) {
                     TuiToolApprovalRequest(
                         requestId = first.requestId,
@@ -796,25 +797,21 @@ class TuiViewModel(
     // Model / context window resolution
     // ========================================================================
 
+    /**
+     * Asks the core for the context window the engine will really use for [modelString] (the same lookup
+     * the plugin's status bar makes), and remembers where the number came from. On failure the window
+     * stays unknown instead of showing an invented one.
+     */
     private fun resolveContextWindow(modelString: String?) {
-        if (modelString.isNullOrBlank()) {
-            _contextMaxTokens.value = 128_000
-            return
-        }
+        val r = router ?: return
         try {
-            val parts = modelString.split("/", limit = 2)
-            if (parts.size == 2) {
-                val provider = parts[0]
-                val modelId = parts[1]
-                val definition = pl.jclab.refio.core.llm.ModelDefinitions.getDefinition(provider, modelId)
-                if (definition != null) {
-                    _contextMaxTokens.value = definition.maxContext
-                    return
-                }
-            }
-            _contextMaxTokens.value = 128_000
-        } catch (_: Exception) {
-            _contextMaxTokens.value = 128_000
+            val resolved = r.configRouter.resolveContextWindow(taskId, modelString)
+            _contextMaxTokens.value = resolved.tokens
+            _contextWindowSource.value = resolved.source
+        } catch (e: Exception) {
+            logger.warn(e) { "Could not resolve the context window for $modelString" }
+            _contextMaxTokens.value = 0
+            _contextWindowSource.value = null
         }
     }
 
@@ -882,6 +879,12 @@ class TuiViewModel(
             logger.warn(e) { "Failed to load tool permissions" }
             emptyList()
         }
+        toolDefinitionsCache = try {
+            r.toolRouter.getAvailableToolDefinitions().associateBy { it.name }
+        } catch (e: Exception) {
+            logger.warn(e) { "Failed to load tool definitions" }
+            emptyMap()
+        }
         // Bump the version so the merged state flow re-renders with the new snapshot.
         _settingsCacheVersion.update { it + 1 }
     }
@@ -891,10 +894,15 @@ class TuiViewModel(
         scope.launch(Dispatchers.IO) {
             try {
                 r.configRouter.updateConfig(section, "app", null, mapOf(key to value))
+                noteSaved()
             } catch (e: Exception) {
                 logger.warn(e) { "Failed to update config: $section.$key" }
+                noteNotSaved("$section.$key", e)
             }
+            // Reloading shows the stored value again, so a refused change visibly goes back.
             refreshSettingsCacheBlocking(r)
+            // Provider context sizes and the context ceiling change the window the engine uses.
+            resolveContextWindow(_model.value)
         }
     }
 
@@ -903,8 +911,10 @@ class TuiViewModel(
         scope.launch(Dispatchers.IO) {
             try {
                 r.configRouter.resetAllSettingsToDefaults()
+                settingsNotice("reset to defaults ${java.time.LocalTime.now().format(NOTICE_TIME)}")
             } catch (e: Exception) {
                 logger.warn(e) { "Failed to reset settings" }
+                noteNotSaved("reset", e)
             }
             refreshSettingsCacheBlocking(r)
         }
@@ -914,18 +924,23 @@ class TuiViewModel(
         val r = router ?: return
         scope.launch {
             try {
-                chat.addSystemMessage("Refreshing models from providers...")
+                settingsNotice("refreshing models${Typography.ellipsis}")
                 fetchAndCacheModels(r)
-                chat.addSystemMessage("Loaded ${TuiSettingsScreen.getCachedModelCount()} models from providers.")
+                settingsNotice("loaded ${TuiSettingsScreen.getCachedModelCount()} models")
             } catch (e: Exception) {
                 logger.warn(e) { "Failed to refresh models" }
-                chat.addSystemMessage("Failed to refresh models: ${e.message}")
+                settingsNotice("models not refreshed: ${e.message ?: e.javaClass.simpleName}", error = true)
             }
         }
     }
 
     fun settingsFieldUp() {
         _settingsSelectedField.update { (it - 1).coerceAtLeast(0) }
+    }
+
+    fun settingsSelectField(index: Int) {
+        val lastIndex = (TuiSettingsScreen.fieldCount(_settingsTab.value) - 1).coerceAtLeast(0)
+        _settingsSelectedField.value = index.coerceIn(0, lastIndex)
     }
 
     fun settingsFieldDown() {
@@ -952,6 +967,59 @@ class TuiViewModel(
     /** Cached tool permissions snapshot (refreshed by [refreshSettingsCache]). */
     fun getToolPermissions(): List<ToolPermissionDto> = toolPermissionsCache
 
+    /** Cached tool definitions by name: category and description for the Tools settings tab. */
+    fun getToolDefinitions(): Map<String, pl.jclab.refio.core.api.ToolDefinitionInfo> = toolDefinitionsCache
+
+    /** `a`/`k`/`x` on the Tools tab: one value for every tool of a group, in the plan or the agent column. */
+    fun setToolGroupPermission(toolNames: List<String>, agentMode: Boolean, value: String) {
+        val r = router ?: return
+        scope.launch(Dispatchers.IO) {
+            val failed = mutableListOf<String>()
+            val current = try {
+                r.toolRouter.getToolPermissions().tools.associateBy { it.toolName }
+            } catch (e: Exception) {
+                logger.warn(e) { "Failed to read tool permissions" }
+                noteNotSaved("tool permissions could not be read", e)
+                return@launch
+            }
+            for (name in toolNames) {
+                val perm = current[name]
+                if (perm == null) {
+                    failed += name
+                    continue
+                }
+                val request = if (agentMode) {
+                    SetToolPermissionRequest(planMode = perm.planMode, agentMode = value)
+                } else {
+                    SetToolPermissionRequest(planMode = value, agentMode = perm.agentMode)
+                }
+                try {
+                    r.toolRouter.setToolPermission(name, request)
+                } catch (e: Exception) {
+                    logger.warn(e) { "Failed to set permission for $name" }
+                    failed += name
+                }
+            }
+            _settingsNotice.value = if (failed.isEmpty()) {
+                SettingsNotice("saved ${java.time.LocalTime.now().format(NOTICE_TIME)}", error = false)
+            } else {
+                SettingsNotice("not saved: ${failed.joinToString(", ")}", error = true)
+            }
+            refreshSettingsCacheBlocking(r)
+        }
+    }
+
+    private fun noteSaved() = settingsNotice("saved ${java.time.LocalTime.now().format(NOTICE_TIME)}")
+
+    /** Feedback of a settings action, shown in the status bar of the Settings screen (the chat is not visible there). */
+    private fun settingsNotice(text: String, error: Boolean = false) {
+        _settingsNotice.value = SettingsNotice(text, error)
+    }
+
+    private fun noteNotSaved(what: String, e: Exception) {
+        _settingsNotice.value = SettingsNotice("not saved: $what (${e.message ?: e.javaClass.simpleName})", error = true)
+    }
+
     /** Cycle ON -> ASK -> OFF for one tool/mode; persists through the tool-permissions API. */
     fun cycleToolPermission(toolName: String, agentMode: Boolean) {
         val r = router ?: return
@@ -970,8 +1038,10 @@ class TuiViewModel(
                     SetToolPermissionRequest(planMode = next(current.planMode), agentMode = current.agentMode)
                 }
                 r.toolRouter.setToolPermission(toolName, request)
+                noteSaved()
             } catch (e: Exception) {
                 logger.warn(e) { "Failed to cycle permission for $toolName" }
+                noteNotSaved(toolName, e)
             }
             refreshSettingsCacheBlocking(r)
         }
@@ -1000,6 +1070,7 @@ class TuiViewModel(
             "default_model.agent" -> ModelOperation.CODING
             "default_model.weak" -> ModelOperation.WEAK
             "default_model.strong" -> ModelOperation.STRONG
+            "default_model.decision" -> ModelOperation.DECISION
             else -> null
         }
         if (modelOperation != null) {
@@ -1031,7 +1102,7 @@ class TuiViewModel(
                 val id = Regex(""""modelId"\s*:\s*"([^"]*)"""").find(trimmed)?.groupValues?.get(1)
                 val prov = Regex(""""provider"\s*:\s*"([^"]*)"""").find(trimmed)?.groupValues?.get(1)
                 if (id == null || prov == null) {
-                    chat.addSystemMessage("Invalid model '$value' — expected provider/model (e.g. ollama/qwen3.5:9b).")
+                    settingsNotice("not saved: '$value' is not provider/model (e.g. ollama/qwen3.5:9b)", error = true)
                     return
                 }
                 prov to id
@@ -1040,7 +1111,7 @@ class TuiViewModel(
                 // Split on the FIRST slash only — a modelId may itself contain slashes.
                 val slash = trimmed.indexOf('/')
                 if (slash <= 0 || slash == trimmed.length - 1) {
-                    chat.addSystemMessage("Invalid model '$value' — expected provider/model (e.g. ollama/qwen3.5:9b).")
+                    settingsNotice("not saved: '$value' is not provider/model (e.g. ollama/qwen3.5:9b)", error = true)
                     return
                 }
                 trimmed.substring(0, slash) to trimmed.substring(slash + 1)
@@ -1049,8 +1120,10 @@ class TuiViewModel(
         scope.launch(Dispatchers.IO) {
             try {
                 r.configRouter.setDefaultModel(SetDefaultModelRequest(operation, modelId, provider), taskId = null)
+                noteSaved()
             } catch (e: Exception) {
                 logger.warn(e) { "Failed to set model slot $operation = $provider/$modelId" }
+                noteNotSaved("model ${operation.name.lowercase()}", e)
             }
             refreshSettingsCacheBlocking(r)
         }
@@ -1082,9 +1155,9 @@ class TuiViewModel(
                     }
                 }
                 configFile.writeText(yaml)
-                chat.addSystemMessage("Config exported to: ${configFile.absolutePath}")
+                settingsNotice("exported to ${configFile.absolutePath}")
             } catch (e: Exception) {
-                chat.addSystemMessage("Export failed: ${e.message}")
+                settingsNotice("export failed: ${e.message ?: e.javaClass.simpleName}", error = true)
             }
         }
     }
@@ -1110,16 +1183,16 @@ class TuiViewModel(
                     }
                 }
                 configFile.writeText(yaml)
-                chat.addSystemMessage("Project config exported to: ${configFile.absolutePath}")
+                settingsNotice("exported to ${configFile.absolutePath}")
             } catch (e: Exception) {
-                chat.addSystemMessage("Export failed: ${e.message}")
+                settingsNotice("export failed: ${e.message ?: e.javaClass.simpleName}", error = true)
             }
         }
     }
 
     fun reloadConfig() {
         refreshSettingsCache()
-        chat.addSystemMessage("Config reloaded from the config store.")
+        settingsNotice("reloaded ${java.time.LocalTime.now().format(NOTICE_TIME)}")
     }
 
     fun testProviderConnection(provider: String) {
@@ -1162,6 +1235,16 @@ class TuiViewModel(
     fun messageSelectionUp() = chat.messageSelectionUp()
     fun messageSelectionDown() = chat.messageSelectionDown()
     fun clearMessageSelection() = chat.clearMessageSelection()
+    fun selectedTranscriptUnit(): TranscriptUnit? = chat.selectedUnit()
+    fun toggleToolRowExpanded(key: String) = chat.toggleToolRow(key)
+
+    /** Opens a tool call's whole output in the content viewer. */
+    fun openToolOutput(row: ToolCallRow) =
+        obs.openContentViewer(listOf(row.toolName, row.argument).filter { it.isNotBlank() }.joinToString("  "), row.result.ifEmpty { "(no output yet)" })
+
+    /** Opens a whole message (a long prompt shown clipped) in the content viewer. */
+    fun viewFullMessage(message: TuiChatMessage) =
+        obs.openContentViewer(if (message.role == "user") "Prompt" else "Message", message.content)
     fun answerQuestion(answer: String) = chat.answerQuestion(answer)
     fun approve(approvalId: String) = chat.approve(approvalId)
     fun reject(approvalId: String) = chat.reject(approvalId)
@@ -1169,24 +1252,83 @@ class TuiViewModel(
     fun isAgentTrusted(agentId: String) = chat.isAgentTrusted(agentId)
 
     // Tool approval (PermissionLevel.ASK)
+    private val approvals get() = router?.toolApprovalService
+
     fun approveToolExecution(requestId: String) {
-        router?.toolApprovalService?.resolveApproval(
-            requestId,
-            pl.jclab.refio.core.services.turn.ToolApprovalService.ApprovalDecision.Approved
-        )
+        approvals?.resolveApproval(requestId, ToolApprovalService.ApprovalDecision.Approved)
+        refreshTrustRules()
     }
+
+    /** The prompt text right now, without the few milliseconds the state snapshot lags behind typing. */
+    fun liveInputBuffer(): String = chat._inputBuffer.value
+
+    /** `t` does what `a` does: allow the tool for this session, limited to the file's folder when it has one. */
     fun trustToolExecution(requestId: String, toolName: String) {
-        router?.toolApprovalService?.resolveApproval(
-            requestId,
-            pl.jclab.refio.core.services.turn.ToolApprovalService.ApprovalDecision.Trusted(toolName)
-        )
+        val req = chat._pendingToolApproval.value
+        allowToolForSession(requestId, toolName, (req?.takeIf { it.requestId == requestId }?.arguments?.get("path") as? String))
     }
+
+    /**
+     * `a`: approve and allow [toolName] for the rest of the session. A call with a file path is allowed only
+     * in that file's folder; a tool without a path (a command, a search) is allowed everywhere, as the
+     * plugin's trust button does. A path that cannot become a safe rule is approved once instead.
+     */
+    fun allowToolForSession(requestId: String, toolName: String, path: String?) {
+        val service = approvals ?: return
+        val folder = path?.let { FolderTrustRule.folderOf(it) }
+        if (path != null && folder == null) {
+            service.resolveApproval(requestId, ToolApprovalService.ApprovalDecision.Approved)
+            addSystemMessage("Approved once: $path cannot be turned into a folder rule.")
+            refreshTrustRules()
+            return
+        }
+        val decision = ToolApprovalService.ApprovalDecision.Trusted(toolName, folder?.let { Regex(FolderTrustRule.pattern(it)) })
+        try {
+            service.resolveApproval(requestId, decision)
+        } catch (e: IllegalArgumentException) {
+            logger.warn(e) { "Folder rule refused by the approval service" }
+            service.resolveApproval(requestId, ToolApprovalService.ApprovalDecision.Approved)
+            addSystemMessage("Approved once: the folder rule could not be saved (${e.message}).")
+        }
+        refreshTrustRules()
+    }
+
     fun rejectToolExecution(requestId: String) {
-        router?.toolApprovalService?.resolveApproval(
-            requestId,
-            pl.jclab.refio.core.services.turn.ToolApprovalService.ApprovalDecision.Rejected()
-        )
+        approvals?.resolveApproval(requestId, ToolApprovalService.ApprovalDecision.Rejected())
+        refreshTrustRules()
     }
+
+    /** `n`: reject and put the cursor in the prompt so the user can say what to do instead. */
+    fun rejectWithChangeRequest(requestId: String) {
+        rejectToolExecution(requestId)
+        chat.updateInputBuffer(pl.jclab.refio.cli.tui.components.ApprovalFrame.CHANGE_REQUEST_PREFIX)
+    }
+
+    /** `d`: show the whole proposed change in the viewer; the approval waits until it is closed. */
+    /** `d`: the full diff of a write, or every argument of any other call, while the approval keeps waiting. */
+    fun openApprovalDiff() {
+        val req = chat._pendingToolApproval.value ?: return
+        val change = req.proposedChange
+        if (change != null) {
+            obs.openContentViewer("diff  ${change.filePath}", change.unifiedDiff)
+        } else {
+            obs.openContentViewer("call  ${req.toolName}", pl.jclab.refio.cli.tui.components.ApprovalFrame.callText(req))
+        }
+    }
+
+    fun approvalChoiceUp() = chat._approvalChoice.update { (it - 1).coerceAtLeast(0) }
+    fun approvalChoiceDown(choices: Int) = chat._approvalChoice.update { (it + 1).coerceAtMost((choices - 1).coerceAtLeast(0)) }
+
+    private fun refreshTrustRules() {
+        chat._trustRules.value = runCatching { approvals?.activeTrustRules() }.getOrNull().orEmpty()
+    }
+
+    /** Names of the prompt templates; a template wins over a slash action of the same name. */
+    fun slashTemplateNames(): List<String> = chat.getSlashPrompts().map { it.name }
+
+    /** Switches straight to [mode] (`/plan`), unlike [cycleMode]. */
+    fun switchMode(mode: String) = session.switchMode(mode)
+
     fun cycleAgentFilter() = chat.cycleAgentFilter()
     fun togglePanelFocus() = chat.togglePanelFocus()
     fun copyLastMessageToClipboard() = chat.copyLastMessageToClipboard()
@@ -1196,6 +1338,37 @@ class TuiViewModel(
     fun resendLastMessage() = chat.resendLastMessage()
     fun editMessage(messageIndex: Int?) = chat.editMessage(messageIndex)
     fun continueConversation() = chat.continueConversation()
+
+    /**
+     * Output-limit notice `s`: switch the task to PLAN (as Shift+Tab would) and put a request to split the task
+     * into the prompt. Nothing goes to the model until the user sends it.
+     */
+    fun splitIntoSteps() {
+        session.switchMode("PLAN")
+        chat.updateInputBuffer(pl.jclab.refio.cli.tui.components.OutputLimitNotice.SPLIT_PROMPT)
+        chat.addSystemMessage("PLAN mode. Enter sends the request to split the task into steps; edit it first if you like.")
+    }
+
+    /**
+     * Output-limit notice `l`: double `limits.max_output_size` (saved like any setting, as the plugin's
+     * settings would) and continue once the new value is stored.
+     */
+    fun raiseOutputLimitAndContinue() {
+        val r = router ?: return
+        val raised = pl.jclab.refio.cli.tui.components.OutputLimitNotice.raisedLimit(stateFlow.value.maxOutputTokens)
+        scope.launch(Dispatchers.IO) {
+            try {
+                r.configRouter.updateConfig("limits", "app", null, mapOf("max_output_size" to raised.toString()))
+            } catch (e: Exception) {
+                logger.warn(e) { "Failed to raise the output limit" }
+                addSystemMessage("Could not raise the output limit: ${e.message}")
+                return@launch
+            }
+            refreshSettingsCacheBlocking(r)
+            addSystemMessage("Output limit raised to $raised tokens (Settings, limits.max_output_size).")
+            chat.continueConversation()
+        }
+    }
     fun summarizeConversation() = chat.summarizeConversation()
     fun exportConversation(path: String) = chat.exportConversation(path)
     fun cancelCurrentOperation() = chat.cancelCurrentOperation()
@@ -1259,6 +1432,20 @@ class TuiViewModel(
     fun ragViewChunks(filePath: String) = obs.ragViewChunks(filePath)
     fun ragStopIndexing() = obs.ragStopIndexing()
     fun ragClearIndex() = obs.ragClearIndex()
+
+    /** `c` in the RAG panel: the first press asks, the second clears the whole index. */
+    fun ragClearPressed() {
+        if (_ragClearArmed.value) {
+            _ragClearArmed.value = false
+            obs.ragClearIndex()
+        } else {
+            _ragClearArmed.value = true
+        }
+    }
+
+    fun disarmRagClear() {
+        _ragClearArmed.value = false
+    }
     fun docsAdd(url: String, depth: Int = 2) = obs.docsAdd(url, depth)
     fun docsDelete(docId: Int) = obs.docsDelete(docId)
     fun docsReindex(docId: Int) = obs.docsReindex(docId)
@@ -1303,6 +1490,7 @@ class TuiViewModel(
     fun fileViewerPageDown() = obs.fileViewerPageDown()
     fun fileViewerAddAsContext() = obs.fileViewerAddAsContext()
     fun fileViewerCopyToClipboard() = obs.fileViewerCopyToClipboard()
+    fun setHelpFilter(filter: String?) = obs.setHelpFilter(filter)
     fun helpScrollUp() = obs.helpScrollUp()
     fun helpScrollDown() = obs.helpScrollDown()
     fun helpPageUp() = obs.helpPageUp()
@@ -1340,14 +1528,12 @@ class TuiViewModel(
      */
     fun setGoal(condition: String) {
         val r = router ?: return
-        val tid = taskId ?: run {
-            chat.addSystemMessage("No active session — start a conversation first, then set a goal.")
-            return
-        }
         if (condition.isBlank()) {
             chat.addSystemMessage("Usage: /goal <completion condition>  (e.g. \"all tests in src/test pass\")")
             return
         }
+        // A goal set before the first message creates the session, so a long task can start with it.
+        val tid = taskId ?: createNewTaskInDb(r).also { taskId = it }
         scope.launch(Dispatchers.IO) {
             try {
                 r.taskRouter.setGoal(tid, condition)
@@ -1396,6 +1582,29 @@ class TuiViewModel(
                 chat.addSystemMessage(if (goal != null) "◎ goal: $goal" else "(no goal set — use /goal <condition> to set one)")
             } catch (e: Exception) {
                 chat.addSystemMessage("Failed to get goal: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * `/until` and `/long`: the task's long-task settings, applied by the same core router the IDE
+     * uses. A setting made before the first message creates the session, so the first message
+     * already runs in rounds.
+     */
+    fun applyLongTaskCommand(command: LongTaskCommand) {
+        val r = router ?: return
+        val creates = command is LongTaskCommand.Until || command is LongTaskCommand.On ||
+            command is LongTaskCommand.Rounds || command is LongTaskCommand.Hours
+        val tid = taskId ?: if (creates) createNewTaskInDb(r).also { taskId = it } else null
+        if (tid == null) {
+            chat.addSystemMessage(if (command is LongTaskCommand.Invalid) command.message else "Long task mode is off.")
+            return
+        }
+        scope.launch(Dispatchers.IO) {
+            try {
+                chat.addSystemMessage("⟳ " + r.longTaskRouter.handle(tid, command))
+            } catch (e: Exception) {
+                chat.addSystemMessage("Failed to change the long task settings: ${e.message}")
             }
         }
     }

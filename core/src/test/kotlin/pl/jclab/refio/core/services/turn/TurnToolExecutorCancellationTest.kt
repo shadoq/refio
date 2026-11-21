@@ -3,6 +3,7 @@ package pl.jclab.refio.core.services.turn
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancelAndJoin
@@ -13,6 +14,7 @@ import org.junit.jupiter.api.Test
 import pl.jclab.refio.core.db.ExecutionMode
 import pl.jclab.refio.core.db.SubtaskKind
 import pl.jclab.refio.core.db.TaskMode
+import pl.jclab.refio.core.db.TaskStatus
 import pl.jclab.refio.core.db.ToolCallData
 import pl.jclab.refio.core.db.repositories.SubtaskRepository
 import pl.jclab.refio.core.services.SnapshotService
@@ -104,5 +106,24 @@ class TurnToolExecutorCancellationTest {
             outcome.get() is CancellationException,
             "Stop must stay a cancellation, not become a failed tool result: ${outcome.get()}"
         )
+    }
+
+    @Test
+    fun `cancelled tool call marks its subtask cancelled`() = runBlocking {
+        val toolStarted = CountDownLatch(1)
+        coEvery { toolExecutor.executeTool(any(), any()) } coAnswers {
+            toolStarted.countDown()
+            Thread.sleep(30_000)
+            ToolResult(success = true, output = "finished after the user gave up")
+        }
+
+        val job = launch(Dispatchers.Default) {
+            runCatching { execute("grep_search") }
+        }
+        assertTrue(toolStarted.await(10, TimeUnit.SECONDS), "the tool never started")
+        job.cancelAndJoin()
+
+        // Left RUNNING, the step shows as still working in the steps list forever.
+        verify { subtaskRepository.updateStatus("s1", TaskStatus.CANCELED) }
     }
 }

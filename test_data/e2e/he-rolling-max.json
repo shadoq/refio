@@ -1,0 +1,24 @@
+{
+  "id": "he-rolling-max",
+  "mode": "AGENT",
+  "description": "HumanEval-style single-function completion: rolling window maximum with the canonical edge cases (identity at k=1, empty when k>len, ValueError for k<=0, negatives, duplicates) verified by an untouched unittest file.",
+  "category": "humaneval",
+  "max_iterations": 15,
+  "fixture": "fixtures/he-rolling-max",
+  "prompt_file": "prompts/he-rolling-max.md",
+  "assert": {
+    "needle_in_file": { "path": "rolling_max.py", "regex": "def rolling_max" },
+    "needles_in_file": [
+      { "path": "rolling_max.py", "regex": "ValueError" },
+      { "path": "rolling_max.py", "regex": "NotImplementedError", "absent": true }
+    ],
+    "file_unchanged": ["test_rolling_max.py", "README.md"],
+    "build_cmd": "python3 -m unittest discover -p \"test_*.py\"",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "All thirteen tests pass; the ValueError contract is implemented (not swallowed); tests untouched."
+    ]
+  }
+}

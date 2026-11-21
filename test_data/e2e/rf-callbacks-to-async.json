@@ -1,0 +1,53 @@
+{
+  "id": "rf-callbacks-to-async",
+  "mode": "AGENT",
+  "description": "Behavior-preserving rewrite of the five-step asset downloader: the error-first callback pyramid in src/downloader.js becomes async/await with try/catch, downloadPipeline(url, opts) returns a Promise, and the acceptance gate pins the resolved values, the SAVED side effect and every exact rejection message before and after the change.",
+  "category": "refactoring",
+  "max_iterations": 30,
+  "fixture": "fixtures/rf-callbacks-to-async",
+  "prompt_file": "prompts/rf-callbacks-to-async.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": [
+      "advance_code_editing"
+    ],
+    "needles_in_file": [
+      {
+        "path": "src/downloader.js",
+        "regex": "async function"
+      },
+      {
+        "path": "src/downloader.js",
+        "regex": "await "
+      },
+      {
+        "path": "src/downloader.js",
+        "regex": "try \\{"
+      },
+      {
+        "path": "src/downloader.js",
+        "regex": "catch \\("
+      },
+      {
+        "path": "src/downloader.js",
+        "regex": ", callback\\)",
+        "absent": true
+      },
+      {
+        "path": "src/downloader.js",
+        "regex": "callback\\(err",
+        "absent": true
+      }
+    ],
+    "file_unchanged": [
+      "README.md",
+      "checks.js"
+    ],
+    "build_cmd": "node checks.js"
+  },
+  "judge": {
+    "criteria": [
+      "src/downloader.js is rewritten so every step is an async function, downloadPipeline(url, opts) awaits the chain inside try/catch and returns a Promise resolving with the saved record or rejecting with the first failure, no callback parameter or error-first hand-off remains anywhere in the file, and the acceptance gate pinning the resolved values, the opts.compact/opts.prefix handling, the SAVED side effect and all six exact rejection messages still exits 0."
+    ]
+  }
+}

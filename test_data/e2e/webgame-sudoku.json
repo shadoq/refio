@@ -1,0 +1,46 @@
+{
+  "id": "webgame-sudoku",
+  "mode": "AGENT",
+  "description": "Single-file Sudoku: puzzle generator with unique solutions and four difficulties, backtracking solver used for validation, pencil marks, mistake highlighting, hints, timer, check/complete, keyboard and mouse input, localStorage best times.",
+  "category": "browser-game",
+  "max_iterations": 40,
+  "fixture": "fixtures/webgame-sudoku",
+  "prompt_file": "prompts/webgame-sudoku.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": [
+      "advance_code_editing"
+    ],
+    "needles_in_file": [
+      {
+        "path": "sudoku_model_01.html",
+        "regex": "backtrack|solver|solve"
+      },
+      {
+        "path": "sudoku_model_01.html",
+        "regex": "pencil|note"
+      },
+      {
+        "path": "sudoku_model_01.html",
+        "regex": "localStorage"
+      },
+      {
+        "path": "sudoku_model_01.html",
+        "regex": "hint"
+      },
+      {
+        "path": "sudoku_model_01.html",
+        "regex": "unique|conflict|invalid"
+      }
+    ],
+    "smoke": {
+      "entry": "sudoku_model_01.html",
+      "dom_present": []
+    }
+  },
+  "judge": {
+    "criteria": [
+      "sudoku_model_01.html is one self-contained Sudoku (no libraries): a generator that digs cells from a full solved board and re-verifies uniqueness with a backtracking solver, four difficulties with matching clue counts, cell selection by mouse and keyboard with conflict/peers highlighting, pencil-mark mode, a solver-backed hint that fills one correct cell, mistake highlighting, completion check with win detection and timer, and best times per difficulty in localStorage. The generated puzzles must have exactly one solution, never faked."
+    ]
+  }
+}

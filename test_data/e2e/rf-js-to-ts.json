@@ -1,0 +1,47 @@
+{
+  "id": "rf-js-to-ts",
+  "mode": "AGENT",
+  "description": "Create src/store.ts as the fully typed TypeScript twin of the untyped src/store.js key/value cache - Entry and StoreOptions interfaces, generics where they earn their keep, strict-mode-clean signatures with no any - while src/store.js stays untouched as the behavioural reference; needles prove the typed surface exists and the any type is gone.",
+  "category": "refactoring",
+  "max_iterations": 30,
+  "fixture": "fixtures/rf-js-to-ts",
+  "prompt_file": "prompts/rf-js-to-ts.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": [
+      "advance_code_editing"
+    ],
+    "needles_in_file": [
+      {
+        "path": "src/store.ts",
+        "regex": "interface [A-Z]"
+      },
+      {
+        "path": "src/store.ts",
+        "regex": ": string"
+      },
+      {
+        "path": "src/store.ts",
+        "regex": ": number"
+      },
+      {
+        "path": "src/store.ts",
+        "regex": "^export "
+      },
+      {
+        "path": "src/store.ts",
+        "regex": ": any",
+        "absent": true
+      }
+    ],
+    "file_unchanged": [
+      "README.md",
+      "src/store.js"
+    ]
+  },
+  "judge": {
+    "criteria": [
+      "src/store.ts exists as a strict-mode-clean TypeScript port of the store - an Entry interface for the stored records, a StoreOptions interface for construction options, a generic Store class with fully typed methods and no any anywhere - whose runtime behavior for TTL semantics, insertion order, eviction and return values matches src/store.js, and src/store.js itself is byte-for-byte untouched."
+    ]
+  }
+}

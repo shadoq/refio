@@ -1,0 +1,20 @@
+{
+  "id": "tb-log-reduction",
+  "mode": "AGENT",
+  "description": "Terminal-Bench style log reduction: turn a 4k-line service log into the per-minute ERROR-count JSON (only minutes with errors, sorted keys) that the gate recomputes line-by-line from the log.",
+  "category": "terminal-bench",
+  "max_iterations": 20,
+  "fixture": "fixtures/tb-reduce",
+  "prompt_file": "prompts/tb-log-reduction.md",
+  "assert": {
+    "needle_in_file": { "path": "report/errors.json", "regex": "2026-06-30T0[0-6]:", "min_count": 100 },
+    "file_unchanged": ["checks.py", "docs/format.md", "logs/service.log", "README.md"],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "Every per-minute ERROR count matches the log exactly, zero-count minutes absent, keys ascending; the log is untouched."
+    ]
+  }
+}

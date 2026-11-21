@@ -75,12 +75,14 @@ class CoreApiRouter(
         subtaskRepository = persistence.subtaskRepository,
         apiLogRepository = persistence.apiLogRepository,
         chatMessageRepository = persistence.chatMessageRepository,
+        taskStateRepository = persistence.taskStateRepository,
     )
     private val promptRegistry = pl.jclab.refio.core.prompts.PromptRegistry(projectRoot)
     val promptsService = PromptsService(persistence.promptsRepository, promptRegistry)
     val toolPermissionsService = ToolPermissionsService(
         configRepository = persistence.configRepository,
-        toolRegistry = toolRegistry
+        toolRegistry = toolRegistry,
+        runOverride = runConfigOverrides[ToolPermissionsService.CONFIG_KEY]
     )
     val toolApprovalService = ToolApprovalService()
     val llmClient = llmClientOverride ?: LLMClient(
@@ -96,6 +98,7 @@ class CoreApiRouter(
         llmClient = llmClient,
         promptsService = promptsService,
         configService = configService,
+        planStore = persistence.taskStateRepository,
     )
     private val workingMemoryService get() = supportServices.workingMemoryService
     val agentPlanService get() = supportServices.agentPlanService
@@ -243,6 +246,7 @@ class CoreApiRouter(
         routerProjectPath = routerProjectPath,
         embeddingProviderFactory = embeddingProviderFactory::create,
         codebaseCacheInvalidator = codebaseCacheInvalidator,
+        agentPlanService = agentPlanService,
     )
 
     val chatRouter get() = domainRouters.chatRouter
@@ -258,6 +262,7 @@ class CoreApiRouter(
     val snapshotRouter get() = domainRouters.snapshotRouter
     val projectContextRouter get() = domainRouters.projectContextRouter
     val multiAgentRouter get() = domainRouters.multiAgentRouter
+    val longTaskRouter get() = domainRouters.longTaskRouter
 
     // Internal accessors for modules in `api.modules` package
     internal val toolRegistryOrNull: ToolRegistry? get() = toolRegistry

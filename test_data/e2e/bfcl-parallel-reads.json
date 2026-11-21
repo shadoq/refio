@@ -1,0 +1,40 @@
+{
+  "id": "bfcl-parallel-reads",
+  "mode": "AGENT",
+  "description": "BFCL style tool-call precision (parallel calls): summarise one value from eight small config files into a single new report file. The files are independent, so they should be read in one batch (or found with one search) and the report written once; eight sequential reads plus the write and the answer overshoot the iteration budget, which is enforced. Config files also carry connect_timeout_ms and commented-out old values to catch careless grepping. A checks script recomputes the expected table from the configs and verifies order, values and the final line. The prompt names that script, so one terminal command (running that script to check the report) is allowed; a second one is not.",
+  "category": "bfcl-tools",
+  "max_iterations": 7,
+  "fixture": "fixtures/bfcl-parallel-reads",
+  "prompt_file": "prompts/bfcl-parallel-reads.md",
+  "config": [
+    "verify.command=python checks/check_report.py"
+  ],
+  "assert": {
+    "no_context_overflow": true,
+    "enforce_max_iterations": true,
+    "tool_invoked": [
+      {
+        "name": "run_code",
+        "absent": true
+      }
+    ],
+    "tool_budget": {
+      "read_file": 9,
+      "run_terminal_command": 1
+    },
+    "file_unchanged": [
+      "README.md",
+      "checks/check_report.py",
+      "config/svc-billing.yaml",
+      "config/svc-catalog.yaml",
+      "config/svc-checkout.yaml",
+      "config/svc-search.yaml",
+      "config/svc-notifications.yaml",
+      "config/svc-auth.yaml",
+      "config/svc-inventory.yaml",
+      "config/svc-reports.yaml"
+    ],
+    "build_cmd": "python checks/check_report.py",
+    "self_verified": true
+  }
+}

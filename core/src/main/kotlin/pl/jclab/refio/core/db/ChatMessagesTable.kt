@@ -45,6 +45,8 @@ object ChatMessagesTable : Table("chat_messages") {
     init {
         // Index for efficient retrieval of messages by task
         index("idx_chat_messages_task_created", false, taskId, createdAt)
+        // History order: also reads the task's last position when a message is added
+        index("idx_chat_messages_task_seq", false, taskId, seq)
     }
 }
 

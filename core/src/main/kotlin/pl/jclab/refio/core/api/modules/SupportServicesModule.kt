@@ -7,6 +7,7 @@ import pl.jclab.refio.core.services.AgentPlanService
 import pl.jclab.refio.core.services.ConfigService
 import pl.jclab.refio.core.services.ConversationSummaryService
 import pl.jclab.refio.core.services.PendingUserMessageQueue
+import pl.jclab.refio.core.services.PlanStore
 import pl.jclab.refio.core.services.PromptsService
 import pl.jclab.refio.core.services.WorkingMemoryIntegration
 import pl.jclab.refio.core.services.context.WorkingMemoryService
@@ -29,6 +30,7 @@ class SupportServicesModule(
     llmClient: LLMClient,
     promptsService: PromptsService,
     configService: ConfigService,
+    planStore: PlanStore? = null,
 ) {
     private val hookExecutor = HookExecutor()
     val hookService = HookService(
@@ -40,7 +42,7 @@ class SupportServicesModule(
         maxEntriesPerTask = configService.getTyped(ConfigKeys.WORKING_MEMORY_MAX_FACTS)
     )
     val workingMemoryIntegration = WorkingMemoryIntegration(workingMemoryService)
-    val agentPlanService = AgentPlanService()
+    val agentPlanService = AgentPlanService(planStore)
 
     val conversationSummaryService = ConversationSummaryService(
         llmClient = llmClient,

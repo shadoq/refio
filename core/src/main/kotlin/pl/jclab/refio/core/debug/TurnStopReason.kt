@@ -47,6 +47,9 @@ enum class TurnStopReason {
     /** The model never produced a parsable answer and the recovery retries were exhausted. */
     FORMAT_UNRECOVERABLE,
 
+    /** The provider declined to answer (finish reason `refusal`); retrying would only be refused again. */
+    MODEL_REFUSED,
+
     /**
      * The model answered in prose and the budget of format reminders ran out. Distinct from
      * [FORMAT_UNRECOVERABLE]: there the answer could not be parsed at all, here the loop chose to
@@ -96,6 +99,14 @@ enum class TurnStopReason {
      * observation from overwriting a reason that already explains the stop.
      */
     val isClean: Boolean get() = this == COMPLETED || this == UNKNOWN
+
+    /**
+     * A stop on a budget or on an unfinished deliverable: the work so far is worth building on,
+     * so a caller reports it as partial rather than failed.
+     */
+    val isPartial: Boolean
+        get() = this == MAX_ITERATIONS || this == TIME_LIMIT || this == COST_LIMIT ||
+            this == GUARDIAN_INCOMPLETE || this == NO_FILE_WRITTEN
 }
 
 /**

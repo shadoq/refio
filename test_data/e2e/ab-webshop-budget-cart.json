@@ -1,0 +1,27 @@
+{
+  "id": "ab-webshop-budget-cart",
+  "mode": "AGENT",
+  "description": "AgentBench-WebShop style constrained shopping: browse a live local catalog shop over HTTP and pick the unique optimal cart - one item per list category, hard 80.00 EUR budget, maximal total rating - where the high-rated items are exactly the ones that bust the budget.",
+  "category": "agentbench-web",
+  "max_iterations": 25,
+  "fixture": "fixtures/ab-webshop",
+  "prompt_file": "prompts/ab-webshop-budget-cart.md",
+  "fixture_server": { "dir": "server", "port": 8740, "cmd": "exec python3 {{DIR}}/app.py {{PORT}}" },
+  "assert": {
+    "tool_invoked": [{ "name": "http_request" }],
+    "needle_in_file": { "path": "cart/cart.json", "text": "\"p4\"" },
+    "needles_in_file": [
+      { "path": "cart/cart.json", "text": "\"p2\"" },
+      { "path": "cart/cart.json", "text": "\"p8\"" },
+      { "path": "cart/cart.json", "text": "\"p11\"" }
+    ],
+    "file_unchanged": ["checks.py", "docs/mission.md", "server/catalog.json", "server/app.py", "README.md"],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The cart covers the four list categories with one item each, stays within 80.00 EUR and equals the unique rating-optimal set (p2, p4, p8, p11); the shop was used over HTTP, not edited."
+    ]
+  }
+}

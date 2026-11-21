@@ -1,0 +1,16 @@
+{
+  "id": "apibank-local-api",
+  "mode": "AGENT",
+  "description": "API-Bank style (tool use against a documented API): write a client from API.md for a local HTTP service that the Node test starts in-process. Needs cursor pagination with URL-encoding of opaque cursors, 429 handling that honours Retry-After (or exponential backoff without it) up to five attempts, 5xx retries limited to idempotent GETs with a retry cap, no retry on POST 5xx or other 4xx, 404 mapped to null and structured errors. Delays are checked through an injected fake sleep.",
+  "category": "api-bank",
+  "max_iterations": 40,
+  "fixture": "fixtures/apibank-local-api",
+  "prompt_file": "prompts/apibank-local-api.md",
+  "config": ["verify.command=node --test test/client.test.js"],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": ["test/client.test.js", "test/fakeServer.js", "API.md"],
+    "build_cmd": "node --test test/client.test.js",
+    "self_verified": true
+  }
+}

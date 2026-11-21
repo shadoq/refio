@@ -1,0 +1,19 @@
+{
+  "id": "commitmsg-from-diff",
+  "mode": "CHAT",
+  "description": "CommitBench style (chat only): write a commit message for a staged diff that mixes one behavioural change (Retry-After derived from the token bucket refill rate instead of a constant 60) with an unrelated import reorder and comment typo fix. The message must have an imperative subject naming the real behaviour, every line within 72 characters, no past-tense or prefixed subject, and no mention of the incidental edits.",
+  "category": "commitbench",
+  "max_iterations": 5,
+  "fixture": "fixtures/commitmsg-from-diff",
+  "prompt_file": "prompts/commitmsg-from-diff.md",
+  "assert": {
+    "no_context_overflow": true,
+    "needle_in_output": {
+      "regex": "^[A-Z][a-z]+ .*([Rr]etry[-_ ][Aa]fter|[Rr]efill)"
+    },
+    "output_absent": {
+      "regex": "^.{73,}$|^(Fixed|Fixes|Fixing|Added|Adds|Adding|Changed|Changes|Changing|Updated|Updates|Updating|Implemented|Implements)( |$)|^(feat|fix|chore|refactor)(\\(.*\\))?:|[Tt]ypo|whitespace|import order|[Rr]eorder|Signed-off-by|Co-[Aa]uthored-by"
+    },
+    "file_unchanged": ["README.md"]
+  }
+}

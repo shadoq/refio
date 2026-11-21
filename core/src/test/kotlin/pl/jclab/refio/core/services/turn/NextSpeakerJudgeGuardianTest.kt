@@ -18,6 +18,9 @@ import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.LLMResponse
 import pl.jclab.refio.core.llm.LLMUsage
 import pl.jclab.refio.core.services.ConfigService
+import pl.jclab.refio.core.services.TurnResult
+import pl.jclab.refio.core.services.longtask.GoalJudgeCheck
+import pl.jclab.refio.core.debug.TurnStopReason
 
 class NextSpeakerJudgeGuardianTest {
 
@@ -66,6 +69,9 @@ class NextSpeakerJudgeGuardianTest {
         every {
             configService.getTyped(ConfigKeys.GENERAL_JUDGE_EXTENDED_REENTRY_ENABLED, "task-1")
         } returns extendedReentry
+        every {
+            configService.getTyped(ConfigKeys.GENERAL_JUDGE_BACKEND, "task-1")
+        } returns ConfigKeys.JUDGE_BACKEND_LLM
     }
 
     private fun stubModel() {
@@ -923,6 +929,81 @@ class NextSpeakerJudgeGuardianTest {
         coVerify(exactly = 0) {
             llmClient.complete(provider = any(), model = any(), messages = any())
         }
+    }
+
+    @Test
+    fun `goal verdict is kept for a long task`() = runBlocking {
+        stubJudgeEnabled()
+        stubModel()
+        stubLlmResponse("""{"speaker": "user", "reason": "npm test output shows 12 passing"}""")
+        GoalVerdicts.clear("task-1")
+
+        guardian().check(ctx(response = "All 12 functions pass.", completionCondition = "all 12 functions implemented"))
+
+        assertEquals(true, GoalVerdicts.take("task-1"), "the loop reads this verdict after the round")
+    }
+
+    @Test
+    fun `a long task round that ends on a question is still judged against the goal`() = runBlocking {
+        // Nobody answers the question before the round's check, which reads the judge's verdict.
+        // Without one the round counted as "goal not met", and a model that closes with a question
+        // by habit kept the loop going after the goal was reached.
+        stubJudgeEnabled()
+        stubModel()
+        stubLlmResponse("""{"speaker": "user", "reason": "npm test shows 12 passing"}""")
+        val goal = "all 12 functions implemented"
+        val check = GoalJudgeCheck("task-1", goal)
+        check.beforeRound()
+
+        val decision = guardian().check(ctx(response = "All 12 functions pass. Shall I also add docs?", completionCondition = goal))
+        val result = check.check(
+            TurnResult(success = true, response = "All 12 functions pass. Shall I also add docs?", iterations = 3, tokensIn = 0, tokensOut = 0, cost = 0.0, stopReason = TurnStopReason.COMPLETED)
+        )
+
+        assertEquals(GuardianDecision.Pass, decision, "the question still ends the turn")
+        assertTrue(result.passed, "the judge found the goal met")
+    }
+
+    @Test
+    fun `goal judge sees the last tool output`() = runBlocking {
+        stubJudgeEnabled()
+        stubModel()
+        val sent = slot<List<pl.jclab.refio.core.llm.LLMMessage>>()
+        coEvery {
+            llmClient.complete(
+                provider = any(), model = any(), messages = capture(sent), systemPrompt = any(), maxTokens = any(),
+                temperature = any(), responseFormat = any(), thinking = any(), reasoningEffort = any(),
+                noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(), subtaskId = any(),
+                source = any(), contextContent = any(), systemMessages = any(), kwargs = any()
+            )
+        } returns LLMResponse(content = """{"speaker": "user", "reason": "12 pass"}""", usage = LLMUsage(150, 20, 170), cost = 0.0, model = "haiku", provider = "anthropic")
+        val judge = NextSpeakerJudgeGuardian(llmClient, configService, recentToolOutput = { "> node --test\n# pass 12\n# fail 0" })
+
+        judge.check(ctx(response = "Done, all green.", completionCondition = "all tests pass"))
+
+        assertTrue(sent.captured.single().content.contains("# pass 12"), "the judge needs the evidence, not only the claim")
+        GoalVerdicts.clear("task-1")
+    }
+
+    @Test
+    fun `prose reply in goal mode still goes to the judge`() = runBlocking {
+        // Without a goal a long prose answer counts as the deliverable. With a goal it proves
+        // nothing: a round that only ran the tests and reported must still be judged.
+        stubJudgeEnabled()
+        stubModel()
+        stubLlmResponse("""{"speaker": "model", "reason": "no test output in the transcript"}""")
+
+        guardian().check(ctx(response = "Summary of the work: ".padEnd(800, 'x'), completionCondition = "all tests pass"))
+
+        coVerify(exactly = 1) {
+            llmClient.complete(
+                provider = any(), model = any(), messages = any(), systemPrompt = any(), maxTokens = any(),
+                temperature = any(), responseFormat = any(), thinking = any(), reasoningEffort = any(),
+                noEgressEnabled = any(), stream = any(), onChunk = any(), taskId = any(), subtaskId = any(),
+                source = any(), contextContent = any(), systemMessages = any(), kwargs = any()
+            )
+        }
+        GoalVerdicts.clear("task-1")
     }
 
     @Test

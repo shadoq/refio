@@ -1,0 +1,26 @@
+{
+  "id": "debug-deadlock",
+  "mode": "AGENT",
+  "description": "Fix a lock-ordering deadlock: two concurrent transfers lock the same pair of accounts in opposite orders across a 50 ms in-flight window. The gate runs the deadly pair with a join timeout; the fix must acquire the two locks in a deterministic (id-sorted) order while keeping the window.",
+  "category": "debugging",
+  "max_iterations": 30,
+  "fixture": "fixtures/deadlock-transfer",
+  "prompt_file": "prompts/debug-deadlock.md",
+  "assert": {
+    "needle_in_file": { "path": "src/accounts.py", "regex": "sorted\\(" },
+    "needles_in_file": [
+      { "path": "src/accounts.py", "regex": "time[.]sleep", "min_count": 1 }
+    ],
+    "file_unchanged": [
+      "checks.py",
+      "README.md"
+    ],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "transfer acquires the two account locks in a deterministic order (id-sorted helper) so opposite-direction transfers cannot interleave, the 50 ms in-flight window is preserved, and the gate's opposite-direction pair completes within the timeout with exact balances - not by removing the window or shortening the timeout path."
+    ]
+  }
+}

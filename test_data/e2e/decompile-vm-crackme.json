@@ -1,0 +1,24 @@
+{
+  "id": "decompile-vm-crackme",
+  "mode": "AGENT",
+  "description": "Reverse-engineer a bytecode program for a documented stack VM: recover the passphrase from the obfuscated per-character comparison blocks and obtain the flag from the success path, without patching the program or the VM.",
+  "category": "reversing",
+  "max_iterations": 30,
+  "fixture": "fixtures/vm-crackme",
+  "prompt_file": "prompts/decompile-vm-crackme.md",
+  "assert": {
+    "tool_order": ["read_file"],
+    "needle_in_output": { "text": "FLAG{zigzag42unlocked}" },
+    "file_unchanged": [
+      "vm.py",
+      "program.bin",
+      "ISA.md"
+    ],
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The agent decoded the per-character XOR comparison blocks of program.bin to recover the passphrase zigzag42, obtained the success message without patching the check or the VM, and reported both the passphrase and the exact flag FLAG{zigzag42unlocked}."
+    ]
+  }
+}

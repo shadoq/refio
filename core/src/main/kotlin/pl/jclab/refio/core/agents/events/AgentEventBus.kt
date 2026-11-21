@@ -223,4 +223,7 @@ interface AgentEventRepository {
 
     /** Returns up to [limit] NEWEST events for the agent, sorted ascending. */
     suspend fun findByAgentId(agentId: String, limit: Int = DEFAULT_EVENT_LIMIT): List<AgentEvent>
+
+    /** Deletes events older than [cutoffMs], [batchSize] rows per transaction. Returns how many went. */
+    fun deleteOlderThan(cutoffMs: Long, batchSize: Int): Int
 }

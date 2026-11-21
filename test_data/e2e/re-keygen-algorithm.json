@@ -1,0 +1,25 @@
+{
+  "id": "re-keygen-algorithm",
+  "mode": "AGENT",
+  "description": "Reverse-engineer the license-check algorithm in license.py (a split checksum half and a per-position letter half derived from the user name) and generate a valid key for the required user, gated by verify_key.py.",
+  "category": "reversing",
+  "max_iterations": 30,
+  "fixture": "fixtures/keygen-me",
+  "prompt_file": "prompts/re-keygen-algorithm.md",
+  "assert": {
+    "tool_order": ["read_file"],
+    "needle_in_file": { "path": "key.txt", "regex": "^[0-9A-F]{4}-[A-Z]{4}[[:space:]]*$" },
+    "file_unchanged": [
+      "license.py",
+      "verify_key.py",
+      "README.md"
+    ],
+    "build_cmd": "python3 verify_key.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The agent derived the keygen rules from license.py (the hexadecimal checksum half and the four letter positions, each a function of the user name characters and position) and wrote a key for refio-user that verify_key.py accepts, without modifying the validator, the gate or the README."
+    ]
+  }
+}

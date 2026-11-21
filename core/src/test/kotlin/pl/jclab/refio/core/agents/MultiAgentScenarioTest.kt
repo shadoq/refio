@@ -228,7 +228,7 @@ class MultiAgentScenarioTest {
                 AgentSpec("C", task = "After B", dependsOn = listOf("B"))
             )
 
-            val results = runner.run("s1", specs, fake.executor)
+            val results = runner.run("s1", specs, WorkflowLimits(onFailure = OnFailure.CONTINUE), fake.executor)
 
             // A completes successfully
             assertTrue(results["A"]!!.success)
@@ -242,7 +242,7 @@ class MultiAgentScenarioTest {
             assertEquals(1, failedEvents.size)
             assertEquals("LLM unavailable", failedEvents[0].error)
 
-            // C runs (B added to completedAgents in finally block)
+            // C runs: with on_failure: continue a failed agent still unblocks its dependents
             assertTrue(results.containsKey("C"),
                 "C should run — failed agents are added to completedAgents in finally block")
             assertTrue(results["C"]!!.success)

@@ -1,0 +1,16 @@
+name: "plan-exec-config-constants"
+description: "A planner writes the plan, a coder carries it out without leaving it."
+on_failure: stop
+max_minutes: 30
+agents:
+  - name: planner
+    mode: plan
+    max_iterations: 20
+    task: >
+      app/shipping.py and app/tax.py hard-code the free-shipping threshold (100), the shipping fee (9.99) and the tax rate (0.23). Plan moving them into a new app/config.py (FREE_SHIPPING_THRESHOLD, SHIPPING_FEE, TAX_RATE) used by both modules, with behaviour unchanged. The only new file allowed is app/config.py; checks.py must not be edited. Do not edit any file. Answer with the plan as a numbered list (1., 2., ...), one step per item, in the order the work must be done, naming in every step the exact files it changes. Name only files that exist, or new files in the places the task allows.
+  - name: coder
+    mode: agent
+    depends_on: [planner]
+    max_iterations: 30
+    task: >
+      Carry out the planner's plan, step by step. Change only the files the plan names. Do not edit checks.py. The work is done when `python checks.py` passes.

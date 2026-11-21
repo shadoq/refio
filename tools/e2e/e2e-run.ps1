@@ -39,6 +39,13 @@
   HARD verdict. Sanity: JUDGE_MODEL must differ from the tested -Model, otherwise judging is skipped
   with a warning; multi-agent scenarios (no prompt file) are skipped with a note.
 
+  Long tasks and part-way scores (mirrors e2e-run.sh): a scenario with `until` runs as a long task
+  (--until <cmd>, plus --max-rounds from `max_rounds`); cap its time with the scenario's own config,
+  e.g. "long_task.max_minutes=30". An optional `score` {cmd, regex} runs in the project after the run,
+  also when the run failed; the first capture group of `regex` is printed as score=... and written to
+  results.jsonl as `score`, next to the long task's `rounds`. The score never changes the verdict.
+  `until` cannot be combined with `multi_agent`.
+
 .EXAMPLE
   ./e2e-run.ps1 -SelfTest
 .EXAMPLE
@@ -236,6 +243,30 @@ function Assert-Run {
             if ($peExit -ne 0) {
                 $hardFail = $true
                 foreach ($l in $peOut) { $t = ([string]$l).Trim(); if ($t) { $reasons += $t } }
+            }
+        }
+    }
+
+    # HARD 1c4 - plan / plan_followed / rounds: how the agent planned the work, judged by the same
+    # trusted script as e2e-run.sh (lib/plan-check.mjs) over run.json. Mirrors HARD 1c4.
+    $a = $s.assert
+    if ($a -and ($a.PSObject.Properties.Name -contains 'plan' -or $a.PSObject.Properties.Name -contains 'plan_followed' -or $a.PSObject.Properties.Name -contains 'rounds')) {
+        $node = Get-Command node -ErrorAction SilentlyContinue
+        if (-not $node) {
+            $hardFail = $true; $reasons += "plan checks need node on PATH"
+        } else {
+            $pcFx = if ($s.fixture) { Join-Path (Split-Path -Parent (Resolve-Path $Scenario)) $s.fixture } else { $ProjectDir }
+            $pcScript = Join-Path $ScriptDir 'lib\plan-check.mjs'
+            $savedEAP = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try {
+                $pcOut = @(& $node.Source $pcScript (Resolve-Path $Scenario).Path $pcFx $ProjectDir --run $RunJsonPath 2>&1)
+                $pcExit = $LASTEXITCODE
+            } catch { $pcOut = @("plan check could not run: $_"); $pcExit = 2 }
+            finally { $ErrorActionPreference = $savedEAP }
+            if ($pcExit -ne 0) {
+                $hardFail = $true
+                foreach ($l in $pcOut) { $t = ([string]$l).Trim(); if ($t) { $reasons += $t } }
             }
         }
     }
@@ -603,6 +634,18 @@ function Invoke-Judge {
     }
 }
 
+# How far a run got, from the output of the scenario's score command: the first capture group of the
+# pattern, or the whole match; $null when it does not match. E.g. "9/12" from "SUMMARY passed 9/12".
+# Mirrors e2e-run.sh scenario_score; [[:space:]] -> \s as for the needles.
+function Get-ScenarioScore {
+    param([string]$Output, [string]$Regex)
+    if (-not $Output -or -not $Regex) { return $null }
+    $m = [regex]::Match($Output, ($Regex -replace '\[\[:space:\]\]', '\s'))
+    if (-not $m.Success) { return $null }
+    if ($m.Groups.Count -gt 1 -and $m.Groups[1].Success) { return $m.Groups[1].Value }
+    return $m.Value
+}
+
 # Persist this run for the stabilization gate (docs/0069). No-op unless E2E_OUT_DIR is set, so default
 # runs are completely unchanged. Writes <out>\<id>__<model>__<run>.run.json plus one results.jsonl
 # record. Never throws (all failure paths swallowed) - the gate is observe-only. Mirrors
@@ -610,7 +653,7 @@ function Invoke-Judge {
 # script-scope $Model (a plain assignment inside a function would only shadow it locally).
 function Write-ResultRecord {
     param([string]$Id, [string]$Verdict, [string]$RunJsonPath, [string]$ModelLabelOverride = $script:Model,
-          $Judge = $null, [string]$BuildCmd = '')
+          $Judge = $null, [string]$BuildCmd = '', [string]$Score = '')
     $outDir = $env:E2E_OUT_DIR
     if (-not $outDir) { return }
     $runIdx = $env:E2E_RUN_INDEX
@@ -618,7 +661,7 @@ function Write-ResultRecord {
     $modelLabel = if ($ModelLabelOverride) { $ModelLabelOverride } else { 'default' }
     $status = 'UNKNOWN'; $cost = 0; $tokens = 0; $mode = ''; $provider = ''
     $tokensIn = 0; $iters = 0; $subtasks = 0; $apiCalls = 0; $duration = 0
-    $tools = [ordered]@{}; $apiErrors = [ordered]@{}; $ranBuild = $null
+    $tools = [ordered]@{}; $apiErrors = [ordered]@{}; $ranBuild = $null; $rounds = $null
     if (Test-Path $RunJsonPath) {
         try {
             $r = Get-Content -Raw $RunJsonPath | ConvertFrom-Json
@@ -639,6 +682,8 @@ function Write-ResultRecord {
             if ($null -ne $r.metrics.toolCallCount) { $subtasks = $r.metrics.toolCallCount }
             if ($null -ne $r.metrics.apiCallCount) { $apiCalls = $r.metrics.apiCallCount }
             if ($null -ne $r.metrics.durationMs) { $duration = $r.metrics.durationMs }
+            # Rounds of a long task; null for a single turn.
+            if ($r.longTask -and $null -ne $r.longTask.roundsDone) { $rounds = [int]$r.longTask.roundsDone }
             foreach ($t in @($r.conversation | ForEach-Object { $_.toolCalls } | Where-Object { $_ })) {
                 if ($tools.Contains($t)) { $tools[$t]++ } else { $tools[$t] = 1 }
             }
@@ -687,6 +732,8 @@ function Write-ResultRecord {
             # SOFT judge verdict object, or null when the run was not judged (mirrors e2e-run.sh).
             judge = $Judge
             modelRanBuildCmd = $ranBuild
+            score = $(if ($Score) { $Score } else { $null })
+            rounds = $rounds
             batch = $(if ($env:E2E_BATCH_ID) { $env:E2E_BATCH_ID } else { $null })
             reasons = $reasons
         }
@@ -783,6 +830,7 @@ function Invoke-Scenario {
         $promptFile = Join-Path $sdir $s.prompt_file
         if (-not (Test-Path $promptFile)) { throw "prompt_file not found: $promptFile" }
     }
+    if ($s.until -and $s.multi_agent) { throw "until cannot be combined with multi_agent: $Scenario" }
     if (-not (Test-Path $fixture)) { throw "fixture dir not found: $fixture" }
 
     $work = Join-Path ([System.IO.Path]::GetTempPath()) ("refio-e2e-{0}-{1}" -f $s.id, [guid]::NewGuid().ToString('N').Substring(0,8))
@@ -908,15 +956,24 @@ function Invoke-Scenario {
     }
 
     $mode    = if ($s.mode) { $s.mode } else { 'AGENT' }
+    # A plan is judged from the answer text, which 'standard' cuts at 2000 characters; 'full' keeps
+    # 20000, so a long plan does not lose its last steps. Mirrors e2e-run.sh.
+    $assertKeys = if ($s.assert) { $s.assert.PSObject.Properties.Name } else { @() }
+    $debugLevel = if ($assertKeys -contains 'plan' -or $assertKeys -contains 'plan_followed') { 'full' } else { 'standard' }
     $cliArgs = @(
         '--headless', '-p', $work, '--mode', $mode,
         '--output', 'json', '--output-file', $runJson,
-        '--debug-level', 'standard',
+        '--debug-level', $debugLevel,
         '--max-cost', $MaxCost
     )
     # Single-agent scenarios pass --prompt-file; multi-agent ones pass --multi-agent <yaml> instead.
     if ($multiAgentFile) { $cliArgs += @('--multi-agent', $multiAgentFile) }
     else                 { $cliArgs += @('--prompt-file', $effectivePrompt) }
+    # A long task: rounds of AGENT turns until this command exits 0 in the project after a round.
+    if ($s.until) {
+        $cliArgs += @('--until', [string]$s.until)
+        if ($s.max_rounds) { $cliArgs += @('--max-rounds', [string]$s.max_rounds) }
+    }
     if ($s.fixture_server -and $s.fixture_server.dir -and $s.fixture_server.port) {
         $cliArgs += @('--config', 'security.allow_loopback=true')
     }
@@ -959,6 +1016,22 @@ function Invoke-Scenario {
         return $false
     }
 
+    # How far the run got, for a scenario that can end part-way (a long task at its round or time
+    # limit). Read before the exit-code gate below, because "9 of 12 when the limit hit" is what such a
+    # scenario measures. Never changes the verdict. Same EAP-Continue guard as build_cmd below.
+    $score = $null
+    if ($s.score -and $s.score.cmd) {
+        Push-Location $work
+        $savedEAP = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        $scoreOut = ''
+        try { $scoreOut = (cmd /c $s.score.cmd 2>&1 | Out-String) }
+        catch { $scoreOut = '' }
+        finally { $ErrorActionPreference = $savedEAP; Pop-Location }
+        $score = Get-ScenarioScore -Output $scoreOut -Regex ([string]$s.score.regex)
+    }
+    $scoreNote = if ($score) { " score=$score" } else { '' }
+
     # A non-zero CLI exit is a HARD failure: the headless turn aborted (cost ceiling, crash). It must
     # never be papered over by deterministic assertions the starting fixture happens to satisfy
     # (docs/0061). Mirrors e2e-run.sh. The status gate in Assert-Run is the in-run.json equivalent.
@@ -966,8 +1039,8 @@ function Invoke-Scenario {
         $run = Get-Content -Raw $runJson | ConvertFrom-Json
         $st = if ($run.session -and $run.session.status) { $run.session.status } else { '?' }
         $verdictText = "FAIL (headless CLI exit=$cliExit)"
-        Write-Output "| $($s.id) | $verdictText | status=$st cli_exit=$cliExit cost=`$$($run.metrics.costUsd) |"
-        Write-ResultRecord -Id $s.id -Verdict $verdictText -RunJsonPath $runJson
+        Write-Output "| $($s.id) | $verdictText | status=$st cli_exit=$cliExit cost=`$$($run.metrics.costUsd)$scoreNote |"
+        Write-ResultRecord -Id $s.id -Verdict $verdictText -RunJsonPath $runJson -Score $score
         if (-not $Keep) { Remove-Item -Recurse -Force $work }
         return $false
     }
@@ -1011,7 +1084,7 @@ function Invoke-Scenario {
 
     $verdict = Assert-Run -Scenario $Scenario -RunJsonPath $runJson -ProjectDir $work -BuildExit $buildExit -SmokeExit $smokeExit
     $run = Get-Content -Raw $runJson | ConvertFrom-Json
-    Write-Output "| $($s.id) | $verdict | status=$($run.session.status) build_exit=$buildExit cost=`$$($run.metrics.costUsd) |"
+    Write-Output "| $($s.id) | $verdict | status=$($run.session.status) build_exit=$buildExit cost=`$$($run.metrics.costUsd)$scoreNote |"
 
     # SOFT judge tier: runs only when JUDGE_MODEL is set; never changes the HARD verdict.
     $judge = Invoke-Judge -Scenario $Scenario -Work $work -Fixture $fixture -PromptFile $effectivePrompt
@@ -1024,7 +1097,7 @@ function Invoke-Scenario {
         }
     }
 
-    Write-ResultRecord -Id $s.id -Verdict $verdict -RunJsonPath $runJson -Judge $judge -BuildCmd ([string]$s.assert.build_cmd)
+    Write-ResultRecord -Id $s.id -Verdict $verdict -RunJsonPath $runJson -Judge $judge -BuildCmd ([string]$s.assert.build_cmd) -Score $score
     if (-not $Keep) { Remove-Item -Recurse -Force $work }
     return ($verdict -like 'PASS*')
 }
@@ -1225,6 +1298,30 @@ function Invoke-SelfTest {
         Write-Host "  preserve-*     -> skipped: node not found on PATH"
     }
 
+    # plan: step order and named files judged from run.json through lib/plan-check.mjs. Mirrors e2e-run.sh.
+    if (Get-Command node -ErrorAction SilentlyContinue) {
+        $plfx = Join-Path $proj 'plfx'; New-Item -ItemType Directory -Path (Join-Path $plfx 'app') -Force | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $plfx 'app\models.py'), "x = 1`n")
+        [System.IO.File]::WriteAllText((Join-Path $plfx 'app\routes.py'), "y = 2`n")
+        $plscen = Join-Path $proj 'plan.scenario.json'
+        '{ "id":"plan","fixture":"plfx","assert":{"plan":{"min_steps":2,"paths_exist":true,"order":[{"before":"models","after":"routes"}]}}}' | Set-Content $plscen
+        $plproj = Join-Path $proj 'plp'; Copy-Item -Recurse $plfx $plproj
+        $planCases = @(
+            @{ name = 'plan-ok   '; out = "1. Add the field in app/models.py`n2. Expose it in app/routes.py`n"; want = 'PASS*' },
+            @{ name = 'plan-order'; out = "1. Expose it in app/routes.py`n2. Add the field in app/models.py`n"; want = '*comes before*' },
+            @{ name = 'plan-path '; out = "1. Add the field in app/models.py`n2. Expose it in app/api/users.py`n"; want = '*app/api/users.py*' }
+        )
+        foreach ($pc in $planCases) {
+            $runObj = Get-Content -Raw (Join-Path $sample 'sample-run.pass.json') | ConvertFrom-Json
+            $runObj | Add-Member -NotePropertyName finalOutput -NotePropertyValue $pc.out -Force
+            $planRun = Join-Path $proj 'plan-run.json'
+            [System.IO.File]::WriteAllText($planRun, ($runObj | ConvertTo-Json -Depth 30))
+            $v = Assert-Run $plscen $planRun $plproj 0; Write-Host "  $($pc.name) -> $v"; if ($v -notlike $pc.want) { $fails = 1 }
+        }
+    } else {
+        Write-Host "  plan-*         -> skipped: node not found on PATH"
+    }
+
     # Batch manifest: secrets masked, an unreachable server or a missing CLI recorded as a reason.
     # The CLI points nowhere so nothing runs; the Ollama endpoint is a closed loopback port.
     if (Get-Command node -ErrorAction SilentlyContinue) {
@@ -1248,6 +1345,14 @@ function Invoke-SelfTest {
     } else {
         Write-Host "  batch-manifest -> skipped: node not found on PATH"
     }
+
+    # score - how far a part-way run got, read from its score command's output (mirrors e2e-run.sh).
+    $sc = Get-ScenarioScore -Output "PASS rle`nFAIL chunk: not implemented`nSUMMARY passed 9/12" -Regex 'SUMMARY passed ([0-9]+/[0-9]+)'
+    Write-Host "  case score -> $sc"
+    if ($sc -ne '9/12') { Write-Host '  !! expected score 9/12'; $fails = 1 }
+    $sc = Get-ScenarioScore -Output 'Error: Cannot find module' -Regex 'SUMMARY passed ([0-9]+/[0-9]+)'
+    Write-Host "  case score-missing -> $(if ($null -eq $sc) { 'none' } else { $sc })"
+    if ($null -ne $sc) { Write-Host '  !! output without the summary line must give no score'; $fails = 1 }
 
     Remove-Item -Recurse -Force $proj, $empty
     if ($fails -eq 0) { Write-Host 'self-test OK' } else { throw 'self-test FAILED' }

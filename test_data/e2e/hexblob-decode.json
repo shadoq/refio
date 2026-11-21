@@ -1,0 +1,24 @@
+{
+  "id": "hexblob-decode",
+  "mode": "AGENT",
+  "description": "Static firmware analysis: follow the documented image format (magic, section table, XOR-0x5A-encoded string entries) to recover the embedded strings from a hex dump and report the flag.",
+  "category": "reversing",
+  "max_iterations": 30,
+  "fixture": "fixtures/hexblob",
+  "prompt_file": "prompts/hexblob-decode.md",
+  "assert": {
+    "tool_order": ["read_file"],
+    "needle_in_output": { "text": "FLAG{firmware_string_table_8c41}" },
+    "file_unchanged": [
+      "firmware/flash_dump.hex",
+      "docs/format.md",
+      "README.md"
+    ],
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The agent parsed the dump per docs/format.md - header magic, section count, the section table, then the type-0x0003 string entries with their length prefixes and the XOR 0x5A encoding - and reported the exact flag FLAG{firmware_string_table_8c41} without modifying the dump, the format doc or the README."
+    ]
+  }
+}

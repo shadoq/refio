@@ -86,7 +86,11 @@ enum class AgentInstanceStatus {
     WAITING_DATA,
     WAITING_APPROVAL,
     COMPLETED,
+    /** The turn stopped on a limit or without delivering; its work so far is kept. */
+    INCOMPLETE,
     FAILED,
+    /** Never ran: a dependency did not complete, the run stopped, or its time or cost ran out. */
+    SKIPPED,
     CANCELLED
 }
 

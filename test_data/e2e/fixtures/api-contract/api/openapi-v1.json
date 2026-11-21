@@ -1,0 +1,87 @@
+{
+  "openapi": "3.0.0",
+  "info": { "title": "Orders API", "version": "1.0.0" },
+  "paths": {
+    "/users/{id}": {
+      "get": {
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "integer" },
+                    "name": { "type": "string" },
+                    "email": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/items": {
+      "get": {
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "default": 20 }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "item page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": { "type": "array", "items": { "type": "string" } },
+                    "next_cursor": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orders": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "user_id": { "type": "integer" },
+                  "items": { "type": "array", "items": { "type": "string" } },
+                  "total": { "type": "number" }
+                },
+                "required": ["user_id", "items", "total"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "created" },
+          "400": { "description": "invalid order" }
+        }
+      }
+    }
+  }
+}

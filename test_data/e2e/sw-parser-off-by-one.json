@@ -1,0 +1,31 @@
+{
+  "id": "sw-parser-off-by-one",
+  "mode": "AGENT",
+  "description": "Fix the off-by-one in the csvlite row splitter: the trailing field is dropped whenever it is empty, so exports ending on a separator come back one field short and misalign the billing batch; the hidden gate replays the corrupted export while quoting behaviour and the visible tests must stay green.",
+  "category": "swe-bench",
+  "max_iterations": 30,
+  "fixture": "fixtures/sw-parser-off-by-one",
+  "prompt_file": "prompts/sw-parser-off-by-one.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": ["advance_code_editing"],
+    "needles_in_file": [
+      { "path": "csvlite.py", "regex": "split_row\\('a,b,'\\)" },
+      { "path": "csvlite.py", "regex": "fields\\.append\\(\"\"\\.join\\(field\\)\\)" },
+      { "path": "csvlite.py", "regex": "while[[:space:]]+i[[:space:]]*<[[:space:]]*len\\(line\\):" },
+      { "path": "csvlite.py", "regex": "i \\+ 1 < len\\(line\\) and line\\[i \\+ 1\\] == '\"'" },
+      { "path": "csvlite.py", "regex": "if[[:space:]]+field:", "absent": true }
+    ],
+    "file_unchanged": [
+      "README.md",
+      "checks.py",
+      "test/test_csvlite.py"
+    ],
+    "build_cmd": "python3 checks.py"
+  },
+  "judge": {
+    "criteria": [
+      "csvlite.py returns every field of a row including trailing empty ones ('a,b,' is ['a', 'b', ''], a row of only separators is all empty fields, an empty row is one empty field), keeps quoting and doubled-quote escapes intact, and parse/pad_row line up with the header again - without touching the gate, the visible tests or the README."
+    ]
+  }
+}

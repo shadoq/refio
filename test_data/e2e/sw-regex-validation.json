@@ -1,0 +1,30 @@
+{
+  "id": "sw-regex-validation",
+  "mode": "AGENT",
+  "description": "Fix the signup validators: the email pattern is unanchored and accepts a@b@c plus surrounding junk, while the date pattern accepts month 13, day 32 and junk around the date but rejects single-digit fields; the hidden gate replays the valid and invalid tables plus the untouched slug and hex validators.",
+  "category": "swe-bench",
+  "max_iterations": 30,
+  "fixture": "fixtures/sw-regex-validation",
+  "prompt_file": "prompts/sw-regex-validation.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": ["advance_code_editing"],
+    "needles_in_file": [
+      { "path": "validators.js", "regex": "EMAIL_PATTERN = /\\^" },
+      { "path": "validators.js", "regex": "DATE_PATTERN = /\\^" },
+      { "path": "validators.js", "regex": "1\\[0-2\\]" },
+      { "path": "validators.js", "regex": "3\\[01\\]" },
+      { "path": "validators.js", "regex": "EMAIL_PATTERN = /\\[a-z0-9._%\\+\\-\\]\\+@\\[a-z0-9.\\-\\]\\+/i", "absent": true }
+    ],
+    "file_unchanged": [
+      "README.md",
+      "checks.js"
+    ],
+    "build_cmd": "node checks.js"
+  },
+  "judge": {
+    "criteria": [
+      "validators.js anchors EMAIL_PATTERN so the whole input must be one local part, one @ and a domain ending in a dot-TLD of two or more letters, and anchors DATE_PATTERN with month 01-12, day 01-31, optional leading zeros and nothing around the date, while the slug and hex validators, the validator functions and the exports stay unchanged - without touching the gate or the README."
+    ]
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "id": "aider-retry-py-complex",
+  "mode": "AGENT",
+  "description": "Aider-polyglot style (Python, two modules), built for the repair round: a template engine with dotted-path lookup, nested conditionals, escapes and malformed-template errors. The natural first implementation substitutes tags with repeated str.replace or re.sub plus recursion and so expands a substituted value that itself contains {{ ... }}, and it tends to treat falsy values such as 0 or False as missing or empty; the tests catch both, so the post-turn verifier's second round has to fix them.",
+  "category": "aider-polyglot",
+  "max_iterations": 50,
+  "fixture": "fixtures/aider-retry-py-complex",
+  "prompt_file": "prompts/aider-retry-py-complex.md",
+  "config": [
+    "verify.command=python -m unittest template_test"
+  ],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": [
+      "template_test.py",
+      ".docs/instructions.md"
+    ],
+    "build_cmd": "python -m unittest template_test",
+    "self_verified": true
+  }
+}

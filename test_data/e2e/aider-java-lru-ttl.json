@@ -1,0 +1,22 @@
+{
+  "id": "aider-java-lru-ttl",
+  "mode": "AGENT",
+  "description": "Aider-polyglot style (Java): implement an LRU cache with per-entry TTL on an injected clock from a stub and an instructions file - expiry exactly at stored time plus ttl, get refreshing recency but not the ttl, expired entries dropped before any live entry is evicted (even a recently used expired one), containsKey/size/keys not touching recency, replacing a live key at capacity evicting nothing, and saturating ttl arithmetic. A protected run_tests.py compiles with javac and runs the plain-Java test runner; the post-turn verifier gives a failing first attempt a repair round, like aider's second try.",
+  "category": "aider-polyglot",
+  "max_iterations": 40,
+  "fixture": "fixtures/aider-java-lru-ttl",
+  "prompt_file": "prompts/aider-java-lru-ttl.md",
+  "config": [
+    "verify.command=python run_tests.py"
+  ],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": [
+      "test/TtlLruCacheTest.java",
+      "run_tests.py",
+      ".docs/instructions.md"
+    ],
+    "build_cmd": "python run_tests.py",
+    "self_verified": true
+  }
+}

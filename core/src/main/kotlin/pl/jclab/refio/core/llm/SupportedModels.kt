@@ -35,8 +35,12 @@ object SupportedModels {
      * Newer Codex generations (5.3+) still work on the direct API and stay listed.
      */
     private val OPENAI_SUPPORTED = setOf(
+        // GPT-6.2
+        "gpt-6.2-astra",
+        "gpt-6.2-sol",
         // GPT-6.1
         "gpt-6.1-sol",
+        "gpt-6.1-terra",
         // GPT-6
         "gpt-6-astra",
         "gpt-6-sol",
@@ -98,6 +102,10 @@ object SupportedModels {
      * Anthropic supported models.
      */
     private val ANTHROPIC_SUPPORTED = setOf(
+        // Fable models
+        "claude-fable-5-2",
+        "claude-fable-5-1",
+        "claude-fable-5",
         // Opus models
         "claude-opus-5-5",
         "claude-opus-5",
@@ -125,6 +133,7 @@ object SupportedModels {
         "claude-3-7-sonnet-20250219",
         "claude-3-7-sonnet-latest",
         // Haiku models
+        "claude-haiku-5-5",
         "claude-haiku-4-5-20251001",
         "claude-haiku-4-5",
         "claude-haiku-4-5@20251001",
@@ -188,6 +197,18 @@ object SupportedModels {
      * Gemini supported models.
      */
     private val GEMINI_SUPPORTED = setOf(
+        "gemini-4-neon",
+        "gemini-4-hydrogen",
+        "gemini-4-carbon",
+        "gemini-4-argon",
+        "gemini-3.8-flash",
+        "gemini-3.7-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.5-flash",
+        "gemini-3.1-pro-preview",
+        "gemini-3.1-flash-lite",
+        "gemini-3-flash-preview",
         "gemini-3-pro-preview",
         "gemini-3-flash",
         "gemini-3-flash-lite",

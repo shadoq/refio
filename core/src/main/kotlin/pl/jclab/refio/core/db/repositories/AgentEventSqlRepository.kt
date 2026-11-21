@@ -3,7 +3,10 @@ package pl.jclab.refio.core.db.repositories
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import org.jetbrains.exposed.sql.*
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.inList
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.less
 import org.jetbrains.exposed.sql.transactions.TransactionManager
+import org.jetbrains.exposed.sql.transactions.transaction
 import pl.jclab.refio.core.agents.events.AgentEvent
 import pl.jclab.refio.core.agents.events.AgentEventRepository
 import pl.jclab.refio.core.agents.events.Artifact
@@ -67,6 +70,23 @@ class AgentEventSqlRepository(
                 .limit(limit)
                 .mapNotNull { row -> deserializeEvent(row) }
                 .asReversed()
+        }
+    }
+
+    override fun deleteOlderThan(cutoffMs: Long, batchSize: Int): Int {
+        var total = 0
+        while (true) {
+            val deleted = transaction(database) {
+                val ids = AgentEventsTable.select(AgentEventsTable.id)
+                    .where { AgentEventsTable.timestamp less cutoffMs }
+                    .limit(batchSize)
+                    .map { it[AgentEventsTable.id] }
+                if (ids.isEmpty()) 0 else AgentEventsTable.deleteWhere { AgentEventsTable.id inList ids }
+            }
+            total += deleted
+            if (deleted < batchSize) {
+                return total
+            }
         }
     }
 

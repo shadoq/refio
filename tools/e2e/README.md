@@ -56,6 +56,16 @@ bash tools/e2e/e2e-run.sh --list
 bash tools/e2e/e2e-run.sh --model ollama/qwen3.5:9b website-web-aurora
 ```
 
+Selecting and reporting (no LLM, no writes):
+
+```bash
+bash tools/e2e/e2e-run.sh --list --category bugfix --filter '^fix-'   # --category exact, --filter ERE on id; also narrows --all
+bash tools/e2e/e2e-run.sh --list --json                               # machine-readable list
+bash tools/e2e/e2e-run.sh --catalog                                   # Markdown table: category, golden, negative, assert keys
+bash tools/e2e/e2e-stats.sh --junit --out junit.xml <results-dir>     # CI formats; --tap for TAP 13, default is Markdown
+bash tools/e2e/validate-scenarios.sh <id>                             # also fails on an unknown `assert` key (a typo would silently skip a check)
+```
+
 Full harness reference: [`test_data/e2e-harness.md`](../../test_data/e2e-harness.md).
 
 The `smoke` assertion needs Chromium: `npm run smoke:install` in this directory.

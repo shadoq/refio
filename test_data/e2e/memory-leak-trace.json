@@ -1,0 +1,24 @@
+{
+  "id": "memory-leak-trace",
+  "mode": "AGENT",
+  "description": "Diagnose an unbounded-memory incident from a tracemalloc-style heap profile: the session store keeps a full copy of every session's payload in its audit trail and never bounds the live map. Fix both (count-only audit, LRU cap 2048) while the issued-session counter stays exact.",
+  "category": "debugging",
+  "max_iterations": 30,
+  "fixture": "fixtures/leak-session",
+  "prompt_file": "prompts/memory-leak-trace.md",
+  "assert": {
+    "needle_in_file": { "path": "src/sessions.py", "text": "2048" },
+    "file_unchanged": [
+      "report/heap-profile.txt",
+      "checks.py",
+      "README.md"
+    ],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The audit trail retains counts instead of full payload copies, the live map is bounded by an LRU cap of 2048 (evicting the least recently used), and the issued counter still counts every session ever opened - proven by the tracemalloc gates (churn and unbounded-open stay under threshold) and the functional checks."
+    ]
+  }
+}

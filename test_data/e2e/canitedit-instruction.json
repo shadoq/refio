@@ -1,0 +1,22 @@
+{
+  "id": "canitedit-instruction",
+  "mode": "AGENT",
+  "description": "CanItEdit style (Python): a precise edit instruction - add a keyword parameter with a default to one function, with a new conditional output row and validation, while the default behaviour stays byte-identical. Tests cover the new feature and the unchanged output; a preserved_except rule requires that everything outside format_receipt is untouched.",
+  "category": "canitedit",
+  "max_iterations": 20,
+  "fixture": "fixtures/canitedit-instruction",
+  "prompt_file": "prompts/canitedit-instruction.md",
+  "config": ["verify.command=python -m unittest discover -s tests"],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": ["tests/test_receipt.py"],
+    "preserved_except": [
+      {
+        "path": "receipt.py",
+        "region": { "start": "^def format_receipt\\(", "end": "^    return \"\\\\n\"\\.join\\(out\\)$" }
+      }
+    ],
+    "build_cmd": "python -m unittest discover -s tests",
+    "self_verified": true
+  }
+}

@@ -31,7 +31,48 @@ data class SessionDebugSnapshot(
      * single-task run. Additive; the schema version is unchanged.
      */
     val multiAgent: MultiAgentInfo? = null,
+    /**
+     * Present only when the task ran in rounds (`--until`, `--goal`, `/until`, `/long on`): how the
+     * loop ended and what each round did. Null for a single turn. Additive; the schema version is
+     * unchanged.
+     */
+    val longTask: LongTaskInfo? = null,
+    /**
+     * Every subagent the task ran, in the order they finished: how far each got, why it stopped
+     * and which files it changed. Empty when no subagent ran. Additive; the schema version is
+     * unchanged.
+     */
+    val agents: List<SubagentRunInfo> = emptyList(),
 ) {
+    data class LongTaskInfo(
+        /** SUCCEEDED, INCOMPLETE, FAILED, CANCELLED, INTERRUPTED, or RUNNING while it runs. */
+        val status: String,
+        val stopReason: String?,
+        /** The command the loop ran until; null in goal mode. */
+        val untilCommand: String?,
+        val roundsDone: Int,
+        /** Time spent in rounds, without time with the process closed. */
+        val activeMs: Long,
+        /** The end of the last check's output, at most a few kilobytes. */
+        val lastCheck: String?,
+        val rounds: List<RoundInfo>,
+    )
+
+    data class RoundInfo(
+        val round: Int,
+        val durationMs: Long,
+        val iterations: Int,
+        val turnStopReason: String,
+        /** Null when the round ended before its check ran. */
+        val checkPassed: Boolean?,
+        /** Null when the check timed out or did not run. */
+        val exitCode: Int?,
+        val errorLines: Int?,
+        val filesWritten: Int,
+        val planStepsDone: Int,
+        val progress: Boolean,
+    )
+
     data class RunInfo(
         val debugLevel: String,
         val durationMs: Long,
@@ -232,6 +273,19 @@ data class SessionDebugSnapshot(
         val error: String? = null,
     )
 
+    /** One subagent run, read from the result its caller received. */
+    data class SubagentRunInfo(
+        val name: String,
+        /** done, partial or failed; null for a run recorded before subagents reported a status. */
+        val status: String?,
+        val stopReason: String?,
+        val iterations: Int,
+        val tokensIn: Int,
+        val tokensOut: Int,
+        val durationMs: Long?,
+        val filesChanged: List<String>,
+    )
+
     /** Multi-agent run summary: the agents in the order they actually executed. */
     data class MultiAgentInfo(
         val agents: List<AgentRunInfo>,
@@ -246,6 +300,10 @@ data class SessionDebugSnapshot(
         val tokensIn: Int = 0,
         val tokensOut: Int = 0,
         val costUsd: Double = 0.0,
+        /** The agent's own task; its conversation is merged into the run's conversation. */
+        val taskId: String? = null,
+        val filesChanged: List<String> = emptyList(),
+        val error: String? = null,
     )
 
     data class ApiLogInfo(

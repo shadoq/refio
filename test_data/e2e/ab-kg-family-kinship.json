@@ -1,0 +1,25 @@
+{
+  "id": "ab-kg-family-kinship",
+  "mode": "AGENT",
+  "description": "AgentBench-KG style relational reasoning: answer ten kinship questions (grandparents, siblings excluding self, aunts/uncles, cousins, one legitimate empty set) over a parent_of/spouse_of triple graph, exactly as the gate recomputes them.",
+  "category": "agentbench-kg",
+  "max_iterations": 20,
+  "fixture": "fixtures/ab-kg-family",
+  "prompt_file": "prompts/ab-kg-family-kinship.md",
+  "assert": {
+    "needle_in_file": { "path": "answers/kinship.json", "text": "\"q8_spouse_of_dan\": \"fiona\"" },
+    "needles_in_file": [
+      { "path": "answers/kinship.json", "text": "\"q6_cousins_of_nina\": []" },
+      { "path": "answers/kinship.json", "text": "\"q10_grandparents_of_oscar\"" },
+      { "path": "answers/kinship.json", "text": "\"q1_parents_of_harry\"" }
+    ],
+    "file_unchanged": ["checks.py", "docs/questions.md", "graph/family.triples", "README.md"],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "All ten answers use the documented definitions (no self in siblings, cousins exclude siblings), arrays are alphabetically sorted, q6 is empty, and the graph is untouched."
+    ]
+  }
+}

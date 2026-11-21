@@ -1,0 +1,16 @@
+{
+  "id": "nofuneval-memory",
+  "mode": "AGENT",
+  "description": "NoFunEval style (non-functional requirement: memory): a log summariser that loads and parses the whole file must be rewritten to stream, keeping its output identical including the unreadable-line count. The checks script generates a 400k-line log at test time and measures peak allocation with tracemalloc against a 3 MiB limit, so reading lines into a list or collecting parsed rows still fails.",
+  "category": "nofuneval",
+  "max_iterations": 30,
+  "fixture": "fixtures/nofuneval-memory",
+  "prompt_file": "prompts/nofuneval-memory.md",
+  "config": ["verify.command=python checks.py"],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": ["checks.py"],
+    "build_cmd": "python checks.py",
+    "self_verified": true
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "id": "pg-rust-result-errors",
+  "mode": "AGENT",
+  "description": "Make a Rust INI parser panic-free: replace the unwrap/expect calls in src/lib.rs with a ParseError enum (InvalidLine, MissingKey, BadNumber carrying the offending input), Result returns and map_err-based conversion, and document that parse() no longer panics, using only the standard library.",
+  "category": "polyglot-editing",
+  "max_iterations": 30,
+  "fixture": "fixtures/pg-rust-result-errors",
+  "prompt_file": "prompts/pg-rust-result-errors.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": ["advance_code_editing"],
+    "needles_in_file": [
+      { "path": "src/lib.rs", "regex": "enum ParseError" },
+      { "path": "src/lib.rs", "regex": "Result<" },
+      { "path": "src/lib.rs", "regex": "map_err" },
+      { "path": "src/lib.rs", "regex": "#\\[derive" },
+      { "path": "src/lib.rs", "regex": "\\.unwrap\\(\\)", "absent": true }
+    ],
+    "file_unchanged": [
+      "README.md"
+    ]
+  },
+  "judge": {
+    "criteria": [
+      "src/lib.rs declares a ParseError enum with InvalidLine, MissingKey and BadNumber variants carrying the offending input, derives the usual traits and implements Display/Error for it, returns Result<_, ParseError> from parse, parse_section, parse_pair, parse_number, get_text and get_number with map_err/ok_or converting every fallible step, documents that parse no longer panics, and contains no .unwrap() call, all with only the standard library and the README untouched."
+    ]
+  }
+}

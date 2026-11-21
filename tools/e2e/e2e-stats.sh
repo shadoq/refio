@@ -14,6 +14,7 @@
 # Usage:
 #   e2e-stats.sh <results-dir | results.jsonl> [more ...]   # print report to stdout
 #   e2e-stats.sh --out <file> <results ...>                 # also write the report to <file>
+#   e2e-stats.sh --junit|--tap [--out <file>] <results ...> # CI formats (JUnit XML per model / TAP 13 per run) instead of Markdown
 #   e2e-stats.sh --self-test                                # offline check of the aggregation (no data)
 #   e2e-stats.sh --help
 #
@@ -26,11 +27,15 @@ require_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "ERROR: '$1' not found
 require_cmd jq
 
 OUT=""
+FORMAT="md"
 SELF_TEST=0
 INPUTS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --out)       OUT="$2"; shift 2 ;;
+        --format)    FORMAT="$2"; shift 2 ;;
+        --junit)     FORMAT=junit; shift ;;
+        --tap)       FORMAT=tap; shift ;;
         --self-test) SELF_TEST=1; shift ;;
         -h|--help)   sed -n '2,26p' "$0"; exit 0 ;;
         -*)          echo "ERROR: unknown flag: $1" >&2; exit 2 ;;
@@ -146,6 +151,37 @@ render_report() {
     '
 }
 
+# JUnit XML for CI: one <testsuite> per model, one <testcase> per run; a non-PASS verdict is a <failure>.
+render_junit() {
+    jq -rs '
+      def esc: tostring | gsub("&";"&amp;") | gsub("<";"&lt;") | gsub(">";"&gt;") | gsub("\"";"&quot;");
+      def secs: ((.durationMs // 0) / 1000);
+      "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
+      "<testsuites>",
+      ( group_by(.model)[]
+        | . as $runs
+        | "  <testsuite name=\"\($runs[0].model | esc)\" tests=\"\($runs|length)\" failures=\"\([$runs[]|select(.verdict!="PASS")]|length)\" time=\"\([$runs[]|secs]|add)\">",
+          ( $runs[]
+            | "    <testcase classname=\"\(.model | esc)\" name=\"\(.scenario | esc)#\(.run // 1)\" time=\"\(secs)\">"
+              + ( if .verdict == "PASS" then ""
+                  else "\n      <failure message=\"\((.failure_mode // "fail") | esc)\">\(((.reasons // []) | join("; ")) | esc)</failure>\n    " end )
+              + "</testcase>" ),
+          "  </testsuite>" ),
+      "</testsuites>"
+    '
+}
+
+# TAP 13: one line per run, reasons of a failed run as a trailing comment.
+render_tap() {
+    jq -rs '
+      "TAP version 13",
+      "1..\(length)",
+      ( to_entries[]
+        | "\(if .value.verdict == "PASS" then "ok" else "not ok" end) \(.key + 1) - \(.value.scenario) [\(.value.model)] run \(.value.run // 1)"
+          + ( if .value.verdict == "PASS" then "" else " # \((.value.failure_mode // "fail")): \(((.value.reasons // []) | join("; ")))" end ) )
+    '
+}
+
 self_test() {
     echo "# e2e-stats.sh self-test (aggregation only - no data files, no LLM)" >&2
     local tmp; tmp="$(mktemp "${TMPDIR:-/tmp}/e2e-stats-selftest-XXXXXX")"
@@ -154,10 +190,21 @@ self_test() {
 {"scenario":"s1","model":"m-a","run":2,"verdict":"FAIL","failure_mode":"loop","status":"INCOMPLETE","costUsd":0,"tokensOut":200,"iterations":20,"durationMs":5000,"tools":{"read_file":5},"apiErrors":{"TIMEOUT":1}}
 {"scenario":"s2","model":"m-b","run":1,"verdict":"PASS","failure_mode":"none","status":"SUCCESS","costUsd":0.01,"tokensOut":50,"iterations":2,"durationMs":800,"tools":{"advance_code_editing":1},"apiErrors":{}}
 JSONL
-    local report fails=0
+    local report junit tap fails=0
     report="$(render_report <"$tmp")"
+    junit="$(render_junit <"$tmp")"
+    tap="$(render_tap <"$tmp")"
     rm -f "$tmp"
     check() { grep -qF -- "$1" <<<"$report" || { echo "  !! expected report to contain: $1" >&2; fails=1; }; }
+    checkj() { grep -qF -- "$1" <<<"$junit" || { echo "  !! expected junit to contain: $1" >&2; fails=1; }; }
+    checkt() { grep -qF -- "$1" <<<"$tap" || { echo "  !! expected tap to contain: $1" >&2; fails=1; }; }
+    # JUnit: m-a has 2 runs and 1 failure (failure_mode loop); m-b is all green
+    checkj '<testsuite name="m-a" tests="2" failures="1"'
+    checkj '<failure message="loop">'
+    checkj '<testsuite name="m-b" tests="1" failures="0"'
+    # TAP: plan covers 3 runs; the failed run is "not ok" and carries its failure mode
+    checkt '1..3'
+    checkt 'not ok 2 - s1 [m-a] run 2 # loop:'
     # m-a: 2 runs, 1 pass -> 50%
     check "| m-a | 2 | 1 | 50% |"
     # read_file total across runs = 2 + 5 = 7, used in 2 runs
@@ -178,7 +225,13 @@ fi
 
 [[ ${#INPUTS[@]} -gt 0 ]] || { echo "ERROR: no input (pass a results dir/jsonl, or --self-test)" >&2; exit 2; }
 
-REPORT="$(gather_jsonl "${INPUTS[@]}" | render_report)"
+case "$FORMAT" in
+    md)    RENDER=render_report ;;
+    junit) RENDER=render_junit ;;
+    tap)   RENDER=render_tap ;;
+    *)     echo "ERROR: --format must be md, junit or tap" >&2; exit 2 ;;
+esac
+REPORT="$(gather_jsonl "${INPUTS[@]}" | $RENDER)"
 printf '%s\n' "$REPORT"
 if [[ -n "$OUT" ]]; then
     printf '%s\n' "$REPORT" > "$OUT"

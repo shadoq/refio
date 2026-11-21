@@ -2,6 +2,9 @@ package pl.jclab.refio.cli
 
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.db.TaskStatus
+import pl.jclab.refio.core.services.TurnResult
+import pl.jclab.refio.core.services.longtask.LongTaskState
+import pl.jclab.refio.core.services.longtask.LongTaskStatus
 
 /**
  * Exit-code contract for headless / multi-agent runs.
@@ -17,6 +20,21 @@ internal object HeadlessExit {
     /** SUCCESS only for a delivered turn; FAILED / INCOMPLETE / anything else is non-zero. */
     fun forStatus(status: TaskStatus): Int =
         if (status == TaskStatus.SUCCESS) SUCCESS else FAILURE
+}
+
+/**
+ * The task status a headless run reports for [result]. When the task ran in rounds, the loop's
+ * outcome in [loop] decides: only a loop that reached its condition is a success.
+ */
+internal fun headlessStatus(result: TurnResult, loop: LongTaskState?): TaskStatus = when {
+    loop != null -> when (loop.status) {
+        LongTaskStatus.SUCCEEDED -> TaskStatus.SUCCESS
+        LongTaskStatus.CANCELLED -> TaskStatus.CANCELED
+        else -> TaskStatus.INCOMPLETE
+    }
+    result.incomplete -> TaskStatus.INCOMPLETE
+    result.success -> TaskStatus.SUCCESS
+    else -> TaskStatus.FAILED
 }
 
 /**

@@ -80,6 +80,8 @@ class TuiObservabilityViewModel(
 
     // --- Help ---
     val _helpScrollOffset = MutableStateFlow(0)
+    /** Text typed after `/` on the help screen; null when not filtering. */
+    val _helpFilter = MutableStateFlow<String?>(null)
 
     /** LogSink that feeds core log messages into the Logs tab. */
     val tuiLogSink = TuiLogSink(_logs, scope = scope)
@@ -173,7 +175,7 @@ class TuiObservabilityViewModel(
     }
 
     fun ragFileUp() { _ragSelectedFileIndex.update { (it - 1).coerceAtLeast(0) } }
-    fun ragFileDown() { _ragSelectedFileIndex.update { it + 1 } }
+    fun ragFileDown() { _ragSelectedFileIndex.update { (it + 1).coerceAtMost((_ragIndexedFiles.value.size - 1).coerceAtLeast(0)) } }
 
     fun ragOpenSelectedFile() {
         val file = _ragIndexedFiles.value.getOrNull(_ragSelectedFileIndex.value) ?: return
@@ -302,32 +304,12 @@ class TuiObservabilityViewModel(
                             _contextSections.value = sections
                         }
                     } catch (e: Exception) {
-                        logger.debug(e) { "Project context not available, falling back to RAG stats" }
+                        logger.debug(e) { "Project context not available" }
                     }
                 }
 
-                // If no context sections were loaded, fall back to RAG stats
-                if (_contextSections.value.isEmpty()) {
-                    val stats = r.ragRouter.getRagStatistics()
-                    _contextSections.value = listOf(
-                        TuiContextSection(
-                            name = "RAG Index",
-                            category = "rag",
-                            tokensUsed = stats.embeddingsCount,
-                            tokensMax = stats.chunksCount,
-                            colorIndex = 6
-                        ),
-                        TuiContextSection(
-                            name = "Indexed Files",
-                            category = "rag",
-                            tokensUsed = stats.filesCount,
-                            tokensMax = 0,
-                            colorIndex = 6
-                        )
-                    )
-                }
-
-                // Always load indexed files for the RAG files table
+                // The RAG panel and settings read the index state from this one list (and its sums),
+                // so the "empty index" message and the file table can never disagree.
                 val files = r.ragRouter.getRagIndexedFiles()
                 _ragIndexedFiles.value = files.map { f ->
                     TuiRagFile(
@@ -957,6 +939,10 @@ class TuiObservabilityViewModel(
     // Help
     // ========================================================================
 
+    fun setHelpFilter(filter: String?) {
+        _helpFilter.value = filter
+        _helpScrollOffset.value = 0
+    }
     fun helpScrollUp() { _helpScrollOffset.update { (it - 1).coerceAtLeast(0) } }
     fun helpScrollDown() { _helpScrollOffset.update { it + 1 } }
     fun helpPageUp() { _helpScrollOffset.update { (it - 10).coerceAtLeast(0) } }

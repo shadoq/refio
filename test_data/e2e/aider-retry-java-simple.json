@@ -1,0 +1,22 @@
+{
+  "id": "aider-retry-java-simple",
+  "mode": "AGENT",
+  "description": "Aider-polyglot style (Java), built for the repair round: convert between spreadsheet column numbers and labels (A, Z, AA, AZ, ZZ, AAA). The natural first implementation uses ordinary base-26 with n % 26 and so gets the multiples of 26 wrong (26 becomes A@ or AZ, 52 and 702 break) because the numbering has no zero digit, and it often forgets the int overflow check in fromLabel; the tests catch both, so the post-turn verifier's second round has to fix them. A protected run_tests.py compiles with javac and runs a plain Java test runner.",
+  "category": "aider-polyglot",
+  "max_iterations": 25,
+  "fixture": "fixtures/aider-retry-java-simple",
+  "prompt_file": "prompts/aider-retry-java-simple.md",
+  "config": [
+    "verify.command=python run_tests.py"
+  ],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": [
+      "ColumnLabelTest.java",
+      "run_tests.py",
+      ".docs/instructions.md"
+    ],
+    "build_cmd": "python run_tests.py",
+    "self_verified": true
+  }
+}

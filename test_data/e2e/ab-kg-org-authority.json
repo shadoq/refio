@@ -1,0 +1,25 @@
+{
+  "id": "ab-kg-org-authority",
+  "mode": "AGENT",
+  "description": "AgentBench-KG style policy resolution over an org graph: rank-gated approval rules (self-approval for routine requests, never for sensitive ones, chain-walk to the nearest sufficient manager) resolved for ten requesters and recomputed by the gate.",
+  "category": "agentbench-kg",
+  "max_iterations": 20,
+  "fixture": "fixtures/ab-kg-org",
+  "prompt_file": "prompts/ab-kg-org-authority.md",
+  "assert": {
+    "needle_in_file": { "path": "answers/authority.json", "text": "\"q5\": \"alice\"" },
+    "needles_in_file": [
+      { "path": "answers/authority.json", "text": "\"q1\": \"dave\"" },
+      { "path": "answers/authority.json", "text": "\"q2\": \"dave\"" },
+      { "path": "answers/authority.json", "text": "\"q9\": \"gita\"" }
+    ],
+    "file_unchanged": ["checks.py", "docs/authority.md", "graph/org.triples", "README.md"],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "All ten resolutions follow the documented rules (self-approval only where allowed, nearest sufficient rank up the chain) and the graph and rules are untouched."
+    ]
+  }
+}

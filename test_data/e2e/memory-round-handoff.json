@@ -1,0 +1,24 @@
+{
+  "id": "memory-round-handoff",
+  "mode": "AGENT",
+  "description": "Roadmap-bench style long task with a memory handoff: the calibration constants of a sensor board are undocumented and can only be learned by running a probe script. They have to be recorded in NOTES.md and carried into the conversion function and the report generator. The harness repeats AGENT rounds until python check.py exits 0, so the facts found in an earlier round must be remembered through NOTES.md and the progress file, not rediscovered or guessed.",
+  "category": "roadmap-bench",
+  "max_iterations": 80,
+  "fixture": "fixtures/memory-round-handoff",
+  "prompt_file": "prompts/memory-round-handoff.md",
+  "until": "python check.py",
+  "max_rounds": 4,
+  "config": [
+    "long_task.max_minutes=30"
+  ],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": [
+      "probe.py",
+      "check.py",
+      "samples.csv",
+      "README.md"
+    ],
+    "build_cmd": "python check.py"
+  }
+}

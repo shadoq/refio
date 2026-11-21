@@ -1,0 +1,30 @@
+{
+  "id": "sw-money-rounding",
+  "mode": "AGENT",
+  "description": "Fix the cent-level money bugs in the storefront cart: float accumulation on subtotals (0.1 + 0.2 + 0.3 drift), per-unit discount rounding scaled by quantity, and parseFloat(toFixed(2)) totals after VAT; the hidden gate replays the finance reports and the integer-cents accessor contract.",
+  "category": "swe-bench",
+  "max_iterations": 30,
+  "fixture": "fixtures/sw-money-rounding",
+  "prompt_file": "prompts/sw-money-rounding.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": ["advance_code_editing"],
+    "needles_in_file": [
+      { "path": "cart.js", "regex": "Cents\\(" },
+      { "path": "cart.js", "regex": "formatCents" },
+      { "path": "cart.js", "regex": "Math\\.round\\(unitPrice \\* 100\\)" },
+      { "path": "cart.js", "regex": "parseFloat\\(", "absent": true },
+      { "path": "cart.js", "regex": "unitPrice \\* item\\.qty", "absent": true }
+    ],
+    "file_unchanged": [
+      "README.md",
+      "checks.js"
+    ],
+    "build_cmd": "node checks.js"
+  },
+  "judge": {
+    "criteria": [
+      "cart.js computes every total in integer cents - unit prices converted once at add() time, lines summed as integers, discounts rounding the line total once, VAT rounding the final cent amount - and exposes subtotalCents, discountedSubtotalCents, totalCents and formatCents alongside the derived dollar-number methods, so the finance reports (0.6 drift, 27.14 line discount, 33.38 VAT total) come out exact without touching the gate or the README."
+    ]
+  }
+}

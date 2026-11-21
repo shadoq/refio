@@ -1,0 +1,3 @@
+Small ML task. `data/train.csv` has four numeric features (`x1`..`x4`) and a 0/1 `label`; `data/test_features.csv` has the same features for 400 held-out rows. The current `model.py` is a placeholder baseline that always predicts the majority class and scores about 50 percent.
+
+Implement `fit(X, y)` and `predict(model, X)` in `model.py` so that held-out accuracy is at least 0.90. numpy only (no scikit-learn, no network). Keep the two function signatures, make training deterministic (same data, same predictions) and fast. The held-out labels are not available to you; `python checks.py` evaluates the module on them. Do not edit `checks.py` or the data files, and do not try to read the labels out of the checker.

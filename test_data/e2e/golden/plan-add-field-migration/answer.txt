@@ -1,0 +1,5 @@
+1. Add `migrations/002_add_user_email.sql`: `ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT ''`, then backfill existing rows with a placeholder such as `'unknown+' || id || '@invalid'`.
+2. Add `email: str` to `User` in `app/models.py`.
+3. Update `app/storage.py`: write `email` in `insert_user` and read it in `get_user`.
+4. Update `app/api.py`: require `email` containing `@` in `create_user` and return it from `user_to_dict`.
+5. Extend `tests/test_api.py` and add `tests/test_storage.py` for the new field and the rejected email.

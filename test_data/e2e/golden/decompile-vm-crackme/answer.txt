@@ -1,0 +1,10 @@
+Decompiling program.bin word by word against the ISA shows eight identical 12-word check
+blocks of the form INPUT i; PUSH k; XOR; PUSH t; EQ; JNZ next; JMP fail - i.e. the check is
+ord(input[i]) XOR k == t, so input[i] = t XOR k. Applying that to the eight blocks
+(k = 43, 119, 17, 94, 60, 100, 45, 81) recovers the passphrase: zigzag42.
+
+The success path after the last block is a run of PUSH e; PUSH k2; XOR; PRINT groups - each
+prints chr(e XOR k2) with k2 starting at 160 and increasing by one per character - followed by
+PRINTNL and HALT. Decoding those pairs gives the success message, and running
+`python3 vm.py program.bin zigzag42` confirms it. The passphrase is zigzag42 and the flag is
+FLAG{zigzag42unlocked}.

@@ -1,0 +1,19 @@
+{
+  "id": "lcb-constrained-paths",
+  "mode": "AGENT",
+  "description": "LiveCodeBench style (JavaScript): cheapest route in a directed graph with at most k toll roads. It needs a search over (junction, tolls used) states with a heap; exhaustive route enumeration fails the large cases, which run in a separate process with a hard kill timeout, and so does a plain Dijkstra that forgets the toll count. Hidden edges cover directed roads, parallel roads and self loops, zero cost roads, src equal to dst, boolean toll flags, a k of one billion that must not size arrays by k, argument validation and a randomized comparison with an exhaustive reference.",
+  "category": "livecodebench",
+  "max_iterations": 45,
+  "fixture": "fixtures/lcb-constrained-paths",
+  "prompt_file": "prompts/lcb-constrained-paths.md",
+  "config": ["verify.command=node --test tests/paths.test.js"],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": [
+      "tests/paths.test.js",
+      "tests/perf_case.js"
+    ],
+    "build_cmd": "node --test tests/paths.test.js",
+    "self_verified": true
+  }
+}

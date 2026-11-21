@@ -313,4 +313,42 @@ class MultiAgentTaskParserTest {
             }
         }
     }
+
+    @Test
+    fun `workflow limits and per agent limits are read from yaml`() {
+        val yaml = """
+            name: "Limited"
+            on_failure: continue
+            max_minutes: 120
+            max_cost: 2.5
+            max_parallel: 2
+            agents:
+              - name: analyst
+                profile: business-analyst
+                task: "Analyze"
+                max_iterations: 30
+                max_minutes: 20
+        """.trimIndent()
+
+        val definition = MultiAgentTaskParser.parse(yaml)
+
+        assertEquals(
+            WorkflowLimits(onFailure = OnFailure.CONTINUE, maxParallel = 2, maxMinutes = 120, maxCostUsd = 2.5),
+            MultiAgentTaskParser.toLimits(definition),
+        )
+        val spec = MultiAgentTaskParser.toAgentSpecs(definition).single()
+        assertEquals(30, spec.maxIterations)
+        assertEquals(20, spec.maxMinutes)
+        assertEquals("business-analyst", spec.profile)
+    }
+
+    @Test
+    fun `unknown on failure value is rejected`() {
+        // A typo such as "retry" must not quietly become the default.
+        val definition = MultiAgentTaskParser.parse("name: w\non_failure: retry\nagents: []\n")
+
+        val error = assertFailsWith<IllegalArgumentException> { MultiAgentTaskParser.toLimits(definition) }
+
+        assertTrue(error.message.orEmpty().contains("stop, skip or continue"), error.message)
+    }
 }

@@ -1,0 +1,83 @@
+{
+  "id": "long-plan-ledger",
+  "mode": "AGENT",
+  "description": "Implement a five-function ledger library as a long task with a tasks-tool plan: parse_entry comes before everything built on it, steps are marked completed, the failing-test count never grows between rounds, and all five tests pass within three rounds.",
+  "category": "planning",
+  "max_iterations": 200,
+  "fixture": "fixtures/long-plan-ledger",
+  "prompt_file": "prompts/long-plan-ledger.md",
+  "until": "python run_tests.py",
+  "max_rounds": 5,
+  "config": [
+    "long_task.max_minutes=30"
+  ],
+  "score": {
+    "cmd": "python run_tests.py",
+    "regex": "SUMMARY passed ([0-9]+/[0-9]+)"
+  },
+  "assert": {
+    "plan": {
+      "source": "tasks",
+      "min_steps": 4,
+      "max_steps": 15,
+      "completed": {
+        "min": 4
+      },
+      "order": [
+        {
+          "before": "parse_entry",
+          "after": "balance|by_category|monthly_totals|largest_expense",
+          "before_label": "parse_entry",
+          "after_label": "what is built on parse_entry"
+        }
+      ]
+    },
+    "rounds": {
+      "max": 3,
+      "errors_non_increasing": true,
+      "progress_file": true
+    },
+    "needles_in_file": [
+      {
+        "path": "lib/parse_entry.py",
+        "text": "not implemented",
+        "absent": true
+      },
+      {
+        "path": "lib/balance.py",
+        "text": "not implemented",
+        "absent": true
+      },
+      {
+        "path": "lib/by_category.py",
+        "text": "not implemented",
+        "absent": true
+      },
+      {
+        "path": "lib/monthly_totals.py",
+        "text": "not implemented",
+        "absent": true
+      },
+      {
+        "path": "lib/largest_expense.py",
+        "text": "not implemented",
+        "absent": true
+      }
+    ],
+    "file_unchanged": [
+      "run_tests.py",
+      "tests/test_parse_entry.py",
+      "tests/test_balance.py",
+      "tests/test_by_category.py",
+      "tests/test_monthly_totals.py",
+      "tests/test_largest_expense.py"
+    ],
+    "build_cmd": "python run_tests.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "All five functions in lib/ are implemented so python run_tests.py prints SUMMARY passed 5/5, the plan was kept in the tasks tool with its steps completed, and nothing under tests/ or run_tests.py changed."
+    ]
+  }
+}

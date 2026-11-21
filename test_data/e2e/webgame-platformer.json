@@ -1,0 +1,46 @@
+{
+  "id": "webgame-platformer",
+  "mode": "AGENT",
+  "description": "Single-file tile-map platformer: gravity/jump with coyote time and jump buffering, run/variable jump height, 3 hand-designed tile levels, patrolling enemies, collectible coins, checkpoints, scrolling camera, HUD, win screen.",
+  "category": "browser-game",
+  "max_iterations": 40,
+  "fixture": "fixtures/webgame-platformer",
+  "prompt_file": "prompts/webgame-platformer.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": [
+      "advance_code_editing"
+    ],
+    "needles_in_file": [
+      {
+        "path": "platformer_model_01.html",
+        "regex": "coyote|buffer|gravity"
+      },
+      {
+        "path": "platformer_model_01.html",
+        "regex": "level|LEVELS|tilemap|tile"
+      },
+      {
+        "path": "platformer_model_01.html",
+        "regex": "enemy"
+      },
+      {
+        "path": "platformer_model_01.html",
+        "regex": "coin"
+      },
+      {
+        "path": "platformer_model_01.html",
+        "regex": "camera|checkpoint"
+      }
+    ],
+    "smoke": {
+      "entry": "platformer_model_01.html",
+      "dom_present": []
+    }
+  },
+  "judge": {
+    "criteria": [
+      "platformer_model_01.html is one self-contained tile-map platformer (no libraries): at least 3 hand-designed tile-map levels as string arrays, a physics loop with gravity, acceleration/friction, jump with coyote time and jump buffering and variable jump height, collision resolution against solid tiles from all sides, at least one enemy type patrolling with edge detection that kills on contact and can be stomped, collectible coins with a counter, checkpoints that respawn the player, a camera that follows and clamps to level bounds, a HUD with lives/coins/level, level transitions and a win screen. No teleporting through walls and no faked level completion."
+    ]
+  }
+}

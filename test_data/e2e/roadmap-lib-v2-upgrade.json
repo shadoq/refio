@@ -1,0 +1,29 @@
+{
+  "id": "roadmap-lib-v2-upgrade",
+  "mode": "AGENT",
+  "description": "Roadmap-bench style long task: an internal library moves from a function API (1.x) to a context-manager API (2.x) documented in MIGRATION.md, and six application modules must be migrated. The migration notes hide behavioural traps (whitespace stripping is no longer implicit, parse defaults are gone, writers reject unknown keys, errors carry physical line numbers and surface lazily). The tests are the end condition: the harness reruns them after every round until they pass, and the tests and the vendored library are protected.",
+  "category": "roadmap-bench",
+  "max_iterations": 60,
+  "fixture": "fixtures/roadmap-lib-v2-upgrade",
+  "prompt_file": "prompts/roadmap-lib-v2-upgrade.md",
+  "until": "python -m unittest discover -s tests",
+  "max_rounds": 4,
+  "config": [
+    "long_task.max_minutes=30"
+  ],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": [
+      "recordio.py",
+      "MIGRATION.md",
+      "tests/helpers.py",
+      "tests/test_importer.py",
+      "tests/test_inventory.py",
+      "tests/test_orders.py",
+      "tests/test_reports.py",
+      "tests/test_exporter.py",
+      "tests/test_audit.py"
+    ],
+    "build_cmd": "python -m unittest discover -s tests"
+  }
+}

@@ -19,6 +19,7 @@ import pl.jclab.refio.core.services.turn.*
 import pl.jclab.refio.core.tools.base.ToolRegistry
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import pl.jclab.refio.core.services.turn.HarnessMessageTypes
 
 /**
  * Tests for mid-execution user message handling in AgentTurnLoop.
@@ -223,6 +224,7 @@ class MidExecutionMessageTest {
                     taskId = testTaskId,
                     role = MessageRole.SYSTEM,
                     content = match { it.contains("New user message above") },
+                    metadata = HarnessMessageTypes.metadataFor(HarnessMessageTypes.INTERJECTION_NOTICE),
                     toolCalls = isNull()
                 )
             }
@@ -259,6 +261,7 @@ class MidExecutionMessageTest {
                     taskId = testTaskId,
                     role = MessageRole.SYSTEM,
                     content = match { it.contains("New user message above") },
+                    metadata = any(),
                     toolCalls = any()
                 )
             }
@@ -314,6 +317,7 @@ class MidExecutionMessageTest {
                     taskId = testTaskId,
                     role = MessageRole.SYSTEM,
                     content = match { it.contains("New user message above") },
+                    metadata = HarnessMessageTypes.metadataFor(HarnessMessageTypes.INTERJECTION_NOTICE),
                     toolCalls = isNull()
                 )
             }

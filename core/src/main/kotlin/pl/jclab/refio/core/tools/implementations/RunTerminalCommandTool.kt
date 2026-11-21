@@ -254,21 +254,7 @@ class RunTerminalCommandTool(
         }
     }
 
-    private fun getShellCommand(command: String): List<String> {
-        val os = System.getProperty("os.name").lowercase()
-
-        return when {
-            os.contains("windows") -> listOf(
-                "powershell.exe",
-                "-NoLogo",
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                WINDOWS_UTF8_PREFIX + command
-            )
-            else -> listOf("/bin/sh", "-c", command)
-        }
-    }
+    private fun getShellCommand(command: String): List<String> = shellCommand(command)
 
     override fun getParameterSchema(): Map<String, Any> {
         return mapOf(
@@ -288,6 +274,49 @@ class RunTerminalCommandTool(
     }
 
     companion object {
+        /**
+         * How the agent's terminal runs [command]: PowerShell with UTF-8 output on Windows, sh
+         * elsewhere. A long task's end command runs the same way, so a command that works for the
+         * agent also works as the check.
+         */
+        fun shellCommand(command: String, osName: String = System.getProperty("os.name")): List<String> =
+            if (osName.lowercase().contains("windows")) {
+                listOf(
+                    "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+                    escapeQuotesForWindowsArgument(WINDOWS_UTF8_PREFIX + command),
+                )
+            } else {
+                listOf("/bin/sh", "-c", command)
+            }
+
+        /**
+         * Java wraps a Windows argument containing spaces in quotes but leaves the double quotes
+         * inside it as they are, so the receiving process drops them while splitting its command
+         * line: `"a|b"` reached PowerShell as `a|b`, a pipeline. Escaping them by the Windows
+         * splitting rules (a quote becomes `\"`, backslashes right before it are doubled) delivers
+         * the command intact. A trailing backslash is left alone: Java already doubles it before
+         * the closing quote it adds.
+         */
+        internal fun escapeQuotesForWindowsArgument(argument: String): String {
+            val escaped = StringBuilder(argument.length + 16)
+            var backslashes = 0
+            for (char in argument) {
+                when (char) {
+                    '\\' -> backslashes++
+                    '"' -> {
+                        escaped.append("\\".repeat(backslashes * 2 + 1)).append('"')
+                        backslashes = 0
+                    }
+                    else -> {
+                        escaped.append("\\".repeat(backslashes)).append(char)
+                        backslashes = 0
+                    }
+                }
+            }
+            escaped.append("\\".repeat(backslashes))
+            return escaped.toString()
+        }
+
         const val MIN_TIMEOUT_SECONDS = 30L
         const val MAX_TIMEOUT_SECONDS = 600L
 
@@ -306,9 +335,17 @@ class RunTerminalCommandTool(
          * mangled by the console's default OEM/ANSI code page before the JVM reads them as UTF-8.
          * The [Console]::OutputEncoding assignment is wrapped in try/catch because it can throw
          * when stdout is redirected; $OutputEncoding alone still covers the pipeline to native tools.
+         *
+         * Files written through the shell get UTF-8 too: Windows PowerShell writes `>`, `>>`,
+         * Out-File, Set-Content and Add-Content as UTF-16 by default, which Python and Node cannot
+         * read. PowerShell 5.1 can only write UTF-8 with a byte order mark; that still decodes,
+         * UTF-16 does not.
          */
         private const val WINDOWS_UTF8_PREFIX =
             "\$OutputEncoding = [System.Text.Encoding]::UTF8; " +
-            "try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}; "
+            "try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}; " +
+            "\$PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'; " +
+            "\$PSDefaultParameterValues['Set-Content:Encoding'] = 'utf8'; " +
+            "\$PSDefaultParameterValues['Add-Content:Encoding'] = 'utf8'; "
     }
 }

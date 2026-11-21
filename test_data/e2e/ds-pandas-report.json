@@ -1,0 +1,20 @@
+{
+  "id": "ds-pandas-report",
+  "mode": "AGENT",
+  "description": "DS-1000 style (pandas): a monthly sales report must assign UTC timestamps to Europe/Warsaw calendar months (month boundaries shift, with a DST change in March and October), treat missing amounts correctly (counted as orders, excluded from sums and averages, NaN average when none), and round half up on the written decimal value instead of the float approximation or banker's rounding. The tests compare the whole output DataFrame, dtypes included, with an expected CSV, and add boundary probes around the DST switch.",
+  "category": "ds-1000",
+  "max_iterations": 45,
+  "fixture": "fixtures/ds-pandas-report",
+  "prompt_file": "prompts/ds-pandas-report.md",
+  "config": ["verify.command=python -m unittest discover -s tests"],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": [
+      "tests/test_monthly.py",
+      "tests/expected_report.csv",
+      "data/events.csv"
+    ],
+    "build_cmd": "python -m unittest discover -s tests",
+    "self_verified": true
+  }
+}

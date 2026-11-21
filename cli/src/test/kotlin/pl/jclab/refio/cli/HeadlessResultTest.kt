@@ -6,6 +6,11 @@ import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Test
 import pl.jclab.refio.core.config.ConfigKeys
 import pl.jclab.refio.core.db.TaskStatus
+import pl.jclab.refio.core.debug.TurnStopReason
+import pl.jclab.refio.core.services.TurnResult
+import pl.jclab.refio.core.services.longtask.LongTaskSpec
+import pl.jclab.refio.core.services.longtask.LongTaskState
+import pl.jclab.refio.core.services.longtask.LongTaskStatus
 
 class HeadlessResultTest {
 
@@ -83,5 +88,22 @@ class HeadlessResultTest {
         val result = withSelectedModel(base, model = "ollama/qwen3.5:9b")
         assertEquals("80", result["agent.max_consecutive_tool_errors"])
         assertEquals("ollama/qwen3.5:9b", result[ConfigKeys.UI_SELECTED_MODEL.key])
+    }
+    // With --until or --goal the run's outcome is the loop's: the last turn ending cleanly says
+    // nothing when the tests still fail, so only a loop that reached its condition exits 0.
+    @Test
+    fun `exit code is zero only when the loop succeeded`() {
+        val cleanTurn = TurnResult(success = true, response = "Done.", iterations = 5, tokensIn = 0, tokensOut = 0, cost = 0.0, stopReason = TurnStopReason.COMPLETED)
+        val spec = LongTaskSpec(untilCommand = "npm test", goal = null, maxRounds = 12, maxMinutes = 240, maxNoProgressRounds = 3, checkTimeoutSeconds = 600)
+
+        LongTaskStatus.values().forEach { status ->
+            val exit = HeadlessExit.forStatus(headlessStatus(cleanTurn, LongTaskState(taskId = "t1", spec = spec, status = status)))
+            if (status == LongTaskStatus.SUCCEEDED) {
+                assertEquals(HeadlessExit.SUCCESS, exit)
+            } else {
+                assertNotEquals(HeadlessExit.SUCCESS, exit, "loop $status must fail the run")
+            }
+        }
+        assertEquals(HeadlessExit.SUCCESS, HeadlessExit.forStatus(headlessStatus(cleanTurn, loop = null)), "a single turn keeps its own outcome")
     }
 }

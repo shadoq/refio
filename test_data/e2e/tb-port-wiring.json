@@ -1,0 +1,25 @@
+{
+  "id": "tb-port-wiring",
+  "mode": "AGENT",
+  "description": "Terminal-Bench style multi-service wiring: repair the drifted run.env against the documented topology and prove the chain end-to-end - the gate boots all three stdlib services with the repaired wiring and probes ingress /fetch?value=2 (stored: 21).",
+  "category": "terminal-bench",
+  "max_iterations": 20,
+  "fixture": "fixtures/tb-wiring",
+  "prompt_file": "prompts/tb-port-wiring.md",
+  "assert": {
+    "needle_in_file": { "path": "run.env", "text": "LOGIC_UPSTREAM=http://127.0.0.1:8773" },
+    "needles_in_file": [
+      { "path": "run.env", "text": "INGRESS_UPSTREAM=http://127.0.0.1:8772" },
+      { "path": "run.env", "text": "LOGIC_PORT=8772" },
+      { "path": "run.env", "text": "8799", "absent": true }
+    ],
+    "file_unchanged": ["services/ingress.py", "services/logic.py", "services/store.py", "checks.py", "docs/topology.md", "README.md"],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "run.env implements the topology exactly and the live chain answers 'stored: 21' end-to-end; services and docs untouched."
+    ]
+  }
+}

@@ -56,8 +56,38 @@ data class ToolPermissions(
  */
 class ToolPermissionsService(
     private val configRepository: ConfigRepository,
-    private val toolRegistry: ToolRegistry? = null
+    private val toolRegistry: ToolRegistry? = null,
+    /**
+     * Raw run-scope `tools.permissions` override (`--config tools.permissions=...`), or null.
+     * Accepts the stored shape `{"tools":{...}}` or a bare `{"<tool>":{...}}` map. Tools it names
+     * win over the stored permissions; tools it does not name keep them. Validated eagerly so a
+     * bad value stops the run instead of being silently ignored.
+     */
+    runOverride: String? = null
 ) {
+
+    private val overridden: Map<String, ToolPermissionConfig> = runOverride?.let(::parseOverride) ?: emptyMap()
+
+    private fun parseOverride(raw: String): Map<String, ToolPermissionConfig> {
+        val root = try {
+            com.google.gson.JsonParser.parseString(raw).asJsonObject
+        } catch (e: Exception) {
+            throw IllegalArgumentException("tools.permissions override is not a JSON object: ${e.message}", e)
+        }
+        val tools = root.get("tools")?.takeIf { it.isJsonObject }?.asJsonObject ?: root
+        return tools.entrySet().associate { (tool, value) ->
+            val entry = value.takeIf { it.isJsonObject }?.asJsonObject
+            fun level(mode: String): PermissionLevel {
+                val text = entry?.get(mode)?.takeIf { it.isJsonPrimitive }?.asString
+                return PermissionLevel.entries.firstOrNull { it.name == text }
+                    ?: throw IllegalArgumentException(
+                        "tools.permissions override for '$tool' needs $mode as one of " +
+                            PermissionLevel.entries.joinToString("/") + ", got '$text'"
+                    )
+            }
+            tool to ToolPermissionConfig(planMode = level("planMode"), agentMode = level("agentMode"))
+        }
+    }
 
     companion object {
         val CONFIG_KEY = ConfigKeys.TOOLS_PERMISSIONS.key
@@ -133,8 +163,8 @@ class ToolPermissionsService(
             emptyMap()
         }
 
-        // Merge with defaults (stored values have priority)
-        return buildDefaultsFromRegistry() + stored
+        // Merge with defaults (stored values have priority, a run-scope override beats both)
+        return buildDefaultsFromRegistry() + stored + overridden
     }
 
     /**

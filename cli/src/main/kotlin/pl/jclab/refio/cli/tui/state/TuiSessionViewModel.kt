@@ -549,7 +549,7 @@ class TuiSessionViewModel(
         val r = getRouter() ?: return getStaticModelList()
         return try {
             val dynamic = r.configRouter.getModelsWithVisibility()
-                .filter { it.showInDropdown }
+                .filter { it.showInDropdown && !pl.jclab.refio.core.llm.isDecisionOnlyModel(it.capabilities) }
                 .map { "${it.provider}/${it.id}" }
             if (dynamic.isNotEmpty()) dynamic else getStaticModelList()
         } catch (e: Exception) {
@@ -588,8 +588,12 @@ class TuiSessionViewModel(
     fun cycleMode() {
         val modes = listOf("CHAT", "PLAN", "AGENT")
         val current = modes.indexOf(mode.value)
-        val newMode = modes[(current + 1) % modes.size]
+        switchMode(modes[(current + 1) % modes.size])
+    }
 
+    /** Switches the session to [newMode] the way Shift+Tab does (the task keeps its conversation). */
+    fun switchMode(newMode: String) {
+        if (newMode == mode.value) return
         val r = getRouter() ?: return
         val currentTaskId = getTaskId() ?: run {
             // No active session -- create one

@@ -67,6 +67,50 @@ class TuiRenderBuffer(val maxWidth: Int, val maxHeight: Int) {
     companion object {
         private val ANSI_REGEX = Regex("\u001b\\[[0-9;]*m")
 
+        // Control characters are written as regex escapes, never as raw characters in the pattern.
+        /**
+         * Any escape sequence: CSI, OSC (ended by BEL or ESC \), DCS/SOS/PM/APC (ended by ESC \) or a two-character one,
+         * and the one-character CSI and OSC introducers some terminals also obey.
+         */
+        private val ESCAPE_SEQUENCE = Regex(
+            "\\u001b(?:\\[[0-?]*[ -/]*[@-~]|\\][^\\u0007\\u001b]*(?:\\u0007|\\u001b\\\\)?|[PX^_][^\\u001b]*(?:\\u001b\\\\)?|[ -~]?)" +
+                "|\\u009b[0-?]*[ -/]*[@-~]|\\u009d[^\\u0007\\u009c]*(?:\\u0007|\\u009c)?"
+        )
+        private val SGR = Regex("\\u001b\\[[0-9;:]*m")
+        /** Control characters a drawn row must not contain; ESC is handled by [ESCAPE_SEQUENCE]. */
+        private val CONTROL_CHARS = Regex("[\\u0000-\\u001a\\u001c-\\u001f\\u007f-\\u009f]")
+
+        private fun hasControl(s: String): Boolean = s.any { it < ' ' || it in '\u007f'..'\u009f' }
+
+        /**
+         * Text from outside the app (tool output, file content, model or user text) made safe to draw: escape
+         * sequences and control characters are removed, so they can neither move the cursor nor talk to the terminal,
+         * and tabs become spaces, so widths stay right. Line breaks are kept.
+         */
+        fun cleanText(s: String): String {
+            if (!hasControl(s)) return s
+            val noEscapes = ESCAPE_SEQUENCE.replace(s.replace("\t", "    ").replace("\r\n", "\n"), "")
+            return CONTROL_CHARS.replace(noEscapes) { if (it.value == "\n") "\n" else "" }
+        }
+
+        /** A composed screen row with only its colours left: any other escape sequence or control character is dropped. */
+        fun keepOnlyColours(row: String): String {
+            if (!hasControl(row.replace(SGR, ""))) return row
+            val coloursOnly = ESCAPE_SEQUENCE.replace(row) { if (SGR.matches(it.value)) it.value else "" }
+            return CONTROL_CHARS.replace(coloursOnly, "")
+        }
+
+        /** Code points below U+FFFF with default emoji presentation (East Asian Width "W" since Unicode 9). */
+        private val BMP_EMOJI_PRESENTATION: List<IntRange> = listOf(
+            0x231A..0x231B, 0x23E9..0x23EC, 0x23F0..0x23F0, 0x23F3..0x23F3, 0x25FD..0x25FE,
+            0x2614..0x2615, 0x2648..0x2653, 0x267F..0x267F, 0x2693..0x2693, 0x26A1..0x26A1,
+            0x26AA..0x26AB, 0x26BD..0x26BE, 0x26C4..0x26C5, 0x26CE..0x26CE, 0x26D4..0x26D4,
+            0x26EA..0x26EA, 0x26F2..0x26F3, 0x26F5..0x26F5, 0x26FA..0x26FA, 0x26FD..0x26FD,
+            0x2705..0x2705, 0x270A..0x270B, 0x2728..0x2728, 0x274C..0x274C, 0x274E..0x274E,
+            0x2753..0x2755, 0x2757..0x2757, 0x2795..0x2797, 0x27B0..0x27B0, 0x27BF..0x27BF,
+            0x2B1B..0x2B1C, 0x2B50..0x2B50, 0x2B55..0x2B55
+        )
+
         /** Measure visible (display) width of a string, stripping ANSI escape codes.
          *  Accounts for wide characters (emoji, CJK) that take 2 terminal columns. */
         fun visibleLength(s: String): Int {
@@ -97,11 +141,9 @@ class TuiRenderBuffer(val maxWidth: Int, val maxHeight: Int) {
             if (cp in 0x1F600..0x1F64F || cp in 0x1F300..0x1F5FF || cp in 0x1F680..0x1F6FF ||
                 cp in 0x1F900..0x1F9FF || cp in 0x1FA00..0x1FA6F ||
                 cp in 0x1FA70..0x1FAFF) return 2
-            // Miscellaneous Symbols & Dingbats (U+2600-U+27BF): width 2 on modern terminals
-            if (cp in 0x2600..0x27BF) return 2
-            // Other common emoji-width symbols
-            if (cp in 0x2300..0x23FF) return 2 // Misc Technical (⌚⏰ etc.)
-            if (cp in 0x25A0..0x25FF) return 2 // Geometric Shapes (■□▲ etc.)
+            // BMP symbols that terminals draw as emoji (2 columns). Their neighbours in the same blocks
+            // (✓ ◆ ▸ ⎿ ☰ ...) are plain text symbols and take 1 column.
+            if (BMP_EMOJI_PRESENTATION.any { cp in it }) return 2
             // CJK Unified Ideographs, Hangul, Katakana/Hiragana, fullwidth forms
             if (cp in 0x1100..0x115F || cp in 0x2E80..0x303E || cp in 0x3040..0x33BF ||
                 cp in 0x3400..0x4DBF || cp in 0x4E00..0x9FFF || cp in 0xA000..0xA4CF ||

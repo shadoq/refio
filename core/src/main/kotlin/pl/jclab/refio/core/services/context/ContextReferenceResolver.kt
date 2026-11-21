@@ -581,9 +581,11 @@ class ContextReferenceResolver(
      */
     fun collectUserContextRefs(taskId: String): List<ContextReference> {
         val refs = mutableListOf<ContextReference>()
-        val history = chatMessageRepository.findByTaskId(taskId)
+        // Only the user's own messages carry @ mentions; reading the whole task here loaded every
+        // tool result of every agent on each iteration.
+        val history = chatMessageRepository.findByRole(taskId, MessageRole.USER)
 
-        history.filter { it.role == MessageRole.USER }.forEach { message ->
+        history.forEach { message ->
             val metadata = UserContextMetadata.fromJson(message.metadata)
             if (metadata != null && metadata.contextRefs.isNotEmpty()) {
                 refs.addAll(metadata.contextRefs)

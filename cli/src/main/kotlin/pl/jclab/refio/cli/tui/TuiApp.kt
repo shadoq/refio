@@ -5,6 +5,7 @@ import kotlinx.coroutines.*
 import mu.KotlinLogging
 import pl.jclab.refio.api.models.TaskMode
 import pl.jclab.refio.cli.tui.input.TuiInputHandler
+import pl.jclab.refio.cli.tui.rendering.LayoutMode
 import pl.jclab.refio.cli.tui.rendering.TuiRenderer
 import pl.jclab.refio.cli.tui.screens.TuiSettingsScreen
 import pl.jclab.refio.cli.tui.state.TuiViewModel
@@ -71,6 +72,11 @@ fun launchTuiApp(
 
         viewModel.initialize()
         TuiSettingsScreen.setViewModel(viewModel)
+        if (jt != null) {
+            inputHandler.layoutMode = { LayoutMode.of(jt.width, jt.height) }
+            // The sidebar lists recent sessions from the start, not only after History was opened.
+            viewModel.loadSessions()
+        }
 
         val error = viewModel.error.value
         if (error != null) {
@@ -94,11 +100,12 @@ fun launchTuiApp(
                 renderer.forceRender(viewModel.stateFlow.value)
             }
 
-            // Render loop: re-render on state change. A failed frame is logged
-            // and skipped; it must never kill the loop (a dead render loop
-            // looks like a silent app crash to the user).
+            // Render loop: re-render on state change, at most ~30 frames per second
+            // while tokens stream in (resizes below still redraw immediately).
+            // A failed frame is logged and skipped; it must never kill the loop
+            // (a dead render loop looks like a silent app crash to the user).
             val renderJob = if (renderer != null) launch {
-                viewModel.stateFlow.collect { state ->
+                viewModel.stateFlow.throttleLatest(FRAME_INTERVAL_MS).collect { state ->
                     try {
                         renderer.render(state)
                     } catch (e: Exception) {

@@ -1,0 +1,19 @@
+{
+  "id": "ab-db-integrity-repair",
+  "mode": "AGENT",
+  "description": "AgentBench-DB style data repair: orphan items and orders, duplicate and NULL-email accounts, comma-decimal TEXT prices - repaired in place under merge rules with a money-conservation digest (877.0) the gate re-derives, so nothing can be silently dropped or inflated.",
+  "category": "agentbench-db",
+  "max_iterations": 25,
+  "fixture": "fixtures/ab-db-repair",
+  "prompt_file": "prompts/ab-db-integrity-repair.md",
+  "assert": {
+    "file_unchanged": ["checks.py", "docs/invariants.md", "README.md"],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "Every invariant holds: no orphan items/orders, emails unique and non-NULL (duplicate merged into the lowest id, NULL-email account retired), prices stored as REAL numbers with dot decimals, counts 6/6/10 and revenue exactly 877.0."
+    ]
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "id": "webgame-tetris",
+  "mode": "AGENT",
+  "description": "Full single-file Tetris: 7 tetrominoes with SRS rotation and wall kicks, hold slot, 5-piece next queue, ghost piece, soft/hard drop, lock delay, line-clear scoring with combos, level speed curve, pause, game over and localStorage high score.",
+  "category": "browser-game",
+  "max_iterations": 40,
+  "fixture": "fixtures/webgame-tetris",
+  "prompt_file": "prompts/webgame-tetris.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": [
+      "advance_code_editing"
+    ],
+    "needles_in_file": [
+      {
+        "path": "tetris_model_01.html",
+        "regex": "<canvas"
+      },
+      {
+        "path": "tetris_model_01.html",
+        "regex": "requestAnimationFrame"
+      },
+      {
+        "path": "tetris_model_01.html",
+        "regex": "keydown"
+      },
+      {
+        "path": "tetris_model_01.html",
+        "regex": "[Ii][JjLlSsTtZz]|tetromino|SHAPES|PIECES"
+      },
+      {
+        "path": "tetris_model_01.html",
+        "regex": "wall.?kick|kick|localStorage"
+      }
+    ],
+    "smoke": {
+      "entry": "tetris_model_01.html",
+      "dom_present": []
+    }
+  },
+  "judge": {
+    "criteria": [
+      "tetris_model_01.html is one self-contained Tetris (no libraries): the 7 tetrominoes with correct shapes, SRS rotation and wall-kick tests, hold with once-per-piece lock, a visible next queue of at least 5 pieces, ghost preview, soft and hard drop, lock delay, line clears with gravity of stacked lines, standard scoring with combo and back-to-back bonuses, a level curve that speeds up gravity, pause and restart, game-over detection, and a persisted high score in localStorage. No fake line clears or predetermined boards."
+    ]
+  }
+}

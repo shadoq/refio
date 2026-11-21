@@ -1,0 +1,23 @@
+{
+  "id": "sql-down-migration",
+  "mode": "AGENT",
+  "description": "DB-migration style: write the three missing down migrations for existing up migrations (initial tables with a foreign key, an added column plus index, a table rename with a new column, an extra table and a view). A protected checks script runs up, down, up on an in-memory SQLite database with foreign keys on and compares schema snapshots (columns, foreign keys, indexes, object names) and row data after every step, so wrong drop order, a forgotten index or a drop-and-recreate that loses rows are all caught.",
+  "category": "db-migration",
+  "max_iterations": 30,
+  "fixture": "fixtures/sql-down-migration",
+  "prompt_file": "prompts/sql-down-migration.md",
+  "config": [
+    "verify.command=python checks.py"
+  ],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": [
+      "checks.py",
+      "migrations/001_init.up.sql",
+      "migrations/002_country_and_index.up.sql",
+      "migrations/003_purchases_audit.up.sql"
+    ],
+    "build_cmd": "python checks.py",
+    "self_verified": true
+  }
+}

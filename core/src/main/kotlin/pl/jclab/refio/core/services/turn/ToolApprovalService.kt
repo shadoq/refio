@@ -20,8 +20,14 @@ private val logger = dualLogger("ToolApprovalService")
  * for previously trusted tool+pattern combinations.
  */
 class ToolApprovalService(
-    /** Timeout in milliseconds for user to respond. 0 = no timeout. Default: 5 minutes. */
-    private val approvalTimeoutMs: Long = DEFAULT_TIMEOUT_MS
+    /**
+     * Timeout in milliseconds for user to respond. 0 = no timeout. Default: 5 minutes.
+     *
+     * Settable because the router builds this service before the caller knows who answers: an IDE
+     * client (ACP) has its own cancel button and a person who may step away, so it turns the
+     * timeout off rather than let a request expire into a silent rejection.
+     */
+    @Volatile var approvalTimeoutMs: Long = DEFAULT_TIMEOUT_MS
 ) {
     companion object {
         const val DEFAULT_TIMEOUT_MS = 5 * 60 * 1000L // 5 minutes
@@ -61,6 +67,12 @@ class ToolApprovalService(
          */
         data class NotPermitted(val reason: String? = null) : ApprovalDecision()
     }
+
+    /**
+     * A session trust rule as a UI lists it. [argsPattern] is the regex source matched against the
+     * call's arguments rendered as `key=value` pairs; null means every call of the tool is trusted.
+     */
+    data class TrustRuleView(val toolName: String, val argsPattern: String?)
 
     private data class PendingEntry(
         val request: ApprovalRequest,
@@ -205,6 +217,18 @@ class ToolApprovalService(
 
     fun onSessionEnd() {
         resetSessionTrustRules()
+    }
+
+    /**
+     * The trust rules granted in this session, grouped by tool name and in grant order within a
+     * tool. A snapshot: changing it does not change what is trusted. A rule granted twice is
+     * listed once, since the second grant trusts nothing new.
+     */
+    fun activeTrustRules(): List<TrustRuleView> = synchronized(sessionTrustRulesLock) {
+        sessionTrustRules.entries
+            .sortedBy { it.key }
+            .flatMap { (toolName, patterns) -> patterns.map { TrustRuleView(toolName, it?.pattern) } }
+            .distinct()
     }
 
     private fun serializeArgs(args: Map<String, Any>): String {

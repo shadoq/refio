@@ -1,0 +1,20 @@
+{
+  "id": "pl-collation-sort",
+  "mode": "AGENT",
+  "description": "Localization style: sort Polish surnames per the Polish alphabet without using the OS locale. Plain code-point or lowercase sorting puts a-with-ogonek, l-with-stroke and the acute and dotted z after the whole Latin alphabet, and stripping diacritics loses the order between a and a-with-ogonek, so the agent must build an explicit collation key, keep case-insensitive ties stable and treat space and hyphen as lower than letters. All surnames are synthetic.",
+  "category": "localization",
+  "max_iterations": 25,
+  "fixture": "fixtures/pl-collation-sort",
+  "prompt_file": "prompts/pl-collation-sort.md",
+  "config": [
+    "verify.command=python -m unittest test_plsort"
+  ],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": [
+      "test_plsort.py"
+    ],
+    "build_cmd": "python -m unittest test_plsort",
+    "self_verified": true
+  }
+}

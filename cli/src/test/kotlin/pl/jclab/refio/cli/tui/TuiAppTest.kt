@@ -10,30 +10,6 @@ import java.io.ByteArrayOutputStream
 
 class TuiAppTest {
 
-    @Test
-    fun `TuiScreenManager should render history overlay`() {
-        val terminal = Terminal(terminalInterface = TerminalRecorder())
-        val state = TuiState(screen = TuiScreen.HISTORY)
-        val layout = pl.jclab.refio.cli.tui.rendering.TuiLayoutRegions.fromTerminal(80, 24)
-        TuiScreenManager.renderOverlay(terminal, state, layout)
-    }
-
-    @Test
-    fun `TuiScreenManager should render settings overlay`() {
-        val terminal = Terminal(terminalInterface = TerminalRecorder())
-        val state = TuiState(screen = TuiScreen.SETTINGS)
-        val layout = pl.jclab.refio.cli.tui.rendering.TuiLayoutRegions.fromTerminal(80, 24)
-        TuiScreenManager.renderOverlay(terminal, state, layout)
-    }
-
-    @Test
-    fun `TuiTabBar should render all tabs`() {
-        val terminal = Terminal(terminalInterface = TerminalRecorder())
-        for (tab in TuiTab.entries) {
-            TuiTabBar.render(terminal, tab)
-        }
-    }
-
     private fun createTestJlineTerminal(): org.jline.terminal.Terminal =
         org.jline.terminal.TerminalBuilder.builder()
             .streams(ByteArrayInputStream(ByteArray(0)), ByteArrayOutputStream())

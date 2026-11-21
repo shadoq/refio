@@ -41,6 +41,9 @@ object SubtasksTable : Table("subtasks") {
     // Snapshots for rollback — references a snapshot group (set of files captured before one tool execution)
     val snapshotIdBeforeWrite = varchar("snapshot_id_before_write", 36).references(SnapshotGroupsTable.id, onDelete = ReferenceOption.SET_NULL).nullable()
 
+    // Agent run that produced the step: NULL for the parent run, the invocation id for a subagent
+    val agentInstanceId = varchar("agent_instance_id", 36).nullable()
+
     // Timestamps
     val createdAt = long("created_at").clientDefault { System.currentTimeMillis() }
     val updatedAt = long("updated_at").clientDefault { System.currentTimeMillis() }
@@ -84,5 +87,6 @@ data class Subtask(
     val createdAt: Long,
     val updatedAt: Long,
     val startedAt: Long?,
-    val completedAt: Long?
+    val completedAt: Long?,
+    val agentInstanceId: String? = null
 )

@@ -1,0 +1,21 @@
+{
+  "id": "ab-web-session-flow",
+  "mode": "AGENT",
+  "description": "AgentBench-WebBench style stateful browsing: complete a real login flow over HTTP (fetch form, echo the CSRF field, POST credentials, take the session cookie, fetch the protected page) and save the flag it shows.",
+  "category": "agentbench-web",
+  "max_iterations": 25,
+  "fixture": "fixtures/ab-session",
+  "prompt_file": "prompts/ab-web-session-flow.md",
+  "fixture_server": { "dir": "server", "port": 8741, "cmd": "exec python3 {{DIR}}/app.py {{PORT}}" },
+  "assert": {
+    "tool_invoked": [{ "name": "http_request" }],
+    "needle_in_file": { "path": "report/session-flag.txt", "text": "FLAG{web_session_flow_8c42}" },
+    "file_unchanged": ["server/app.py", "docs/notes.md", "README.md"],
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The flag was obtained through the documented form flow (CSRF echoed, session cookie used on /report) and saved verbatim as the only line of report/session-flag.txt."
+    ]
+  }
+}

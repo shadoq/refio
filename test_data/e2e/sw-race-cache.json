@@ -1,0 +1,23 @@
+{
+  "id": "sw-race-cache",
+  "mode": "AGENT",
+  "description": "Fix the async race in the profile request cache: concurrent get() calls for a cold key each start their own upstream load and hand out different value objects, and warm() duplicates the same storm; the hidden gate asserts single-flight coalescing, joined rejections, retry after failure and TTL expiry.",
+  "category": "swe-bench",
+  "max_iterations": 30,
+  "fixture": "fixtures/sw-race-cache",
+  "prompt_file": "prompts/sw-race-cache.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": ["advance_code_editing"],
+    "file_unchanged": [
+      "README.md",
+      "checks.js"
+    ],
+    "build_cmd": "node checks.js"
+  },
+  "judge": {
+    "criteria": [
+      "src/cache.js coalesces concurrent get() calls for the same cold key into a single loader call whose resolved value object is shared by every caller, deletes the in-flight entry again once a load settles so a rejected load rejects every joined caller without poisoning the next attempt, keeps TTL expiry and the public API (get, warm, peek, drop, stats) intact, and routes warm() through the same single-flight path - without touching the gate or the README."
+    ]
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "id": "plan-split-function",
+  "mode": "PLAN",
+  "description": "Plan splitting the long process_order function into validate, price, save and notify parts without changing behaviour: tests that pin today's behaviour come first, every part is named, and only real files are named.",
+  "category": "planning",
+  "max_iterations": 30,
+  "fixture": "fixtures/plan-split-function",
+  "prompt_file": "prompts/plan-split-function.md",
+  "assert": {
+    "plan": {
+      "min_steps": 3,
+      "max_steps": 14,
+      "covers": [
+        {
+          "label": "validate_order",
+          "regex": "validate_order"
+        },
+        {
+          "label": "price_order",
+          "regex": "price_order"
+        },
+        {
+          "label": "save_order",
+          "regex": "save_order"
+        },
+        {
+          "label": "notify_customer",
+          "regex": "notify_customer"
+        },
+        {
+          "label": "tests",
+          "regex": "test"
+        }
+      ],
+      "order": [
+        {
+          "before": "test",
+          "after": "validate_order|price_order|save_order|notify_customer"
+        }
+      ],
+      "paths_exist": true,
+      "new_paths": [
+        "^tests/"
+      ]
+    },
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The plan first pins process_order's current behaviour with tests, then extracts validate_order, price_order, save_order and notify_customer in shop/orders.py, makes process_order call them in order, and re-runs the tests."
+    ]
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "id": "he-textutils-stubs",
+  "mode": "AGENT",
+  "description": "HumanEval-style function completion: three stubs with contract-bearing docstrings (one-level flatten, slugify with run-collapsing, email masking) completed against an untouched unittest file - the canonical pass-the-tests bar with edge cases that kill the obvious shortcuts.",
+  "category": "humaneval",
+  "max_iterations": 20,
+  "fixture": "fixtures/he-textutils",
+  "prompt_file": "prompts/he-textutils-stubs.md",
+  "assert": {
+    "needle_in_file": { "path": "textutils.py", "regex": "def flatten_once" },
+    "needles_in_file": [
+      { "path": "textutils.py", "regex": "def slugify" },
+      { "path": "textutils.py", "regex": "def mask_email" },
+      { "path": "textutils.py", "regex": "NotImplementedError", "absent": true }
+    ],
+    "file_unchanged": ["test_textutils.py", "README.md"],
+    "build_cmd": "python3 -m unittest discover -p \"test_*.py\"",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "All three functions implemented exactly per the docstrings; tests untouched; no NotImplementedError left."
+    ]
+  }
+}

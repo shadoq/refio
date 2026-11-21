@@ -8,6 +8,7 @@ import pl.jclab.refio.core.db.repositories.ChatMessageRepository
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.LLMMessage
 import pl.jclab.refio.core.services.context.ContextTokenEstimator
+import pl.jclab.refio.core.services.context.ConversationContextBuilder
 import pl.jclab.refio.core.utils.GsonInstance
 import pl.jclab.refio.core.logging.dualLogger
 
@@ -44,7 +45,16 @@ class ConversationSummaryService(
          * prompted it. Four keeps the most recent exchange intact next to the summary.
          */
         private const val MIN_KEEP_RECENT_MESSAGES = 4
+
+        /**
+         * Room for the summary itself. Six mandatory sections at 300-800 words do not fit in 500
+         * tokens: the answer was cut mid-section and the model lost exactly the parts that come
+         * last (what remains, the next step).
+         */
+        private const val SUMMARY_MAX_TOKENS = 1_200
     }
+
+    private val contextBuilder = ConversationContextBuilder()
 
     /**
      * @param contentResolver maps a ChatMessage to the string that will actually appear in the
@@ -73,14 +83,15 @@ class ConversationSummaryService(
     ): List<ChatMessage> {
         if (messages.isEmpty() || maxTokens <= 0) return messages
 
-        // Only summarize messages that came AFTER the most recent summary —
-        // never re-summarize a summary, so we don't lose information through
-        // chained compressions.
-        val lastSummaryIndex = messages.indexOfLast { isConversationSummary(it) }
-        val messagesSinceSummary = if (lastSummaryIndex >= 0) {
-            messages.drop(lastSummaryIndex + 1)
-        } else {
-            messages
+        // Candidates are the rows after the last summary's boundary. The model sees only the latest
+        // summary, so a new one is written over the previous one plus these rows (a rolling
+        // summary); summarizing only the new rows let the first summary's facts disappear from view.
+        val previousSummary = messages.lastOrNull { isConversationSummary(it) }
+        val boundaryIndex = previousSummary?.let { contextBuilder.summaryBoundaryIndex(messages, it) } ?: -1
+        val messagesSinceSummary = when {
+            previousSummary == null -> messages
+            boundaryIndex >= 0 -> messages.drop(boundaryIndex + 1).filterNot { isConversationSummary(it) }
+            else -> messages.drop(messages.indexOf(previousSummary) + 1)
         }
 
         // Trigger is purely budget-based: only when the uncompressed tail
@@ -108,6 +119,13 @@ class ConversationSummaryService(
             summarizeCount++
         }
 
+        // Never cut between a tool call and its results: a kept result whose call was summarized
+        // away reaches the model as an answer to a question it never sees.
+        while (summarizeCount > 0 && messagesSinceSummary[summarizeCount].role == MessageRole.TOOL) {
+            accumulated -= tokensPerMessage[summarizeCount - 1]
+            summarizeCount--
+        }
+
         if (summarizeCount == 0) return messages
 
         val toSummarize = messagesSinceSummary.take(summarizeCount)
@@ -119,6 +137,13 @@ class ConversationSummaryService(
         }
 
         val conversationText = buildString {
+            if (previousSummary != null) {
+                appendLine("PREVIOUS SUMMARY:")
+                appendLine(previousSummary.content)
+                appendLine()
+                appendLine("MESSAGES SINCE THE PREVIOUS SUMMARY:")
+                appendLine()
+            }
             toSummarize.forEach { msg ->
                 appendLine("${msg.role.name.uppercase()}: ${msg.content}")
                 appendLine()
@@ -140,7 +165,7 @@ class ConversationSummaryService(
             model = model,
             messages = listOf(LLMMessage(role = "user", content = summaryPrompt)),
             temperature = 0.3,
-            maxTokens = 500,
+            maxTokens = SUMMARY_MAX_TOKENS,
             source = "ConversationSummaryService",
             taskId = taskId,
             subtaskId = null
@@ -150,20 +175,27 @@ class ConversationSummaryService(
             response.thinking?.trim().takeIf { !it.isNullOrBlank() } ?: buildDeterministicFallback(toSummarize)
         }
 
+        // A rolling summary covers everything from the first summarized row on.
+        val previousCount = previousSummary
+            ?.let { (contextBuilder.summaryMetadataValue(it, "summarized_count") as? Number)?.toInt() } ?: 0
+        val firstMessageId = previousSummary
+            ?.let { contextBuilder.summaryMetadataValue(it, "first_message_id") as? String }
+            ?: toSummarize.first().id
+        val summarizedCount = previousCount + toSummarize.size
         val summaryIndex = messages.count { isConversationSummary(it) } + 1
         val metadataJson = GsonInstance.gson.toJson(
             mapOf(
                 "type" to CONVERSATION_SUMMARY_METADATA_TYPE,
-                "summarized_count" to toSummarize.size,
+                "summarized_count" to summarizedCount,
                 "summary_index" to summaryIndex,
                 "timestamp" to System.currentTimeMillis(),
-                "first_message_id" to toSummarize.first().id,
+                "first_message_id" to firstMessageId,
                 "last_message_id" to toSummarize.last().id
             )
         )
 
         val summaryContent = buildString {
-            append("**Conversation summary (${toSummarize.size} messages):**\n\n")
+            append("**Conversation summary ($summarizedCount messages):**\n\n")
             append(summaryBody)
         }
 

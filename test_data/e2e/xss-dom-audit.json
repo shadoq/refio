@@ -1,0 +1,29 @@
+{
+  "id": "xss-dom-audit",
+  "mode": "AGENT",
+  "description": "Security audit of a small web app for DOM-based XSS: locate the real sink (innerHTML fed from location.hash) among a safe look-alike, and write a findings report with CWE, severity, a working PoC payload and a remediation.",
+  "category": "security",
+  "max_iterations": 30,
+  "fixture": "fixtures/xss-dom",
+  "prompt_file": "prompts/xss-dom-audit.md",
+  "assert": {
+    "tool_order": ["read_file", "grep_search"],
+    "needle_in_file": { "path": "report/xss-findings.md", "regex": "innerHTML" },
+    "needles_in_file": [
+      { "path": "report/xss-findings.md", "regex": "location[.]hash" },
+      { "path": "report/xss-findings.md", "regex": "CWE-79" },
+      { "path": "report/xss-findings.md", "regex": "onerror|onload" }
+    ],
+    "file_unchanged": [
+      "webapp/index.html",
+      "webapp/app.js",
+      "README.md"
+    ],
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The report identifies the innerHTML sink in renderResults (webapp/app.js) fed by location.hash as the DOM XSS (CWE-79), provides a working hash-based PoC payload (e.g. an img onerror or svg onload vector), explains why the nearby textContent use is safe, and recommends a safe sink or sanitisation - without modifying the web app."
+    ]
+  }
+}

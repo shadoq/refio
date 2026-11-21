@@ -1,0 +1,28 @@
+{
+  "id": "pg-rust-trait-display",
+  "mode": "AGENT",
+  "description": "Give a Rust weather Reading struct first-class traits: implement std::fmt::Display for unit-aware output written with write!, std::str::FromStr with a ParseReadingError instead of the panicking helper, and load the batch via ? in main, with no .expect() left in src/main.rs.",
+  "category": "polyglot-editing",
+  "max_iterations": 30,
+  "fixture": "fixtures/pg-rust-trait-display",
+  "prompt_file": "prompts/pg-rust-trait-display.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": ["advance_code_editing"],
+    "needles_in_file": [
+      { "path": "src/main.rs", "regex": "impl .*Display.*for" },
+      { "path": "src/main.rs", "regex": "impl .*FromStr.*for" },
+      { "path": "src/main.rs", "regex": "fmt::Result" },
+      { "path": "src/main.rs", "regex": "write!" },
+      { "path": "src/main.rs", "regex": "\\.expect\\(", "absent": true }
+    ],
+    "file_unchanged": [
+      "README.md"
+    ]
+  },
+  "judge": {
+    "criteria": [
+      "src/main.rs implements fmt::Display for Reading with unit-aware output built from write! inside a fmt::Result-returning fmt function, implements FromStr for Reading with a ParseReadingError so malformed collector lines become Err values instead of panics, loads the batch through a fallible loader that uses ?, keeps print_reading as a thin wrapper over the Display impl, and contains no .expect() call, with the README untouched."
+    ]
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "id": "bigcode-stdlib-combo",
+  "mode": "AGENT",
+  "description": "BigCodeBench style (Python): one task that needs several standard library modules at once (csv with BOM and quoted fields, datetime with UTC offset conversion, re for ticket ids, collections for counting and tie-breaking, json output formatting) to turn an activity export into a summary document defined by a written spec. Many small rules must all hold, so a partial reading of the spec fails the tests.",
+  "category": "bigcodebench",
+  "max_iterations": 40,
+  "fixture": "fixtures/bigcode-stdlib-combo",
+  "prompt_file": "prompts/bigcode-stdlib-combo.md",
+  "config": ["verify.command=python -m unittest discover -s tests"],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": ["SPEC.md", "data/export.csv", "tests/test_summarize.py"],
+    "build_cmd": "python -m unittest discover -s tests",
+    "self_verified": true
+  }
+}

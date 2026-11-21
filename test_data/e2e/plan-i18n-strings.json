@@ -1,0 +1,54 @@
+{
+  "id": "plan-i18n-strings",
+  "mode": "PLAN",
+  "description": "Plan moving the hard-coded texts of three components into translation files: every component is covered, locales/en.json is filled before a Polish locales/pl.json is added, and no step names a file that does not exist.",
+  "category": "planning",
+  "max_iterations": 30,
+  "fixture": "fixtures/plan-i18n-strings",
+  "prompt_file": "prompts/plan-i18n-strings.md",
+  "assert": {
+    "plan": {
+      "min_steps": 3,
+      "max_steps": 9,
+      "covers": [
+        {
+          "label": "Header.js",
+          "regex": "Header\\.js"
+        },
+        {
+          "label": "Footer.js",
+          "regex": "Footer\\.js"
+        },
+        {
+          "label": "LoginForm.js",
+          "regex": "LoginForm\\.js"
+        },
+        {
+          "label": "locales/en.json",
+          "regex": "en\\.json"
+        },
+        {
+          "label": "locales/pl.json",
+          "regex": "pl\\.json"
+        }
+      ],
+      "order": [
+        {
+          "before": "en\\.json",
+          "after": "pl\\.json"
+        }
+      ],
+      "paths_exist": true,
+      "new_paths": [
+        "^locales/",
+        "^tests/"
+      ]
+    },
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The plan adds keys for every text of src/components/Header.js, Footer.js and LoginForm.js to locales/en.json, switches the components to t(key), and only then adds locales/pl.json with the same keys."
+    ]
+  }
+}

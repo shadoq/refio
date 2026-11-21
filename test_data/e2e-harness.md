@@ -25,6 +25,8 @@ tools/e2e/e2e-run.sh --self-test    # asserts the engine only - no CLI, no LLM, 
 ./gradlew :cli:installDist                                   # build the headless CLI once
 
 tools/e2e/e2e-run.sh --list                         # show selectable scenarios, then exit
+tools/e2e/e2e-run.sh --list --category C --filter ERE --json   # narrow by category / id regex (also narrows --all), JSON output
+tools/e2e/e2e-run.sh --catalog                      # Markdown table of the corpus, then exit
 tools/e2e/e2e-run.sh --model ollama/qwen3.5:9b \
   increase-retry-count                                       # select by id (or by file path)
 tools/e2e/e2e-run.sh --model ollama/qwen3.5:9b --all # run every scenario
@@ -164,8 +166,14 @@ A scenario can drive the turn with a **`multi_agent`** YAML (CLI `--multi-agent`
 |---|---|---|---|
 | `pipeline-2-agents` | (per-agent) | `analyst` (PLAN) -> `coder` (AGENT, `depends_on: analyst`) implement a stub | `agent_order [analyst, coder]` + needle on the impl + **compile & run** |
 | `dependency-ordering` | (per-agent) | 3-agent chain `analyze -> implement -> document` | `agent_order [analyze, implement, document]` + needle on the impl |
+| `multi-agent-handoff` | (per-agent) | `measurer` (profile without editing tools) runs `node tools/measure.js`; `editor` (profile without a terminal, `depends_on: measurer`) sets `TIMEOUT_MS` to twice the reported p95, so the number can only reach it through the dependency report | `agent_order [measurer, editor]` + `node check.js` + measurement and check files unchanged |
+| `multi-agent-red-blue` | (per-agent) | `red` (profile with `http_request` but no edit tools) exploits the SQL-injectable `/user` lookup on the **live** fixture server and saves the leaked admin secret to `redteam/leaked-flag.txt`; `blue` (profile with edit tools, `depends_on: red`) patches `lookup_user` with a parameterized query | `agent_order [red, blue]` + needle on `redteam/leaked-flag.txt` + `python3 attack_check.py` (checks red's extraction AND that blue's patch kills both injection payloads while legitimate lookups survive) + placeholder needle + `file_unchanged` on gate/profiles |
 
 Each agent's mode comes from the YAML (`mode: plan|agent`), so the scenario-level `mode` is ignored.
+The handoff and red-blue scenarios' profiles live in the fixture's `.refio/agents/`, so they apply only
+to that run. `multi-agent-red-blue` is also the first multi-agent scenario that combines the graph with
+a live `fixture_server` (the `cmd` form, port 8727): the red agent attacks the running old code during
+the turn, and `attack_check.py` starts its own instance on port 8728 afterwards to judge the patch.
 Cycle detection (a `depends_on` loop) is rejected up front by `MultiAgentRunner.validateDependencies`
 (covered by its unit test), so it is not a separate e2e scenario. These need a model that drives the
 multi-agent loop and may legitimately fail on a weak one.
@@ -230,6 +238,355 @@ secret like any other fixture value.
 an intentionally-vulnerable stdlib server (`fixtures/ctf-path-traversal/server/vuln_server.py`) instead
 of the safe static file server; `ctf-exposed-endpoint` uses the plain static server. Both need a model
 capable enough to chain recon requests and may legitimately fail on a weak one.
+
+### Security-workflow scenarios (audit, white team, red team)
+
+Beyond the CTF pair, three scenarios cover the three directions of security work on the same
+local-and-throwaway footing: reading code for weaknesses, fixing what an attack would hit, and
+running the attack itself. All three are deterministic without an external oracle: the audit
+gates on the report's content, the white-team run on an attack-replay gate shipped in the
+fixture, and the red-team run on the exact flag string.
+
+| id | mode | what it exercises | key assertion |
+|---|---|---|---|
+| `vuln-audit-report` | AGENT | white-box audit of a small notes service: find the SQL injection, the path traversal and the hardcoded credential, and write a structured report | needles on `report/findings.md` (function name + `CWE-89`/`CWE-22`/`CWE-798` + severity) + `file_unchanged` on the code (an audit does not modify) |
+| `white-team-harden-server` | AGENT | defensive hardening: contain the download endpoint to `public/` and replace the hardcoded admin password with `ADMIN_PASSWORD` from the environment | `build_cmd` = `python3 attack_check.py` (replays traversal + credential attacks AND the legit traffic) + needles (`ADMIN_PASSWORD` present, old literal absent) + `file_unchanged` on the gate |
+| `red-team-cmd-injection` | AGENT | exploit unsanitised shell interpolation in `GET /ping?host=...` (OS command injection) to read a flag outside the web root | `tool_invoked` `http_request` + `needle_in_output` = exact flag + `file_unchanged` on the server |
+
+`white-team-harden-server` is the mirror of a CTF exploit: the same attacks that would prove a
+weakness must now FAIL while the legitimate requests keep succeeding - a "block everything"
+regression fails the gate the same way an unfixed traversal does (its `deny-all` negative
+control proves it). `attack_check.py` runs the vulnerable functions directly, so it needs no
+live server; the red-team scenario uses the `cmd` form of `fixture_server` (port 8726) like
+`ctf-path-traversal`. Both `vuln-audit-report` and `white-team-harden-server` carry golden
+solutions and negative controls for `validate-scenarios.sh`; `red-team-cmd-injection` ships a
+golden `answer.txt` only (its flag gate is run-time).
+
+### Reverse-engineering scenario (decompilation and code analysis)
+
+| id | mode | what it exercises | key assertion |
+|---|---|---|
+| `decompile-vm-crackme` | AGENT | decompile a bytecode program for a documented stack VM (`vm.py` + `ISA.md`): recover the passphrase from the obfuscated per-character XOR comparisons and obtain the flag from the success path | `needle_in_output` = exact flag (which embeds the passphrase) + `file_unchanged` on `vm.py`/`program.bin`/`ISA.md` (patching the check is not solving it) |
+
+The fixture is a deliberate crackme: `program.bin` holds eight unrolled `INPUT; PUSH k; XOR;
+PUSH t; EQ; JNZ; JMP` blocks (passphrase char XOR key == target) followed by `PUSH e; PUSH k2;
+XOR; PRINT` groups for the flag. Two legitimate solution paths exist - decode everything
+statically, or recover the passphrase statically and run `python3 vm.py program.bin
+<passphrase>` - and both require actually reading the bytecode; brute force at a 9b-model's
+iteration budget is not viable. Ships a golden `answer.txt` for the offline validator.
+
+### Incident-driven debugging scenario
+
+The existing repair scenarios start from a failing test; this one starts from a production
+incident artifact, like a real debugging session does.
+
+| id | mode | what it exercises | key assertion |
+|---|---|---|---|
+| `debug-crash-report` | AGENT | diagnose from `crash-report.txt`: an `IndexError` in `take_recent` when fewer events exist than requested, plus a cross-call state leak from a mutable default argument in `record_event` | `build_cmd` = `python3 checks.py` (replays both failure modes + runs the visible suite) + needles (`history is None`-style sentinel present, `history=[]` absent) + `file_unchanged` on the report, the gate and the tests |
+
+Both bugs must be fixed for the gate to pass: the visible unit tests pass on the untouched
+fixture (they never trigger either failure mode), so the scenario separates "diagnose from
+symptoms" from "make the visible tests green". The partial-fix negative controls
+(`mutable-kept`, `crash-kept`) prove that fixing only one symptom fails.
+
+### Linux operations scenario
+
+| id | mode | what it exercises | key assertion |
+|---|---|---|---|
+| `linux-ops-audit` | AGENT | on-call sysadmin work: triage `var/log/auth.log` (count failed-password logins, find the top offending IP) into `report/intrusion-report.txt`, tighten a world-writable file to mode 640, restore a script's executable bit | `build_cmd` = `bash verify.sh` (checks both report lines, the 640 mode and the executable bit) + `tool_invoked` `run_terminal_command` + needles on the report + `file_unchanged` on the log and the gate |
+
+Two run notes. (1) **`chmod` is not in the harness's default auto-approve set**, so the two
+permission items need either an operator-passed `--auto-approve` that adds it (the default
+regex plus `\bchmod\b`) or an approved equivalent the model can reach (e.g. `python3 -c
+'import os; os.chmod(...)'`). Example:
+
+```bash
+tools/e2e/e2e-run.sh --model ollama/qwen3.5:9b --auto-approve '(\bchmod\b|\b(kotlinc?|gradlew|gradle|javac|java|python3?|pip3?|node|npm|npx|pnpm|yarn|pytest|mvn|cargo|go|make|cmake|ls|cat|pwd|echo|head|tail|sed|awk|grep|rg|find|wc|diff|test|true|cd|sh|bash|env|export|mkdir|touch|mv|cp|tr|sort|uniq|cut|sleep|which|lsof)\b)' linux-ops-audit
+```
+
+(2) File modes are not content: `file_unchanged` compares bytes, so `chmod` does not violate it
+(the mode checks live in `verify.sh`), and the fixture's initial modes are prompt-stated rather
+than git-tracked (git only remembers the executable bit). The scenario has no golden dir for
+the same reason - a golden overlay cannot carry a mode change.
+
+## Benchmark-style scenario batch (Terminal-Bench inspired)
+
+Twenty-six further hand-written scenarios extend the suite into domains the plugin had not
+been tested in, in the Terminal-Bench spirit: every task is a small but **real** job with a
+**deterministic, self-contained gate** (a checker script, a digest, a re-derived answer) -
+never a fuzzy "looks plausible" judgement. Where the gate is file-level, the scenario also
+ships a golden solution and negative controls for `validate-scenarios.sh`; where the gate is
+run-time (live servers, multi-agent order, `needle_in_output` flags), a golden `answer.txt`
+documents the expected result instead.
+
+### CTF / exploitation (live local targets)
+
+| id | mode | what it exercises | key assertion |
+|---|---|---|---|
+| `ctf-jwt-forgery` | AGENT | the API's HS256 secret is committed in `server/config/dev.env`; recover it and mint an admin token | `tool_invoked` `http_request` + `needle_in_output` = exact flag + `file_unchanged` on server/config |
+| `ctf-ssrf-metadata` | AGENT | `/preview?url=` denylists loopback hostnames by literal string (bypass with `0.0.0.0`/integer IP) and attaches its internal token to every fetch; pivot to the metadata service one port up | `tool_invoked` `http_request` + exact flag |
+| `red-team-deserialization` | AGENT | the template store unpickles partner uploads; craft a `__reduce__` payload that exfiltrates the secret **on unpickle** | `needle_in_output` flag + needle on `exfil/out.txt` + `build_cmd` = `python3 verify.py` (wipes exfil first, so hand-written files cannot pass) + `tool_invoked` `run_terminal_command` |
+| `crypto-token-forgery` | AGENT | a homemade "MAC" is repeating-key XOR over the readable payload; recover the keystream from captures (the key length is not public - cross-consistency over captures pins it) and forge an admin token | `build_cmd` = `python3 check.py` (validates signature, admin, future expiry, prints the flag) |
+
+`ctf-jwt-forgery` (port 8730) and `ctf-ssrf-metadata` (port 8731, metadata on 8732) use the
+`cmd` form of `fixture_server`; the SSRF target binds its internal service one port above
+the public one and only accepts requests carrying the proxy's internal token, so the
+exercise genuinely has to go through the SSRF. `crypto-token-forgery`'s gate re-derives
+the token's validity through the fixture's own verifier; `red-team-deserialization`'s gate
+executes the crafted pickle exactly the way the loader does.
+
+### Security analysis, audit and forensics
+
+| id | mode | what it exercises | key assertion |
+|---|---|---|---|
+| `xss-dom-audit` | AGENT | find the real DOM-XSS sink (`innerHTML` fed from `location.hash`) next to a safe `textContent` look-alike | needles on `report/xss-findings.md` (sink, source, `CWE-79`, PoC payload) + `file_unchanged` on the app |
+| `container-sec-audit` | AGENT | Dockerfile/compose misconfigurations: baked secret, root user, `latest` tags, `privileged` sidecar, `0.0.0.0` publish | needles with CWEs/severities on the report + untouched configs |
+| `privesc-path-audit` | AGENT | separate viable privesc paths (NOPASSWD `sudo tar` GTFOBins technique; root-cron script writable by our group) from a patched SUID screen | needles (the `--checkpoint` payload, the writable script, the patched rejection) |
+| `malware-triage-deobfuscate` | AGENT | statically peel a two-layer base64 shell loader; document C2, both persistence mechanisms, exfil target | needles on the IOC report incl. `classification=shell_loader` |
+| `net-forensics-exfil` | AGENT | reassemble DNS-tunnelled base32 chunks (sequence-ordered, marker and noise ignored) from a capture log | `build_cmd` = `python3 checks.py` (sha256 gate - the plaintext is not in the fixture) |
+| `log-incident-timeline` | AGENT | triage an ssh brute force + sudo escalation + useradd persistence across two logs into `key=value` facts | `build_cmd` gate re-derives all five facts from the logs and matches the report |
+| `api-contract-diff` | AGENT | three breaking changes between two API specs (field removed, param now required, type changed) vs one additive | needles on the breaking-changes report + untouched specs/SDK |
+| `dependency-cve-triage` | AGENT | advisory triage by **reachability**: bump the two imported vulnerable deps, leave the unreachable one | needles on `package.json` + **`preserved_except` `json_paths`** proving only those two dependencies changed |
+
+### Reverse engineering and static decoding
+
+| id | mode | what it exercises | key assertion |
+|---|---|---|---|
+| `re-keygen-algorithm` | AGENT | recover a licence-check algorithm (hex checksum half + per-position letters half) and compute a key | `build_cmd` = `python3 verify_key.py` (checks the exact user) + format needle |
+| `deobfuscate-javascript` | AGENT | a rotated string-array, hex-escaped beacon: account for the IIFE rotation before mapping accessor indices | needles on the deobfuscated-config report (decoys fail if the rotation is ignored) |
+| `hexblob-decode` | AGENT | follow a documented firmware image format (magic, section table, XOR-0x5A string entries) in a hex dump | `needle_in_output` = exact flag (static decode, nothing executed) |
+
+### Concurrency, debugging and test quality
+
+| id | mode | what it exercises | key assertion |
+|---|---|---|---|
+| `debug-race-condition` | AGENT | a lost-update race across a **compliance-mandated 1 ms window** - lock it, don't delete the window | `build_cmd` stress (exact total) + latency probe (window kept) + needles (`Lock`, `time.sleep`) |
+| `debug-deadlock` | AGENT | opposite-direction transfers deadlock on lock order; fix with id-sorted acquisition | `build_cmd` runs the deadly pair with join timeouts + needles (`sorted(`, window kept) |
+| `flaky-test-stabilize` | AGENT | an unseeded-random assertion and an order-dependent scratch file - fix the **tests**, not the code | `build_cmd` runs four deterministic orderings/seeds and rejects skips/deletions; `src/pricing.py` `file_unchanged` |
+| `memory-leak-trace` | AGENT | diagnose from a tracemalloc-style profile: audit trail keeps payload copies, live map unbounded | `build_cmd` = functional + two tracemalloc bounds (churn, unbounded open) + `2048` cap needle |
+
+### Terminal-Bench style operations
+
+| id | mode | what it exercises | key assertion |
+|---|---|---|---|
+| `perf-regression-bisect` | AGENT | a deterministic operation-count benchmark is red on `main`; **git bisect** to the first bad commit (needs `git` on PATH) | `build_cmd` = `python3 check_answer.py` (re-derives the bad commit from history via `git show`) + `commit=`/`reason=` needles |
+| `linux-cron-repair` | AGENT | repair a drifted crontab against the schedule policy and restore a missing shebang cron chokes on | `build_cmd` = own cron parser firing all jobs over a synthetic year vs the policy |
+| `linux-logrotate-fix` | AGENT | bring logrotate.conf to the retention policy (weekly, `rotate 4`, compress, `create 0640 app app`, `su`, `app-reload`) | `build_cmd` = field-by-field conf validator (forbidden old values rejected) |
+| `linux-service-recovery` | AGENT | fix a drifted systemd unit (interpreter path, restart policy, user, workdir) **and** the env file so the service really boots | `build_cmd` parses the unit against the spec, then **boots the service and probes `/health`** |
+| `sql-migration-repair` | AGENT | production drift: 003 recorded but never executed - write an idempotent repair migration (converge, preserve rows, stay clean on fresh + re-runs) | `build_cmd` proves convergence/data/idempotence on temp copies; the drifted snapshot stays untouched |
+
+### Multi-agent pipelines (second wave)
+
+| id | mode | what it exercises | key assertion |
+|---|---|---|---|
+| `multi-agent-pentest-pipeline` | (per-agent) | `recon` (PLAN, http) -> `exploiter` (numeric SQLi on `/api/users`, saves the flag) -> `reporter` (report citing endpoint + flag), against a live fixture server (port 8734) | `agent_order [recon, exploiter, reporter]` + flag needle + report needles + `build_cmd` = `verify_report.py` |
+| `multi-agent-audit-patch-zipslip` | (per-agent) | `auditor` (read-only) documents the zip-slip in `extract_archive` (CWE-22); `patcher` (depends_on auditor) contains extraction to the destination | `agent_order [auditor, patcher]` + `CWE-22` needle on the audit + containment needle on the fix + `build_cmd` replays the malicious **and** clean archives |
+
+Run notes for the batch. (1) New fixture-server ports: 8730 (jwt), 8731/8732 (ssrf public /
+internal), 8734 (pentest pipeline). (2) `perf-regression-bisect` ships its six-commit
+history as `history.git.bundle` (a git bundle, not an embedded `.git` - nested repositories
+cannot be committed) plus an idempotent `restore-history.sh` that materialises `.git` from
+it; it needs `git` on PATH. The gate restores the history itself if the agent has not, never
+touches the working tree (`git show` per commit), and `file_unchanged` on `src/index.py`
+catches a forgotten `git bisect reset`. (3) `red-team-deserialization` and
+`crypto-token-forgery`
+expect the model to run terminal commands (crafting a pickle / computing a forgery), so
+their `--auto-approve` needs the default set (both ship `tool_invoked` only where the
+attack genuinely requires it). (4) The two SQL/crypto gates and the incident-timeline gate
+embed no plaintext answers - digests or re-derivation only - so reading the gate does not
+solve the task. (5) Like the first wave, the multi-agent pair has no golden dir (runtime
+gates only); every file-level scenario in this batch validates through
+`validate-scenarios.sh` with golden + negative controls.
+
+## Benchmark-style scenario batch 3 (AgentBench, Terminal-Bench and HumanEval inspired)
+
+Twenty-eight further scenarios model the suite explicitly on three public benchmarks:
+**AgentBench** (OS / DB / knowledge-graph / web-browsing / WebShop / coding / digital
+games / lateral-thinking environments, via the `ab-` prefix), **HumanEval**
+(function completion judged by an untouched unit-test file, via `he-`), and
+**Terminal-Bench** (terminal work verified by an end-state gate, via `tb-`). Two
+multi-agent scenarios compose the benchmarks with orchestration. As in wave 2, every
+file-level scenario ships a golden solution and negative controls for
+`validate-scenarios.sh` (26 of 28; the two multi-agent pairs are runtime-gated), gates
+embed digests or re-derivation rather than plaintext answers, and scenario JSONs
+changed relative to wave 2 only where the model differs.
+
+### AgentBench-OS (host evidence and policy manifests)
+
+| id | mode | what it exercises | key assertion |
+|---|---|---|---|
+| `proc-autopsy` | AGENT | triage a host from cold evidence (ps snapshot + dmesg): CPU hog, zombie + its parent, the OOM victim that must NOT be in ps, worker-pool shape | `build_cmd` gate re-derives all six facts from the evidence |
+| `disk-quota-cleanup` | AGENT | apply a dated retention policy (keep 10 newest logs, caches older than 7 days, reports never) as the exact operator manifest | gate recomputes the expired set from filenames + reference date |
+| `symlink-farm` | AGENT | repair four drifted release slots against the authoritative matrix; stale rc pointers must vanish | needles + gate cross-checks slots and version dirs |
+| `perms-alignment` | AGENT | align the permission manifest with the policy (modes, owners, setgid dir, global no-world-writable rule) | CSV gate cross-checks every policy row |
+
+### AgentBench-DB (SQLite analytics and surgery)
+
+| id | mode | what it exercises | key assertion |
+|---|---|---|---|
+| `ab-db-sales-queries` | AGENT | eight business questions with revenue rules (cancelled never counts, returned does, deterministic ties) | gate recomputes all answers via SQL; money compared at 2 decimals |
+| `ab-db-normalize-orders` | AGENT | normalize a denormalized one-table export in place (case-insensitive email merge, UNIQUE enforced by schema, quantities preserved) | gate re-derives everything from the immutable raw table |
+| `ab-db-index-tuning` | AGENT | give three documented slow queries the right indexes - the aggregation needs a covering index | gate proves it through `EXPLAIN QUERY PLAN` against the real db |
+| `ab-db-integrity-repair` | AGENT | orphan rows, duplicate/NULL emails, comma-decimal TEXT prices; merge rules + money conservation | gate asserts invariants plus revenue digest 877.0 |
+
+### AgentBench-KG (knowledge-graph reasoning)
+
+| id | mode | what it exercises | key assertion |
+|---|---|---|---|
+| `ab-kg-family-kinship` | AGENT | ten kinship questions over a parent/spouse graph (siblings exclude self, one legitimate empty set) | gate recomputes the closure from the triples |
+| `ab-kg-org-authority` | AGENT | rank-gated approval resolution (self-approval for routine requests, never for sensitive ones, nearest sufficient manager up the chain) | gate recomputes all ten resolutions |
+| `ab-kg-consistency-audit` | AGENT | find exactly the seven violations of five documented rules (cycles, life spans, `same_as` symmetry, missing managers, parent age) | gate rejects subsets and false positives alike |
+
+### AgentBench-Web / WebShop (live local targets)
+
+| id | mode | what it exercises | key assertion |
+|---|---|---|---|
+| `ab-webshop-budget-cart` | AGENT | WebShop: browse a live catalog shop and pick the unique optimal cart (one item per category, hard budget, maximal rating - the high-rated items bust the budget) | gate brute-forces the optimum; `tool_invoked http_request` |
+| `ab-web-docs-extraction` | AGENT | extract facts from served HTML (unreleased builds never win "latest released", teams without leads left out) | gate re-parses the pages with the stdlib HTML parser |
+| `ab-web-session-flow` | AGENT | complete a real login flow: fetch form, echo the CSRF field, POST credentials, carry the session cookie to the protected page | exact-flag needle + `tool_invoked http_request` + untouched server |
+
+### AgentBench-Coding / digital games / lateral thinking
+
+| id | mode | what it exercises | key assertion |
+|---|---|---|---|
+| `ab-code-coin-change` | AGENT | unbounded coin change with a 5s-per-case runner and a large case that rules out exponential search (greedy has no correct form - the negative controls prove it) | `build_cmd` runs all six cases |
+| `ab-game-mastermind` | AGENT | a solver played against a real game driver; every guess must be consistent with all previous feedback | `needle_in_output SOLVED in [1-7]` + driver-enforced consistency |
+| `ab-game-minimax-tictactoe` | AGENT | unbeatable move selection with a depth-aware rule (fastest win, slowest loss) so each position has exactly one answer | six unique-optimal positions via untouched tests |
+| `ab-think-classic-puzzles` | AGENT | river crossing (7 optimal crossings) and bridge-and-torch (exactly 17 minutes), simulated step by step | gate simulates both plans |
+
+### HumanEval-style completion (unit tests are the judge)
+
+| id | mode | what it exercises | key assertion |
+|---|---|---|---|
+| `he-textutils-stubs` | AGENT | three contract-bearing stubs (one-level flatten, run-collapsing slugify, email masking) | untouched `unittest` file; `NotImplementedError` gone |
+| `he-rolling-max` | AGENT | rolling window maximum with the canonical edge cases (k=1 identity, empty when k>len, `ValueError` for k<=0) | untouched tests incl. the raise contract |
+| `he-parse-parens` | AGENT | the canonical per-group nesting-depth parser (adjacent pairs are ONE group) | untouched tests |
+| `he-pure-total-cost` | AGENT | correct AND pure - two tests assert the input is never mutated across calls | untouched tests incl. purity assertions |
+
+### Terminal-Bench-style operations (wave 3)
+
+| id | mode | what it exercises | key assertion |
+|---|---|---|---|
+| `tb-config-drift-triage` | AGENT | staging leaked an incident hot-patch; invariant = prod + exactly the documented overrides | gate recomputes prod+overrides and diffs key-by-key |
+| `tb-archive-rescue` | AGENT | peel a triple-nested rescue payload (base64 -> ZIP -> tar.gz) and restore byte-exactly | sha256 gate rejects wrong layers and drifted copies |
+| `tb-log-reduction` | AGENT | reduce a 4k-line log to per-minute ERROR counts (only minutes with errors, sorted keys) | gate recomputes every count from the log |
+| `tb-port-wiring` | AGENT | repair the drifted run.env against the documented topology and prove the chain end-to-end | gate boots all three services and probes `stored: 21` |
+
+### Multi-agent x benchmarks (runtime gates, no golden - as in waves 1-2)
+
+| id | mode | what it exercises | key assertion |
+|---|---|---|---|
+| `multi-agent-he-review-fix` | MULTI-AGENT | reviewer (PLAN) runs the red suite and documents each failing test; fixer implements the stubs to green | `agent_order` + suite green + tests untouched + report names the failing tests |
+| `multi-agent-ab-webshop` | MULTI-AGENT | planner (PLAN) fetches the live catalog and computes the unique optimal cart; buyer materializes it | `agent_order` + gate confirms the optimum + plan cites the 59.50 total |
+
+## Browser games and complex single-file web apps (HTML/CSS/JS generation, wave 4)
+
+Twenty from-scratch generation scenarios (10 `browser-game`, 10 `browser-app`) that each produce ONE
+self-contained HTML file (inline CSS/JS, vanilla, no CDN/backend) from an empty fixture. Same shape as
+`games-chip8-emulator` / `single-file-app-circuitsmith`: `tool_order` gate on `advance_code_editing`,
+5 HARD needles on the entry file (canvas/DOM APIs plus feature-specific identifiers - rotation,
+localStorage, sim loops, real math), a runtime `smoke` check on the entry page, and a heavy SOFT judge
+listing every feature that must actually work (no fake states). They are the heaviest single-file
+generation workloads in the suite - run them on the strongest model under test and expect
+`no_context_overflow` to fail weak models that truncate the file.
+
+### Browser games (`webgame-*`)
+
+| id | entry | what it exercises | key assertions |
+|---|---|---|---|
+| `webgame-tetris` | `tetris_model_01.html` | full Tetris: SRS rotation + wall kicks, hold, next queue, ghost, lock delay, scoring/levels, localStorage high score | canvas + rAF + keydown + tetromino defs + kick/persistence |
+| `webgame-breakout` | `breakout_model_01.html` | Breakout: paddle angle control, multi-hit/unbreakable bricks, working power-ups (multi-ball/laser/slow), particles, 4+ levels | canvas + rAF + power-ups + input + lives/score |
+| `webgame-minesweeper` | `minesweeper_model_01.html` | Minesweeper: safe first click, flood-fill reveal, flags, chording, timer, best times | reveal/flood + contextmenu/flags + localStorage + presets + timer |
+| `webgame-2048` | `game_2048_model_01.html` | 2048: one-merge-per-tile rule, animated transitions, swipe input, undo, win + continue | localStorage + undo + merge + touch + 2048/transition |
+| `webgame-sudoku` | `sudoku_model_01.html` | Sudoku: unique-solution generator with backtracking solver, pencil marks, hints, best times | solver + pencil + localStorage + hint + uniqueness |
+| `webgame-wordle` | `wordle_model_01.html` | Wordle: duplicate-letter feedback rules, on-screen keyboard state, hard mode, streak stats, emoji share | localStorage + keyboard + color rules + hard mode + share |
+| `webgame-platformer` | `platformer_model_01.html` | tile-map platformer: coyote time/jump buffering, enemies, coins, checkpoints, camera clamping, 3 levels | physics + tilemap + enemy + coin + camera/checkpoint |
+| `webgame-space-shooter` | `space_shooter_model_01.html` | vertical shooter: 4+ enemy patterns, scripted waves, power-ups, multi-phase boss, particles/shake | rAF + waves + boss + power-ups + particles/persistence |
+| `webgame-chess` | `chess_model_01.html` | chess: legal move gen (castling/en passant/promotion), mate/stalemate, SAN history, minimax AI | castling/EP + mate detection + search + SAN + persistence |
+| `webgame-tower-defense` | `tower_defense_model_01.html` | tower defense: pathing enemies, 3+ tower types, upgrades, economy, range preview, speed control | towers + waves + upgrades + range/splash + lives/persistence |
+
+### Complex web apps (`webapp-*`)
+
+| id | entry | what it exercises | key assertions |
+|---|---|---|---|
+| `webapp-markdown-studio` | `markdown_studio_model_01.html` | hand-written Markdown parser (tables, fenced code, nesting), live preview, toolbar, scroll sync, export | tables + fenced code + localStorage + scroll sync + export |
+| `webapp-flowdraw` | `flowdraw_model_01.html` | SVG flowchart editor: port-to-port bezier edges, drag/snap, pan/zoom, undo/redo, JSON + SVG export | svg + bezier/paths + undo/redo + zoom/pan + persistence |
+| `webapp-code-playground` | `code_playground_model_01.html` | HTML/CSS/JS sandbox: srcdoc preview, real console capture via postMessage, error overlay, templates | iframe/srcdoc + postMessage + localStorage + gutter + templates |
+| `webapp-vfs-file-manager` | `vfs_file_manager_model_01.html` | localStorage virtual filesystem: tree/breadcrumbs, move/copy, OS drag-drop upload, text editor, search, quota | localStorage + dataTransfer + tree + rename/move + search/quota |
+| `webapp-calendar-planner` | `calendar_planner_model_01.html` | month/week/agenda views, drag-to-create events, recurrence expansion, conflict detection, search | recurrence + localStorage + views + overlap + navigation |
+| `webapp-whiteboard` | `whiteboard_model_01.html` | drawing board: smoothed strokes, shape tools, layers with opacity, 50-op undo stack, PNG export | undo/redo + layers + shapes + export + zoom/pan |
+| `webapp-image-editor` | `image_editor_model_01.html` | real ImageData math: adjustments, filters, crop/rotate/flip, histogram, undo history, PNG/JPEG export | ImageData + adjustments + transforms + histogram + undo/export |
+| `webapp-regex-lab` | `regex_lab_model_01.html` | regex lab: live match highlighting, capture-group table, replace preview, pattern library, no UI freeze | match/exec + groups/$1 + flags + localStorage + library |
+| `webapp-zettel-notes` | `zettel_notes_model_01.html` | Zettelkasten: [[wiki-links]], auto backlinks, broken-link handling, search, force-directed graph | [[ ]] + backlinks + localStorage + force graph + search/tags |
+| `webapp-habit-tracker` | `habit_tracker_model_01.html` | habits: weekly schedule check-off, year heatmap, schedule-aware streaks across boundaries, stats | streaks + heatmap + localStorage + habits + goals |
+
+## Code editing across languages, bug fixing and refactoring (wave 5)
+
+Twenty EDIT-IN-PLACE scenarios in three families. Unlike wave 4's empty fixtures, every fixture here
+ships real pre-existing code (60-140 lines per file, commented, plausible apart from the described
+gap) and the model edits it: `pg-*` adds a language-idiomatic feature, `sw-*` fixes a reproduced bug
+against a hidden-test gate, `rf-*` performs a behavior-preserving migration. Every scenario was
+verified against a golden reference solution before shipping: normal needles match the reference (and
+miss the original wherever the construct is new), `absent` needles pin the legacy construct that must
+disappear, and the `build_cmd` gates were proven to flip red-to-green (`sw-*`, the SWE-bench
+FAIL_TO_PASS property) or stay green across the refactor (`rf-*`).
+
+### Polyglot feature edits (`pg-*`)
+
+Aider-Polyglot-style: one focused, language-idiomatic change per language, no runtime gate (the
+toolchains are not part of the harness image), structural needles only.
+
+| id | entry | what it exercises | key assertions |
+|---|---|---|---|
+| `pg-go-error-wrapping` | `config/config.go` | sentinel errors + `%w` wrapping + `errors.Is` helper | `errors.New` + `: %w` + `errors.Is`; old `Errorf("%s"` gone |
+| `pg-go-context-timeout` | `fetcher/fetcher.go` | `FetchCtx` with `context.WithTimeout`, request context, typed deadline error | `WithTimeout` + `NewRequestWithContext` + `defer cancel`; bare `http.Get(` gone |
+| `pg-rust-result-errors` | `src/lib.rs` | panic-free parser: `ParseError` enum, `Result` returns, `map_err` | `enum ParseError` + `Result<` + `map_err`; `.unwrap()` gone |
+| `pg-rust-trait-display` | `src/main.rs` | `impl Display` + `impl FromStr` + `?` in the loader | `impl .*Display` + `impl .*FromStr` + `write!`; `.expect(` gone |
+| `pg-cpp-operator-overload` | `include/vector2.hpp` | operators `+ - * == <<`, const-correctness, `dot`/`length` | `operator+` + `operator==` + `operator<<` + const; `memcmp` gone |
+| `pg-ts-generics` | `src/client.ts` | typed API client: interfaces, generic `request<T>`, no `any` | `interface [A-Z]` + `<T` + `Promise<`; `: any` gone |
+| `pg-java-optional` | `src/com/example/inventory/InventoryService.java` | `Optional` returns + stream pipelines replacing null checks | `Optional.` + `stream()` + `ofNullable` + `orElse`; `== null` gone |
+| `pg-ruby-kwarg-enum` | `lib/order.rb` | keyword args, frozen status tuple, `pending?/paid?/shipped?` predicates | kwargs `def initialize(...:)` + `to_sym` + `freeze` + predicates |
+
+### Mini SWE-bench bug fixes (`sw-*`)
+
+Each fixture ships a real bug plus a hidden gate (`checks.py`/`checks.js`) that fails on the shipped
+code and passes on the golden fix - the FAIL_TO_PASS property. Prompts are written like GitHub
+issues: symptom, reproduction, expected behaviour.
+
+| id | entry | what it exercises | key assertions |
+|---|---|---|---|
+| `sw-parser-off-by-one` | `csvlite.py` | trailing empty field dropped by the guarded flush | docstring examples + unconditional flush; `if field:` guard gone |
+| `sw-race-cache` | `src/cache.js` | concurrent-miss coalescing via a pending map | `pending.get/set` + `return await load` + `.finally(`; bare `cache.has(` gone |
+| `sw-canvas-leak` | `game.js` | listener/rAF teardown across start/stop cycles | `removeEventListener` + `cancelAnimationFrame` + bound handler; inline arrow registration gone |
+| `sw-regex-validation` | `validators.js` | anchored email + calendar-aware date regexes | anchors + day/month classes; unanchored pattern gone |
+| `sw-sort-comparator` | `sorttable.js` | numeric comparators + stable multi-key ordering | numeric diff shape + direction control; boolean comparator gone |
+| `sw-dst-arithmetic` | `scheduler.py` | wall-clock-preserving shifts across CET/CEST | `timedelta(days=days)` + zone re-attach; `timezone(offset)` stamp gone |
+| `sw-money-rounding` | `cart.js` | integer-cent money maths end to end | `Cents(` accessors + `formatCents` + single conversion; `parseFloat(` and float line sums gone |
+
+### Refactors and migrations (`rf-*`)
+
+Behavior-preserving structural migrations. Gated ones must stay green on the legacy code AND on the
+golden refactor (no FAIL_TO_PASS here - the point is that nothing breaks).
+
+| id | entry | what it exercises | key assertions |
+|---|---|---|---|
+| `rf-callbacks-to-async` | `src/downloader.js` | callback pyramid -> async/await with try/catch | `async function` + `await ` + `try {`; `, callback)` and `callback(err` gone |
+| `rf-js-to-ts` | `src/store.ts` | typed twin of `src/store.js` (left in place as reference) | `interface [A-Z]` + `: string` + `: number` + `export`; `: any` gone |
+| `rf-react-class-to-hooks` | `app.jsx` | class component -> function + hooks, dependency arrays, cleanup | `useState` + `useEffect`; `extends Component` gone |
+| `rf-css-design-tokens` | `styles.css` | repeated literals -> `:root` custom properties + `var(--...)` | `:root` + `--token:` + `var(--`; the most-repeated hex literal gone |
+| `rf-python-procedural-oop` | `pipeline.py` | module-level globals -> `Pipeline` class with typed API | `class Pipeline` + `__init__` + `self.` + `@property`; `^UPPER =` globals gone |
+
+## Planning scenarios
+
+Twenty scenarios check how Refio plans longer work, on three levels. Each has a fixture, a golden plan (and golden files where the agent edits) and deliberately wrong controls that `validate-scenarios.sh` must reject: a plan in the wrong order, a plan naming a file that does not exist, a plan that misses a required part, an agent that edits outside its plan.
+
+| Level | Scenarios | What is judged |
+|---|---|---|
+| 1. Plan quality (PLAN mode, nothing is edited) | `plan-add-field-migration`, `plan-rename-module`, `plan-extract-service`, `plan-bugfix-repro`, `plan-config-env`, `plan-callback-migration`, `plan-split-function`, `plan-i18n-strings`, `plan-trivial-fix`, `plan-api-v2-compat` | `plan`: number of steps (including "do not overplan a typo"), required parts covered, order constraints the prompt states (migration before the code that reads the column, failing test before the fix, importers before deleting the old module), no invented files |
+| 2. Plan, then execution (multi-agent: a `planner` in PLAN mode hands its plan to a `coder` in AGENT mode) | `plan-exec-user-email`, `plan-exec-rename-function`, `plan-exec-paging-bug`, `plan-exec-extract-validators`, `plan-exec-config-constants` | `agent_order`, `plan` on the planner's answer, `plan_followed` on the coder's changes, protected files unchanged, `build_cmd` green |
+| 3. Long tasks (`until`, several rounds) | `long-plan-csv-toolkit`, `long-plan-inventory`, `long-plan-textkit`, `long-plan-ledger`, `long-plan-dates` | a `tasks` plan with steps marked completed and base modules before the ones built on them, `rounds` (at most 3 of the 5 allowed rounds, failing-test count never grows, `.refio/progress.md` written), every stub implemented, tests unchanged, `build_cmd` green |
+
+The level-3 test runners print one `FAILED <name>` line per failing test, so `errorLines` in `run.json.longTask.rounds[]` counts failing tests and `errors_non_increasing` catches a round that broke a test that passed before.
 
 ## Where scenarios come from
 
@@ -335,6 +692,14 @@ into CRLF while an agent's write tool may emit LF, which is the environment, not
 under bash and under `cmd /c`. It only reads the pristine fixture and the project; nothing the agent writes can
 change the check. No `node` on PATH is a HARD fail with that reason, never a silent pass.
 
+**Planning gates.** These judge how the agent planned the work, not only what it left behind. The plan is read from the run by `tools/e2e/lib/plan-check.mjs` (run with `node`, like `preserve-check.mjs`): the last plan made with the `tasks` tool, with every later step update applied, or else the numbered steps of the answer (a checklist `- [ ]` / `- [x]`, or top-level bullets, when there are no numbers). A step owns the lines under it until the next step. A scenario with any planning gate runs at `--debug-level full`, because `standard` cuts the answer at 2000 characters and a long plan would lose its last steps.
+
+- **`plan`** (object): `source` (`any` by default: the `tasks` plan when there is one, else the answer; `tasks` or `output` to insist on one), `agent` (multi-agent: judge only this agent's calls and its `--- name ---` section of the answer), `min_steps` / `max_steps`, `covers[]` (`{label, regex}`: some step must match), `order[]` (`{before, after, before_label?, after_label?}`: the first step matching `before` must not come after the first step matching `after`; steps whose title starts with a reading verb such as read, review, inspect or find are left out, and one step matching both is fine), `mentions[]` (regexes the plan as a whole must match), `paths_exist` (every file path the plan names exists in the fixture, by full path or by file name in some folder) with `new_paths[]` (regexes for files the plan may create), and `completed` (`{min}` or `{all: true}`: steps marked completed through `tasks` updates or `[x]`). Regexes are JavaScript and case-insensitive. A run with no plan steps fails.
+- **`plan_followed`** (object, optional `allow_extra[]` regexes): every file the agent added, changed or deleted, compared with the fixture, is named in the plan (by path or file name). Harness files (`.refio/`), caches and build output do not count. A plan that says one thing while the agent edits another fails.
+- **`rounds`** (object, long tasks only): `max` rounds, `errors_non_increasing` (the check's error-line count from `run.json.longTask.rounds[].errorLines` never grows from one round to the next), `plan_steps_done_min` (completed plan steps after the last round) and `progress_file` (`.refio/progress.md` exists). It needs a run, so `validate-scenarios.sh` skips it.
+
+In `validate-scenarios.sh` there is no run, so the plan is a text file: `golden/<id>/plan.txt` (an agent's `tasks` plan written out as numbered steps, `1. [x] ...` for completed ones), else `golden/<id>/answer.txt` (a PLAN-mode answer). A control under `negative/<id>/<name>/` may bring its own `plan.txt` or `answer.txt` to show that a wrong plan is rejected; without one it is judged with the golden `plan.txt`, so only its files are wrong. Neither file is copied into the project.
+
 **Loop-quality gates.** Everything above measures the final state of the project; these five measure
 how the run got there, which is the one thing the rest is blind to. A run that took forty wasted turns,
 never checked its own work, kept retrying a call that could not work, or fired a guardrail and then
@@ -399,6 +764,10 @@ multi-agent run now emits a `run.json` carrying `session.status` (SUCCESS iff ev
 and `multiAgent.agents[]` in execution order, so the usual gates (status, needles, `build_cmd`) plus
 `agent_order` all apply. A scenario sets **either** `prompt_file` **or** `multi_agent`, not both.
 
+**`until`** (shell command, optional) runs the scenario as a long task (CLI `--until <cmd>`): rounds of AGENT turns until the command exits 0 in the project after a round. **`max_rounds`** (integer, optional) passes `--max-rounds`. Cap the time with the scenario's own `config`, e.g. `"long_task.max_minutes=30"`; an operator `--config` still overrides it, e.g. `long_task.max_minutes=180` for the three-hour run. `until` cannot be combined with `multi_agent`. Example: `long-12-stubs` (twelve helper stubs, `node run-tests.js` after every round).
+
+**`score`** (`{ cmd, regex }`, optional) says how far a run got when it can end part-way: after the run, also a failed one, the harness runs `cmd` in the project and takes the first capture group of `regex` (POSIX ERE), e.g. `9/12` from `SUMMARY passed 9/12`. It is printed as `score=...` in the result line and written to `results.jsonl` as `score`, next to `rounds` (the long task's rounds, null for a single turn). It never changes the verdict.
+
 **`smoke`** (`{ entry, no_js_errors?, dom_present[], interactions[] }`, optional) runs a headless-Chromium
 runtime check on a generated browser artifact after the turn (HARD, exit-gated like `build_cmd`).
 `entry` is the HTML file (relative to the project); `no_js_errors` fails on any page/console error;
@@ -430,11 +799,14 @@ harness splits assertions:
 | **HARD** | `no_context_overflow` (`run.json.metrics.contextOverflow == false`) | fail - silent truncation is never a success |
 | **HARD** | `tool_invoked[]` (`{name, args_regex?, absent?}`) | fail - a named tool **had** to run (or, with `absent:true`, must **not** have). `args_regex` matches the raw arguments JSON in `run.json.conversation[].toolCallDetails[]`, so a scenario can assert the *right* subagent/tool ran, not just *a* tool |
 | **HARD** | `agent_order[]` (multi-agent only) | fail - the listed agent names must appear in this relative order in the real execution sequence (`run.json.multiAgent.agents[]`, sorted by start time) - proves `depends_on` was respected |
+| **HARD** | `plan` (steps, coverage, order, real file paths, completed steps) | fail - proves the plan is complete, in a workable order and names only files that exist |
+| **HARD** | `plan_followed` | fail - proves the agent changed only the files its plan named |
+| **HARD** | `rounds` (long tasks) | fail - proves rounds never made the check worse, stayed within the cap and left `.refio/progress.md` |
 | **SOFT** | `tool_order` is a **subsequence** of the real call order | warn only - order drifts on weak models |
 | **SOFT** | `judge.criteria` | advisory - run the `LlmTaskVerifier` judge separately; score drift can't gate regression |
 
 Tool order is read from `run.json.conversation[].toolCalls[]`, which requires
-`--debug-level standard` (the runner sets it).
+`--debug-level standard` (the runner sets it; scenarios with a planning gate get `full`).
 
 ## Benchmark statistics
 

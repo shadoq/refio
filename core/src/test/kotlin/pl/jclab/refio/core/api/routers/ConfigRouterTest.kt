@@ -10,7 +10,9 @@ import pl.jclab.refio.core.api.*
 import pl.jclab.refio.core.db.repositories.ConfigRepository
 import pl.jclab.refio.core.llm.LLMClient
 import pl.jclab.refio.core.llm.ModelConfig
+import pl.jclab.refio.core.llm.clearModelsCache
 import pl.jclab.refio.core.llm.getAllModels
+import pl.jclab.refio.core.llm.getModelsByProvider
 import pl.jclab.refio.core.services.ConfigService
 
 class ConfigRouterTest {
@@ -152,5 +154,31 @@ class ConfigRouterTest {
         assertEquals(1234, result.latencyMs)
         assertEquals("Connected successfully, but the probe request was rate limited", result.message)
         assertEquals("rate_limited", result.details?.get("warning"))
+    }
+
+    // A local server that lists its models is reachable. Probing a chat model on top of that would
+    // load the first listed model (often a large one) into GPU memory, which alone can outlast the
+    // 30 s test budget and report a running server as unreachable.
+    @Test
+    fun `ollama connection test succeeds on model list without loading a model`() = runBlocking {
+        every { configService.get(any(), any()) } returns "http://127.0.0.1:11434"
+        every { configService.set(any(), any(), any()) } just Runs
+        every { clearModelsCache() } just Runs
+        coEvery { getModelsByProvider("ollama", configService) } returns listOf(
+            ModelConfig(
+                id = "qwen3.8:27b",
+                name = "qwen3.8:27b",
+                provider = "ollama",
+                capabilities = listOf("CHAT_COMPLETION"),
+                maxContext = 65536,
+                costPer1mInput = 0.0,
+                costPer1mOutput = 0.0
+            )
+        )
+
+        val result = configRouter.testProviderConnection("ollama", mapOf("base_url" to "http://127.0.0.1:11434"))
+
+        assertTrue(result.success, result.message)
+        confirmVerified(llmClient)
     }
 }

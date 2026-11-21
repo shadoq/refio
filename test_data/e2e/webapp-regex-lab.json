@@ -1,0 +1,46 @@
+{
+  "id": "webapp-regex-lab",
+  "mode": "AGENT",
+  "description": "Single-file regex laboratory: pattern+flags editor with live match highlighting over a test text, capture-group table, replace preview with $1 substitution, common-pattern cheatsheet library, regex debugger-ish step explanation, sample datasets, safe evaluation.",
+  "category": "browser-app",
+  "max_iterations": 40,
+  "fixture": "fixtures/webapp-regex-lab",
+  "prompt_file": "prompts/webapp-regex-lab.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": [
+      "advance_code_editing"
+    ],
+    "needles_in_file": [
+      {
+        "path": "regex_lab_model_01.html",
+        "regex": "match|exec|test"
+      },
+      {
+        "path": "regex_lab_model_01.html",
+        "regex": "group|capture|\\$1"
+      },
+      {
+        "path": "regex_lab_model_01.html",
+        "regex": "flag|flags"
+      },
+      {
+        "path": "regex_lab_model_01.html",
+        "regex": "localStorage"
+      },
+      {
+        "path": "regex_lab_model_01.html",
+        "regex": "email|IP|pattern|cheat|library"
+      }
+    ],
+    "smoke": {
+      "entry": "regex_lab_model_01.html",
+      "dom_present": []
+    }
+  },
+  "judge": {
+    "criteria": [
+      "regex_lab_model_01.html is one self-contained regex lab (no libraries): a pattern input with flags toggles (g, i, m, s, u) and live validation that reports compile errors with position instead of crashing, match highlighting rendered over the test text including overlaps handled correctly, a results table listing match value, index and capture groups with named-group support, a replace preview applying $1/$<name> substitutions, a library of at least 8 ready patterns (email, URL, date, IP, hex color, phone, duplicate words, HTML tag) that load with a sample text, a plain-English breakdown of the pattern's tokens, and localStorage remembering the last pattern. Long or catastrophic patterns must not freeze the UI (run matches in chunks or cap work)."
+    ]
+  }
+}

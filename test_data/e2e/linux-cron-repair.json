@@ -1,0 +1,29 @@
+{
+  "id": "linux-cron-repair",
+  "mode": "AGENT",
+  "description": "Terminal-Bench style ops repair: bring a drifted crontab back in line with the documented schedule policy (four jobs, exact minute/hour/weekday fields, POSIX day numbers) and restore the missing shebang that silently kills the cleanup job.",
+  "category": "linux-ops",
+  "max_iterations": 30,
+  "fixture": "fixtures/cron-broken",
+  "prompt_file": "prompts/linux-cron-repair.md",
+  "assert": {
+    "needle_in_file": { "path": "etc/crontab", "text": "30 2 * * *" },
+    "needles_in_file": [
+      { "path": "etc/crontab", "text": "0 3 * * 0" },
+      { "path": "bin/cleanup.sh", "regex": "^#!/" }
+    ],
+    "file_unchanged": [
+      "checks.py",
+      "docs/cron-spec.md",
+      "README.md",
+      "var/log/app.log"
+    ],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "All four schedules match the spec exactly (backup daily 02:30, cleanup hourly at :15, report Sundays 03:00 with the POSIX 0 day, health every 5 minutes in business hours on weekdays) and bin/cleanup.sh starts with a shebang - verified by the gate's own cron parser, not by string luck."
+    ]
+  }
+}

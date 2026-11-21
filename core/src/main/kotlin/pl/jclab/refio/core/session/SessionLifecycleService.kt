@@ -473,7 +473,9 @@ class SessionLifecycleService(
      *        screens already refresh the provider they touched.
      */
     suspend fun getAvailableModels(fetchIfMissing: Boolean = true): List<String> {
+        // A decision-only model cannot chat, so it is never offered as the chat model.
         val models = projectRouter.configRouter.getModelsWithVisibility(fetchIfMissing = fetchIfMissing)
+            .filterNot { pl.jclab.refio.core.llm.isDecisionOnlyModel(it.capabilities) }
         val visibleModels = models.filter { it.showInDropdown }
         val modelsForDropdown = if (visibleModels.isNotEmpty() || models.isEmpty()) {
             visibleModels

@@ -1,0 +1,45 @@
+{
+  "id": "plan-exec-user-email",
+  "mode": "AGENT",
+  "description": "A planner plans an email field for users and a coder carries it out: the plan names app/models.py and app/api.py, the coder changes nothing outside the plan, and the tests pass.",
+  "category": "planning",
+  "max_iterations": 30,
+  "fixture": "fixtures/plan-exec-user-email",
+  "multi_agent": "multi-agent/plan-exec-user-email.yaml",
+  "assert": {
+    "agent_order": [
+      "planner",
+      "coder"
+    ],
+    "plan": {
+      "min_steps": 2,
+      "max_steps": 8,
+      "covers": [
+        {
+          "label": "the model",
+          "regex": "models\\.py"
+        },
+        {
+          "label": "the API",
+          "regex": "api\\.py"
+        }
+      ],
+      "paths_exist": true,
+      "new_paths": [
+        "^tests/"
+      ],
+      "agent": "planner"
+    },
+    "plan_followed": {},
+    "file_unchanged": [
+      "tests/test_api.py"
+    ],
+    "build_cmd": "python -m unittest discover -s tests",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The planner names app/models.py and app/api.py; the coder adds email to User and validates it in create_user, changes no other file, and the tests pass."
+    ]
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "id": "webapp-vfs-file-manager",
+  "mode": "AGENT",
+  "description": "Single-file virtual file manager over a localStorage filesystem: folder tree, breadcrumbs, create/rename/delete files and folders, move/copy, drag-and-drop upload from OS, text file viewer/editor with save, recursive search, storage usage meter.",
+  "category": "browser-app",
+  "max_iterations": 40,
+  "fixture": "fixtures/webapp-vfs-file-manager",
+  "prompt_file": "prompts/webapp-vfs-file-manager.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": [
+      "advance_code_editing"
+    ],
+    "needles_in_file": [
+      {
+        "path": "vfs_file_manager_model_01.html",
+        "regex": "localStorage"
+      },
+      {
+        "path": "vfs_file_manager_model_01.html",
+        "regex": "dataTransfer|dragover|drop"
+      },
+      {
+        "path": "vfs_file_manager_model_01.html",
+        "regex": "breadcrumb|tree"
+      },
+      {
+        "path": "vfs_file_manager_model_01.html",
+        "regex": "rename|move|copy"
+      },
+      {
+        "path": "vfs_file_manager_model_01.html",
+        "regex": "search|usage|quota"
+      }
+    ],
+    "smoke": {
+      "entry": "vfs_file_manager_model_01.html",
+      "dom_present": []
+    }
+  },
+  "judge": {
+    "criteria": [
+      "vfs_file_manager_model_01.html is one self-contained file manager (no libraries): a hierarchical filesystem stored in localStorage with folders and text files, a tree panel plus breadcrumbs navigation, create/rename/delete for files and folders, move and copy including into other folders, drag-and-drop import of files from the operating system via dataTransfer plus a fallback upload button, an editor pane that opens text files and saves changes back, recursive search over names and file contents, download of a file, and a storage-usage meter against the localStorage quota. Path handling must be correct (no orphaned children after moves)."
+    ]
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "id": "rf-react-class-to-hooks",
+  "mode": "AGENT",
+  "description": "Rewrite the React class component in app.jsx in place as a function component on useState/useEffect with complete dependency arrays and timer cleanup on unmount, keeping the same fetch, polling, filter and auto-refresh behavior and the same rendered markup with no class left behind.",
+  "category": "refactoring",
+  "max_iterations": 30,
+  "fixture": "fixtures/rf-react-class-to-hooks",
+  "prompt_file": "prompts/rf-react-class-to-hooks.md",
+  "assert": {
+    "no_context_overflow": true,
+    "tool_order": [
+      "advance_code_editing"
+    ],
+    "needles_in_file": [
+      {
+        "path": "app.jsx",
+        "regex": "useState"
+      },
+      {
+        "path": "app.jsx",
+        "regex": "useEffect"
+      },
+      {
+        "path": "app.jsx",
+        "regex": "=>|function [A-Z]"
+      },
+      {
+        "path": "app.jsx",
+        "regex": "extends (React\\.)?Component",
+        "absent": true
+      }
+    ],
+    "file_unchanged": [
+      "README.md"
+    ]
+  },
+  "judge": {
+    "criteria": [
+      "app.jsx is a function component with the state fields in useState, the feed fetch and the polling timer in separate useEffect hooks with complete dependency arrays, clearInterval cleanup on every effect re-run and on unmount, polling running only while auto-refresh is on and restarted when refreshInterval changes, the same rendered markup, class names, props and defaults as before, and no class component, constructor or lifecycle method remaining."
+    ]
+  }
+}

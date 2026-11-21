@@ -1,0 +1,19 @@
+{
+  "id": "tb-archive-rescue",
+  "mode": "AGENT",
+  "description": "Terminal-Bench style artifact recovery: peel a triple-nested rescue payload (base64 -> ZIP -> tar.gz) and restore the pristine configuration byte-exactly, verified by a sha256 gate that rejects wrong-layer or drifted copies.",
+  "category": "terminal-bench",
+  "max_iterations": 15,
+  "fixture": "fixtures/tb-rescue",
+  "prompt_file": "prompts/tb-archive-rescue.md",
+  "assert": {
+    "file_unchanged": ["checks.py", "rescue/payload.b64", "etc/app.conf", "README.md"],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "restored/app.conf is byte-exact (sha256 digest matches the pristine config); no fixture file was modified."
+    ]
+  }
+}

@@ -70,7 +70,7 @@ class TuiPlanApprovalTest {
         val buf = TuiStepsView.renderToBuffer(state, 80, 20)
         val lines = buf.getLines().joinToString("\n")
         // The title uses ANSI color codes, so check raw text content
-        assertTrue(lines.contains("Plan Approval") || lines.contains("plan approval"),
+        assertTrue(lines.contains("PLAN APPROVAL", ignoreCase = true),
             "Should show plan approval title, got: ${lines.take(200)}")
         assertTrue(lines.contains("2 steps"), "Should show step count")
     }

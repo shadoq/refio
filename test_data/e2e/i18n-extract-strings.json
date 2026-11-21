@@ -1,0 +1,23 @@
+{
+  "id": "i18n-extract-strings",
+  "mode": "AGENT",
+  "description": "RefactorBench style (behaviour-preserving refactor): extract all user-facing wording of a small Python CLI (argparse help texts, success and error lines, statistics, a singular/plural summary) into a new messages catalog module. Output must stay byte-identical (protected tests compare stdout, stderr and exit codes), and a protected checks script scans the CLI module's AST for any remaining message literal, including the bare plural noun, and verifies the catalog really holds the wording.",
+  "category": "refactorbench",
+  "max_iterations": 40,
+  "fixture": "fixtures/i18n-extract-strings",
+  "prompt_file": "prompts/i18n-extract-strings.md",
+  "config": [
+    "verify.command=python checks.py"
+  ],
+  "assert": {
+    "no_context_overflow": true,
+    "file_unchanged": [
+      "checks.py",
+      "tests/test_cli.py",
+      "tests/__init__.py",
+      "shelf/__init__.py"
+    ],
+    "build_cmd": "python checks.py",
+    "self_verified": true
+  }
+}

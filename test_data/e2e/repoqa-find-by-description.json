@@ -1,0 +1,21 @@
+{
+  "id": "repoqa-find-by-description",
+  "mode": "PLAN",
+  "description": "RepoQA style (Python): find a function in a synthetic sixty-file project from a behavioural description alone, with no name given. The project holds near-miss decoys (calendar days, weekdays of a month, billable days that include weekends, an inclusive-end leave counter, a date shifter, a weekend counter), so the answer is only right when the half-open range, weekend skipping and closed-date handling are all checked. Read-only; the answer must be given as path::function.",
+  "category": "repoqa",
+  "max_iterations": 25,
+  "fixture": "fixtures/repoqa-find-by-description",
+  "prompt_file": "prompts/repoqa-find-by-description.md",
+  "assert": {
+    "no_context_overflow": true,
+    "needle_in_output": { "regex": "scheduling[/\\\\]+windows\\.py::span_workdays" },
+    "file_unchanged": [
+      "scheduling/windows.py",
+      "hr/leave.py",
+      "billing/proration.py",
+      "reports/periods.py",
+      "scheduling/slots.py",
+      "utils/dates.py"
+    ]
+  }
+}

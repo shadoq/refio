@@ -4,6 +4,8 @@ import pl.jclab.refio.core.db.*
 import pl.jclab.refio.core.logging.dualLogger
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.inList
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.less
 import org.jetbrains.exposed.sql.transactions.transaction
 
 private val logger = dualLogger("ApiLogRepository")
@@ -163,6 +165,26 @@ class ApiLogRepository {
         return transaction {
             val deleted = ApiLogsTable.deleteWhere { ApiLogsTable.id eq id }
             deleted > 0
+        }
+    }
+
+    /** Deletes API logs written before [cutoffMs], [batchSize] rows per transaction. Returns how many went. */
+    fun deleteOlderThan(cutoffMs: Long, batchSize: Int): Int {
+        var total = 0
+        // Short transactions: the IDE and the CLI share this database, and one long delete would
+        // hold the write lock while a turn waits to log its next call.
+        while (true) {
+            val deleted = transaction {
+                val ids = ApiLogsTable.select(ApiLogsTable.id)
+                    .where { ApiLogsTable.createdAt less cutoffMs }
+                    .limit(batchSize)
+                    .map { it[ApiLogsTable.id] }
+                if (ids.isEmpty()) 0 else ApiLogsTable.deleteWhere { ApiLogsTable.id inList ids }
+            }
+            total += deleted
+            if (deleted < batchSize) {
+                return total
+            }
         }
     }
 

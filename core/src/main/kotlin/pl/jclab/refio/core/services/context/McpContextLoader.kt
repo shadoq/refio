@@ -28,7 +28,16 @@ class McpContextLoader {
     private val mcpToolCache = ConcurrentHashMap<McpToolCacheKey, McpToolCacheEntry>()
     private val mcpToolCacheTtlMs = 30_000L
 
-    suspend fun loadMcpResources(projectRoot: Path, query: String?): List<MCPContextResourceDTO> {
+    /**
+     * @param allowToolCalls false for a context preview (UI panels refresh it on a timer): tool
+     * outputs then come only from what the last real build fetched for the same prompt, however
+     * old, and the server is never asked - otherwise every refresh is a paid or rate-limited call.
+     */
+    suspend fun loadMcpResources(
+        projectRoot: Path,
+        query: String?,
+        allowToolCalls: Boolean = true,
+    ): List<MCPContextResourceDTO> {
         val projectId = ProjectIdGenerator.generate(projectRoot)
         val serverIds = MCPManager.getConnectedServers(projectId)
         if (serverIds.isEmpty()) {
@@ -74,6 +83,27 @@ class McpContextLoader {
             val hasWorkflow = (serverConfig?.toolWorkflow?.steps?.isNotEmpty()) == true
             // Skip ad-hoc tool invocations when there is nothing to ask for and no workflow is configured.
             // Calling e.g. context7's resolve-library-id with empty query just yields validation errors.
+            if (!allowToolCalls) {
+                if (shouldUseTools) {
+                    mcpToolCache.entries
+                        .filter { (key, _) ->
+                            key.projectId == projectId && key.serverId == serverId && key.query == toolQuery
+                        }
+                        .forEach { (key, entry) ->
+                            outputs.add(
+                                MCPContextResourceDTO(
+                                    serverId = serverId,
+                                    uri = "tool:${key.toolName}",
+                                    name = "tool:${key.toolName}",
+                                    description = entry.content,
+                                    mimeType = "text/plain"
+                                )
+                            )
+                        }
+                }
+                return@flatMap outputs
+            }
+
             if (shouldUseTools && serverConfig != null && connection.supportsTools() && (hasWorkflow || toolQuery.isNotBlank())) {
                 val tools = runCatching {
                     val cached = connection.getCachedTools()

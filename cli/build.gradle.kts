@@ -29,6 +29,9 @@ dependencies {
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
 
+    // JSON for the Agent Client Protocol mode (same version :core already uses)
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.2")
+
     // CLI argument parsing (5.x required for Mordant 3.x compatibility)
     implementation("com.github.ajalt.clikt:clikt:5.0.2")
 
