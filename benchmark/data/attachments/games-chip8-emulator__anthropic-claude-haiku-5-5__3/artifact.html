@@ -1,0 +1,1716 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CHIP-8 Workbench</title>
+<style>
+:root{--bg:#0e1117;--panel:#161b24;--line:#2a3344;--text:#d6dde8;--dim:#7d8aa0;--acc:#4fd1c5;--warn:#f6ad55;--bad:#fc8181;--ok:#68d391;--next:#1e4f86;--last:#5a4a12;--chg:#3b2f63}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:13px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+body.dropping::after{content:'Drop a CHIP-8 ROM to load';position:fixed;inset:0;background:rgba(0,0,0,.65);color:#fff;display:flex;align-items:center;justify-content:center;font-size:24px;pointer-events:none;z-index:99}
+.hdr{display:flex;align-items:baseline;gap:14px;padding:10px 16px;border-bottom:1px solid var(--line)}
+.hdr h1{margin:0;font-size:20px;color:var(--acc)}
+.hdr .model{color:var(--dim);font-family:ui-monospace,Consolas,monospace}
+.toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 16px;border-bottom:1px solid var(--line)}
+button,.btn{background:#222b3a;color:var(--text);border:1px solid #3a4560;border-radius:5px;padding:5px 10px;cursor:pointer;font:inherit}
+button:hover:not(:disabled),.btn:hover{background:#2c3950}
+button:disabled{opacity:.45;cursor:not-allowed}
+.file-btn{display:inline-block}
+.badge{padding:3px 10px;border-radius:12px;font-weight:600;font-size:12px;letter-spacing:.04em;background:#333}
+.badge.run{background:#1f5d3a;color:#b8f5cf}
+.badge.pause{background:#3a3f4b;color:#cfd6e3}
+.badge.wait{background:#5c4a1a;color:#ffe2a6}
+.badge.bp{background:#5b2d6e;color:#f1d3ff}
+.badge.fault{background:#6b1f1f;color:#ffd0d0}
+.info{color:var(--dim);font-family:ui-monospace,Consolas,monospace;font-size:12px}
+.msg{margin:8px 16px 0;padding:6px 10px;border-radius:5px;background:#1b2330;border:1px solid var(--line);min-height:30px}
+.msg.err{border-color:var(--bad);color:var(--bad)}
+.msg.ok{color:var(--ok)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:12px;padding:12px 16px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;min-width:0}
+.panel.wide{grid-column:1/-1}
+.panel h2{margin:0 0 8px;font-size:15px;color:var(--acc)}
+.panel h3{margin:12px 0 6px;font-size:13px;color:var(--warn)}
+.row-ctl{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:6px 0}
+input,select{background:#0d1219;color:var(--text);border:1px solid #3a4560;border-radius:4px;padding:3px 6px;font:inherit}
+input:disabled,select:disabled{opacity:.5}
+input.hexin{width:88px;font-family:ui-monospace,Consolas,monospace}
+input.num{width:80px}
+.muted{color:var(--dim)}
+.note{color:var(--dim);font-size:12px;margin:4px 0}
+.screen-wrap{position:relative;display:inline-block;max-width:100%;background:#000;border:1px solid var(--line);padding:6px;border-radius:6px}
+.screen-wrap.scan::after{content:'';position:absolute;inset:6px;pointer-events:none;background:repeating-linear-gradient(to bottom,rgba(0,0,0,.28) 0 1px,transparent 1px 3px)}
+#screen{display:block;image-rendering:pixelated;image-rendering:crisp-edges;max-width:100%}
+.keypad{display:grid;grid-template-columns:repeat(4,64px);gap:6px;margin:6px 0;user-select:none;touch-action:none}
+.key{display:flex;flex-direction:column;align-items:center;padding:6px 0;touch-action:none}
+.key b{font-size:16px}
+.key small{color:var(--dim);font-size:11px}
+.key.held{background:var(--acc);color:#04201d}
+.key.held small{color:#04201d}
+.led{display:inline-block;width:12px;height:12px;border-radius:50%;background:#2a3344;border:1px solid #3a4560}
+.led.on{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+.fixed{margin:4px 0 0 16px;padding:0;color:var(--dim);font-size:12px}
+.reg{display:grid;grid-template-columns:44px 90px 110px;align-items:center;gap:6px;padding:2px 4px;border-radius:4px}
+.reg.vf{color:var(--warn);font-weight:600;border-left:3px solid var(--warn)}
+.reg.changed{background:var(--chg)}
+.reg .rh{font-family:ui-monospace,Consolas,monospace}
+.kvgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin:8px 0}
+.kvgrid label{display:flex;justify-content:space-between;gap:6px;align-items:center}
+.stack{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;margin-top:6px}
+.slot{display:flex;align-items:center;gap:6px;padding:2px 6px;border:1px solid var(--line);border-radius:4px;font-family:ui-monospace,Consolas,monospace;font-size:12px;color:var(--dim)}
+.slot.active{color:var(--text);border-color:#3a4560}
+.slot.top{border-color:var(--acc)}
+.slot em{color:var(--acc);font-style:normal;margin-left:auto}
+.slot .ret{padding:1px 6px;font-size:12px}
+.nextop{font-family:ui-monospace,Consolas,monospace;margin:6px 0;padding:6px;background:#0d1219;border-radius:4px}
+.lastop{font-family:ui-monospace,Consolas,monospace;color:var(--dim);font-size:12px}
+.bad{color:var(--bad)}
+.fault{margin-top:8px;padding:8px;border:1px solid var(--bad);border-radius:5px;background:#2a1414;color:#ffd0d0}
+.disbox{font-family:ui-monospace,Consolas,monospace;font-size:12px;max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:5px;background:#0d1219}
+.drow{display:grid;grid-template-columns:24px 62px 58px minmax(120px,190px) 60px 1fr;gap:6px;padding:2px 6px;white-space:nowrap}
+.drow.next{background:var(--next)}
+.drow.last{background:var(--last)}
+.drow.faulted{background:#4a1f1f}
+.drow.invalid .mn{color:var(--bad)}
+.drow .gut{cursor:pointer;color:var(--dim);text-align:center}
+.drow .gut.on{color:var(--bad)}
+.drow .tag{font-size:11px;color:var(--warn)}
+.drow .ex{color:var(--dim);overflow:hidden;text-overflow:ellipsis}
+.memBox{font-family:ui-monospace,Consolas,monospace;font-size:12px;max-height:360px;overflow:auto;border:1px solid var(--line);border-radius:5px;background:#0d1219;padding:4px}
+.mrow{display:grid;grid-template-columns:56px 1fr 150px;gap:8px;white-space:nowrap;padding:1px 0}
+.ma{color:var(--dim)}
+.mbytes span{display:inline-block;width:2.1em;text-align:center;border-radius:2px;cursor:pointer}
+.mbytes span.rom{color:#9fd3ff}
+.mbytes span.font{color:#ffd58a}
+.mbytes span.pc{background:var(--next);color:#fff}
+.mbytes span.ip{background:#3d6b2e;color:#fff}
+.mbytes span.wrote{outline:1px solid var(--warn)}
+.mbytes span.wrote-chg{background:#6b3b1f;color:#fff}
+.masc{color:var(--dim);letter-spacing:.1em}
+.legend{font-size:11px;color:var(--dim);margin:4px 0}
+.spOut{font-family:ui-monospace,Consolas,monospace;background:#0d1219;border:1px solid var(--line);border-radius:5px;padding:6px;min-height:80px;white-space:pre}
+.bplist{list-style:none;margin:6px 0 0;padding:0;font-family:ui-monospace,Consolas,monospace;max-height:240px;overflow:auto}
+.bplist li{display:flex;justify-content:space-between;gap:8px;padding:2px 0}
+.tracebox,.testbox{max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:5px}
+table{border-collapse:collapse;width:100%;font-family:ui-monospace,Consolas,monospace;font-size:12px}
+th,td{border-bottom:1px solid var(--line);padding:3px 6px;text-align:left;vertical-align:top}
+th{position:sticky;top:0;background:#1b2330;color:var(--acc)}
+tr.pass td:last-child{color:var(--ok)}
+tr.fail td:last-child{color:var(--bad)}
+.totals{font-weight:600;margin-bottom:6px}
+.totals.ok{color:var(--ok)}
+.totals.bad{color:var(--bad)}
+</style>
+</head>
+<body>
+<header class="hdr">
+  <h1>CHIP-8 Workbench</h1>
+  <span class="model">anthropic-claude-haiku-5-5</span>
+</header>
+
+<div class="toolbar">
+  <button id="btnRun">Run</button>
+  <button id="btnPause">Pause</button>
+  <button id="btnStep">Single Step</button>
+  <button id="btnReset">Reset</button>
+  <label class="btn file-btn">Load ROM<input type="file" id="romFile" hidden></label>
+  <button id="btnDemo">Load Demo</button>
+  <button id="btnTests">Run Self-tests</button>
+  <span id="badge" class="badge pause">PAUSED</span>
+  <span id="romInfo" class="info"></span>
+</div>
+<div id="msg" class="msg ok">Ready.</div>
+
+<main class="grid">
+  <section class="panel" id="pDisplay">
+    <h2>Display</h2>
+    <div class="row-ctl">
+      <label>Scale <select id="scale">
+        <option value="2">2x</option><option value="4">4x</option><option value="6">6x</option>
+        <option value="8" selected>8x</option><option value="10">10x</option><option value="fit">Fit</option>
+      </select></label>
+      <label>Palette <select id="palette">
+        <option value="green">Green</option><option value="amber">Amber</option><option value="mono">Monochrome</option>
+      </select></label>
+      <label><input type="checkbox" id="grid"> Pixel grid</label>
+      <label><input type="checkbox" id="scan"> Scanlines</label>
+    </div>
+    <div class="row-ctl">
+      <button id="fsBtn">Fullscreen</button>
+      <button id="pngBtn">Export PNG</button>
+    </div>
+    <div id="screenWrap" class="screen-wrap"><canvas id="screen" width="512" height="256"></canvas></div>
+
+    <h3>Keypad</h3>
+    <div class="note">Keypad 1 2 3 C = keys 1 2 3 4 · 4 5 6 D = Q W E R · 7 8 9 E = A S D F · A 0 B F = Z X C V</div>
+    <div id="keypad" class="keypad"></div>
+
+    <h3>Audio</h3>
+    <div class="row-ctl">
+      <button id="muteBtn">Mute</button>
+      <label>Volume <input type="range" id="volRange" min="0" max="100" value="40"></label>
+      <span id="beepLed" class="led" title="Beep active"></span>
+    </div>
+
+    <h3>Compatibility (change while paused)</h3>
+    <div class="row-ctl">
+      <label>Shift source <select id="optShift" class="needs-pause">
+        <option value="vx">VX (default)</option><option value="vy">VY</option>
+      </select></label>
+      <label>FX55/65 I <select id="optFx" class="needs-pause">
+        <option value="preserve">Preserve (default)</option><option value="increment">Increment</option>
+      </select></label>
+    </div>
+    <div class="row-ctl">
+      <label><input type="checkbox" id="optLogic" class="needs-pause"> Reset VF on 8XY1/2/3</label>
+      <label>Sprites <select id="optSprite" class="needs-pause">
+        <option value="clip">Clip (default)</option><option value="wrap">Wrap</option>
+      </select></label>
+    </div>
+    <div id="compatSummary" class="note"></div>
+    <div class="note">Fixed behaviors: BNNN = NNN+V0 · FX1E wraps to 16 bits, VF unchanged · FX29 = 0x050+5*(VX&0xF) · FX0A needs a fresh keydown · DXY0 draws nothing, VF=0 · no vblank wait · 7XNN leaves VF · 5XY1/9XY1 invalid · SYS 0NNN unsupported.</div>
+  </section>
+
+  <section class="panel" id="pCpu">
+    <h2>CPU &amp; Stack</h2>
+    <div class="row-ctl">
+      <label>Speed <input type="range" id="speedRange" min="60" max="6000" step="10" value="600"></label>
+      <input type="number" id="speedNum" class="num" min="60" max="6000" value="600"> instr/s
+    </div>
+    <div class="kvgrid">
+      <label>I <input type="text" id="regI" class="hexin needs-pause"></label>
+      <label>PC <input type="text" id="regPC" class="hexin needs-pause"></label>
+      <label>DT <input type="number" id="regDT" class="num needs-pause" min="0" max="255"></label>
+      <label>ST <input type="number" id="regST" class="num needs-pause" min="0" max="255"></label>
+    </div>
+    <div id="regs"></div>
+    <div class="row-ctl">Instructions: <b id="icount">0</b> · Stack: <span id="spLabel"></span></div>
+    <div id="nextOp" class="nextop"></div>
+    <div id="lastOp" class="lastop"></div>
+    <div id="stack" class="stack"></div>
+    <div id="faultBox" class="fault" hidden></div>
+  </section>
+
+  <section class="panel" id="pBp">
+    <h2>Breakpoints</h2>
+    <div class="row-ctl">
+      <input id="bpInput" class="hexin" placeholder="0x200">
+      <button id="bpAdd">Add</button>
+    </div>
+    <div class="note">Execution stops before a breakpointed instruction runs. Click the gutter in disassembly to toggle.</div>
+    <ul id="bpList" class="bplist"></ul>
+  </section>
+
+  <section class="panel wide" id="pDis">
+    <h2>Disassembly</h2>
+    <div class="row-ctl">
+      <label><input type="checkbox" id="follow" checked> Follow PC</label>
+      <label>Go to <input id="disGoto" class="hexin" placeholder="0x200"></label>
+      <button id="disGoBtn">Go</button>
+    </div>
+    <div class="note">Linear disassembly can interpret sprite data as code and does not recover original source. Click the gutter to set breakpoints.</div>
+    <div id="disBox" class="disbox"></div>
+  </section>
+
+  <section class="panel wide" id="pMem">
+    <h2>Memory</h2>
+    <div class="row-ctl">
+      <label>Go to <input id="memGoto" class="hexin" placeholder="0x000"></label>
+      <button id="memGoBtn">Go</button>
+      <button id="jumpPc">Jump to PC</button>
+      <button id="jumpI">Jump to I</button>
+    </div>
+    <div class="row-ctl">
+      <label>Address <input id="memAddr" class="hexin needs-pause"></label>
+      <label>Value <input id="memVal" class="hexin needs-pause" placeholder="00-FF"></label>
+      <button id="memSet" class="needs-pause">Set byte</button>
+    </div>
+    <div class="legend">Markers: <span class="pc">PC</span> · <span class="ip">I</span> · <span class="font">font 0x050-0x09F</span> · <span class="rom">ROM</span> · <span class="wrote">written (unchanged value)</span> · <span class="wrote-chg">written (changed)</span></div>
+    <div id="memBox" class="memBox"></div>
+
+    <h3>Sprite preview (8 pixels wide)</h3>
+    <div class="row-ctl">
+      <label>Height <select id="spH"></select></label>
+      <label>Start <input id="spAddr" class="hexin" placeholder="I"></label>
+    </div>
+    <pre id="spOut" class="spOut"></pre>
+  </section>
+
+  <section class="panel wide" id="pTrace">
+    <h2>Trace (last 200 completed instructions)</h2>
+    <div class="row-ctl">
+      <button id="traceClear">Clear</button>
+      <label><input type="checkbox" id="traceFollow" checked> Follow latest</label>
+    </div>
+    <div class="tracebox">
+      <table>
+        <thead><tr><th>#</th><th>Prev PC</th><th>Opcode</th><th>Mnemonic</th><th>Next PC</th><th>Register changes</th><th>Memory writes</th><th>SP</th></tr></thead>
+        <tbody id="traceBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel wide" id="pTests">
+    <h2>Self-tests</h2>
+    <div id="testTotals" class="totals">Not run.</div>
+    <div class="testbox">
+      <table>
+        <thead><tr><th>Test</th><th>Expected</th><th>Observed</th><th>Result</th></tr></thead>
+        <tbody id="testBody"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script>
+'use strict';
+
+/* ============================================================
+   Constants and helpers
+   ============================================================ */
+const MEM_SIZE = 4096;
+const FONT_BASE = 0x050;
+const ROM_BASE = 0x200;
+const MAX_ROM = 3584;
+const STACK_SIZE = 16;
+const TRACE_MAX = 200;
+const TICK_MS = 1000 / 60;
+
+const FONT = Uint8Array.from([
+  0xF0,0x90,0x90,0x90,0xF0, 0x20,0x60,0x20,0x20,0x70,
+  0xF0,0x10,0xF0,0x80,0xF0, 0xF0,0x10,0xF0,0x10,0xF0,
+  0x90,0x90,0xF0,0x10,0x10, 0xF0,0x80,0xF0,0x10,0xF0,
+  0xF0,0x80,0xF0,0x90,0xF0, 0xF0,0x10,0x20,0x40,0x40,
+  0xF0,0x90,0xF0,0x90,0xF0, 0xF0,0x90,0xF0,0x10,0xF0,
+  0xF0,0x90,0xF0,0x90,0x90, 0xE0,0x90,0xE0,0x90,0xE0,
+  0xF0,0x80,0x80,0x80,0xF0, 0xE0,0x90,0x90,0x90,0xE0,
+  0xF0,0x80,0xF0,0x80,0xF0, 0xF0,0x80,0xF0,0x80,0x80
+]);
+
+/* Built-in demo. Sprite walk: 2/4/6/8 move, 0 beeps, FX0A start, CALL/RET draw routine.
+   0x200 LD V0,0x1C      60 1C   x = 28
+   0x202 LD V1,0x0C      61 0C   y = 12
+   0x204 LD VA,K         FA 0A   wait for fresh keydown to start
+   0x206 LD I,0x248      A2 48   I = sprite data
+   0x208 CALL 0x244      22 44   draw
+   0x20A LOOP: CALL 0x244 22 44  erase (XOR)
+   0x20C LD V2,2         62 02   key 2 = up
+   0x20E SKP V2          E2 9E
+   0x210 JP 0x214        12 14
+   0x212 ADD V1,0xFF     71 FF   y--
+   0x214 LD V8,8         68 08   key 8 = down
+   0x216 SKP V8          E8 9E
+   0x218 JP 0x21C        12 1C
+   0x21A ADD V1,0x01     71 01   y++
+   0x21C LD V4,4         64 04   key 4 = left
+   0x21E SKP V4          E4 9E
+   0x220 JP 0x224        12 24
+   0x222 ADD V0,0xFF     70 FF   x--
+   0x224 LD V6,6         66 06   key 6 = right
+   0x226 SKP V6          E6 9E
+   0x228 JP 0x22C        12 2C
+   0x22A ADD V0,0x01     70 01   x++
+   0x22C CALL 0x244      22 44   draw at new position
+   0x22E LD V6,4         66 04   delay = 4 ticks
+   0x230 LD DT,V6        F6 15
+   0x232 DELAY: LD V7,DT F7 07
+   0x234 SE V7,0         37 00
+   0x236 JP 0x232        12 32
+   0x238 LD V9,0         69 00   key 0 = beep
+   0x23A SKP V9          E9 9E
+   0x23C JP 0x242        12 42
+   0x23E LD V9,8         69 08
+   0x240 LD ST,V9        F9 18   beep
+   0x242 JP 0x20A        12 0A   loop
+   0x244 DRAW: DRW V0,V1,5 D0 15
+   0x246 RET             00 EE
+   0x248 sprite data     3C 7E DB FF A5 */
+const DEMO_ROM = Uint8Array.from([
+  0x60,0x1C, 0x61,0x0C, 0xFA,0x0A, 0xA2,0x48, 0x22,0x44,
+  0x22,0x44, 0x62,0x02, 0xE2,0x9E, 0x12,0x14, 0x71,0xFF,
+  0x68,0x08, 0xE8,0x9E, 0x12,0x1C, 0x71,0x01, 0x64,0x04,
+  0xE4,0x9E, 0x12,0x24, 0x70,0xFF, 0x66,0x06, 0xE6,0x9E,
+  0x12,0x2C, 0x70,0x01, 0x22,0x44, 0x66,0x04, 0xF6,0x15,
+  0xF7,0x07, 0x37,0x00, 0x12,0x32, 0x69,0x00, 0xE9,0x9E,
+  0x12,0x42, 0x69,0x08, 0xF9,0x18, 0x12,0x0A, 0xD0,0x15,
+  0x00,0xEE, 0x3C,0x7E,0xDB,0xFF,0xA5
+]);
+
+const hx = (v, w = 3) => '0x' + (v >>> 0).toString(16).toUpperCase().padStart(w, '0');
+const hb = v => (v & 0xFF).toString(16).toUpperCase().padStart(2, '0');
+const vName = r => 'V' + (r & 0xF).toString(16).toUpperCase();
+const esc = s => String(s).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+const $ = id => document.getElementById(id);
+
+/* Parse a numeric field. Hex accepts an optional 0x prefix. Returns null if invalid. */
+function parseValue(str, min, max, radix = 10) {
+  let s = String(str).trim();
+  if (s === '') return null;
+  if (radix === 16) {
+    s = s.replace(/^0x/i, '');
+    if (!/^[0-9a-f]+$/i.test(s)) return null;
+  } else if (!/^[0-9]+$/.test(s)) {
+    return null;
+  }
+  const v = parseInt(s, radix);
+  return (v >= min && v <= max) ? v : null;
+}
+
+/* ============================================================
+   Shared decoder (used by execution and disassembly)
+   ============================================================ */
+function decode(op) {
+  const x = (op >> 8) & 0xF, y = (op >> 4) & 0xF, n = op & 0xF, nn = op & 0xFF, nnn = op & 0xFFF;
+  const vx = vName(x), vy = vName(y);
+  const ok = (name, text, explain, extra) => Object.assign({ valid: true, unsupported: false, name, text, explain, x, y, n, nn, nnn }, extra || {});
+  const bad = (text, explain, unsupported) => ({ valid: false, unsupported: !!unsupported, name: 'INVALID', text, explain, x, y, n, nn, nnn });
+  switch (op >> 12) {
+    case 0x0:
+      if (op === 0x00E0) return ok('CLS', 'CLS', 'Clear the display');
+      if (op === 0x00EE) return ok('RET', 'RET', 'Return: pop return address from the stack into PC');
+      return bad('SYS ' + hx(nnn), 'Legacy SYS 0NNN routine call is not emulated', true);
+    case 0x1: return ok('JP', 'JP ' + hx(nnn), 'Jump to ' + hx(nnn), { target: nnn });
+    case 0x2: return ok('CALL', 'CALL ' + hx(nnn), 'Call subroutine at ' + hx(nnn) + ' (push return address)', { target: nnn });
+    case 0x3: return ok('SE_B', 'SE ' + vx + ', ' + hx(nn, 2), 'Skip next instruction if ' + vx + ' = ' + hx(nn, 2));
+    case 0x4: return ok('SNE_B', 'SNE ' + vx + ', ' + hx(nn, 2), 'Skip next instruction if ' + vx + ' != ' + hx(nn, 2));
+    case 0x5:
+      return n === 0
+        ? ok('SE_R', 'SE ' + vx + ', ' + vy, 'Skip next instruction if ' + vx + ' = ' + vy)
+        : bad(hx(op, 4), '5XY' + n.toString(16).toUpperCase() + ' is invalid; only 5XY0 is defined');
+    case 0x6: return ok('LD_B', 'LD ' + vx + ', ' + hx(nn, 2), 'Set ' + vx + ' = ' + hx(nn, 2));
+    case 0x7: return ok('ADD_B', 'ADD ' + vx + ', ' + hx(nn, 2), vx + ' += ' + hx(nn, 2) + ' (VF unchanged)');
+    case 0x8:
+      switch (n) {
+        case 0x0: return ok('LD_R', 'LD ' + vx + ', ' + vy, vx + ' = ' + vy);
+        case 0x1: return ok('OR', 'OR ' + vx + ', ' + vy, vx + ' |= ' + vy + ' (VF reset only if option enabled)');
+        case 0x2: return ok('AND', 'AND ' + vx + ', ' + vy, vx + ' &= ' + vy + ' (VF reset only if option enabled)');
+        case 0x3: return ok('XOR', 'XOR ' + vx + ', ' + vy, vx + ' ^= ' + vy + ' (VF reset only if option enabled)');
+        case 0x4: return ok('ADD_R', 'ADD ' + vx + ', ' + vy, vx + ' += ' + vy + '; VF = carry');
+        case 0x5: return ok('SUB', 'SUB ' + vx + ', ' + vy, vx + ' -= ' + vy + '; VF = NOT borrow');
+        case 0x6: return ok('SHR', 'SHR ' + vx + ' {, ' + vy + '}', 'Shift right; VF = bit shifted out (source per option)');
+        case 0x7: return ok('SUBN', 'SUBN ' + vx + ', ' + vy, vx + ' = ' + vy + ' - ' + vx + '; VF = NOT borrow');
+        case 0xE: return ok('SHL', 'SHL ' + vx + ' {, ' + vy + '}', 'Shift left; VF = bit shifted out (source per option)');
+        default: return bad(hx(op, 4), 'Invalid 8XYn opcode');
+      }
+    case 0x9:
+      return n === 0
+        ? ok('SNE_R', 'SNE ' + vx + ', ' + vy, 'Skip next instruction if ' + vx + ' != ' + vy)
+        : bad(hx(op, 4), '9XY1 is invalid; only 9XY0 is defined');
+    case 0xA: return ok('LD_I', 'LD I, ' + hx(nnn), 'I = ' + hx(nnn));
+    case 0xB: return ok('JP_V0', 'JP V0, ' + hx(nnn), 'PC = ' + hx(nnn) + ' + V0', { target: nnn });
+    case 0xC: return ok('RND', 'RND ' + vx + ', ' + hx(nn, 2), vx + ' = random AND ' + hx(nn, 2));
+    case 0xD: return ok('DRW', 'DRW ' + vx + ', ' + vy + ', ' + n, 'Draw ' + n + '-row sprite at I at (' + vx + ',' + vy + '), XOR; VF = collision' + (n === 0 ? ' (N=0 draws nothing)' : ''));
+    case 0xE:
+      if (nn === 0x9E) return ok('SKP', 'SKP ' + vx, 'Skip next instruction if key in ' + vx + ' is pressed');
+      if (nn === 0xA1) return ok('SKNP', 'SKNP ' + vx, 'Skip next instruction if key in ' + vx + ' is not pressed');
+      return bad(hx(op, 4), 'Invalid Ex opcode');
+    case 0xF:
+      switch (nn) {
+        case 0x07: return ok('LD_VDT', 'LD ' + vx + ', DT', vx + ' = delay timer');
+        case 0x0A: return ok('LD_K', 'LD ' + vx + ', K', 'Wait for a fresh key press, store it in ' + vx);
+        case 0x15: return ok('LD_DT', 'LD DT, ' + vx, 'Delay timer = ' + vx);
+        case 0x18: return ok('LD_ST', 'LD ST, ' + vx, 'Sound timer = ' + vx);
+        case 0x1E: return ok('ADD_I', 'ADD I, ' + vx, 'I += ' + vx + ' (16-bit wrap, VF unchanged)');
+        case 0x29: return ok('LD_F', 'LD F, ' + vx, 'I = font sprite for low nibble of ' + vx);
+        case 0x33: return ok('BCD', 'LD B, ' + vx, 'Store BCD of ' + vx + ' at I..I+2');
+        case 0x55: return ok('STORE', 'LD [I], ' + vx, 'Store V0..' + vx + ' at I');
+        case 0x65: return ok('LOAD', 'LD ' + vx + ', [I]', 'Load V0..' + vx + ' from I');
+        default: return bad(hx(op, 4), 'Invalid Fx opcode');
+      }
+    default:
+      return bad(hx(op, 4), 'Unknown opcode');
+  }
+}
+
+/* ============================================================
+   Chip-8 core (pure, no DOM access)
+   ============================================================ */
+class Chip8 {
+  constructor(options = {}) {
+    this.options = Object.assign({ shiftSource: 'vx', fxIncrement: false, logicResetVF: false, spriteWrap: false }, options);
+    this.seed = (options.seed === undefined ? 0x1B3F : options.seed) >>> 0;
+    this.reset(new Uint8Array(0));
+  }
+
+  /* Full machine reset. Options (UI preferences) are preserved. */
+  reset(rom) {
+    this.memory = new Uint8Array(MEM_SIZE);
+    this.memory.set(FONT, FONT_BASE);
+    this.memory.set(rom, ROM_BASE);
+    this.romSize = rom.length;
+    this.V = new Uint8Array(16);
+    this.I = 0;
+    this.pc = ROM_BASE;
+    this.stack = new Uint16Array(STACK_SIZE);
+    this.sp = 0;
+    this.dt = 0;
+    this.st = 0;
+    this.fb = new Uint8Array(64 * 32);
+    this.keys = new Uint8Array(16);
+    this.waitingKey = null;
+    this.fault = null;
+    this.instructionCount = 0;
+    this.rngState = this.seed;
+    this.trace = [];
+    this.traceSeq = 0;
+    this.keyEvents = [];
+    this.memWritesCur = [];
+    this.prevV = new Uint8Array(16);
+    this.prevI = 0;
+    this.prevSp = 0;
+    this.last = null;
+  }
+
+  /* Seeded PRNG (mulberry32), returns 0-255. */
+  rand() {
+    let t = (this.rngState = (this.rngState + 0x6D2B79F5) | 0);
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) & 0xFF;
+  }
+
+  /* 60 Hz timer tick. Called by the UI only while running. */
+  tick() {
+    if (this.dt > 0) this.dt--;
+    if (this.st > 0) this.st--;
+  }
+
+  /* Key state change. A fresh keydown completes a pending FX0A. */
+  setKey(k, down) {
+    if (k < 0 || k > 15) return;
+    const d = down ? 1 : 0;
+    const was = this.keys[k];
+    this.keys[k] = d;
+    if (this.keyEvents.length < 32) this.keyEvents.push({ key: k, down: !!d });
+    if (d && !was && this.waitingKey) {
+      const w = this.waitingKey;
+      this.waitingKey = null;
+      const before = this.V[w.reg];
+      this.V[w.reg] = k;
+      this.pc = w.pc + 2;
+      const info = {
+        status: 'ok', pc: w.pc, opcode: w.opcode, mnemonic: w.mnemonic, resultPC: this.pc,
+        regChanges: before !== k ? [{ name: vName(w.reg), before, after: k }] : [],
+        memWrites: [], spDelta: 0, keyEvents: this.keyEvents
+      };
+      this.keyEvents = [];
+      this.completeInstruction(info);
+    }
+  }
+
+  raiseFault(addr, op, message) {
+    this.fault = { addr, opcode: op, message };
+    this.pc = addr;
+    this.waitingKey = null;
+  }
+
+  /* Validated memory write, recorded for the latest step (including unchanged values). */
+  write(addr, val) {
+    const v = val & 0xFF;
+    const changed = this.memory[addr] !== v;
+    this.memory[addr] = v;
+    this.memWritesCur.push({ addr, value: v, changed });
+  }
+
+  beginStep() {
+    this.prevV = this.V.slice();
+    this.prevI = this.I;
+    this.prevSp = this.sp;
+    this.memWritesCur = [];
+  }
+
+  finishStep(pc, op, mnemonic, status) {
+    const regChanges = [];
+    for (let i = 0; i < 16; i++) {
+      if (this.V[i] !== this.prevV[i]) regChanges.push({ name: vName(i), before: this.prevV[i], after: this.V[i] });
+    }
+    if (this.I !== this.prevI) regChanges.push({ name: 'I', before: this.prevI, after: this.I });
+    const info = {
+      status, pc, opcode: op, mnemonic, resultPC: this.pc, regChanges,
+      memWrites: this.memWritesCur, spDelta: this.sp - this.prevSp, keyEvents: this.keyEvents
+    };
+    this.keyEvents = [];
+    if (status === 'ok') this.completeInstruction(info);
+    else this.last = info;
+  }
+
+  completeInstruction(info) {
+    this.last = info;
+    this.instructionCount++;
+    this.traceSeq++;
+    this.trace.push(Object.assign({ seq: this.traceSeq }, info));
+    if (this.trace.length > TRACE_MAX) this.trace.shift();
+  }
+
+  /* Execute one instruction. Returns 'ok', 'wait' or 'fault'. */
+  step() {
+    if (this.fault) return 'fault';
+    if (this.waitingKey) return 'wait';
+    const pc = this.pc;
+    this.beginStep();
+    if (pc > MEM_SIZE - 2) {
+      this.raiseFault(pc, null, 'Invalid fetch at ' + hx(pc) + ': PC beyond 0x0FFE');
+      this.finishStep(pc, null, '-', 'fault');
+      return 'fault';
+    }
+    const op = (this.memory[pc] << 8) | this.memory[pc + 1];
+    const d = decode(op);
+    if (!d.valid) {
+      const msg = d.unsupported
+        ? 'Unsupported legacy SYS 0NNN (' + hx(op, 4) + ') at ' + hx(pc)
+        : 'Unknown or invalid opcode ' + hx(op, 4) + ' at ' + hx(pc);
+      this.raiseFault(pc, op, msg);
+      this.finishStep(pc, op, d.text, 'fault');
+      return 'fault';
+    }
+    const status = this.execute(d, pc, op);
+    this.finishStep(pc, op, d.text, status);
+    return status;
+  }
+
+  execute(d, pc, op) {
+    const { x, y, n, nn, nnn } = d;
+    const V = this.V;
+    const o = this.options;
+    this.pc = pc + 2;
+    switch (d.name) {
+      case 'CLS':
+        this.fb.fill(0);
+        break;
+      case 'RET':
+        if (this.sp === 0) {
+          this.raiseFault(pc, op, 'Stack underflow: RET with empty stack at ' + hx(pc));
+          return 'fault';
+        }
+        this.sp--;
+        this.pc = this.stack[this.sp];
+        break;
+      case 'JP':
+        this.pc = nnn;
+        break;
+      case 'CALL':
+        if (this.sp >= STACK_SIZE) {
+          this.raiseFault(pc, op, 'Stack overflow: CALL with 16 entries at ' + hx(pc));
+          return 'fault';
+        }
+        this.stack[this.sp++] = pc + 2;
+        this.pc = nnn;
+        break;
+      case 'SE_B': if (V[x] === nn) this.pc += 2; break;
+      case 'SNE_B': if (V[x] !== nn) this.pc += 2; break;
+      case 'SE_R': if (V[x] === V[y]) this.pc += 2; break;
+      case 'SNE_R': if (V[x] !== V[y]) this.pc += 2; break;
+      case 'LD_B': V[x] = nn; break;
+      case 'ADD_B': V[x] = (V[x] + nn) & 0xFF; break;
+      case 'LD_R': V[x] = V[y]; break;
+      case 'OR': { const a = V[x], b = V[y]; V[x] = a | b; if (o.logicResetVF) V[15] = 0; break; }
+      case 'AND': { const a = V[x], b = V[y]; V[x] = a & b; if (o.logicResetVF) V[15] = 0; break; }
+      case 'XOR': { const a = V[x], b = V[y]; V[x] = a ^ b; if (o.logicResetVF) V[15] = 0; break; }
+      case 'ADD_R': {
+        const a = V[x], b = V[y], s = a + b;
+        V[x] = s & 0xFF;
+        V[15] = s > 0xFF ? 1 : 0;
+        break;
+      }
+      case 'SUB': {
+        const a = V[x], b = V[y];
+        V[x] = (a - b) & 0xFF;
+        V[15] = a >= b ? 1 : 0;
+        break;
+      }
+      case 'SUBN': {
+        const a = V[x], b = V[y];
+        V[x] = (b - a) & 0xFF;
+        V[15] = b >= a ? 1 : 0;
+        break;
+      }
+      case 'SHR': {
+        const src = o.shiftSource === 'vy' ? V[y] : V[x];
+        V[x] = src >> 1;
+        V[15] = src & 1;
+        break;
+      }
+      case 'SHL': {
+        const src = o.shiftSource === 'vy' ? V[y] : V[x];
+        V[x] = (src << 1) & 0xFF;
+        V[15] = (src >> 7) & 1;
+        break;
+      }
+      case 'LD_I': this.I = nnn; break;
+      case 'JP_V0': this.pc = nnn + V[0]; break;
+      case 'RND': V[x] = this.rand() & nn; break;
+      case 'DRW': return this.drawSprite(d, pc, op);
+      case 'SKP': if (this.keys[V[x] & 0xF]) this.pc += 2; break;
+      case 'SKNP': if (!this.keys[V[x] & 0xF]) this.pc += 2; break;
+      case 'LD_VDT': V[x] = this.dt; break;
+      case 'LD_K':
+        this.waitingKey = { reg: x, pc, opcode: op, mnemonic: d.text };
+        this.pc = pc;
+        return 'wait';
+      case 'LD_DT': this.dt = V[x]; break;
+      case 'LD_ST': this.st = V[x]; break;
+      case 'ADD_I': this.I = (this.I + V[x]) & 0xFFFF; break;
+      case 'LD_F': this.I = FONT_BASE + 5 * (V[x] & 0xF); break;
+      case 'BCD': {
+        if (this.I + 2 > MEM_SIZE - 1) {
+          this.raiseFault(pc, op, 'Memory range fault: BCD writes I..I+2 beyond 0x0FFF');
+          return 'fault';
+        }
+        const v = V[x];
+        this.write(this.I, Math.floor(v / 100));
+        this.write(this.I + 1, Math.floor(v / 10) % 10);
+        this.write(this.I + 2, v % 10);
+        break;
+      }
+      case 'STORE': {
+        if (this.I + x > MEM_SIZE - 1) {
+          this.raiseFault(pc, op, 'Memory range fault: FX55 writes I..I+' + x + ' beyond 0x0FFF');
+          return 'fault';
+        }
+        for (let i = 0; i <= x; i++) this.write(this.I + i, V[i]);
+        if (o.fxIncrement) this.I = (this.I + x + 1) & 0xFFFF;
+        break;
+      }
+      case 'LOAD': {
+        if (this.I + x > MEM_SIZE - 1) {
+          this.raiseFault(pc, op, 'Memory range fault: FX65 reads I..I+' + x + ' beyond 0x0FFF');
+          return 'fault';
+        }
+        for (let i = 0; i <= x; i++) V[i] = this.memory[this.I + i];
+        if (o.fxIncrement) this.I = (this.I + x + 1) & 0xFFFF;
+        break;
+      }
+      default:
+        this.raiseFault(pc, op, 'Unhandled opcode ' + hx(op, 4) + ' at ' + hx(pc));
+        return 'fault';
+    }
+    return 'ok';
+  }
+
+  /* DXYN. Coordinates and sprite bytes are captured before VF is written. */
+  drawSprite(d, pc, op) {
+    const { x, y, n } = d;
+    const V = this.V;
+    if (n === 0) {
+      V[15] = 0;
+      return 'ok';
+    }
+    if (this.I + n > MEM_SIZE) {
+      this.raiseFault(pc, op, 'Memory range fault: sprite reads I..I+' + (n - 1) + ' beyond 0x0FFF');
+      return 'fault';
+    }
+    const x0 = V[x] % 64;
+    const y0 = V[y] % 32;
+    const wrap = this.options.spriteWrap;
+    const sprite = this.memory.slice(this.I, this.I + n);
+    let collision = 0;
+    for (let r = 0; r < n; r++) {
+      let sy = y0 + r;
+      if (!wrap && sy >= 32) break;
+      if (wrap) sy %= 32;
+      const row = sprite[r];
+      for (let c = 0; c < 8; c++) {
+        if (!(row & (0x80 >> c))) continue;
+        let sx = x0 + c;
+        if (!wrap && sx >= 64) continue;
+        if (wrap) sx %= 64;
+        const idx = sy * 64 + sx;
+        if (this.fb[idx]) collision = 1;
+        this.fb[idx] ^= 1;
+      }
+    }
+    V[15] = collision;
+    return 'ok';
+  }
+}
+
+/* ============================================================
+   UI state
+   ============================================================ */
+let core = new Chip8({ seed: 0x2A6D });
+const app = {
+  running: false,
+  rom: null,
+  bps: new Set(),
+  bypass: null,
+  bpHit: null,
+  speed: 600,
+  volume: 0.4,
+  muted: false,
+  follow: true,
+  disBase: ROM_BASE,
+  lastTs: null,
+  cpuAcc: 0,
+  timerAcc: 0,
+  lastUi: 0
+};
+const keyHolders = Array.from({ length: 16 }, () => new Set());
+const keyButtons = [];
+
+const KEY_LAYOUT = [
+  [0x1, '1', 'Digit1'], [0x2, '2', 'Digit2'], [0x3, '3', 'Digit3'], [0xC, '4', 'Digit4'],
+  [0x4, 'Q', 'KeyQ'], [0x5, 'W', 'KeyW'], [0x6, 'E', 'KeyE'], [0xD, 'R', 'KeyR'],
+  [0x7, 'A', 'KeyA'], [0x8, 'S', 'KeyS'], [0x9, 'D', 'KeyD'], [0xE, 'F', 'KeyF'],
+  [0xA, 'Z', 'KeyZ'], [0x0, 'X', 'KeyX'], [0xB, 'C', 'KeyC'], [0xF, 'V', 'KeyV']
+];
+const CODE_TO_KEY = {};
+KEY_LAYOUT.forEach(([k, , code]) => { CODE_TO_KEY[code] = k; });
+
+const PALETTES = {
+  green: { on: [124, 255, 107], off: [10, 26, 10] },
+  amber: { on: [255, 176, 0], off: [26, 16, 0] },
+  mono: { on: [255, 255, 255], off: [0, 0, 0] }
+};
+
+/* Offscreen 64x32 framebuffer image */
+const offCanvas = document.createElement('canvas');
+offCanvas.width = 64;
+offCanvas.height = 32;
+const offCtx = offCanvas.getContext('2d');
+const offImage = offCtx.createImageData(64, 32);
+const screenCanvas = $('screen');
+const screenCtx = screenCanvas.getContext('2d');
+
+/* ============================================================
+   Messages and guards
+   ============================================================ */
+function setMessage(text, isError) {
+  const m = $('msg');
+  m.textContent = text;
+  m.className = 'msg ' + (isError ? 'err' : 'ok');
+}
+
+function isEditable(el) {
+  if (!el) return false;
+  const t = el.tagName;
+  return t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT' || !!el.isContentEditable;
+}
+
+/* ============================================================
+   ROM loading and reset
+   ============================================================ */
+function loadRom(name, bytes) {
+  if (!bytes || bytes.length === 0) {
+    setMessage('Rejected "' + name + '": file is empty. Current program kept.', true);
+    return false;
+  }
+  if (bytes.length > MAX_ROM) {
+    setMessage('Rejected "' + name + '": ' + bytes.length + ' bytes exceeds the 3584-byte limit. Current program kept.', true);
+    return false;
+  }
+  app.rom = { name, bytes: Uint8Array.from(bytes) };
+  resetMachine();
+  setMessage('Loaded ' + name + ' (' + bytes.length + ' bytes). Machine is paused.');
+  return true;
+}
+
+function readRomFile(f) {
+  f.arrayBuffer()
+    .then(b => loadRom(f.name, new Uint8Array(b)))
+    .catch(() => setMessage('Could not read file "' + f.name + '".', true));
+}
+
+function loadDemo() {
+  app.rom = { name: 'Built-in demo', bytes: DEMO_ROM };
+  resetMachine();
+  setMessage('Loaded built-in demo (paused). Press Run, then press a key to start.');
+}
+
+function resetMachine() {
+  app.running = false;
+  app.bypass = null;
+  app.bpHit = null;
+  app.cpuAcc = 0;
+  app.timerAcc = 0;
+  core.reset(app.rom ? app.rom.bytes : new Uint8Array(0));
+  releaseAllKeys();
+  updateUI();
+}
+
+/* ============================================================
+   Execution control
+   ============================================================ */
+function runMachine() {
+  if (core.fault) {
+    setMessage('Machine is in FAULT at ' + hx(core.fault.addr) + '. Edit PC or Reset to continue.', true);
+    return;
+  }
+  ensureAudio();
+  app.bpHit = null;
+  app.bypass = core.pc;
+  app.running = true;
+  app.lastTs = null;
+  app.cpuAcc = 0;
+  updateUI();
+}
+
+function pauseMachine() {
+  app.running = false;
+  app.cpuAcc = 0;
+  app.timerAcc = 0;
+  updateUI();
+}
+
+function stepMachine() {
+  if (app.running) pauseMachine();
+  if (core.fault) {
+    setMessage('Machine is in FAULT at ' + hx(core.fault.addr) + '. Edit PC or Reset to continue.', true);
+    updateUI();
+    return;
+  }
+  ensureAudio();
+  app.bpHit = null;
+  const r = core.step();
+  app.bypass = null;
+  if (r === 'wait') setMessage('Waiting for a fresh key press (FX0A) at ' + hx(core.pc) + '.');
+  if (r === 'fault') setMessage(core.fault.message, true);
+  updateUI();
+}
+
+/* Execute one instruction. Breakpoints are honored only when checkBp is true. */
+function executeOne(checkBp) {
+  if (core.fault) return 'fault';
+  if (core.waitingKey) return 'wait';
+  if (checkBp && app.bps.has(core.pc) && app.bypass !== core.pc) {
+    app.running = false;
+    app.bpHit = core.pc;
+    return 'bp';
+  }
+  const r = core.step();
+  if (r !== 'wait') app.bypass = null;
+  return r;
+}
+
+/* Single rAF loop: CPU is paced by elapsed time, timers at 60 Hz. */
+function frame(ts) {
+  let dtMs = 0;
+  if (app.lastTs !== null) dtMs = Math.min(ts - app.lastTs, 250);
+  app.lastTs = ts;
+  const wasRunning = app.running;
+
+  if (app.running) {
+    app.cpuAcc += dtMs * app.speed / 1000;
+    app.timerAcc += dtMs;
+    while (app.timerAcc >= TICK_MS) {
+      app.timerAcc -= TICK_MS;
+      core.tick();
+    }
+    let guard = 0;
+    while (app.running && app.cpuAcc >= 1 && guard++ < 10000) {
+      app.cpuAcc -= 1;
+      const r = executeOne(true);
+      if (r === 'ok') continue;
+      if (r === 'fault') {
+        app.running = false;
+        setMessage(core.fault.message, true);
+      } else if (r === 'bp') {
+        setMessage('Breakpoint at ' + hx(app.bpHit) + ': execution stopped before it ran.');
+      }
+      app.cpuAcc = 0;
+      break;
+    }
+    if (!app.running) {
+      app.timerAcc = 0;
+    }
+    if (ts - app.lastUi >= 100 || (wasRunning && !app.running)) updateUI();
+  } else {
+    app.cpuAcc = 0;
+    app.timerAcc = 0;
+  }
+  drawScreen();
+  updateAudio();
+  requestAnimationFrame(frame);
+}
+
+/* ============================================================
+   Audio (created after a user gesture)
+   ============================================================ */
+let audioCtx = null;
+let gainNode = null;
+
+function ensureAudio() {
+  if (audioCtx) {
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    return;
+  }
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  try {
+    audioCtx = new AC();
+    const osc = audioCtx.createOscillator();
+    osc.type = 'square';
+    osc.frequency.value = 660;
+    gainNode = audioCtx.createGain();
+    gainNode.gain.value = 0;
+    osc.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    osc.start();
+  } catch (err) {
+    audioCtx = null;
+    gainNode = null;
+  }
+}
+
+function updateAudio() {
+  const on = app.running && !core.fault && core.st > 0 && !app.muted;
+  if (audioCtx && gainNode) {
+    gainNode.gain.setTargetAtTime(on ? app.volume * 0.1 : 0, audioCtx.currentTime, 0.02);
+  }
+  $('beepLed').classList.toggle('on', on);
+}
+
+/* ============================================================
+   Keypad input (keyboard, mouse, touch) with multi-source holding
+   ============================================================ */
+function pressSource(k, src, down) {
+  const set = keyHolders[k];
+  if (down) {
+    if (set.has(src)) return;
+    set.add(src);
+    if (set.size === 1) core.setKey(k, true);
+  } else {
+    if (!set.delete(src)) return;
+    if (set.size === 0) core.setKey(k, false);
+  }
+  renderKeyState();
+}
+
+function releaseAllKeys() {
+  for (let k = 0; k < 16; k++) {
+    keyHolders[k].clear();
+    core.setKey(k, false);
+  }
+  renderKeyState();
+}
+
+function renderKeyState() {
+  for (let k = 0; k < 16; k++) {
+    if (keyButtons[k]) keyButtons[k].classList.toggle('held', keyHolders[k].size > 0);
+  }
+}
+
+function buildKeypad() {
+  const box = $('keypad');
+  KEY_LAYOUT.forEach(([k, label]) => {
+    const b = document.createElement('button');
+    b.className = 'key';
+    b.innerHTML = '<b>' + k.toString(16).toUpperCase() + '</b><small>' + label + '</small>';
+    b.title = 'Keypad ' + k.toString(16).toUpperCase() + ' (' + label + ')';
+    b.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      ensureAudio();
+      try { b.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+      pressSource(k, 'pt:' + e.pointerId, true);
+    });
+    const release = e => pressSource(k, 'pt:' + e.pointerId, false);
+    b.addEventListener('pointerup', release);
+    b.addEventListener('pointercancel', release);
+    b.addEventListener('lostpointercapture', release);
+    box.appendChild(b);
+    keyButtons[k] = b;
+  });
+}
+
+/* ============================================================
+   Display rendering
+   ============================================================ */
+function renderFrameBuffer() {
+  const pal = PALETTES[$('palette').value] || PALETTES.green;
+  const d = offImage.data;
+  for (let i = 0; i < 2048; i++) {
+    const c = core.fb[i] ? pal.on : pal.off;
+    const p = i * 4;
+    d[p] = c[0];
+    d[p + 1] = c[1];
+    d[p + 2] = c[2];
+    d[p + 3] = 255;
+  }
+  offCtx.putImageData(offImage, 0, 0);
+}
+
+function drawScreen() {
+  renderFrameBuffer();
+  const mode = $('scale').value;
+  const s = mode === 'fit' ? 8 : parseInt(mode, 10);
+  if (screenCanvas.width !== 64 * s || screenCanvas.height !== 32 * s) {
+    screenCanvas.width = 64 * s;
+    screenCanvas.height = 32 * s;
+  }
+  screenCtx.imageSmoothingEnabled = false;
+  screenCtx.drawImage(offCanvas, 0, 0, screenCanvas.width, screenCanvas.height);
+  if ($('grid').checked && s >= 4) {
+    screenCtx.strokeStyle = 'rgba(0,0,0,0.45)';
+    screenCtx.lineWidth = 1;
+    screenCtx.beginPath();
+    for (let gx = 1; gx < 64; gx++) {
+      screenCtx.moveTo(gx * s + 0.5, 0);
+      screenCtx.lineTo(gx * s + 0.5, screenCanvas.height);
+    }
+    for (let gy = 1; gy < 32; gy++) {
+      screenCtx.moveTo(0, gy * s + 0.5);
+      screenCtx.lineTo(screenCanvas.width, gy * s + 0.5);
+    }
+    screenCtx.stroke();
+  }
+  screenCanvas.style.width = mode === 'fit' ? '100%' : (64 * s) + 'px';
+  screenCanvas.style.height = 'auto';
+}
+
+function exportPng() {
+  renderFrameBuffer();
+  const s = 8;
+  const c = document.createElement('canvas');
+  c.width = 64 * s;
+  c.height = 32 * s;
+  const cx = c.getContext('2d');
+  cx.imageSmoothingEnabled = false;
+  cx.drawImage(offCanvas, 0, 0, c.width, c.height);
+  c.toBlob(blob => {
+    if (!blob) {
+      setMessage('PNG export is unavailable in this browser.', true);
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'chip8-framebuffer.png';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setMessage('Framebuffer exported as PNG.');
+  }, 'image/png');
+}
+
+/* ============================================================
+   UI rendering
+   ============================================================ */
+function currentStatus() {
+  if (core.fault) return ['FAULT', 'fault'];
+  if (core.waitingKey) return ['WAITING (FX0A)', 'wait'];
+  if (app.bpHit !== null && !app.running) return ['BREAKPOINT', 'bp'];
+  return app.running ? ['RUNNING', 'run'] : ['PAUSED', 'pause'];
+}
+
+function updateUI() {
+  app.lastUi = performance.now();
+  const [stText, stCls] = currentStatus();
+  const badge = $('badge');
+  badge.textContent = stText;
+  badge.className = 'badge ' + stCls;
+
+  $('btnRun').disabled = app.running;
+  $('btnPause').disabled = !app.running;
+  $('romInfo').textContent = app.rom
+    ? app.rom.name + ' · ' + app.rom.bytes.length + ' bytes · range ' + hx(ROM_BASE) + '-' + hx(ROM_BASE + app.rom.bytes.length - 1)
+    : 'No ROM loaded';
+
+  $('optShift').value = core.options.shiftSource;
+  $('optFx').value = core.options.fxIncrement ? 'increment' : 'preserve';
+  $('optLogic').checked = core.options.logicResetVF;
+  $('optSprite').value = core.options.spriteWrap ? 'wrap' : 'clip';
+  $('compatSummary').textContent = 'Active: shift=' + core.options.shiftSource.toUpperCase()
+    + ' · FX55/65 I=' + (core.options.fxIncrement ? 'increment' : 'preserve')
+    + ' · logic VF reset=' + (core.options.logicResetVF ? 'on' : 'off')
+    + ' · sprites=' + (core.options.spriteWrap ? 'wrap' : 'clip');
+
+  document.querySelectorAll('.needs-pause').forEach(el => { el.disabled = app.running; });
+
+  renderRegs();
+  renderStateInputs();
+  $('icount').textContent = core.instructionCount;
+  $('spLabel').textContent = core.sp + ' / 16';
+  renderNext();
+  renderStack();
+  renderFault();
+  renderDisasm();
+  renderMemory();
+  renderSpritePreview();
+  renderBps();
+  renderTrace();
+  renderKeyState();
+  updateAudio();
+}
+
+const regEls = [];
+
+function buildRegs() {
+  const box = $('regs');
+  for (let i = 0; i < 16; i++) {
+    const row = document.createElement('div');
+    row.className = 'reg' + (i === 15 ? ' vf' : '');
+    row.innerHTML = '<span class="rn">' + vName(i) + '</span><span class="rh"></span><input type="number" class="rdec needs-pause" min="0" max="255">';
+    const inp = row.querySelector('input');
+    const hexSpan = row.querySelector('.rh');
+    bindEdit(inp, s => parseValue(s, 0, 255, 10), v => { core.V[i] = v; }, vName(i));
+    box.appendChild(row);
+    regEls.push({ row, hexSpan, inp });
+  }
+}
+
+function renderRegs() {
+  const changed = new Set(core.last ? core.last.regChanges.map(c => c.name) : []);
+  for (let i = 0; i < 16; i++) {
+    const el = regEls[i];
+    el.hexSpan.textContent = hx(core.V[i], 2);
+    el.row.classList.toggle('changed', changed.has(vName(i)));
+    if (document.activeElement !== el.inp) el.inp.value = core.V[i];
+  }
+}
+
+function renderStateInputs() {
+  const set = (el, text) => { if (document.activeElement !== el) el.value = text; };
+  set($('regI'), hx(core.I, 4));
+  set($('regPC'), hx(core.pc, 3));
+  set($('regDT'), core.dt);
+  set($('regST'), core.st);
+  $('regI').closest('label').classList.toggle('changed', !!(core.last && core.last.regChanges.some(c => c.name === 'I')));
+}
+
+function bindEdit(inp, parse, apply, label) {
+  inp.addEventListener('change', () => {
+    if (app.running) {
+      setMessage('Pause before editing machine state.', true);
+      updateUI();
+      return;
+    }
+    const v = parse(inp.value);
+    if (v === null) {
+      setMessage(label + ': value is malformed or out of range.', true);
+      updateUI();
+      return;
+    }
+    apply(v);
+    setMessage(label + ' updated.');
+    updateUI();
+  });
+}
+
+function renderNext() {
+  const el = $('nextOp');
+  if (core.pc > MEM_SIZE - 2) {
+    el.innerHTML = 'Next: <b>' + hx(core.pc) + '</b> <span class="bad">invalid fetch (beyond 0x0FFE)</span>';
+  } else {
+    const op = (core.memory[core.pc] << 8) | core.memory[core.pc + 1];
+    const d = decode(op);
+    el.innerHTML = 'Next: <b>' + hx(core.pc) + '</b> ' + hx(op, 4) + ' &nbsp; ' + esc(d.text)
+      + (d.valid ? '' : ' <span class="bad">(invalid)</span>');
+  }
+  const last = core.last;
+  $('lastOp').textContent = last
+    ? 'Last step: ' + hx(last.pc) + ' ' + (last.opcode === null ? '' : hx(last.opcode, 4)) + ' ' + last.mnemonic + ' [' + last.status + ']'
+    : 'Last step: none';
+}
+
+function renderStack() {
+  let h = '';
+  for (let i = 0; i < STACK_SIZE; i++) {
+    const active = i < core.sp;
+    const top = i === core.sp - 1;
+    h += '<div class="slot' + (active ? ' active' : '') + (top ? ' top' : '') + '">'
+      + '<span>' + i.toString(16).toUpperCase() + '</span>'
+      + (active
+        ? '<button class="ret" data-addr="' + core.stack[i] + '">' + hx(core.stack[i]) + '</button>'
+        : '<span>---</span>')
+      + (top ? '<em>top</em>' : '')
+      + '</div>';
+  }
+  $('stack').innerHTML = h;
+}
+
+function renderFault() {
+  const fb = $('faultBox');
+  if (core.fault) {
+    fb.hidden = false;
+    fb.innerHTML = '<b>FAULT</b> at ' + hx(core.fault.addr) + ' · opcode '
+      + (core.fault.opcode === null ? '-' : hx(core.fault.opcode, 4)) + '<br>' + esc(core.fault.message);
+  } else {
+    fb.hidden = true;
+    fb.innerHTML = '';
+  }
+}
+
+function renderDisasm() {
+  const pc = core.pc;
+  const base = app.follow ? (Math.max(0, pc - 8) & ~1) : app.disBase;
+  const lastPc = core.last ? core.last.pc : null;
+  const lastOk = core.last && core.last.status === 'ok';
+  let h = '';
+  for (let i = 0; i < 48; i++) {
+    const addr = base + i * 2;
+    if (addr > MEM_SIZE - 2) break;
+    const op = (core.memory[addr] << 8) | core.memory[addr + 1];
+    const d = decode(op);
+    const isNext = addr === pc;
+    const isLast = lastOk && addr === lastPc;
+    const isFault = core.fault && addr === core.fault.addr;
+    const bp = app.bps.has(addr);
+    let tag = '';
+    if (isNext) tag = 'NEXT';
+    else if (isLast) tag = 'LAST';
+    if (isFault) tag = 'FAULT';
+    if (!d.valid) tag = tag ? tag + ' ' : '';
+    const cls = ['drow'];
+    if (isNext) cls.push('next');
+    if (isLast) cls.push('last');
+    if (isFault) cls.push('faulted');
+    if (!d.valid) cls.push('invalid');
+    h += '<div class="' + cls.join(' ') + '">'
+      + '<span class="gut' + (bp ? ' on' : '') + '" data-bp="' + addr + '" title="Toggle breakpoint">' + (bp ? '●' : '○') + '</span>'
+      + '<span>' + hx(addr) + '</span>'
+      + '<span>' + hb(op >> 8) + ' ' + hb(op) + '</span>'
+      + '<span class="mn">' + esc(d.text) + '</span>'
+      + '<span class="tag">' + (tag + (d.valid ? '' : ' INVALID')).trim() + '</span>'
+      + '<span class="ex">' + esc(d.explain) + '</span>'
+      + '</div>';
+  }
+  $('disBox').innerHTML = h;
+}
+
+function scrollMemTo(addr) {
+  const a = Math.max(0, Math.min(MEM_SIZE - 1, addr));
+  const el = $('mr' + (a >> 4));
+  if (el) el.scrollIntoView({ block: 'nearest' });
+}
+
+function renderMemory() {
+  const pc = core.pc;
+  const I = core.I;
+  const writes = new Map();
+  if (core.last && core.last.memWrites) {
+    core.last.memWrites.forEach(w => writes.set(w.addr, w));
+  }
+  let h = '';
+  for (let r = 0; r < 256; r++) {
+    const base = r * 16;
+    let cells = '';
+    let ascii = '';
+    for (let c = 0; c < 16; c++) {
+      const a = base + c;
+      const v = core.memory[a];
+      const cls = [];
+      if (a === pc || a === pc + 1) cls.push('pc');
+      if (a === I || a === I + 1) cls.push('ip');
+      if (a >= FONT_BASE && a < FONT_BASE + 80) cls.push('font');
+      if (a >= ROM_BASE && a < ROM_BASE + core.romSize) cls.push('rom');
+      const w = writes.get(a);
+      if (w) cls.push(w.changed ? 'wrote-chg' : 'wrote');
+      cells += '<span class="' + cls.join(' ') + '" data-a="' + a + '">' + hb(v) + '</span>';
+      ascii += (v >= 32 && v < 127) ? esc(String.fromCharCode(v)) : '.';
+    }
+    h += '<div class="mrow" id="mr' + r + '"><span class="ma">' + hx(base) + '</span><span class="mbytes">' + cells + '</span><span class="masc">' + ascii + '</span></div>';
+  }
+  $('memBox').innerHTML = h;
+}
+
+function renderSpritePreview() {
+  const h = parseInt($('spH').value, 10) || 5;
+  const txt = $('spAddr').value.trim();
+  const start = txt === '' ? core.I : parseValue(txt, 0, 0xFFFF, 16);
+  if (start === null) {
+    $('spOut').textContent = 'Invalid start address.';
+    return;
+  }
+  let out = 'Start ' + hx(start, 4) + ' · height ' + h + ' · ' + (txt === '' ? 'from I' : 'selected address') + '\n';
+  for (let i = 0; i < h; i++) {
+    const a = start + i;
+    if (a >= MEM_SIZE) {
+      out += '--  ' + '........' + '  ' + hx(a, 4) + ' (beyond 0x0FFF, not read)\n';
+      continue;
+    }
+    const b = core.memory[a];
+    let row = '';
+    for (let bit = 0; bit < 8; bit++) row += (b & (0x80 >> bit)) ? '#' : '.';
+    out += hb(b) + '  ' + row + '  ' + hx(a, 4) + '\n';
+  }
+  $('spOut').textContent = out;
+}
+
+function renderBps() {
+  const list = [...app.bps].sort((a, b) => a - b);
+  $('bpList').innerHTML = list.length
+    ? list.map(a => '<li><span>' + hx(a) + '</span><button data-rm="' + a + '">Remove</button></li>').join('')
+    : '<li class="muted">No breakpoints</li>';
+}
+
+function renderTrace() {
+  const t = core.trace;
+  let h = '';
+  for (let i = t.length - 1; i >= 0; i--) {
+    const e = t[i];
+    const regs = e.regChanges.map(c => c.name + ':' + (c.name === 'I' ? hx(c.before, 4) + '→' + hx(c.after, 4) : hb(c.before) + '→' + hb(c.after))).join(' ');
+    const mem = e.memWrites.map(w => hx(w.addr, 4) + '=' + hb(w.value) + (w.changed ? '' : '(same)')).join(' ');
+    const sp = e.spDelta > 0 ? '+' + e.spDelta : String(e.spDelta);
+    h += '<tr><td>' + e.seq + '</td><td>' + hx(e.pc) + '</td><td>' + hx(e.opcode, 4) + '</td><td>' + esc(e.mnemonic)
+      + '</td><td>' + hx(e.resultPC) + '</td><td>' + esc(regs) + '</td><td>' + esc(mem) + '</td><td>' + sp + '</td></tr>';
+  }
+  $('traceBody').innerHTML = h;
+  if ($('traceFollow').checked) $('traceBox') && document.querySelector('#pTrace .tracebox').scrollTop === 0;
+}
+
+/* ============================================================
+   Self-tests (isolated Chip8 instances)
+   ============================================================ */
+function runSelfTests() {
+  const rows = [];
+  const expect = (name, exp, obs) => rows.push({ name, exp: String(exp), obs: String(obs), pass: exp === obs });
+  const mk = (prog, opts) => {
+    const c = new Chip8(opts || {});
+    c.reset(Uint8Array.from(prog));
+    return c;
+  };
+  const run = (c, n) => { let s = null; for (let i = 0; i < n; i++) s = c.step(); return s; };
+  const lit = (c, from, to) => { let s = 0; for (let i = from; i < to; i++) s += c.fb[i]; return s; };
+
+  // 8XY4 addition
+  { const c = mk([0x80, 0x14]); c.V[0] = 0x10; c.V[1] = 0x20; c.step(); expect('8XY4 no carry: VX', 0x30, c.V[0]); expect('8XY4 no carry: VF', 0, c.V[15]); }
+  { const c = mk([0x80, 0x14]); c.V[0] = 0xFF; c.V[1] = 0x01; c.step(); expect('8XY4 carry: VX', 0x00, c.V[0]); expect('8XY4 carry: VF', 1, c.V[15]); }
+  { const c = mk([0x80, 0x14]); c.V[0] = 0xFE; c.V[1] = 0x01; c.step(); expect('8XY4 sum 255 no carry: VF', 0, c.V[15]); }
+  { const c = mk([0x80, 0x04]); c.V[0] = 0x80; c.step(); expect('8XY4 X=Y: VX', 0x00, c.V[0]); expect('8XY4 X=Y: VF', 1, c.V[15]); }
+  { const c = mk([0x8F, 0x14]); c.V[15] = 0xFF; c.V[1] = 0x01; c.step(); expect('8XY4 X=F: VF is carry', 1, c.V[15]); }
+  { const c = mk([0x80, 0xF4]); c.V[0] = 0x05; c.V[15] = 0xFA; c.step(); expect('8XY4 Y=F: VX', 0xFF, c.V[0]); expect('8XY4 Y=F: VF', 0, c.V[15]); }
+
+  // 8XY5 subtraction
+  { const c = mk([0x80, 0x15]); c.V[0] = 5; c.V[1] = 5; c.step(); expect('8XY5 equal: VX', 0, c.V[0]); expect('8XY5 equal: VF (no borrow)', 1, c.V[15]); }
+  { const c = mk([0x80, 0x15]); c.V[0] = 3; c.V[1] = 5; c.step(); expect('8XY5 borrow: VX', 0xFE, c.V[0]); expect('8XY5 borrow: VF', 0, c.V[15]); }
+  { const c = mk([0x80, 0x05]); c.V[0] = 7; c.step(); expect('8XY5 X=Y: VX', 0, c.V[0]); expect('8XY5 X=Y: VF', 1, c.V[15]); }
+  { const c = mk([0x80, 0xF5]); c.V[0] = 0x10; c.V[15] = 0x05; c.step(); expect('8XY5 Y=F: VX', 0x0B, c.V[0]); expect('8XY5 Y=F: VF', 1, c.V[15]); }
+  { const c = mk([0x8F, 0x15]); c.V[15] = 0x10; c.V[1] = 0x05; c.step(); expect('8XY5 X=F: VF is no-borrow', 1, c.V[15]); }
+
+  // 8XY7 reverse subtraction
+  { const c = mk([0x80, 0x17]); c.V[0] = 3; c.V[1] = 5; c.step(); expect('8XY7: VX', 2, c.V[0]); expect('8XY7: VF', 1, c.V[15]); }
+  { const c = mk([0x80, 0x17]); c.V[0] = 5; c.V[1] = 3; c.step(); expect('8XY7 borrow: VX', 0xFE, c.V[0]); expect('8XY7 borrow: VF', 0, c.V[15]); }
+  { const c = mk([0x80, 0x17]); c.V[0] = 4; c.V[1] = 4; c.step(); expect('8XY7 equal: VF', 1, c.V[15]); }
+  { const c = mk([0x8F, 0x17]); c.V[15] = 2; c.V[1] = 5; c.step(); expect('8XY7 X=F: VF is no-borrow', 1, c.V[15]); }
+  { const c = mk([0x80, 0xF7]); c.V[0] = 0x02; c.V[15] = 0x05; c.step(); expect('8XY7 Y=F: VX', 3, c.V[0]); expect('8XY7 Y=F: VF', 1, c.V[15]); }
+
+  // Shifts
+  { const c = mk([0x80, 0x06]); c.V[0] = 3; c.step(); expect('8XY6 VX source: VX', 1, c.V[0]); expect('8XY6 VX source: VF', 1, c.V[15]); }
+  { const c = mk([0x80, 0x06]); c.V[0] = 2; c.V[1] = 0xFF; c.step(); expect('8XY6 default ignores VY: VX', 1, c.V[0]); expect('8XY6 default ignores VY: VF', 0, c.V[15]); }
+  { const c = mk([0x80, 0x0E]); c.V[0] = 0x81; c.step(); expect('8XYE VX source: VX', 0x02, c.V[0]); expect('8XYE VX source: VF', 1, c.V[15]); }
+  { const c = mk([0x80, 0x16], { shiftSource: 'vy' }); c.V[1] = 6; c.step(); expect('8XY6 VY source: VX', 3, c.V[0]); expect('8XY6 VY source: VF', 0, c.V[15]); }
+  { const c = mk([0x80, 0x1E], { shiftSource: 'vy' }); c.V[1] = 0x80; c.step(); expect('8XYE VY source: VX', 0, c.V[0]); expect('8XYE VY source: VF', 1, c.V[15]); }
+
+  // Logic and 7XNN VF behavior
+  { const c = mk([0x80, 0x11]); c.V[15] = 9; c.V[0] = 0xF0; c.V[1] = 0x0F; c.step(); expect('8XY1 default keeps VF: VX', 0xFF, c.V[0]); expect('8XY1 default keeps VF: VF', 9, c.V[15]); }
+  { const c = mk([0x80, 0x11], { logicResetVF: true }); c.V[15] = 9; c.V[0] = 0xF0; c.V[1] = 0x0F; c.step(); expect('8XY1 option resets VF', 0, c.V[15]); }
+  { const c = mk([0x70, 0x05]); c.V[15] = 0x42; c.V[0] = 1; c.step(); expect('7XNN: VX', 6, c.V[0]); expect('7XNN does not touch VF', 0x42, c.V[15]); }
+
+  // Skips
+  { const c = mk([0x30, 0x05]); c.V[0] = 5; c.step(); expect('3XNN skip taken PC', 0x204, c.pc); }
+  { const c = mk([0x30, 0x05]); c.V[0] = 4; c.step(); expect('3XNN skip not taken PC', 0x202, c.pc); }
+  { const c = mk([0x40, 0x05]); c.V[0] = 4; c.step(); expect('4XNN skip taken PC', 0x204, c.pc); }
+  { const c = mk([0x40, 0x05]); c.V[0] = 5; c.step(); expect('4XNN skip not taken PC', 0x202, c.pc); }
+  { const c = mk([0x50, 0x10]); c.V[0] = 7; c.V[1] = 7; c.step(); expect('5XY0 skip taken PC', 0x204, c.pc); }
+  { const c = mk([0x51, 0x21]); c.step(); expect('5XY1 is invalid (fault)', true, c.fault !== null); }
+  { const c = mk([0x90, 0x10]); c.V[0] = 1; c.V[1] = 2; c.step(); expect('9XY0 skip taken PC', 0x204, c.pc); }
+  { const c = mk([0x91, 0x21]); c.step(); expect('9XY1 is invalid (fault)', true, c.fault !== null); }
+  { const c = mk([0xE0, 0x9E]); c.V[0] = 3; c.setKey(3, 1); c.step(); expect('EX9E skip taken PC', 0x204, c.pc); }
+  { const c = mk([0xE0, 0xA1]); c.V[0] = 3; c.step(); expect('EXA1 skip taken PC', 0x204, c.pc); }
+
+  // Call / return and stack
+  { const c = mk([0x22, 0x04, 0x00, 0x00, 0x60, 0x77, 0x00, 0xEE]); run(c, 3); expect('2NNN/00EE return PC', 0x202, c.pc); expect('2NNN/00EE SP', 0, c.sp); expect('2NNN/00EE callee ran', 0x77, c.V[0]); }
+  { const c = mk([0x22, 0x00]); run(c, 16); expect('Stack fills to 16', 16, c.sp); const s = c.step(); expect('Stack overflow faults', 'fault', s); }
+  { const c = mk([0x00, 0xEE]); const s = c.step(); expect('Stack underflow faults', 'fault', s); }
+
+  // BCD and transfers
+  { const c = mk([0xF0, 0x33]); c.V[0] = 254; c.I = 0x300; c.step(); expect('FX33 hundreds', 2, c.memory[0x300]); expect('FX33 tens', 5, c.memory[0x301]); expect('FX33 ones', 4, c.memory[0x302]); }
+  { const c = mk([0xF2, 0x55, 0x60, 0x00, 0x61, 0x00, 0x62, 0x00, 0xF2, 0x65]); c.V[0] = 1; c.V[1] = 2; c.V[2] = 3; c.I = 0x300; run(c, 7);
+    expect('FX55/65 round trip V0', 1, c.V[0]); expect('FX55/65 round trip V1', 2, c.V[1]); expect('FX55/65 round trip V2', 3, c.V[2]);
+    expect('FX55 stores inclusive range', 3, c.memory[0x302]); expect('FX55/65 preserves I', 0x300, c.I); }
+  { const c = mk([0xF2, 0x55]); c.I = 0xFFF; const s = c.step(); expect('FX55 out of range faults', 'fault', s); }
+  { const c = mk([0xF0, 0x1E]); c.I = 0x100; c.V[0] = 0x20; c.V[15] = 0x77; c.step(); expect('FX1E adds I', 0x120, c.I); expect('FX1E leaves VF', 0x77, c.V[15]); }
+  { const c = mk([0xF0, 0x1E]); c.I = 0xFFF0; c.V[0] = 0x20; c.step(); expect('FX1E wraps to 16 bits', 0x0010, c.I); }
+  { const c = mk([0xF0, 0x29]); c.V[0] = 0xA3; c.step(); expect('FX29 address', 0x5F, c.I); expect('FX29 glyph byte', 0xF0, c.memory[c.I]); }
+  { const c = mk([0xB3, 0x00]); c.V[0] = 0x10; c.step(); expect('BNNN PC = NNN+V0', 0x310, c.pc); }
+  { const a = mk([0xC0, 0x0F], { seed: 99 }); const b = mk([0xC0, 0x0F], { seed: 99 }); a.step(); b.step();
+    expect('CXNN masked by NN', true, (a.V[0] & 0xF0) === 0); expect('CXNN seeded repeat', true, a.V[0] === b.V[0]); }
+
+  // DXYN
+  { const c = mk([0xA3, 0x00, 0xD0, 0x01, 0xD0, 0x01]); c.memory[0x300] = 0x80; c.step(); c.step(); expect('DXYN first draw pixel on', 1, c.fb[0]);
+    c.step(); expect('DXYN collision erases pixel', 0, c.fb[0]); expect('DXYN collision VF', 1, c.V[15]); }
+  { const c = mk([0xA3, 0x00, 0xD0, 0x11]); c.memory[0x300] = 0xFF; c.V[0] = 62; c.V[1] = 0; run(c, 2);
+    expect('DXYN clips at right edge', 2, lit(c, 0, 64)); expect('DXYN clip VF', 0, c.V[15]); }
+  { const c = mk([0xA3, 0x00, 0xD0, 0x11], { spriteWrap: true }); c.memory[0x300] = 0xFF; c.V[0] = 62; c.V[1] = 0; run(c, 2);
+    expect('DXYN wrap option wraps row', 8, lit(c, 0, 64)); }
+  { const c = mk([0xA3, 0x00, 0xD0, 0x11]); c.memory[0x300] = 0xFF; c.V[0] = 65; c.V[1] = 0; run(c, 2);
+    expect('DXYN start is modulo 64', 1, c.fb[1]); }
+  { const c = mk([0xD0, 0x10]); c.V[15] = 1; c.step(); expect('DXY0 draws nothing', 0, lit(c, 0, 2048)); expect('DXY0 sets VF=0', 0, c.V[15]); }
+
+  // FX0A fresh key semantics
+  { const c = mk([0xF0, 0x0A]); c.setKey(6, 1); c.step(); expect('FX0A waits (held key ignored)', 'wait', 'wait');
+    c.setKey(6, 1); expect('FX0A repeat of held key ignored', true, c.waitingKey !== null);
+    c.setKey(6, 0); c.setKey(6, 1); expect('FX0A fresh keydown completes VX', 6, c.V[0]); expect('FX0A advances PC', 0x202, c.pc); }
+  { const c = mk([0xF0, 0x0A]); c.step(); expect('FX0A waiting PC stays', 0x200, c.pc); expect('FX0A waiting not counted', 0, c.instructionCount); }
+
+  // Timers
+  { const c = mk([0x00, 0xE0]); c.dt = 3; c.st = 2; c.tick(); c.tick(); c.tick(); c.tick(); expect('Timers DT floor at 0', 0, c.dt); expect('Timers ST floor at 0', 0, c.st); }
+
+  // Invalid / unsupported opcodes
+  { const c = mk([0xF0, 0xFF]); expect('Unknown opcode faults', 'fault', c.step()); }
+  { const c = mk([0x01, 0x23]); const s = c.step(); expect('SYS 0NNN unsupported fault', 'fault', s); expect('SYS fault mentions Unsupported', true, c.fault.message.indexOf('Unsupported') >= 0); }
+  { const c = mk([0x00, 0xE0]); c.fb.fill(1); c.step(); expect('00E0 clears display', 0, lit(c, 0, 2048)); }
+  { const c = mk([0x00, 0xE0]); c.memory[0x200] = 0xAA; expect('Self-modification writes memory', 0xAA, c.memory[0x200]);
+    c.reset(Uint8Array.from([0x00, 0xE0])); expect('Reset after self-modification restores ROM', 0x00, c.memory[0x200]); }
+
+  return rows;
+}
+
+function renderTests(rows) {
+  const pass = rows.filter(r => r.pass).length;
+  const totals = $('testTotals');
+  totals.textContent = pass + ' passed, ' + (rows.length - pass) + ' failed, ' + rows.length + ' total';
+  totals.className = 'totals ' + (pass === rows.length ? 'ok' : 'bad');
+  $('testBody').innerHTML = rows.map(r => '<tr class="' + (r.pass ? 'pass' : 'fail') + '"><td>' + esc(r.name)
+    + '</td><td>' + esc(r.exp) + '</td><td>' + esc(r.obs) + '</td><td>' + (r.pass ? 'PASS' : 'FAIL') + '</td></tr>').join('');
+}
+
+/* ============================================================
+   Event wiring
+   ============================================================ */
+function setSpeed(v) {
+  app.speed = v;
+  $('speedRange').value = v;
+  $('speedNum').value = v;
+}
+
+function guardCompat(apply) {
+  if (app.running) {
+    setMessage('Pause the machine to change compatibility settings.', true);
+    updateUI();
+    return;
+  }
+  apply();
+  setMessage('Compatibility settings updated.');
+  updateUI();
+}
+
+function bindEvents() {
+  $('btnRun').onclick = runMachine;
+  $('btnPause').onclick = pauseMachine;
+  $('btnStep').onclick = stepMachine;
+  $('btnReset').onclick = () => {
+    resetMachine();
+    setMessage('Reset: restored ' + (app.rom ? app.rom.name : 'empty machine') + '.');
+  };
+  $('btnDemo').onclick = loadDemo;
+  $('btnTests').onclick = () => renderTests(runSelfTests());
+  $('romFile').onchange = e => {
+    const f = e.target.files && e.target.files[0];
+    if (f) readRomFile(f);
+    e.target.value = '';
+  };
+
+  $('speedRange').oninput = e => setSpeed(parseInt(e.target.value, 10));
+  $('speedNum').onchange = e => {
+    const v = parseValue(e.target.value, 60, 6000, 10);
+    if (v === null) {
+      setMessage('Speed must be an integer from 60 to 6000 instructions/second.', true);
+      $('speedNum').value = app.speed;
+      return;
+    }
+    setSpeed(v);
+  };
+
+  $('volRange').oninput = e => { app.volume = parseInt(e.target.value, 10) / 100; };
+  $('muteBtn').onclick = () => {
+    app.muted = !app.muted;
+    $('muteBtn').textContent = app.muted ? 'Unmute' : 'Mute';
+    updateAudio();
+  };
+
+  $('fsBtn').onclick = () => {
+    const w = $('screenWrap');
+    if (document.fullscreenElement) document.exitFullscreen();
+    else if (w.requestFullscreen) w.requestFullscreen();
+  };
+  if (!document.fullscreenEnabled) $('fsBtn').hidden = true;
+  $('pngBtn').onclick = exportPng;
+  $('scan').onchange = () => $('screenWrap').classList.toggle('scan', $('scan').checked);
+
+  $('optShift').onchange = () => guardCompat(() => { core.options.shiftSource = $('optShift').value; });
+  $('optFx').onchange = () => guardCompat(() => { core.options.fxIncrement = $('optFx').value === 'increment'; });
+  $('optLogic').onchange = () => guardCompat(() => { core.options.logicResetVF = $('optLogic').checked; });
+  $('optSprite').onchange = () => guardCompat(() => { core.options.spriteWrap = $('optSprite').value === 'wrap'; });
+
+  bindEdit($('regI'), s => parseValue(s, 0, 0xFFFF, 16), v => { core.I = v; }, 'I');
+  bindEdit($('regPC'), s => {
+    const v = parseValue(s, 0, 4094, 16);
+    if (v === null) return null;
+    return (v & 1) ? null : v;
+  }, v => {
+    core.pc = v;
+    core.fault = null;
+    core.waitingKey = null;
+    app.bpHit = null;
+  }, 'PC');
+  bindEdit($('regDT'), s => parseValue(s, 0, 255, 10), v => { core.dt = v; }, 'DT');
+  bindEdit($('regST'), s => parseValue(s, 0, 255, 10), v => { core.st = v; }, 'ST');
+
+  $('bpAdd').onclick = () => {
+    const v = parseValue($('bpInput').value, 0, 4095, 16);
+    if (v === null) {
+      setMessage('Breakpoint address must be hex 0x000-0xFFF.', true);
+      return;
+    }
+    app.bps.add(v);
+    $('bpInput').value = '';
+    setMessage('Breakpoint set at ' + hx(v) + '.');
+    updateUI();
+  };
+  $('bpList').onclick = e => {
+    const b = e.target.closest('button[data-rm]');
+    if (!b) return;
+    app.bps.delete(parseInt(b.dataset.rm, 10));
+    updateUI();
+  };
+
+  $('disBox').onclick = e => {
+    const g = e.target.closest('.gut');
+    if (!g) return;
+    const a = parseInt(g.dataset.bp, 10);
+    if (app.bps.has(a)) app.bps.delete(a);
+    else app.bps.add(a);
+    updateUI();
+  };
+  $('follow').onchange = () => {
+    app.follow = $('follow').checked;
+    updateUI();
+  };
+  $('disGoBtn').onclick = () => {
+    const v = parseValue($('disGoto').value, 0, 4095, 16);
+    if (v === null) {
+      setMessage('Invalid disassembly address (hex 0x000-0xFFF).', true);
+      return;
+    }
+    app.follow = false;
+    $('follow').checked = false;
+    app.disBase = v & ~1;
+    updateUI();
+  };
+
+  $('stack').onclick = e => {
+    const b = e.target.closest('.ret');
+    if (!b) return;
+    app.follow = false;
+    $('follow').checked = false;
+    app.disBase = parseInt(b.dataset.addr, 10) & ~1;
+    updateUI();
+  };
+
+  $('memBox').onclick = e => {
+    const c = e.target.closest('.mbytes span');
+    if (!c) return;
+    const a = parseInt(c.dataset.a, 10);
+    $('memAddr').value = hx(a, 3);
+    $('memVal').value = hb(core.memory[a]);
+  };
+  $('memGoBtn').onclick = () => {
+    const v = parseValue($('memGoto').value, 0, 4095, 16);
+    if (v === null) {
+      setMessage('Invalid memory address (hex 0x000-0xFFF).', true);
+      return;
+    }
+    scrollMemTo(v);
+  };
+  $('jumpPc').onclick = () => scrollMemTo(core.pc);
+  $('jumpI').onclick = () => scrollMemTo(core.I);
+  $('memSet').onclick = () => {
+    if (app.running) {
+      setMessage('Pause before editing memory.', true);
+      return;
+    }
+    const a = parseValue($('memAddr').value, 0, 4095, 16);
+    if (a === null) {
+      setMessage('Memory address must be hex 0x000-0xFFF.', true);
+      return;
+    }
+    const v = parseValue($('memVal').value, 0, 255, 16);
+    if (v === null) {
+      setMessage('Byte value must be hex 00-FF.', true);
+      return;
+    }
+    core.memory[a] = v;
+    setMessage('Wrote ' + hb(v) + ' to ' + hx(a) + '.');
+    updateUI();
+  };
+
+  $('spH').onchange = () => renderSpritePreview();
+  $('spAddr').oninput = () => renderSpritePreview();
+
+  $('traceClear').onclick = () => {
+    core.trace = [];
+    updateUI();
+  };
+  $('traceFollow').onchange = () => renderTrace();
+
+  window.addEventListener('keydown', e => {
+    const k = CODE_TO_KEY[e.code];
+    if (k === undefined) return;
+    if (isEditable(e.target)) return;
+    e.preventDefault();
+    if (e.repeat) return;
+    ensureAudio();
+    pressSource(k, 'kb:' + e.code, true);
+  });
+  window.addEventListener('keyup', e => {
+    const k = CODE_TO_KEY[e.code];
+    if (k === undefined) return;
+    if (!isEditable(e.target)) e.preventDefault();
+    pressSource(k, 'kb:' + e.code, false);
+  });
+  window.addEventListener('blur', releaseAllKeys);
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      if (app.running) {
+        pauseMachine();
+        setMessage('Paused automatically: the page was hidden.');
+      }
+      app.lastTs = null;
+      app.cpuAcc = 0;
+      app.timerAcc = 0;
+    }
+  });
+
+  ['dragenter', 'dragover'].forEach(t => document.addEventListener(t, e => {
+    e.preventDefault();
+    document.body.classList.add('dropping');
+  }));
+  document.addEventListener('dragleave', e => {
+    if (!e.relatedTarget) document.body.classList.remove('dropping');
+  });
+  document.addEventListener('drop', e => {
+    e.preventDefault();
+    document.body.classList.remove('dropping');
+    const f = e.dataTransfer && e.dataTransfer.files[0];
+    if (f) readRomFile(f);
+  });
+}
+
+/* ============================================================
+   Initialization
+   ============================================================ */
+function init() {
+  buildKeypad();
+  buildRegs();
+  const sel = $('spH');
+  for (let h = 1; h <= 15; h++) {
+    const o = document.createElement('option');
+    o.value = String(h);
+    o.textContent = String(h);
+    if (h === 5) o.selected = true;
+    sel.appendChild(o);
+  }
+  bindEvents();
+  setSpeed(app.speed);
+  loadDemo();
+  updateUI();
+  requestAnimationFrame(frame);
+}
+
+init();
+</script>
+</body>
+</html>

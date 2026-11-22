@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Gouraud-shaded Rotating Cube (Canvas 2D)</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #05070d; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(() => {
+"use strict";
+
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+const buf = document.createElement("canvas");   // low-res software framebuffer
+const bctx = buf.getContext("2d");
+
+const CAM_Z = 6;          // camera on +Z axis, looking toward origin
+const GRID = 4;           // subdivisions per cube face (gives per-vertex lighting gradients)
+const STRIDE = GRID + 1;
+const BG = [11, 15, 26];
+const BG_PIXEL = (255 << 24) | (BG[2] << 16) | (BG[1] << 8) | BG[0]; // little-endian ABGR
+const PALETTE = [
+  [255, 90, 90], [90, 255, 140], [90, 160, 255],
+  [255, 220, 90], [220, 110, 255], [90, 240, 240]
+];
+
+// ---------- state ----------
+let iw = 0, ih = 0, F = 1;
+let imageData, data32, depthBuf;
+let paused = false, wire = false;
+let time = 0;
+let fps = 0, frameCount = 0, fpsAcc = 0;
+let last = performance.now();
+
+// ---------- geometry ----------
+// Each cube face is a GRID x GRID quad grid. Vertices are shared within a face only,
+// so each vertex carries that face's normal (flat cube normals) but a different
+// position, so Lambert lighting varies across the face and Gouraud interpolation shows.
+const FACE_COUNT = 6;
+const VERTS_PER_FACE = STRIDE * STRIDE;
+const VCOUNT = FACE_COUNT * VERTS_PER_FACE;
+const modelPos = new Float64Array(VCOUNT * 3);
+const faceNormal = new Float64Array(FACE_COUNT * 3);   // model-space; also the face centre (cube half-size 1)
+const faceColor = [];
+const tris = [];                                        // [i0, i1, i2, faceIndex]
+
+{
+  let f = 0;
+  for (let a = 0; a < 3; a++) {
+    for (const s of [-1, 1]) {
+      const u = (a + 1) % 3, v = (a + 2) % 3;
+      const base = f * VERTS_PER_FACE;
+      faceNormal[f * 3 + a] = s;
+      faceColor.push(PALETTE[f]);
+      for (let j = 0; j <= GRID; j++) {
+        for (let i = 0; i <= GRID; i++) {
+          const k = (base + j * STRIDE + i) * 3;
+          modelPos[k + a] = s;
+          modelPos[k + u] = -1 + 2 * i / GRID;
+          modelPos[k + v] = -1 + 2 * j / GRID;
+        }
+      }
+      for (let j = 0; j < GRID; j++) {
+        for (let i = 0; i < GRID; i++) {
+          const a0 = base + j * STRIDE + i, a1 = a0 + 1, a2 = a0 + STRIDE, a3 = a2 + 1;
+          tris.push([a0, a1, a3, f], [a0, a3, a2, f]);
+        }
+      }
+      f++;
+    }
+  }
+}
+
+// ---------- per-frame buffers ----------
+const wpos = new Float64Array(VCOUNT * 3);     // world-space positions
+const wnorm = new Float64Array(FACE_COUNT * 3);// world-space face normals
+const faceVis = new Uint8Array(FACE_COUNT);    // backface culling result
+const PX = new Float64Array(VCOUNT), PY = new Float64Array(VCOUNT), PZ = new Float64Array(VCOUNT);
+const PR = new Float64Array(VCOUNT), PG = new Float64Array(VCOUNT), PB = new Float64Array(VCOUNT);
+const light = [0, 0, 0];
+
+// Rotation trig (set per frame): R = Rz * Ry * Rx
+let cX = 1, sX = 0, cY = 1, sY = 0, cZ = 1, sZ = 0;
+
+function xform(x, y, z, o, k) {
+  // Rx
+  const y1 = y * cX - z * sX, z1 = y * sX + z * cX, x1 = x;
+  // Ry
+  const x2 = x1 * cY + z1 * sY, z2 = -x1 * sY + z1 * cY, y2 = y1;
+  // Rz
+  o[k]     = x2 * cZ - y2 * sZ;
+  o[k + 1] = x2 * sZ + y2 * cZ;
+  o[k + 2] = z2;
+}
+
+function lightPosition(t, out) {
+  const a = t * 0.9;
+  out[0] = 2.8 * Math.cos(a);
+  out[1] = 1.2 * Math.sin(a * 0.6);
+  out[2] = 2.8 * Math.sin(a);
+}
+
+// ---------- software Gouraud rasterizer ----------
+// Barycentric rasterization; colour (and 1/z for depth) are interpolated per pixel.
+function rasterTri(a, b, c) {
+  const ax = PX[a], ay = PY[a], bx = PX[b], by = PY[b], cx = PX[c], cy = PY[c];
+  const area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+  if (Math.abs(area) < 1e-9) return;
+  const inv = 1 / area;
+
+  const minX = Math.max(0, Math.floor(Math.min(ax, bx, cx)));
+  const maxX = Math.min(iw - 1, Math.ceil(Math.max(ax, bx, cx)));
+  const minY = Math.max(0, Math.floor(Math.min(ay, by, cy)));
+  const maxY = Math.min(ih - 1, Math.ceil(Math.max(ay, by, cy)));
+
+  const za = PZ[a], zb = PZ[b], zc = PZ[c];
+  const ra = PR[a], rb = PR[b], rc = PR[c];
+  const ga = PG[a], gb = PG[b], gc = PG[c];
+  const ba = PB[a], bb = PB[b], bc = PB[c];
+
+  for (let py = minY; py <= maxY; py++) {
+    const y = py + 0.5;
+    for (let px = minX; px <= maxX; px++) {
+      const x = px + 0.5;
+      const w0 = ((bx - x) * (cy - y) - (by - y) * (cx - x)) * inv;
+      if (w0 < 0) continue;
+      const w1 = ((x - ax) * (cy - ay) - (y - ay) * (cx - ax)) * inv;
+      if (w1 < 0) continue;
+      const w2 = 1 - w0 - w1;
+      if (w2 < 0) continue;
+
+      const idx = py * iw + px;
+      const z = w0 * za + w1 * zb + w2 * zc;   // 1/depth is linear in screen space
+      if (z <= depthBuf[idx]) continue;
+      depthBuf[idx] = z;
+
+      let r = w0 * ra + w1 * rb + w2 * rc;
+      let g = w0 * ga + w1 * gb + w2 * gc;
+      let bl = w0 * ba + w1 * bb + w2 * bc;
+      r = r > 255 ? 255 : r | 0;
+      g = g > 255 ? 255 : g | 0;
+      bl = bl > 255 ? 255 : bl | 0;
+      data32[idx] = (255 << 24) | (bl << 16) | (g << 8) | r;
+    }
+  }
+}
+
+// ---------- frame rendering ----------
+function render() {
+  // 1) Rotate faces and decide visibility (backface culling against the camera).
+  for (let f = 0; f < FACE_COUNT; f++) {
+    const m = f * 3;
+    xform(faceNormal[m], faceNormal[m + 1], faceNormal[m + 2], wnorm, m);
+    const nx = wnorm[m], ny = wnorm[m + 1], nz = wnorm[m + 2];
+    // face centre == normal (cube half-size 1); view vector = camera - centre
+    const vx = -nx, vy = -ny, vz = CAM_Z - nz;
+    faceVis[f] = (nx * vx + ny * vy + nz * vz) > 0 ? 1 : 0;
+  }
+
+  // 2) Transform vertices, project, and compute per-vertex Lambert lighting.
+  const Lx = light[0], Ly = light[1], Lz = light[2];
+  for (let v = 0; v < VCOUNT; v++) {
+    xform(modelPos[v * 3], modelPos[v * 3 + 1], modelPos[v * 3 + 2], wpos, v * 3);
+    const wx = wpos[v * 3], wy = wpos[v * 3 + 1], wz = wpos[v * 3 + 2];
+
+    // perspective projection
+    const depth = CAM_Z - wz;
+    PX[v] = iw * 0.5 + F * wx / depth;
+    PY[v] = ih * 0.5 - F * wy / depth;
+    PZ[v] = 1 / depth;
+
+    // Lambert with point light (world space), mild distance attenuation
+    const f = (v / VERTS_PER_FACE) | 0;
+    const m = f * 3;
+    const dx = Lx - wx, dy = Ly - wy, dz = Lz - wz;
+    const d2 = dx * dx + dy * dy + dz * dz;
+    const d = Math.sqrt(d2) + 1e-9;
+    const ndl = Math.max(0, (wnorm[m] * dx + wnorm[m + 1] * dy + wnorm[m + 2] * dz) / d);
+    const att = 1 / (1 + 0.06 * d2);
+    const I = 0.12 + 1.4 * ndl * att;
+
+    const col = faceColor[f];
+    PR[v] = Math.min(255, col[0] * I);
+    PG[v] = Math.min(255, col[1] * I);
+    PB[v] = Math.min(255, col[2] * I);
+  }
+
+  // 3) Rasterize (or draw wireframe).
+  if (wire) {
+    bctx.fillStyle = `rgb(${BG[0]},${BG[1]},${BG[2]})`;
+    bctx.fillRect(0, 0, iw, ih);
+    bctx.lineWidth = 1;
+    for (const t of tris) {
+      if (!faceVis[t[3]]) continue;
+      const a = t[0], b = t[1], c = t[2];
+      bctx.beginPath();
+      bctx.moveTo(PX[a], PY[a]);
+      bctx.lineTo(PX[b], PY[b]);
+      bctx.lineTo(PX[c], PY[c]);
+      bctx.closePath();
+      bctx.strokeStyle = `rgb(${((PR[a] + PR[b] + PR[c]) / 3) | 0},${((PG[a] + PG[b] + PG[c]) / 3) | 0},${((PB[a] + PB[b] + PB[c]) / 3) | 0})`;
+      bctx.stroke();
+    }
+  } else {
+    data32.fill(BG_PIXEL);
+    depthBuf.fill(0);
+    for (const t of tris) {
+      if (!faceVis[t[3]]) continue;
+      rasterTri(t[0], t[1], t[2]);
+    }
+    bctx.putImageData(imageData, 0, 0);
+  }
+
+  // 4) Light marker.
+  const ldepth = CAM_Z - Lz;
+  const lsx = iw * 0.5 + F * Lx / ldepth;
+  const lsy = ih * 0.5 - F * Ly / ldepth;
+  bctx.fillStyle = "rgba(255,255,210,0.22)";
+  bctx.beginPath(); bctx.arc(lsx, lsy, 6, 0, Math.PI * 2); bctx.fill();
+  bctx.fillStyle = "rgba(255,255,230,0.95)";
+  bctx.beginPath(); bctx.arc(lsx, lsy, 2.2, 0, Math.PI * 2); bctx.fill();
+
+  // 5) Present (upscale low-res buffer) and HUD.
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(buf, 0, 0, canvas.width, canvas.height);
+
+  ctx.font = "14px Consolas, 'Courier New', monospace";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = "rgba(0,0,0,0.45)";
+  ctx.fillRect(8, 8, 340, 50);
+  ctx.fillStyle = "#e6edf3";
+  ctx.fillText(`FPS: ${fps}`, 16, 28);
+  ctx.fillText(`[W] wireframe: ${wire ? "on" : "off"}   [P] pause: ${paused ? "on" : "off"}`, 16, 48);
+}
+
+// ---------- update / loop ----------
+function update(dt) {
+  const ax = time * 0.7, ay = time * 1.0, az = time * 0.35;
+  cX = Math.cos(ax); sX = Math.sin(ax);
+  cY = Math.cos(ay); sY = Math.sin(ay);
+  cZ = Math.cos(az); sZ = Math.sin(az);
+  lightPosition(time, light);
+}
+
+function frame(now) {
+  const realDt = (now - last) / 1000;
+  last = now;
+  if (!paused) time += Math.min(realDt, 0.05);
+
+  frameCount++;
+  fpsAcc += realDt;
+  if (fpsAcc >= 0.5) {
+    fps = Math.round(frameCount / fpsAcc);
+    frameCount = 0;
+    fpsAcc = 0;
+  }
+
+  update();
+  render();
+  requestAnimationFrame(frame);
+}
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  // internal render resolution: half the window (pixelated upscale looks like a retro soft-render)
+  iw = Math.max(160, Math.floor(window.innerWidth / 2));
+  ih = Math.max(120, Math.floor(window.innerHeight / 2));
+  buf.width = iw;
+  buf.height = ih;
+  imageData = bctx.createImageData(iw, ih);
+  data32 = new Uint32Array(imageData.data.buffer);
+  depthBuf = new Float32Array(iw * ih);
+  F = ih * 1.5;   // focal length in pixels (cube fills roughly 60% of height)
+}
+
+window.addEventListener("resize", resize);
+window.addEventListener("keydown", (e) => {
+  if (e.key === "w" || e.key === "W") wire = !wire;
+  else if (e.key === "p" || e.key === "P") paused = !paused;
+});
+
+resize();
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

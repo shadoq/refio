@@ -211,7 +211,7 @@ describe("buildInboxEntry under an external harness", () => {
 });
 
 describe("promoteInboxEntry", () => {
-  it("moves the entry into results with the human scores and artifacts, but not judge scores (judges run later)", () => {
+  it("moves the entry into results with the human scores and artifacts, but not the queue's auto-judge", () => {
     const file = fileWithOneInboxEntry();
     const next = promoteInboxEntry(
       file,
@@ -227,10 +227,34 @@ describe("promoteInboxEntry", () => {
     const r = next.results[0];
     expect(r.id).toBe("todo__ollama-qwen3.6-35b__1");
     expect(r.scores.map((s) => s.criterionId)).toEqual(["look", "code"]);
-    expect(r.judgeScores).toEqual([]); // judges are run later during scoring, never copied on promotion
+    expect(r.judgeScores).toEqual([]); // only the queue auto-judge was on the entry, and it is not carried over
     expect(r.attachments).toHaveLength(1);
     expect(r.durationMs).toBe(84210);
     // The promoted file must still be schema-valid (results now require >=1 score).
+    expect(ResultsFileSchema.safeParse(next).success).toBe(true);
+  });
+
+  // Judges may run on the queue before the human scores it. Promoting must not wipe
+  // those verdicts, or the run reaches the leaderboard with no judge score at all.
+  it("keeps the strong-judge verdicts given while the entry was in the queue", () => {
+    const file = fileWithOneInboxEntry();
+    const strong = {
+      judgeId: "claude-code",
+      judgeModel: "claude-sonnet-5-5",
+      judgedAt: "2026-07-26T08:00:00.000Z",
+      scores: [{ criterionId: "look", value: 4, rationale: "ok" }],
+      screenshots: [],
+      consoleErrors: [],
+      error: null,
+    };
+    file.inbox[0].judgeScores.push(strong as never);
+    const next = promoteInboxEntry(
+      file,
+      "todo__ollama-qwen3.6-35b__1",
+      [{ criterionId: "look", value: 1.5 }],
+      "2026-07-26T09:00:00.000Z",
+    );
+    expect(next.results[0].judgeScores.map((j) => j.judgeId)).toEqual(["claude-code"]);
     expect(ResultsFileSchema.safeParse(next).success).toBe(true);
   });
 

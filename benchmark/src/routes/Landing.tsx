@@ -58,6 +58,8 @@ export default function Landing() {
   const uniqueModels = new Set(rows.map((r) => r.modelId)).size;
   const evaluatedTasks = Math.max(0, ...rows.map((r) => r.tasksEvaluated));
   const totalAttempts = rows.reduce((sum, row) => sum + row.attemptCount, 0);
+  const localModels = new Set(rows.filter((r) => r.environment.type === "local").map((r) => r.modelId)).size;
+  const cloudModels = new Set(rows.filter((r) => r.environment.type !== "local").map((r) => r.modelId)).size;
   const reliabilityRows = rows.filter((r) => r.reliabilityScore != null);
   const avgReliability =
     reliabilityRows.length > 0
@@ -221,6 +223,22 @@ export default function Landing() {
               ? t("landing.bestLocalNote", { model: bestLocalViability.model.name })
               : t("landing.bestLocalEmpty")}
           </p>
+        </Card>
+        <Card className="metric-card insight-card">
+          <Statistic title={t("landing.tasksCount")} value={evaluatedTasks} />
+          <p>{t("landing.tasksCountNote")}</p>
+        </Card>
+        <Card className="metric-card insight-card">
+          <Statistic title={t("landing.localModels")} value={localModels} />
+          <p>{t("landing.localModelsNote")}</p>
+        </Card>
+        <Card className="metric-card insight-card">
+          <Statistic title={t("landing.cloudModels")} value={cloudModels} />
+          <p>{t("landing.cloudModelsNote")}</p>
+        </Card>
+        <Card className="metric-card insight-card">
+          <Statistic title={t("landing.attemptsCount")} value={totalAttempts} />
+          <p>{t("landing.attemptsCountNote")}</p>
         </Card>
       </div>
 

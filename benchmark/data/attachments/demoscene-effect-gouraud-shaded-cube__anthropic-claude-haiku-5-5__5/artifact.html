@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Gouraud-Shaded Rotating Cube</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #000;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-family: monospace;
+    color: #9f9;
+  }
+  #c {
+    width: 640px;
+    height: 480px;
+    image-rendering: pixelated;
+    border: 1px solid #222;
+  }
+  #hud {
+    margin-top: 8px;
+    font-size: 14px;
+    white-space: pre;
+    text-align: center;
+  }
+  #keys {
+    margin-top: 4px;
+    font-size: 12px;
+    color: #686;
+  }
+</style>
+</head>
+<body>
+<canvas id="c" width="320" height="240"></canvas>
+<div id="hud">FPS: --</div>
+<div id="keys">W: wireframe  P: pause</div>
+<script>
+(function () {
+  'use strict';
+
+  const canvas = document.getElementById('c');
+  const hudEl = document.getElementById('hud');
+  const ctx = canvas.getContext('2d');
+
+  const W = canvas.width;
+  const H = canvas.height;
+  const CAM_DIST = 4.0;
+  const FOCAL = H * 1.1;
+  const AMBIENT = 0.15;
+  const DIFFUSE = 0.85;
+  const MAX_DT = 0.05;
+
+  const imageData = ctx.createImageData(W, H);
+  const pixels = new Uint32Array(imageData.data.buffer);
+  const depthBuf = new Float32Array(W * H);
+
+  const littleEndian = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
+
+  // Pack an RGB triple (each 0..255) into a 32-bit ImageData pixel.
+  function packColor(r, g, b) {
+    return littleEndian
+      ? ((0xFF000000 | (b << 16) | (g << 8) | r) >>> 0)
+      : (((r << 24) | (g << 16) | (b << 8) | 0xFF) >>> 0);
+  }
+
+  const BG_PACKED = packColor(16, 16, 24);
+  const BLACK_PACKED = packColor(0, 0, 0);
+  const WIRE_PACKED = packColor(180, 255, 255);
+  const LIGHT_PACKED = packColor(255, 255, 200);
+
+  function clamp255(v) {
+    return v < 0 ? 0 : (v > 255 ? 255 : v);
+  }
+
+  // Cube faces: outward normal, base color, and 4 corners in cyclic order.
+  const FACE_DEFS = [
+    { normal: [1, 0, 0], color: [255, 70, 70],
+      corners: [[1, -1, -1], [1, 1, -1], [1, 1, 1], [1, -1, 1]] },
+    { normal: [-1, 0, 0], color: [70, 255, 70],
+      corners: [[-1, -1, -1], [-1, -1, 1], [-1, 1, 1], [-1, 1, -1]] },
+    { normal: [0, 1, 0], color: [70, 130, 255],
+      corners: [[-1, 1, -1], [-1, 1, 1], [1, 1, 1], [1, 1, -1]] },
+    { normal: [0, -1, 0], color: [255, 255, 70],
+      corners: [[-1, -1, -1], [1, -1, -1], [1, -1, 1], [-1, -1, 1]] },
+    { normal: [0, 0, 1], color: [255, 70, 255],
+      corners: [[-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]] },
+    { normal: [0, 0, -1], color: [70, 255, 255],
+      corners: [[-1, -1, -1], [-1, 1, -1], [1, 1, -1], [1, -1, -1]] }
+  ];
+
+  // Each face owns 4 vertices so each vertex carries the face normal.
+  const modelVerts = [];
+  const faceList = [];
+  FACE_DEFS.forEach(function (def) {
+    const indices = [];
+    def.corners.forEach(function (c) {
+      indices.push(modelVerts.length);
+      modelVerts.push({
+        px: c[0], py: c[1], pz: c[2],
+        nx: def.normal[0], ny: def.normal[1], nz: def.normal[2],
+        base: def.color,
+        wx: 0, wy: 0, wz: 0,
+        wnx: 0, wny: 0, wnz: 0,
+        vz: 1, sx: 0, sy: 0, iz: 1,
+        cr: 0, cg: 0, cb: 0
+      });
+    });
+    faceList.push({ idx: indices, visible: false });
+  });
+
+  // Animation and interaction state.
+  let angleX = 0;
+  let angleY = 0;
+  let angleZ = 0;
+  let lightTime = 0;
+  let paused = false;
+  let wireframe = false;
+
+  // Rotation about X, then Y, then Z.
+  function buildRotation() {
+    return {
+      cx: Math.cos(angleX), sx: Math.sin(angleX),
+      cy: Math.cos(angleY), sy: Math.sin(angleY),
+      cz: Math.cos(angleZ), sz: Math.sin(angleZ)
+    };
+  }
+
+  function rotateVector(x, y, z, rot) {
+    // Rotate around X
+    const y1 = y * rot.cx - z * rot.sx;
+    const z1 = y * rot.sx + z * rot.cx;
+    // Rotate around Y
+    const x2 = x * rot.cy + z1 * rot.sy;
+    const z2 = -x * rot.sy + z1 * rot.cy;
+    // Rotate around Z
+    const x3 = x2 * rot.cz - y1 * rot.sz;
+    const y3 = x2 * rot.sz + y1 * rot.cz;
+    return [x3, y3, z2];
+  }
+
+  // Light moves on an orbit in world space.
+  function getLightPosition(t) {
+    return [
+      Math.cos(t) * 3,
+      Math.sin(t * 0.7) * 2.5 + 1,
+      Math.sin(t) * 3
+    ];
+  }
+
+  // Rotate vertices and normals, project to screen, and compute per-vertex Lambert lighting.
+  function transformVertices(rot, light) {
+    for (let i = 0; i < modelVerts.length; i++) {
+      const v = modelVerts[i];
+
+      const w = rotateVector(v.px, v.py, v.pz, rot);
+      v.wx = w[0];
+      v.wy = w[1];
+      v.wz = w[2];
+
+      const n = rotateVector(v.nx, v.ny, v.nz, rot);
+      v.wnx = n[0];
+      v.wny = n[1];
+      v.wnz = n[2];
+
+      // View space: camera at origin looking down +Z, cube pushed to z = CAM_DIST.
+      const vz = v.wz + CAM_DIST;
+      v.vz = vz;
+      v.iz = 1 / vz;
+      v.sx = W / 2 + v.wx * FOCAL / vz;
+      v.sy = H / 2 - v.wy * FOCAL / vz;
+
+      // Lambert lighting in world space (light and normal in the same space).
+      const lx = light[0] - v.wx;
+      const ly = light[1] - v.wy;
+      const lz = light[2] - v.wz;
+      const len = Math.hypot(lx, ly, lz) || 1;
+      const ndotl = (v.wnx * lx + v.wny * ly + v.wnz * lz) / len;
+      const intensity = AMBIENT + DIFFUSE * Math.max(0, ndotl);
+
+      v.cr = clamp255(v.base[0] * intensity);
+      v.cg = clamp255(v.base[1] * intensity);
+      v.cb = clamp255(v.base[2] * intensity);
+    }
+  }
+
+  // Backface culling: face is visible if its normal points toward the eye.
+  function computeVisibility() {
+    for (let f = 0; f < faceList.length; f++) {
+      const face = faceList[f];
+      let cx = 0, cy = 0, cz = 0;
+      for (let k = 0; k < 4; k++) {
+        const v = modelVerts[face.idx[k]];
+        cx += v.wx;
+        cy += v.wy;
+        cz += v.wz;
+      }
+      cx /= 4;
+      cy /= 4;
+      cz /= 4;
+
+      // Vector from face center (view space) to eye at origin.
+      const toCamX = -cx;
+      const toCamY = -cy;
+      const toCamZ = -(cz + CAM_DIST);
+
+      const v0 = modelVerts[face.idx[0]];
+      const facing = v0.wnx * toCamX + v0.wny * toCamY + v0.wnz * toCamZ;
+      face.visible = facing > 0;
+    }
+  }
+
+  // Interpolate along an edge at scanline sampleY.
+  function edgePoint(a, b, y) {
+    const dy = b.sy - a.sy;
+    const t = dy === 0 ? 0 : (y - a.sy) / dy;
+    return {
+      x: a.sx + (b.sx - a.sx) * t,
+      iz: a.iz + (b.iz - a.iz) * t,
+      r: a.cr + (b.cr - a.cr) * t,
+      g: a.cg + (b.cg - a.cg) * t,
+      b: a.cb + (b.cb - a.cb) * t
+    };
+  }
+
+  // Gouraud-shaded scanline triangle fill with z-buffer.
+  function fillTriangle(v0, v1, v2) {
+    const tri = [v0, v1, v2].sort(function (p, q) { return p.sy - q.sy; });
+    const top = tri[0];
+    const mid = tri[1];
+    const bot = tri[2];
+
+    if (bot.sy - top.sy <= 0) {
+      return; // degenerate
+    }
+
+    const yStart = Math.max(0, Math.ceil(top.sy - 0.5));
+    const yEnd = Math.min(H - 1, Math.floor(bot.sy - 0.5));
+
+    for (let y = yStart; y <= yEnd; y++) {
+      const sampleY = y + 0.5;
+
+      const longPt = edgePoint(top, bot, sampleY);
+      const shortPt = sampleY < mid.sy
+        ? edgePoint(top, mid, sampleY)
+        : edgePoint(mid, bot, sampleY);
+
+      let left = longPt;
+      let right = shortPt;
+      if (left.x > right.x) {
+        left = shortPt;
+        right = longPt;
+      }
+
+      const spanStart = Math.max(0, Math.ceil(left.x - 0.5));
+      const spanEnd = Math.min(W - 1, Math.floor(right.x - 0.5));
+      const dx = right.x - left.x;
+      const rowBase = y * W;
+
+      for (let x = spanStart; x <= spanEnd; x++) {
+        const sampleX = x + 0.5;
+        const t = dx === 0 ? 0 : (sampleX - left.x) / dx;
+
+        const iz = left.iz + (right.iz - left.iz) * t;
+        const z = 1 / iz;
+        const idx = rowBase + x;
+
+        if (z < depthBuf[idx]) {
+          depthBuf[idx] = z;
+          const r = left.r + (right.r - left.r) * t;
+          const g = left.g + (right.g - left.g) * t;
+          const b = left.b + (right.b - left.b) * t;
+          pixels[idx] = packColor(clamp255(r) | 0, clamp255(g) | 0, clamp255(b) | 0);
+        }
+      }
+    }
+  }
+
+  function rasterizeFaces() {
+    for (let f = 0; f < faceList.length; f++) {
+      const face = faceList[f];
+      if (!face.visible) continue;
+      const a = modelVerts[face.idx[0]];
+      const b = modelVerts[face.idx[1]];
+      const c = modelVerts[face.idx[2]];
+      const d = modelVerts[face.idx[3]];
+      fillTriangle(a, b, c);
+      fillTriangle(a, c, d);
+    }
+  }
+
+  // Plot a single pixel with bounds check.
+  function plotPixel(x, y, color) {
+    if (x < 0 || y < 0 || x >= W || y >= H) return;
+    pixels[y * W + x] = color;
+  }
+
+  // Bresenham line into the pixel buffer.
+  function drawLine(x0, y0, x1, y1, color) {
+    let xa = Math.round(x0);
+    let ya = Math.round(y0);
+    const xb = Math.round(x1);
+    const yb = Math.round(y1);
+
+    const dx = Math.abs(xb - xa);
+    const sx = xa < xb ? 1 : -1;
+    const dy = -Math.abs(yb - ya);
+    const sy = ya < yb ? 1 : -1;
+    let err = dx + dy;
+
+    for (;;) {
+      plotPixel(xa, ya, color);
+      if (xa === xb && ya === yb) break;
+      const e2 = 2 * err;
+      if (e2 >= dy) {
+        err += dy;
+        xa += sx;
+      }
+      if (e2 <= dx) {
+        err += dx;
+        ya += sy;
+      }
+    }
+  }
+
+  function drawWireframe() {
+    for (let f = 0; f < faceList.length; f++) {
+      const face = faceList[f];
+      if (!face.visible) continue;
+      for (let k = 0; k < 4; k++) {
+        const a = modelVerts[face.idx[k]];
+        const b = modelVerts[face.idx[(k + 1) % 4]];
+        drawLine(a.sx, a.sy, b.sx, b.sy, WIRE_PACKED);
+      }
+    }
+  }
+
+  // Small marker showing the light position, depth-tested against the cube.
+  function drawLightMarker(light) {
+    const vz = light[2] + CAM_DIST;
+    if (vz <= 0.1) return;
+    const sx = W / 2 + light[0] * FOCAL / vz;
+    const sy = H / 2 - light[1] * FOCAL / vz;
+    const cx = Math.round(sx);
+    const cy = Math.round(sy);
+
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const x = cx + dx;
+        const y = cy + dy;
+        if (x < 0 || y < 0 || x >= W || y >= H) continue;
+        const idx = y * W + x;
+        if (vz < depthBuf[idx]) {
+          pixels[idx] = LIGHT_PACKED;
+        }
+      }
+    }
+  }
+
+  function advance(dt) {
+    angleX += dt * 0.7;
+    angleY += dt * 1.1;
+    angleZ += dt * 0.4;
+    lightTime += dt;
+  }
+
+  // Key handling: ignore auto-repeat for toggles.
+  window.addEventListener('keydown', function (e) {
+    if (e.repeat) return;
+    const key = (e.key || '').toLowerCase();
+    if (key === 'w') {
+      wireframe = !wireframe;
+    } else if (key === 'p') {
+      paused = !paused;
+    }
+  });
+
+  // FPS measurement over a 0.5 s window.
+  let fpsFrames = 0;
+  let fpsAccum = 0;
+  let fpsValue = 0;
+
+  let lastTime = performance.now();
+
+  function frame(now) {
+    const realDt = (now - lastTime) / 1000;
+    lastTime = now;
+
+    let dt = realDt > 0 ? realDt : 0;
+    if (dt > MAX_DT) dt = MAX_DT;
+
+    if (!paused) {
+      advance(dt);
+    }
+
+    const rot = buildRotation();
+    const light = getLightPosition(lightTime);
+
+    transformVertices(rot, light);
+    computeVisibility();
+
+    depthBuf.fill(Infinity);
+    if (wireframe) {
+      pixels.fill(BLACK_PACKED);
+      drawWireframe();
+    } else {
+      pixels.fill(BG_PACKED);
+      rasterizeFaces();
+    }
+
+    drawLightMarker(light);
+    ctx.putImageData(imageData, 0, 0);
+
+    fpsFrames++;
+    fpsAccum += realDt > 0 ? realDt : 0;
+    if (fpsAccum >= 0.5) {
+      fpsValue = Math.round(fpsFrames / fpsAccum);
+      fpsFrames = 0;
+      fpsAccum = 0;
+    }
+
+    hudEl.textContent =
+      'FPS: ' + fpsValue +
+      '  |  ' + (wireframe ? 'Wireframe' : 'Filled Gouraud') +
+      '  |  ' + (paused ? 'PAUSED' : 'Running');
+
+    requestAnimationFrame(frame);
+  }
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

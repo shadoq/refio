@@ -1,0 +1,183 @@
+{
+  "schemaVersion": 1,
+  "run": {
+    "debugLevel": "STANDARD",
+    "durationMs": 635108,
+    "startedAt": 1795296573875,
+    "endedAt": 1795297208983
+  },
+  "session": {
+    "id": "3afae2ff-2cc2-4570-bf79-86bbc0b8d95c",
+    "name": "headless-1795296573845",
+    "mode": "AGENT",
+    "executionMode": "INTERACTIVE",
+    "model": "claude-haiku-5-5",
+    "provider": "anthropic",
+    "status": "SUCCESS",
+    "tokensIn": 78653,
+    "tokensOut": 155409,
+    "costUsd": 0.08493706999999999
+  },
+  "metrics": {
+    "durationMs": 635108,
+    "tokensIn": 78653,
+    "tokensOut": 155409,
+    "costUsd": 0.08493706999999999,
+    "apiCallCount": 5,
+    "toolCallCount": 1,
+    "iterations": 2,
+    "maxIterations": 200,
+    "stopReason": "COMPLETED",
+    "contextOverflow": false,
+    "verification": {
+      "ran": false,
+      "attempts": 0,
+      "timedOut": false,
+      "attributionUncertain": false,
+      "notRunReason": "no verify.command configured and no known project marker detected"
+    },
+    "guardrails": {
+      "consolidationNudges": 0,
+      "regenerationNudges": 0,
+      "subagentInvokeNudges": 0,
+      "formatRetryNudges": 0,
+      "guardianReentries": 0,
+      "maxRepeatedCall": 1,
+      "toolErrorRate": 0.0,
+      "noopWrites": 0
+    },
+    "context": {
+      "budgetTokens": 90736,
+      "usedTokens": 998,
+      "droppedMessages": 0,
+      "droppedSteps": 0,
+      "drops": {
+        "WORKING_MEMORY": 2,
+        "USER_CONTEXT": 3
+      }
+    },
+    "filesWritten": [
+      {
+        "path": "chip8_anthropic-claude-haiku-5-5_01.html",
+        "writes": 1,
+        "netChanged": true
+      }
+    ],
+    "nativeToolsDegraded": "EMPTY_NATIVE_RESPONSE"
+  },
+  "finalOutput": "I created `chip8_anthropic-claude-haiku-5-5_01.html` in the project directory (about 70.9 KB, single file, inline CSS and JavaScript, no external resources). The file is written, but I did not open it in a browser or run its self-tests, so runtime behaviour is unverified.\n\nThe file is intended to contain:\n- **Core:** a `Chip8` class with 4 KB memory, the font at 0x050, ROM loading at 0x200, V0-VF, I, PC, a 16-entry stack, DT/ST timers, a 64x32 framebuffer and 16-key input. It decodes and executes the 34 base opcodes, reports SYS 0NNN as unsupported, and treats 5XY1 and 9XY1 as invalid.\n- **Compatibility:** the default settings from the spec (shift uses VX, FX55/65 preserve I, BNNN uses NNN+V0, logic ops do not reset VF, sprite modulo start with clipping, FX1E wraps, FX29 uses 0x050 + 5*(VX & 0xF), FX0A waits for a fresh keydown, DXY0 sets VF=0), with the paused-only toggles.\n- **Timing and UI:** an accumulator-based CPU clock at 60-6000 Hz (default 600), 60 Hz timers, a Web Audio beep, auto-pause on hidden documents, the register, disassembly, memory, stack, breakpoint and trace panels, keypad, palettes, scaling, PNG export and drag-and-drop loading.\n- **Demo:** an embedded ROM that runs entirely through CHIP-8 instructions.\n- **Self-tests:** a \"Run Self-tests\" button that uses isolated core instances.\n\nNot verified: offline startup via file://, demo execution, key release, pause/step, breakpoint resume, reset repeatability and the self-test results. These need a browser run before anyone relies on them. The file is ready for that check.",
+  "subtasks": [
+    {
+      "orderIndex": 0,
+      "kind": "ADVANCE_CODE_EDITING",
+      "status": "SUCCESS",
+      "description": "advance_code_editing: chip8_anthropic-claude-haiku-5-5_01.html",
+      "tokensIn": 6179,
+      "tokensOut": 116248,
+      "costUsd": 0.0587419,
+      "latencyMs": 442600,
+      "model": "claude-haiku-5-5",
+      "provider": "anthropic"
+    }
+  ],
+  "conversation": [
+    {
+      "role": "USER",
+      "contentPreview": "Create a polished, working CHIP-8 emulator and visual debugger in one self-contained file: chip8_anthropic-claude-haiku-5-5_01.html.\n\nUse inline HTML, CSS and JavaScript only: no libraries, CDNs, external assets, backend or network requests. It must work offline via file://. Every control must work and every displayed value must reflect real emulator state.\n\n1. EMULATOR CORE\n\nImplement 4096 writable memory bytes, the standard 80-byte font at 0x050, ROM loading at 0x200, sixteen 8-bit registers V0-VF, 16-bit I and PC, a 16-entry return stack, DT/ST timers, a 64x32 framebuffer and 16-key input. Support self-modifying code.\n\nImplement all 34 executable base CHIP-8 patterns:\n00E0, 00EE, 1NNN, 2NNN, 3XNN, 4XNN, 5XY0, 6XNN, 7XNN,\n8XY0, 8XY1, 8XY2, 8XY3, 8XY4, 8XY5, 8XY6, 8XY7, 8XYE,\n9XY0, ANNN, BNNN, CXNN, DXYN, EX9E, EXA1, FX07, FX0A,\nFX15, FX18, FX1E, FX29, FX33, FX55, FX65.\n\nRecognize legacy SYS 0NNN, often counted as instruction 35; report it as unsupported after decoding 00E0/00EE. Do not emulate native COSMAC 1802 routines or add partial SUPER-CHIP/XO-CHIP support.\n\nDecode exact patterns: 5XY1 and 9XY1 are invalid. Handle carry, no-borrow including equality, shifted-out bits, BCD and inclusive V0-VX transfers correctly. Capture operands before writes; write arithmetic/shift results before VF. Test X=F, Y=F and X=Y. Capture sprite coordinates before clearing VF. 7XNN does not separately modify VF.\n\n2. COMPATIBILITY AND TIMING\n\nUse these explicit default compatibility settings:\n- Shifts use VX; FX55/65 preserve I; BNNN uses NNN+V0.\n- Logic operations do not separately reset VF.\n- Drawing starts at coordinates modulo 64/32, then clips at right/bottom edges.\n- FX1E wraps I to 16 bits and leaves VF unchanged.\n- FX29 uses 0x050 + 5*(VX & 0x0F).\n- FX0A waits for a fresh keydown, ignoring previously held keys and repeats.\n- DXY0 draws nothing and sets VF=0; no vertical-blank drawing wait.\n\nWhile paused, allow switching shift source VX/VY, preserving/incrementing I after tra… [+6240 chars]",
+      "toolCalls": [],
+      "toolCallDetails": [],
+      "createdAt": 1795296574008
+    },
+    {
+      "role": "ASSISTANT",
+      "contentPreview": "{\"response\": \"Generating the complete single-file CHIP-8 emulator and debugger with the advance_code_editing tool, since the file is large.\", \"actions\": [{\"tool\": \"advance_code_editing\", \"args\": {\"path\": \"chip8_anthropic-claude-haiku-5-5_01.html\", \"edit_description\": \"Create one self-contained HTML file (inline CSS and JavaScript only, no libraries, CDNs, external assets, network requests; must work offline via file://) titled 'CHIP-8 Workbench', showing 'anthropic-claude-haiku-5-5' in the header. Output the complete file with no placeholders.\\n\\nARCHITECTURE: Keep a pure, testable Chip8 core class (no DOM access) separate from UI code. Core state: memory Uint8Array(4096); font (80 bytes, standard CHIP-8 font 0-F) at 0x050; ROM loaded at 0x200; V Uint8Array(16); I (16-bit); PC (16-bit); stack Uint16Array(16) with SP; DT and ST timers; framebuffer Uint8Array(64*32); keys Uint8Array(16); halted/waiting-for-key state; instruction count; last-step info (previous PC, opcode, register changes, memory writes, stack-depth change, key events). Fault state records faulting address, opcode and explanation.\\n\\nDECODE: One shared decoder used by both execution and disassembly. Patterns: 00E0 clear; 00EE return; 0NNN other than 00E0/00EE is SYS, reported as unsupported (fault/unsupported). 1NNN jump; 2NNN call (push PC, check stack overflow); 3XNN, 4XNN, 5XY0 (5XY1 invalid), 6XNN, 7XNN (does not touch VF), 8XY0, 8XY1, 8XY2, 8XY3, 8XY4, 8XY5, 8XY6, 8XY7, 8XYE (9XY0 valid, 9XY1 invalid), ANNN, BNNN (jump to NNN+V0), CXNN (random, deterministic seeded PRNG for tests), DXYN, EX9E, EXA1, FX07, FX0A, FX15, FX18, FX1E, FX29, FX33, FX55, FX65. Unknown opcodes fault. Invalid fetches (PC beyond 4094 or odd handling: fetch big-endian 2-byte pair at PC even at odd addresses) must fault rather than wrap.\\n\\nARITHMETIC: Capture operands before writes. 8XY4: VX = (VX+VY)&0xFF then VF = carry (1 if sum>255). 8XY5: VX = VX-VY, VF = 1 if VX>=VY (no-borrow including equality). 8XY7: VX = VY-VX, VF … [+8106 chars]",
+      "toolCalls": [
+        "advance_code_editing"
+      ],
+      "toolCallDetails": [
+        {
+          "name": "advance_code_editing",
+          "arguments": "{\"path\":\"chip8_anthropic-claude-haiku-5-5_01.html\",\"edit_description\":\"Create one self-contained HTML file (inline CSS and JavaScript only, no libraries, CDNs, external assets, network requests; must work offline via file://) titled 'CHIP-8 Workbench', showing 'anthropic-claude-haiku-5-5' in the header. Output the complete file with no placeholders.\\n\\nARCHITECTURE: Keep a pure, testable Chip8 core class (no DOM access) separate from UI code. Core state: memory Uint8Array(4096); font (80 bytes, standard CHIP-8 font 0-F) at 0x050; ROM loaded at 0x200; V Uint8Array(16); I (16-bit); PC (16-bit); stack Uint16Array(16) with SP; DT and ST timers; framebuffer Uint8Array(64*32); keys Uint8Array(16); halted/waiting-for-key state; instruction count; last-step info (previous PC, opcode, register changes, memory writes, stack-depth change, key events). Fault state records faulting address, opcode and explanation.\\n\\nDECODE: One shared decoder used by both execution and disassembly. Patterns: 00E0 clear; 00EE return; 0NNN other than 00E0/00EE is SYS, reported as unsupported (fault/unsupported). 1NNN jump; 2NNN call (push PC, check stack overflow); 3XNN, 4XNN, 5XY0 (5XY1 invalid), 6XNN, 7XNN (does not touch VF), 8XY0, 8XY1, 8XY2, 8XY3, 8XY4, 8XY5, 8XY6, 8XY7, 8XYE (9XY0 valid, 9XY1 invalid), ANNN, BNNN (jump to NNN+V0), CXNN (random, deterministic seeded PRNG for tests), DXYN, EX9E, EXA1, FX07, FX0A, FX15, FX18, FX1E, FX29, FX33, FX55, FX65. Unknown opcodes fault. Invalid fetches (PC beyond 4094 or odd handling: fetch big-endian 2-byte pair at PC even at odd addresses) must fault rather than wrap.\\n\\nARITHMETIC: Capture operands before writes. 8XY4: VX = (VX+VY)&0xFF then VF = carry (1 if sum>255). 8XY5: VX = VX-VY, VF = 1 if VX>=VY (no-borrow including equality). 8XY7: VX = VY-VX, VF = 1 if VY>=VX. Write result first, then set VF last, so X=F and Y=F work correctly. 8XY6: shift uses VX (source VX by default), VF = shifted-out LSB; 8XYE: VF = shifted-out MSB. Logic 8XY1/8XY2/8XY3 do NOT reset VF by default (compatibility setting). Shifts and logic must handle X=Y correctly. FX33 BCD: validate I+2 range (<4096) before writing hundreds, tens, ones. FX55 stores V0..VX inclusive at I, FX65 loads V0..VX inclusive; both preserve I by default. FX1E: I = (I+VX) & 0xFFFF, VF unchanged. FX29: I = 0x050 + 5*(VX & 0x0F). BNNN: PC = NNN + V0. DXYN: start coordinates = VX%64, VY%32 (captured before clearing VF), clip at right/bottom edges (not wrap) by default, XOR pixels, VF=1 if any lit pixel becomes unlit else 0; N=0 draws nothing and sets VF=0; read sprite bytes from memory at I (fault if I+N exceeds 4096 range). Also support a sprite-wrap option. FX0A: waits for a fresh keydown (ignore already-held keys and repeats); the instruction does not advance until a new key press is detected, then VX = key and it completes; log once on completion, not repeatedly while waiting. EX9E/EXA1 check key state.\\n\\nCOMPATIBILITY SWITCHES (UI, changeable only while paused, show active settings): shift source VX/VY (default VX); FX55/FX65 I behavior (preserve default, or increment); logic VF reset (off default, on option); sprite clipping vs wrapping (clip default). Also show the fixed behaviors.\\n\\nTIMING: Separate CPU, timers, rendering. Use elapsed-time accumulators (performance.now / requestAnimationFrame), NOT instructions per animation frame. Speed slider AND numeric input, range 60-6000 instructions/second, default 600. Timers DT/ST decrement at 60 Hz independently while running, including during FX0A waits. Pause freezes CPU and timers. Single Step executes exactly one instruction without advancing timers. Auto-pause when document becomes hidden (visibilitychange), discarding background elapsed time. Avoid duplicate loops (guard single rAF loop). Throttle UI refresh while running (e.g. ~10-20 Hz); update immediately after pause, step, edits.\\n\\nAUDIO: Web Audio oscillator, quiet beep only while running and ST>0. Initialize AudioContext after a user gesture. Mute toggle, volume slider, visual activity indicator. Silence on pause/fault/reset.\\n\\nDISPLAY: Canvas 64x32 framebuffer rendered with nearest-neighbor scaling at 2:1 aspect ratio (pixels as squares scaled integer or fit). Scale/fit controls, optional pixel grid, palettes (green, amber, monochrome), optional scanlines (CSS overlay or canvas drawing, must not alter emulation), fullscreen button (where supported), framebuffer PNG export via canvas.toDataURL/toBlob download. Effects never alter emulation state.\\n\\nINPUT: Keypad mapping shown with virtual and physical labels: 1 2 3 C -> 1 2 3 4; 4 5 6 D -> Q W E R; 7 8 9 E -> A S D F; A 0 B F -> Z X C V. Use KeyboardEvent.code (Digit1, Digit2, Digit3, Digit4, KeyQ, KeyW, KeyE, KeyR, KeyA, KeyS, KeyD, KeyF, KeyZ, KeyX, KeyC, KeyV). Handle keydown/keyup, simultaneous keys, key repeat ignored. On-screen keypad with mouse and touch using pointer events with pointer capture and pointercancel handling. Combine sources correctly (a key is down if any source holds it). Clear all held keys on window blur. Do not intercept keys while focus is in input/textarea/select/contenteditable (typing in editable fields). preventDefault for mapped game keys only when not editing.\\n\\nCONTROLS: Run, Pause, Single Step, Reset, Load ROM (file input), Load Demo, drag-and-drop loading onto the page. Show filename, size, address range (0x200-0x...), status badge: PAUSED / RUNNING / WAITING (FX0A) / BREAKPOINT / FAULT. Reject empty files and files over 3584 bytes with a visible message, without replacing the current program. Start with the demo loaded and PAUSED. Reset restores the original current ROM (the one loaded last, not the demo unless it was the current) and complete machine state (memory, registers, timers, stack, display, keys, counters) while preserving UI preferences and valid breakpoints.\\n\\nCPU/STACK PANEL: Show V0-VF in hex and decimal, with VF visually distinct. Show I, PC, SP/stack depth, DT, ST, instruction count, next opcode with mnemonic. Highlight registers that changed after the last step. Editing registers and timers while paused, with validation (0-255 for V and timers, 0-0xFFFF for I, even/valid range for PC within memory). Show all 16 stack entries with active slots, top marker, return addresses; clicking a return address navigates the disassembly to it.\\n\\nDISASSEMBLY: Live disassembly panel with address, raw bytes, mnemonic, operands, brief explanation. Mark PC as NEXT instruction and separately mark last executed instruction. Follow PC toggle, go-to-address input (validated), branch/call targets shown, breakpoint markers in a clickable gutter. Mark invalid instructions. Include a note: linear disassembly can interpret sprite data as code and does not recover original source. Reflect memory edits and self-modifying code immediately.\\n\\nMEMORY PANEL: Hex dump of all 4096 bytes, 16 bytes per row, with ASCII column, go-to-address, jump-to-PC and jump-to-I buttons, distinct markers for PC, I, font region, ROM region. Highlight memory writes from the latest step including unchanged-value writes. Validated byte editing while paused. Sprite preview: 8 pixels wide, height 1-15 selectable, starting from I or a selected address, showing corresponding byte values, safe end-of-memory handling.\\n\\nBREAKPOINTS AND TRACE: Add/remove address breakpoints from disassembly gutter and from a list panel. Execution stops BEFORE a breakpointed instruction executes (status BREAKPOINT). Resuming bypasses the current breakpoint once, then honors later visits. Single Step executes through a breakpoint without removing it. Trace ring buffer of the last 200 completed instructions: sequence number, previous PC, opcode/mnemonic, resulting PC, register changes, memory writes, stack-depth change. Clear and follow-latest controls.\\n\\nBUILT-IN DEMO: Embed an original CHIP-8 ROM as a byte array with annotated assembly comments in the source (address, opcode, mnemonic). The demo is an interactive sprite program that only executes via CHIP-8 instructions (JavaScript must not animate it). Features: movement with keys 2/4/6/8 (up/left/right/down) with visible physical bindings (W/A/D/S... use the keypad mapping shown in UI); XOR erase/redraw; DT-paced movement (timer-based delay between moves); a real CALL/RET drawing subroutine; a key-triggered ST beep; an FX0A start interaction (wait for a key to begin); movement near edges demonstrating clipping/wrapping. Hand-assemble the bytes carefully so the program is correct, with a font sprite or small custom sprite at a known address in ROM data.\\n\\nROBUSTNESS: Faults (unknown opcode, invalid fetch, out-of-bounds memory access, stack overflow/underflow, invalid FX33/FX55/FX65 ranges, unsupported SYS 0NNN) pause execution, silence audio, preserve inspectable state with faulting address, opcode and explanation. Validate full transfer ranges before writing; never silently wrap invalid addresses.\\n\\nSELF-TESTS: 'Run Self-tests' button runs isolated instances of the real core (not the user's session) and shows a table of test name, expected, observed, PASS/FAIL, plus pass/fail totals. Cover: 8XY4/8XY5/8XY7 carry and borrow including equality, X=F, Y=F, X=Y cases; 8XY6/8XYE shifted-out bits with VX source and VY source option; skips 3XNN/4XNN/5XY0/9XY0/EX9E/EXA1; 2NNN/00EE CALL/RET; stack overflow/underflow fault; BCD FX33; FX55/FX65 inclusive transfer and I preservation; FX1E no VF change; FX29; BNNN; CXNN with deterministic seeded PRNG; DXYN collision, clipping, N=0; FX0A wait and fresh-key semantics; timer ticks; invalid opcodes (5XY1, 9XY1, unknown); reset after self-modification; 7XNN not touching VF; logic not resetting VF by default.\\n\\nVERIFY: Keep code clean and commented. Use functions with camelCase naming (class and method camelCase per project convention). No placeholders, no TODO markers, no omitted code. Output the complete HTML file.\"}",
+          "ok": true
+        }
+      ],
+      "tokensIn": 22011,
+      "tokensOut": 4808,
+      "createdAt": 1795296753772
+    },
+    {
+      "role": "TOOL",
+      "contentPreview": "Created chip8_anthropic-claude-haiku-5-5_01.html (+1715/-0)\n```diff\n--- a/chip8_anthropic-claude-haiku-5-5_01.html\n+++ b/chip8_anthropic-claude-haiku-5-5_01.html\n@@ -1,1 +1,1716 @@\n+ <!DOCTYPE html>\n+ <html lang=\"en\">\n+ <head>\n+ <meta charset=\"utf-8\">\n+ <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n+ <title>CHIP-8 Workbench</title>\n+ <style>\n+ :root{--bg:#0e1117;--panel:#161b24;--line:#2a3344;--text:#d6dde8;--dim:#7d8aa0;--acc:#4fd1c5;--warn:#f6ad55;--bad:#fc8181;--ok:#68d391;--next:#1e4f86;--last:#5a4a12;--chg:#3b2f63}\n+ *{box-sizing:border-box}\n+ body{margin:0;background:var(--bg);color:var(--text);font:13px/1.4 system-ui,-apple-system,\"Segoe UI\",Roboto,sans-serif}\n+ body.dropping::after{content:'Drop a CHIP-8 ROM to load';position:fixed;inset:0;background:rgba(0,0,0,.65);color:#fff;display:flex;align-items:center;justify-content:center;font-size:24px;pointer-events:none;z-index:99}\n+ .hdr{display:flex;align-items:baseline;gap:14px;padding:10px 16px;border-bottom:1px solid var(--line)}\n+ .hdr h1{margin:0;font-size:20px;color:var(--acc)}\n+ .hdr .model{color:var(--dim);font-family:ui-monospace,Consolas,monospace}\n+ .toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 16px;border-bottom:1px solid var(--line)}\n+ button,.btn{background:#222b3a;color:var(--text);border:1px solid #3a4560;border-radius:5px;padding:5px 10px;cursor:pointer;font:inherit}\n+ button:hover:not(:disabled),.btn:hover{background:#2c3950}\n+ button:disabled{opacity:.45;cursor:not-allowed}\n+ .file-btn{display:inline-block}\n+ .badge{padding:3px 10px;border-radius:12px;font-weight:600;font-size:12px;letter-spacing:.04em;background:#333}\n+ .badge.run{background:#1f5d3a;color:#b8f5cf}\n+ .badge.pause{background:#3a3f4b;color:#cfd6e3}\n+ .badge.wait{background:#5c4a1a;color:#ffe2a6}\n+ .badge.bp{background:#5b2d6e;color:#f1d3ff}\n+ .badge.fault{background:#6b1f1f;color:#ffd0d0}\n+ .info{color:var(--dim);font-family:ui-monospace,Consolas,monospace;font-size:12px}\n+ … [+72490 chars]",
+      "toolCalls": [],
+      "toolCallDetails": [],
+      "metadata": "{\"path\":\"chip8_anthropic-claude-haiku-5-5_01.html\",\"mode\":\"llm_assisted\",\"diff_lines\":1720,\"added_lines\":1715,\"removed_lines\":0,\"noop\":false,\"edit_description\":\"Create one self-contained HTML file (inline CSS and JavaScript only, no libraries, CDNs, external assets, network requests; must work offline via file://) titled 'CHIP-8 Workbench', showing 'anthropic-claude-haiku-5-5' in the header. Output the complete file with no placeholders.\\n\\nARCHITECTURE: Keep a pure, testable Chip8 core class (no DOM access) separate from UI code. Core state: memory Uint8Array(4096); font (80 bytes, standard CHIP-8 font 0-F) at 0x050; ROM loaded at 0x200; V Uint8Array(16); I (16-bit); PC (16-bit); stack Uint16Array(16) with SP; DT and ST timers; framebuffer Uint8Array(64*32); keys Uint8Array(16); halted/waiting-for-key state; instruction count; last-step info (previous PC, opcode, register changes, memory writes, stack-depth change, key events). Fault state records faulting address, opcode and explanation.\\n\\nDECODE: One shared decoder used by both execution and disassembly. Patterns: 00E0 clear; 00EE return; 0NNN other than 00E0/00EE is SYS, reported as unsupported (fault/unsupported). 1NNN jump; 2NNN call (push PC, check stack overflow); 3XNN, 4XNN, 5XY0 (5XY1 invalid), 6XNN, 7XNN (does not touch VF), 8XY0, 8XY1, 8XY2, 8XY3, 8XY4, 8XY5, 8XY6, 8XY7, 8XYE (9XY0 valid, 9XY1 invalid), ANNN, BNNN (jump to NNN+V0), CXNN (random, deterministic seeded PRNG for tests), DXYN, EX9E, EXA1, FX07, FX0A, FX15, FX18, FX1E, FX29, FX33, FX55, FX65. Unknown opcodes fault. Invalid fetches (PC beyond 4094 or odd handling: fetch big-endian 2-byte pair at PC even at odd addresses) must fault rather than wrap.\\n\\nARITHMETIC: Capture operands before writes. 8XY4: VX = (VX+VY)&0xFF then VF = carry (1 if sum>255). 8XY5: VX = VX-VY, VF = 1 if VX>=VY (no-borrow including equality). 8XY7: VX = VY-VX, VF = 1 if VY>=VX. Write result first, then set VF last, so X=F and Y=F work correctly. 8XY6: shift uses VX (source VX by default), VF = shifted-out LSB; 8XYE: VF = shifted-out MSB. Logic 8XY1/8XY2/8XY3 do NOT reset VF by default (compatibility setting). Shifts and logic must handle X=Y correctly. FX33 BCD: validate I+2 range (<4096) before writing hundreds, tens, ones. FX55 stores V0..VX inclusive at I, FX65 loads V0..VX inclusive; both preserve I by default. FX1E: I = (I+VX) & 0xFFFF, VF unchanged. FX29: I = 0x050 + 5*(VX & 0x0F). BNNN: PC = NNN + V0. DXYN: start coordinates = VX%64, VY%32 (captured before clearing VF), clip at right/bottom edges (not wrap) by default, XOR pixels, VF=1 if any lit pixel becomes unlit else 0; N=0 draws nothing and sets VF=0; read sprite bytes from memory at I (fault if I+N exceeds 4096 range). Also support a sprite-wrap option. FX0A: waits for a fresh keydown (ignore already-held keys and repeats); the instruction does not advance until a new key press is detected, then VX = key and it completes; log once on completion, not repeatedly while waiting. EX9E/EXA1 check key state.\\n\\nCOMPATIBILITY SWITCHES (UI, changeable only while paused, show active settings): shift source VX/VY (default VX); FX55/FX65 I behavior (preserve default, or increment); logic VF reset (off default, on option); sprite clipping vs wrapping (clip default). Also show the fixed behaviors.\\n\\nTIMING: Separate CPU, timers, rendering. Use elapsed-time accumulators (performance.now / requestAnimationFrame), NOT instructions per animation frame. Speed slider AND numeric input, range 60-6000 instructions/second, default 600. Timers DT/ST decrement at 60 Hz independently while running, including during FX0A waits. Pause freezes CPU and timers. Single Step executes exactly one instruction without advancing timers. Auto-pause when document becomes hidden (visibilitychange), discarding background elapsed time. Avoid duplicate loops (guard single rAF loop). Throttle UI refresh while running (e.g. ~10-20 Hz); update immediately after pause, step, edits.\\n\\nAUDIO: Web Audio oscillator, quiet beep only while running and ST>0. Initialize AudioContext after a user gesture. Mute toggle, volume slider, visual activity indicator. Silence on pause/fault/reset.\\n\\nDISPLAY: Canvas 64x32 framebuffer rendered with nearest-neighbor scaling at 2:1 aspect ratio (pixels as squares scaled integer or fit). Scale/fit controls, optional pixel grid, palettes (green, amber, monochrome), optional scanlines (CSS overlay or canvas drawing, must not alter emulation), fullscreen button (where supported), framebuffer PNG export via canvas.toDataURL/toBlob download. Effects never alter emulation state.\\n\\nINPUT: Keypad mapping shown with virtual and physical labels: 1 2 3 C -> 1 2 3 4; 4 5 6 D -> Q W E R; 7 8 9 E -> A S D F; A 0 B F -> Z X C V. Use KeyboardEvent.code (Digit1, Digit2, Digit3, Digit4, KeyQ, KeyW, KeyE, KeyR, KeyA, KeyS, KeyD, KeyF, KeyZ, KeyX, KeyC, KeyV). Handle keydown/keyup, simultaneous keys, key repeat ignored. On-screen keypad with mouse and touch using pointer events with pointer capture and pointercancel handling. Combine sources correctly (a key is down if any source holds it). Clear all held keys on window blur. Do not intercept keys while focus is in input/textarea/select/contenteditable (typing in editable fields). preventDefault for mapped game keys only when not editing.\\n\\nCONTROLS: Run, Pause, Single Step, Reset, Load ROM (file input), Load Demo, drag-and-drop loading onto the page. Show filename, size, address range (0x200-0x...), status badge: PAUSED / RUNNING / WAITING (FX0A) / BREAKPOINT / FAULT. Reject empty files and files over 3584 bytes with a visible message, without replacing the current program. Start with the demo loaded and PAUSED. Reset restores the original current ROM (the one loaded last, not the demo unless it was the current) and complete machine state (memory, registers, timers, stack, display, keys, counters) while preserving UI preferences and valid breakpoints.\\n\\nCPU/STACK PANEL: Show V0-VF in hex and decimal, with VF visually distinct. Show I, PC, SP/stack depth, DT, ST, instruction count, next opcode with mnemonic. Highlight registers that changed after the last step. Editing registers and timers while paused, with validation (0-255 for V and timers, 0-0xFFFF for I, even/valid range for PC within memory). Show all 16 stack entries with active slots, top marker, return addresses; clicking a return address navigates the disassembly to it.\\n\\nDISASSEMBLY: Live disassembly panel with address, raw bytes, mnemonic, operands, brief explanation. Mark PC as NEXT instruction and separately mark last executed instruction. Follow PC toggle, go-to-address input (validated), branch/call targets shown, breakpoint markers in a clickable gutter. Mark invalid instructions. Include a note: linear disassembly can interpret sprite data as code and does not recover original source. Reflect memory edits and self-modifying code immediately.\\n\\nMEMORY PANEL: Hex dump of all 4096 bytes, 16 bytes per row, with ASCII column, go-to-address, jump-to-PC and jump-to-I buttons, distinct markers for PC, I, font region, ROM region. Highlight memory writes from the latest step including unchanged-value writes. Validated byte editing while paused. Sprite preview: 8 pixels wide, height 1-15 selectable, starting from I or a selected address, showing corresponding byte values, safe end-of-memory handling.\\n\\nBREAKPOINTS AND TRACE: Add/remove address breakpoints from disassembly gutter and from a list panel. Execution stops BEFORE a breakpointed instruction executes (status BREAKPOINT). Resuming bypasses the current breakpoint once, then honors later visits. Single Step executes through a breakpoint without removing it. Trace ring buffer of the last 200 completed instructions: sequence number, previous PC, opcode/mnemonic, resulting PC, register changes, memory writes, stack-depth change. Clear and follow-latest controls.\\n\\nBUILT-IN DEMO: Embed an original CHIP-8 ROM as a byte array with annotated assembly comments in the source (address, opcode, mnemonic). The demo is an interactive sprite program that only executes via CHIP-8 instructions (JavaScript must not animate it). Features: movement with keys 2/4/6/8 (up/left/right/down) with visible physical bindings (W/A/D/S... use the keypad mapping shown in UI); XOR erase/redraw; DT-paced movement (timer-based delay between moves); a real CALL/RET drawing subroutine; a key-triggered ST beep; an FX0A start interaction (wait for a key to begin); movement near edges demonstrating clipping/wrapping. Hand-assemble the bytes carefully so the program is correct, with a font sprite or small custom sprite at a known address in ROM data.\\n\\nROBUSTNESS: Faults (unknown opcode, invalid fetch, out-of-bounds memory access, stack overflow/underflow, invalid FX33/FX55/FX65 ranges, unsupported SYS 0NNN) pause execution, silence audio, preserve inspectable state with faulting address, opcode and explanation. Validate full transfer ranges before writing; never silently wrap invalid addresses.\\n\\nSELF-TESTS: 'Run Self-tests' button runs isolated instances of the real core (not the user's session) and shows a table of test name, expected, observed, PASS/FAIL, plus pass/fail totals. Cover: 8XY4/8XY5/8XY7 carry and borrow including equality, X=F, Y=F, X=Y cases; 8XY6/8XYE shifted-out bits with VX source and VY source option; skips 3XNN/4XNN/5XY0/9XY0/EX9E/EXA1; 2NNN/00EE CALL/RET; stack overflow/underflow fault; BCD FX33; FX55/FX65 inclusive transfer and I preservation; FX1E no VF change; FX29; BNNN; CXNN with deterministic seeded PRNG; DXYN collision, clipping, N=0; FX0A wait and fresh-key semantics; timer ticks; invalid opcodes (5XY1, 9XY1, unknown); reset after self-modification; 7XNN not touching VF; logic not resetting VF by default.\\n\\nVERIFY: Keep code clean and commented. Use functions with camelCase naming (class and method camelCase per project convention). No placeholders, no TODO markers, no omitted code. Output the complete HTML file.\",\"model\":\"claude-haiku-5-5\",\"provider\":\"anthropic\",\"tokens_in\":6179,\"tokens_out\":116248,\"cost_usd\":0.0587419,\"tool_name\":\"advance_code_editing\"}",
+      "tokensIn": 6179,
+      "tokensOut": 116248,
+      "createdAt": 1795297197157
+    },
+    {
+      "role": "ASSISTANT",
+      "contentPreview": "I created `chip8_anthropic-claude-haiku-5-5_01.html` in the project directory (about 70.9 KB, single file, inline CSS and JavaScript, no external resources). The file is written, but I did not open it in a browser or run its self-tests, so runtime behaviour is unverified.\n\nThe file is intended to contain:\n- **Core:** a `Chip8` class with 4 KB memory, the font at 0x050, ROM loading at 0x200, V0-VF, I, PC, a 16-entry stack, DT/ST timers, a 64x32 framebuffer and 16-key input. It decodes and executes the 34 base opcodes, reports SYS 0NNN as unsupported, and treats 5XY1 and 9XY1 as invalid.\n- **Compatibility:** the default settings from the spec (shift uses VX, FX55/65 preserve I, BNNN uses NNN+V0, logic ops do not reset VF, sprite modulo start with clipping, FX1E wraps, FX29 uses 0x050 + 5*(VX & 0xF), FX0A waits for a fresh keydown, DXY0 sets VF=0), with the paused-only toggles.\n- **Timing and UI:** an accumulator-based CPU clock at 60-6000 Hz (default 600), 60 Hz timers, a Web Audio beep, auto-pause on hidden documents, the register, disassembly, memory, stack, breakpoint and trace panels, keypad, palettes, scaling, PNG export and drag-and-drop loading.\n- **Demo:** an embedded ROM that runs entirely through CHIP-8 instructions.\n- **Self-tests:** a \"Run Self-tests\" button that uses isolated core instances.\n\nNot verified: offline startup via file://, demo execution, key release, pause/step, breakpoint resume, reset repeatability and the self-test results. These need a browser run before anyone relies on them. The file is ready for that check.",
+      "toolCalls": [],
+      "toolCallDetails": [],
+      "tokensIn": 24315,
+      "tokensOut": 1076,
+      "createdAt": 1795297208749
+    }
+  ],
+  "apiLogs": [
+    {
+      "provider": "anthropic",
+      "model": "claude-haiku-5-5",
+      "requestSource": "NextSpeakerJudge",
+      "httpStatus": 200,
+      "inputTokens": 3102,
+      "outputTokens": 593,
+      "costUsd": 6.067000000000001E-4,
+      "latencyMs": 3428
+    },
+    {
+      "provider": "anthropic",
+      "model": "claude-haiku-5-5",
+      "requestSource": "AgentTurnLoop:AGENT",
+      "httpStatus": 200,
+      "inputTokens": 24315,
+      "outputTokens": 1076,
+      "costUsd": 0.0033814249999999995,
+      "latencyMs": 5713
+    },
+    {
+      "provider": "anthropic",
+      "model": "claude-haiku-5-5",
+      "requestSource": "AdvCodeEditor",
+      "httpStatus": 200,
+      "inputTokens": 6179,
+      "outputTokens": 116248,
+      "costUsd": 0.0587419,
+      "latencyMs": 442346
+    },
+    {
+      "provider": "anthropic",
+      "model": "claude-haiku-5-5",
+      "requestSource": "AgentTurnLoop:AGENT",
+      "httpStatus": 200,
+      "inputTokens": 22011,
+      "outputTokens": 4808,
+      "costUsd": 0.0031221699999999996,
+      "latencyMs": 20375
+    },
+    {
+      "provider": "anthropic",
+      "model": "claude-haiku-5-5",
+      "requestSource": "AgentTurnLoop:AGENT",
+      "httpStatus": 200,
+      "inputTokens": 23046,
+      "outputTokens": 32684,
+      "costUsd": 0.019084874999999998,
+      "latencyMs": 152911
+    }
+  ],
+  "errors": [],
+  "warnings": [],
+  "agents": []
+}

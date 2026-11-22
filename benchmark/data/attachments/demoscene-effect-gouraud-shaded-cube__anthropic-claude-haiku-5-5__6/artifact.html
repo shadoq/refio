@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gouraud Shaded Rotating Cube</title>
+<style>
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: #0b0d12;
+  overflow: hidden;
+}
+body {
+  position: relative;
+}
+canvas {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+#hud {
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  color: #cfd8e6;
+  font: 13px/1.4 monospace;
+  background: rgba(0, 0, 0, 0.35);
+  padding: 6px 10px;
+  border-radius: 4px;
+  white-space: pre-line;
+  pointer-events: none;
+  user-select: none;
+}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud"></div>
+<script>
+(function () {
+  "use strict";
+
+  // ---------- Vector helpers (plain arrays [x, y, z]) ----------
+  function vAdd(a, b) { return [a[0] + b[0], a[1] + b[1], a[2] + b[2]]; }
+  function vSub(a, b) { return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; }
+  function vScale(a, s) { return [a[0] * s, a[1] * s, a[2] * s]; }
+  function vDot(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+  function vCross(a, b) {
+    return [
+      a[1] * b[2] - a[2] * b[1],
+      a[2] * b[0] - a[0] * b[2],
+      a[0] * b[1] - a[1] * b[0]
+    ];
+  }
+  function vLength(a) { return Math.sqrt(vDot(a, a)); }
+  function vNormalize(a) {
+    const len = vLength(a);
+    if (len < 1e-12) return [0, 0, 0];
+    return vScale(a, 1 / len);
+  }
+
+  // ---------- Matrix helpers (3x3 arrays, row-major) ----------
+  function rotX(a) {
+    const c = Math.cos(a), s = Math.sin(a);
+    return [[1, 0, 0], [0, c, -s], [0, s, c]];
+  }
+  function rotY(a) {
+    const c = Math.cos(a), s = Math.sin(a);
+    return [[c, 0, s], [0, 1, 0], [-s, 0, c]];
+  }
+  function rotZ(a) {
+    const c = Math.cos(a), s = Math.sin(a);
+    return [[c, -s, 0], [s, c, 0], [0, 0, 1]];
+  }
+  function mulMatMat(a, b) {
+    const out = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+    for (let i = 0; i < 3; i++) {
+      for (let j = 0; j < 3; j++) {
+        out[i][j] = a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j];
+      }
+    }
+    return out;
+  }
+  function mulMatVec(m, v) {
+    return [
+      m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
+      m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
+      m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2]
+    ];
+  }
+
+  // ---------- Geometry ----------
+  const CAMERA_DIST = 5;
+  const FACE_COLORS = [
+    [230, 80, 80],
+    [80, 200, 110],
+    [80, 130, 240],
+    [230, 200, 70],
+    [200, 90, 220],
+    [70, 210, 210]
+  ];
+  // Each face: outward normal n, tangents u and v with cross(u, v) = n,
+  // so corners taken in order (-,-), (+,-), (+,+), (-,+) are CCW from outside.
+  const FACE_DEFS = [
+    { n: [1, 0, 0], u: [0, 0, -1], v: [0, 1, 0] },
+    { n: [-1, 0, 0], u: [0, 0, 1], v: [0, 1, 0] },
+    { n: [0, 1, 0], u: [1, 0, 0], v: [0, 0, -1] },
+    { n: [0, -1, 0], u: [1, 0, 0], v: [0, 0, 1] },
+    { n: [0, 0, 1], u: [1, 0, 0], v: [0, 1, 0] },
+    { n: [0, 0, -1], u: [-1, 0, 0], v: [0, 1, 0] }
+  ];
+  const CORNERS = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
+
+  const localVerts = [];   // 24 unique vertices
+  const vertFace = [];     // face index for each vertex
+  const faceNormals = [];  // local outward normal per face
+  const triIndices = [];   // 12 triangles as vertex index triples
+
+  FACE_DEFS.forEach(function (def, fi) {
+    faceNormals.push(def.n);
+    CORNERS.forEach(function (c) {
+      const p = vAdd(def.n, vAdd(vScale(def.u, c[0]), vScale(def.v, c[1])));
+      localVerts.push(p);
+      vertFace.push(fi);
+    });
+    const b = fi * 4;
+    triIndices.push([b, b + 1, b + 2]);
+    triIndices.push([b, b + 2, b + 3]);
+  });
+
+  // ---------- State ----------
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d");
+  const hud = document.getElementById("hud");
+
+  const BG_PACKED = (0xff << 24) | (0x12 << 16) | (0x0d << 8) | 0x0b; // #0b0d12, little-endian ABGR
+
+  let W = 0, H = 0;
+  let imageData = null;
+  let buf = null;
+  let cxScreen = 0, cyScreen = 0, focal = 0;
+
+  let angleX = 0, angleY = 0, angleZ = 0;
+  let lightTime = 0;
+  let paused = false;
+  let wireframe = false;
+
+  let lastTime = 0;
+  let frameCount = 0;
+  let windowStart = 0;
+  let fps = 0;
+
+  // ---------- Rasterizer ----------
+  // Edge function coefficients: E(p) = A*px + B*py + C, normalized by inv area.
+  function edgeCoeffs(p, q, inv) {
+    return {
+      A: -(q.y - p.y) * inv,
+      B: (q.x - p.x) * inv,
+      C: (-(q.x - p.x) * p.y + (q.y - p.y) * p.x) * inv
+    };
+  }
+
+  function rasterizeTriangle(v0, v1, v2) {
+    const area = (v2.x - v1.x) * (v0.y - v1.y) - (v2.y - v1.y) * (v0.x - v1.x);
+    if (Math.abs(area) < 1e-9) return;
+    const inv = 1 / area;
+
+    const e0 = edgeCoeffs(v1, v2, inv); // weight for v0
+    const e1 = edgeCoeffs(v2, v0, inv); // weight for v1
+    const e2 = edgeCoeffs(v0, v1, inv); // weight for v2
+
+    const minX = Math.max(0, Math.floor(Math.min(v0.x, v1.x, v2.x)));
+    const maxX = Math.min(W - 1, Math.ceil(Math.max(v0.x, v1.x, v2.x)));
+    const minY = Math.max(0, Math.floor(Math.min(v0.y, v1.y, v2.y)));
+    const maxY = Math.min(H - 1, Math.ceil(Math.max(v0.y, v1.y, v2.y)));
+    if (minX > maxX || minY > maxY) return;
+
+    for (let y = minY; y <= maxY; y++) {
+      const py = y + 0.5;
+      let w0 = e0.A * (minX + 0.5) + e0.B * py + e0.C;
+      let w1 = e1.A * (minX + 0.5) + e1.B * py + e1.C;
+      let w2 = e2.A * (minX + 0.5) + e2.B * py + e2.C;
+      const row = y * W;
+
+      for (let x = minX; x <= maxX; x++) {
+        if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
+          const r = Math.min(255, w0 * v0.r + w1 * v1.r + w2 * v2.r) | 0;
+          const g = Math.min(255, w0 * v0.g + w1 * v1.g + w2 * v2.g) | 0;
+          const b = Math.min(255, w0 * v0.b + w1 * v1.b + w2 * v2.b) | 0;
+          buf[row + x] = (0xff << 24) | (b << 16) | (g << 8) | r;
+        }
+        w0 += e0.A;
+        w1 += e1.A;
+        w2 += e2.A;
+      }
+    }
+  }
+
+  // ---------- Light ----------
+  function lightPosition(t) {
+    return [3 * Math.cos(t), 2.2 * Math.sin(0.7 * t), 3 * Math.sin(t)];
+  }
+
+  function project(vv) {
+    const z = Math.max(vv[2], 0.1);
+    return {
+      x: cxScreen + focal * vv[0] / z,
+      y: cyScreen - focal * vv[1] / z
+    };
+  }
+
+  // ---------- Frame rendering ----------
+  function renderScene() {
+    buf.fill(BG_PACKED);
+
+    // Rotation: R = rotY * rotX * rotZ
+    const R = mulMatMat(mulMatMat(rotY(angleY), rotX(angleX)), rotZ(angleZ));
+
+    // World-space vertices and face normals
+    const worldV = localVerts.map(function (v) { return mulMatVec(R, v); });
+    const worldN = faceNormals.map(function (n) { return mulMatVec(R, n); });
+
+    // Camera at origin; cube pushed out to view-space z = worldZ + D
+    const viewV = worldV.map(function (v) { return [v[0], v[1], v[2] + CAMERA_DIST]; });
+
+    // Light in world space
+    const L = lightPosition(lightTime);
+
+    // Per-vertex Lambert + ambient lighting, with mild distance attenuation
+    const verts = worldV.map(function (wp, i) {
+      const fi = vertFace[i];
+      const N = worldN[fi];
+      const toL = vSub(L, wp);
+      const d = vLength(toL);
+      const Ld = vScale(toL, 1 / Math.max(d, 1e-6));
+      const diff = Math.max(0, vDot(N, Ld));
+      const att = 1 / (1 + 0.06 * d * d);
+      const inten = Math.min(1, Math.max(0, 0.15 + 0.85 * diff * att * 1.4));
+      const col = FACE_COLORS[fi];
+      const s = project(viewV[i]);
+      return {
+        x: s.x,
+        y: s.y,
+        r: col[0] * inten,
+        g: col[1] * inten,
+        b: col[2] * inten
+      };
+    });
+
+    // Build visible triangles (view-space backface culling)
+    const visible = [];
+    for (let t = 0; t < triIndices.length; t++) {
+      const idx = triIndices[t];
+      const a = viewV[idx[0]], b = viewV[idx[1]], c = viewV[idx[2]];
+      const nrm = vCross(vSub(b, a), vSub(c, a));
+      // Camera at origin: facing camera when dot(normal, -a) > 0
+      if (vDot(nrm, a) >= 0) continue;
+      visible.push([verts[idx[0]], verts[idx[1]], verts[idx[2]]]);
+    }
+
+    // Gouraud-shaded fill
+    if (!wireframe) {
+      for (let i = 0; i < visible.length; i++) {
+        const tri = visible[i];
+        rasterizeTriangle(tri[0], tri[1], tri[2]);
+      }
+    }
+
+    ctx.putImageData(imageData, 0, 0);
+
+    // Wireframe overlay
+    if (wireframe) {
+      ctx.strokeStyle = "#e8f0ff";
+      ctx.lineWidth = 1;
+      for (let i = 0; i < visible.length; i++) {
+        const tri = visible[i];
+        ctx.beginPath();
+        ctx.moveTo(tri[0].x, tri[0].y);
+        ctx.lineTo(tri[1].x, tri[1].y);
+        ctx.lineTo(tri[2].x, tri[2].y);
+        ctx.closePath();
+        ctx.stroke();
+      }
+    }
+
+    // Light marker
+    const lv = [L[0], L[1], L[2] + CAMERA_DIST];
+    if (lv[2] > 0.1) {
+      const lp = project(lv);
+      const glow = ctx.createRadialGradient(lp.x, lp.y, 0, lp.x, lp.y, 30);
+      glow.addColorStop(0, "rgba(255, 255, 230, 1)");
+      glow.addColorStop(0.3, "rgba(255, 250, 200, 0.6)");
+      glow.addColorStop(1, "rgba(255, 250, 200, 0)");
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(lp.x, lp.y, 30, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = "#ffffff";
+      ctx.beginPath();
+      ctx.arc(lp.x, lp.y, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // ---------- HUD ----------
+  function updateHud() {
+    let text = "FPS: " + fps + "\n";
+    text += "Wireframe: " + (wireframe ? "on" : "off") + "\n";
+    if (paused) text += "PAUSED\n";
+    text += "W: wireframe | P: pause";
+    hud.textContent = text;
+  }
+
+  // ---------- Resize ----------
+  function resize() {
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+    imageData = ctx.createImageData(W, H);
+    buf = new Uint32Array(imageData.data.buffer);
+    cxScreen = W / 2;
+    cyScreen = H / 2;
+    focal = Math.min(W, H) * 0.45;
+  }
+
+  // ---------- Main loop ----------
+  function frame(now) {
+    let dt = (now - lastTime) / 1000;
+    if (dt < 0) dt = 0;
+    if (dt > 0.05) dt = 0.05;
+    lastTime = now;
+
+    if (!paused) {
+      angleX += 0.7 * dt;
+      angleY += 1.0 * dt;
+      angleZ += 0.4 * dt;
+      lightTime += dt;
+    }
+
+    renderScene();
+
+    frameCount++;
+    const elapsed = now - windowStart;
+    if (elapsed >= 500) {
+      fps = Math.round(frameCount * 1000 / elapsed);
+      frameCount = 0;
+      windowStart = now;
+      updateHud();
+    }
+
+    requestAnimationFrame(frame);
+  }
+
+  // ---------- Input ----------
+  window.addEventListener("keydown", function (e) {
+    if (e.repeat) return;
+    const key = (e.key || "").toLowerCase();
+    if (key === "w") {
+      wireframe = !wireframe;
+      updateHud();
+    } else if (key === "p") {
+      paused = !paused;
+      updateHud();
+    }
+  });
+
+  window.addEventListener("resize", function () {
+    resize();
+  });
+
+  // ---------- Init ----------
+  resize();
+  updateHud();
+  lastTime = performance.now();
+  windowStart = lastTime;
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

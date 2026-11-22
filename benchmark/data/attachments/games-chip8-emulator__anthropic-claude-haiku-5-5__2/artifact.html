@@ -1,0 +1,1526 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CHIP-8 Workbench</title>
+<style>
+:root{--bg:#121417;--panel:#1b1f24;--panel2:#23282f;--line:#2e343c;--txt:#d6dde5;--mut:#8b96a3;--cy:#4fd1c5;--am:#f6ad55;--bad:#f87171;--ok:#68d391;
+font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font-size:14px}
+code,.mono,table,input,select,textarea{font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace}
+header.hdr{display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid var(--line);background:#0f1215}
+header h1{margin:0;font-size:20px;color:var(--cy);letter-spacing:.02em}
+.sub{margin:2px 0 0;color:var(--mut);font-size:12px}
+.tag{color:var(--am)}
+button{background:var(--panel2);color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:5px 10px;cursor:pointer;font:inherit}
+button:hover:not(:disabled){border-color:var(--cy)}
+button.primary{border-color:var(--cy);color:var(--cy)}
+button:focus-visible,input:focus-visible,select:focus-visible,label:focus-visible{outline:2px solid var(--cy);outline-offset:2px}
+button:disabled,input:disabled,select:disabled{opacity:.45;cursor:not-allowed}
+input,select{background:#0e1114;color:var(--txt);border:1px solid var(--line);border-radius:4px;padding:3px 6px;font-size:13px}
+input[type=range]{padding:0}
+label{display:inline-flex;align-items:center;gap:6px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;min-width:0}
+.panel h2{margin:0 0 10px;font-size:13px;color:var(--cy);text-transform:uppercase;letter-spacing:.06em}
+.panel h3{margin:8px 0 6px;font-size:13px;color:var(--am)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;padding:12px}
+.wide{grid-column:1/-1}
+.bar{margin:12px 12px 0;display:flex;flex-wrap:wrap;gap:14px;align-items:center;justify-content:space-between}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+.wrap{flex-wrap:wrap}
+.col{display:flex;flex-direction:column;gap:8px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.scroll{overflow:auto;max-height:320px;min-width:0}
+.tall{max-height:360px}
+.note{color:var(--mut);font-size:12px;margin:6px 0}
+.mut{color:var(--mut)}
+table{border-collapse:collapse;width:100%}
+th,td{padding:3px 6px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap;font-size:12.5px}
+th{color:var(--mut);font-weight:600;position:sticky;top:0;background:var(--panel)}
+.hexin{width:64px}
+.msg{min-height:20px;margin-top:8px;font-size:13px}
+.msg.err{color:var(--bad)}
+.msg.ok{color:var(--ok)}
+.badge{padding:4px 12px;border-radius:999px;font-weight:700;letter-spacing:.06em;font-size:12px}
+.b-PAUSED{background:#2e343c;color:var(--mut)}
+.b-RUNNING{background:rgba(79,209,197,.18);color:var(--cy)}
+.b-WAITING{background:rgba(246,173,85,.18);color:var(--am)}
+.b-BREAKPOINT{background:rgba(246,173,85,.32);color:#ffd08a}
+.b-FAULT{background:rgba(248,113,113,.24);color:var(--bad)}
+.fault{border:1px solid var(--bad);background:rgba(248,113,113,.1);padding:8px;border-radius:6px;margin-bottom:8px;font-size:13px}
+.romInfo{display:flex;gap:18px;flex-wrap:wrap}
+.lbl{color:var(--mut);font-size:12px;margin-right:4px}
+.transport{display:flex;gap:6px;flex-wrap:wrap}
+.speed{display:flex;gap:6px;align-items:center}
+.seg{display:inline-flex}
+.seg button{border-radius:0}
+.seg button:first-child{border-radius:6px 0 0 6px}
+.seg button:last-child{border-radius:0 6px 6px 0}
+.seg button.sel{border-color:var(--cy);color:var(--cy)}
+.screen-wrap{position:relative;background:#000;line-height:0;border:1px solid var(--line);display:inline-block;max-width:100%}
+#screen{display:block;width:512px;height:256px;image-rendering:pixelated;image-rendering:crisp-edges}
+.ov{position:absolute;inset:0;pointer-events:none;display:none}
+.ov.show{display:block}
+.grid-ov{background-image:linear-gradient(to right,rgba(0,0,0,.6) 1px,transparent 1px),linear-gradient(to bottom,rgba(0,0,0,.6) 1px,transparent 1px);background-size:calc(100% / 64) calc(100% / 32)}
+.scan-ov{background:repeating-linear-gradient(to bottom,rgba(0,0,0,.32) 0 1px,transparent 1px 3px)}
+.audio{margin-top:10px}
+.beep{display:inline-block;width:12px;height:12px;border-radius:50%;background:#2e343c;border:1px solid var(--line)}
+.beep.on{background:var(--am);border-color:var(--am);box-shadow:0 0 8px var(--am)}
+.kp{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.kp button{min-height:56px;font-size:18px;font-weight:700;display:flex;flex-direction:column;align-items:center;justify-content:center;user-select:none;-webkit-user-select:none;touch-action:none}
+.kp button small{font-size:11px;color:var(--mut);font-weight:400}
+.kp button.held{background:var(--cy);color:#06201e;border-color:var(--cy)}
+.kp button.held small{color:#06201e}
+.fields{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:8px}
+.fields label.changed{color:var(--am)}
+.regs tr.changed td{background:rgba(246,173,85,.22)}
+.regs td.vf,.regs tr.vfrow td{color:var(--am);font-weight:700}
+.regs tr.vfrow td:first-child{border-left:3px solid var(--am)}
+.stack tr.active td{color:var(--txt)}
+.stack tr:not(.active) td{color:#4b5563}
+.stack tr.top td{background:rgba(79,209,197,.15)}
+.linkbtn{background:none;border:none;color:var(--cy);padding:0;cursor:pointer;font:inherit}
+.linkbtn:disabled{color:#4b5563;cursor:default}
+.dis tr.next td{background:rgba(79,209,197,.16)}
+.dis tr.last td:first-child{box-shadow:inset 3px 0 var(--am)}
+.dis tr.invalid td{color:var(--bad)}
+.dis tr.unsup td{color:var(--am)}
+.exp{color:var(--mut);white-space:normal;min-width:200px}
+.tag{display:inline-block;padding:0 5px;border-radius:4px;font-size:10px;font-weight:700;margin-right:4px}
+.tag.next{background:var(--cy);color:#06201e}
+.tag.last{background:var(--am);color:#2a1a00}
+.tag.bad{background:var(--bad);color:#2a0000}
+.gut{display:inline-block;width:12px;height:12px;border-radius:50%;border:1px solid var(--mut);cursor:pointer;vertical-align:middle}
+.gut.on{background:var(--bad);border-color:var(--bad)}
+.dump{position:relative;font-size:12px;line-height:1.5;white-space:pre}
+.mrow{display:block}
+.ma{color:var(--mut);display:inline-block;width:44px}
+.mb{display:inline-block;padding:0 2px;margin:0 1px;border-radius:2px}
+.mb.f{color:#9fb8d8}
+.mb.r{color:#e2e8f0}
+.mb.pc{background:rgba(79,209,197,.35);color:#fff}
+.mb.i{background:rgba(246,173,85,.35);color:#fff}
+.mb.w{outline:1px solid var(--bad);outline-offset:-1px}
+.asc{color:var(--mut);margin-left:10px}
+.sprite{font-size:12px}
+.srow{display:flex;gap:8px;align-items:center;margin-bottom:4px;white-space:nowrap}
+.px span{display:inline-block;width:12px;height:12px;background:#0e1114;border:1px solid var(--line)}
+.px span.on{background:var(--cy)}
+.oor{color:var(--bad)}
+.bplist{list-style:none;padding:0;margin:0;max-height:180px;overflow:auto}
+.bplist li{display:flex;justify-content:space-between;align-items:center;padding:3px 0;border-bottom:1px solid var(--line)}
+.legend{display:inline-flex;gap:6px;align-items:center;color:var(--mut);font-size:12px;flex-wrap:wrap}
+.trace td{font-size:12px}
+.pass td:last-child{color:var(--ok);font-weight:700}
+.fail td:last-child{color:var(--bad);font-weight:700}
+.about p,.about li{font-size:13px;line-height:1.5}
+.about ul{padding-left:18px;margin:6px 0}
+@media (max-width:760px){
+  .grid{grid-template-columns:1fr;padding:8px}
+  .two{grid-template-columns:1fr}
+  .kp button{min-height:46px}
+  .bar{margin:8px}
+  .transport button{flex:1 1 auto}
+}
+</style>
+</head>
+<body>
+<header class="hdr">
+  <div>
+    <h1>CHIP-8 Workbench</h1>
+    <p class="sub">Model: <span class="tag">anthropic-claude-haiku-5-5</span> &middot; single self-contained file, offline</p>
+  </div>
+  <span id="badge" class="badge b-PAUSED">PAUSED</span>
+</header>
+
+<section class="panel bar" aria-label="Top bar">
+  <div class="romInfo">
+    <div><span class="lbl">ROM</span> <strong id="romName">&mdash;</strong></div>
+    <div><span class="lbl">Size</span> <span id="romSize">0</span> bytes</div>
+    <div><span class="lbl">Range</span> <span id="romRange" class="mono">&mdash;</span></div>
+  </div>
+  <div class="transport">
+    <button id="btnRun" class="primary">Run</button>
+    <button id="btnPause">Pause</button>
+    <button id="btnStep">Single Step</button>
+    <button id="btnReset">Reset</button>
+    <button id="btnLoad">Load ROM&hellip;</button>
+    <input type="file" id="fileRom" hidden>
+    <button id="btnDemo">Load Demo</button>
+  </div>
+  <div class="speed">
+    <label for="speed">Speed</label>
+    <input type="range" id="speed" min="60" max="6000" step="10" value="600">
+    <input type="number" id="speedNum" class="hexin" style="width:80px" min="60" max="6000" step="1" value="600">
+    <span class="mut">instr/s</span>
+  </div>
+  <div id="msg" class="msg" role="status" aria-live="polite" style="width:100%"></div>
+</section>
+
+<main class="grid">
+
+  <section class="panel display" aria-labelledby="h-display">
+    <h2 id="h-display">Display</h2>
+    <div class="row wrap">
+      <div class="seg" role="group" aria-label="Scale">
+        <button data-scale="1">1x</button><button data-scale="2">2x</button><button data-scale="4">4x</button><button data-scale="8">8x</button><button data-scale="fit">Fit</button>
+      </div>
+      <label>Palette <select id="palette">
+        <option value="green">Green</option><option value="amber">Amber</option><option value="mono">Monochrome</option>
+      </select></label>
+      <label><input type="checkbox" id="gridChk"> Pixel grid</label>
+      <label><input type="checkbox" id="scanChk"> Scanlines</label>
+      <button id="btnFull">Fullscreen</button>
+      <button id="btnPng">Export PNG</button>
+    </div>
+    <div class="screen-wrap" id="screenWrap">
+      <canvas id="screen" width="64" height="32" aria-label="CHIP-8 framebuffer"></canvas>
+      <div class="ov grid-ov" id="gridOv"></div>
+      <div class="ov scan-ov" id="scanOv"></div>
+    </div>
+    <div class="row wrap audio">
+      <span id="beepDot" class="beep" title="Beeping: running and ST&gt;0"></span>
+      <span>Sound</span>
+      <label><input type="checkbox" id="muteChk"> Mute</label>
+      <label>Volume <input type="range" id="volRange" min="0" max="100" value="50"></label>
+      <span class="note">Audio is created only after the Run button is clicked.</span>
+    </div>
+  </section>
+
+  <section class="panel keypad" aria-labelledby="h-keypad">
+    <h2 id="h-keypad">Keypad</h2>
+    <div id="keypad" class="kp"></div>
+    <p class="note">Keyboard (physical keys): 1 2 3 4 / Q W E R / A S D F / Z X C V. Mouse and touch also work on the keypad buttons.</p>
+  </section>
+
+  <section class="panel" aria-labelledby="h-cpu">
+    <h2 id="h-cpu">CPU &amp; Stack</h2>
+    <div id="faultBox" class="fault" hidden></div>
+    <div class="fields">
+      <label>I <input id="f-I" class="hexin" maxlength="3"></label>
+      <label>PC <input id="f-PC" class="hexin" maxlength="3"></label>
+      <label>DT <input id="f-DT" class="hexin" maxlength="2"></label>
+      <label>ST <input id="f-ST" class="hexin" maxlength="2"></label>
+    </div>
+    <div class="fields mut">
+      <span>SP <b id="spDepth" class="mono" style="color:var(--txt)">0</b></span>
+      <span>Instructions <b id="icount" class="mono" style="color:var(--txt)">0</b></span>
+    </div>
+    <p class="note">Next: <code id="nextOp"></code></p>
+    <div class="two">
+      <div class="scroll">
+        <table class="regs">
+          <thead><tr><th>Reg</th><th>Hex (edit)</th><th>Dec</th></tr></thead>
+          <tbody id="regBody"></tbody>
+        </table>
+      </div>
+      <div class="scroll">
+        <table class="stack">
+          <thead><tr><th>#</th><th>Return address</th><th>Marker</th></tr></thead>
+          <tbody id="stackBody"></tbody>
+        </table>
+      </div>
+    </div>
+    <p class="note">Register and PC/I/DT/ST edits are allowed only while paused. Valid edits clear a fault.</p>
+  </section>
+
+  <section class="panel" aria-labelledby="h-compat">
+    <h2 id="h-compat">Compatibility</h2>
+    <div class="col">
+      <label>Shift source <select id="optShift">
+        <option value="VX">VX (default)</option>
+        <option value="VY">VY</option>
+      </select></label>
+      <label>FX55/FX65 I <select id="optLS">
+        <option value="preserve">Preserve I (default)</option>
+        <option value="increment">Increment I by X+1</option>
+      </select></label>
+      <label><input type="checkbox" id="optLogic"> 8XY1/8XY2/8XY3 reset VF to 0</label>
+      <label>Sprites <select id="optWrap">
+        <option value="clip">Clip at edges (default)</option>
+        <option value="wrap">Wrap at edges</option>
+      </select></label>
+    </div>
+    <p id="compatSummary" class="note"></p>
+  </section>
+
+  <section class="panel wide" aria-labelledby="h-dis">
+    <h2 id="h-dis">Disassembly</h2>
+    <div class="row wrap">
+      <label><input type="checkbox" id="followPc" checked> Follow PC</label>
+      <label>Go to <input id="disGo" class="hexin" maxlength="3" placeholder="200"></label>
+      <button id="disGoBtn">Go</button>
+      <span class="legend">
+        <span class="tag next">NEXT</span><span class="tag last">LAST</span><span class="tag bad">INVALID</span>
+        <span class="gut on"></span> breakpoint (click gutter to toggle)
+      </span>
+    </div>
+    <div class="scroll tall">
+      <table class="dis">
+        <thead><tr><th>BP</th><th>Addr</th><th>Bytes</th><th>Mnemonic</th><th>Operands</th><th>Marks</th><th>Explanation</th></tr></thead>
+        <tbody id="disBody"></tbody>
+      </table>
+    </div>
+    <p class="note">Linear disassembly can interpret sprite data or padding as code and does not recover original source. Bytes shown are the raw pair at each listed address, including odd addresses.</p>
+  </section>
+
+  <section class="panel wide" aria-labelledby="h-mem">
+    <h2 id="h-mem">Memory</h2>
+    <div class="row wrap">
+      <label>Go to <input id="memGo" class="hexin" maxlength="3"></label>
+      <button id="memGoBtn">Go</button>
+      <button id="memPc">Jump to PC</button>
+      <button id="memI">Jump to I</button>
+      <span class="legend">
+        <span class="mb pc">PC</span><span class="mb i">I</span><span class="mb f">font 050-09F</span><span class="mb r">ROM 200+</span><span class="mb w">written in last step</span>
+      </span>
+    </div>
+    <div class="scroll tall dump" id="memDump"></div>
+    <div class="two">
+      <div>
+        <h3>Byte editor (paused only)</h3>
+        <div class="row wrap">
+          <label>Addr <input id="bAddr" class="hexin" maxlength="3"></label>
+          <label>Value <input id="bVal" class="hexin" maxlength="2"></label>
+          <button id="bWrite">Write byte</button>
+        </div>
+      </div>
+      <div>
+        <h3>Sprite preview</h3>
+        <div class="row wrap">
+          <label>Addr <input id="spAddr" class="hexin" maxlength="3"></label>
+          <button id="spI">Use I</button>
+          <button id="spPc">Use PC</button>
+          <label>Height <select id="spH"></select></label>
+        </div>
+        <div id="spOut" class="scroll sprite"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" aria-labelledby="h-bp">
+    <h2 id="h-bp">Breakpoints</h2>
+    <div class="row">
+      <label>Address <input id="bpAddr" class="hexin" maxlength="3"></label>
+      <button id="bpAdd">Add</button>
+    </div>
+    <ul id="bpList" class="bplist"></ul>
+    <p class="note">Execution stops before a breakpoint address. Resuming skips the breakpoint at the current PC once. Single Step runs through a breakpoint without removing it.</p>
+  </section>
+
+  <section class="panel wide" aria-labelledby="h-trace">
+    <h2 id="h-trace">Trace (last 200 completed instructions)</h2>
+    <div class="row">
+      <button id="trClear">Clear</button>
+      <label><input type="checkbox" id="trFollow" checked> Follow latest</label>
+    </div>
+    <div class="scroll tall">
+      <table class="trace">
+        <thead><tr><th>#</th><th>Prev PC</th><th>Opcode</th><th>Mnemonic</th><th>Next PC</th><th>Register changes</th><th>Memory writes</th><th>SP</th></tr></thead>
+        <tbody id="trBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel" aria-labelledby="h-tests">
+    <h2 id="h-tests">Self-tests</h2>
+    <div class="row">
+      <button id="btnTests" class="primary">Run Self-tests</button>
+      <span id="testSummary" class="mut"></span>
+    </div>
+    <div class="scroll tall">
+      <table>
+        <thead><tr><th>Test</th><th>Expected</th><th>Observed</th><th>Result</th></tr></thead>
+        <tbody id="testBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel about wide" aria-labelledby="h-about">
+    <h2 id="h-about">About / Notes</h2>
+    <p>The emulator core (Chip8Core) is separate from the UI. The core implements the 34 base CHIP-8 opcodes with exact-pattern decoding, the default compatibility settings above, validated memory bounds, stack fault checks, FX0A fresh-keydown waiting, and a 200-entry trace. Legacy SYS 0NNN is decoded and reported as unsupported; it is not emulated.</p>
+    <p><strong>Verification status:</strong> The code was written without being executed in a browser in this session. The built-in self-tests exercise the core in isolated instances and report expected vs observed results; run them to check behavior in your browser. Treat any test that fails as a real finding.</p>
+    <p><strong>Built-in demo:</strong> loads at 0x200 (76 bytes), starts paused. Press any key to start (FX0A). Move the sprite with the keypad keys 2 (up), 8 (down), 4 (left), 6 (right), which are physical 2, S, Q and E on the keypad labels. Hold key 0 (physical X) to beep via ST. Movement is paced by the delay timer. The sprite is drawn by a CALL/RET subroutine at 0x240 and wraps/clips at the screen edges. All behavior comes from CHIP-8 instructions; the JavaScript only loads bytes and renders state.</p>
+    <p><strong>Notes:</strong></p>
+    <ul>
+      <li>Fault conditions (unknown or invalid opcode, invalid fetch, out-of-bounds memory access, stack overflow/underflow, unsupported SYS) pause execution, silence audio, and keep the faulting PC, opcode and explanation.</li>
+      <li>Editing registers or PC clears a fault so you can continue from modified state; Reset always restores the loaded ROM and a clean machine.</li>
+      <li>Keypad labels are authoritative: the 1 2 3 C row uses physical 1 2 3 4, so keypad key 2 is physical 2.</li>
+    </ul>
+  </section>
+
+</main>
+
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const MEM_SIZE = 4096, PROG_START = 0x200, MAX_ROM = 3584, FONT_START = 0x050;
+const MAX_STEPS_FRAME = 2000, TRACE_MAX = 200;
+
+const FONT = [
+  0xF0,0x90,0x90,0x90,0xF0, 0x20,0x60,0x20,0x20,0x70, 0xF0,0x10,0xF0,0x80,0xF0, 0xF0,0x10,0xF0,0x10,0xF0,
+  0x90,0x90,0xF0,0x10,0x10, 0xF0,0x80,0xF0,0x10,0xF0, 0xF0,0x80,0xF0,0x90,0xF0, 0xF0,0x10,0x20,0x40,0x40,
+  0xF0,0x90,0xF0,0x90,0xF0, 0xF0,0x90,0xF0,0x10,0xF0, 0xF0,0x90,0xF0,0x90,0x90, 0xE0,0x90,0xE0,0x90,0xE0,
+  0xF0,0x80,0x80,0x80,0xF0, 0xE0,0x90,0x90,0x90,0xE0, 0xF0,0x80,0xF0,0x80,0xF0, 0xF0,0x80,0xF0,0x80,0x80
+];
+
+const KEYMAP = {Digit1:0x1,Digit2:0x2,Digit3:0x3,Digit4:0xC,KeyQ:0x4,KeyW:0x5,KeyE:0x6,KeyR:0xD,
+  KeyA:0x7,KeyS:0x8,KeyD:0x9,KeyF:0xE,KeyZ:0xA,KeyX:0x0,KeyC:0xB,KeyV:0xF};
+const KEY_LAYOUT = [[0x1,0x2,0x3,0xC],[0x4,0x5,0x6,0xD],[0x7,0x8,0x9,0xE],[0xA,0x0,0xB,0xF]];
+const KEY_PHYS = {0x1:'1',0x2:'2',0x3:'3',0xC:'4',0x4:'Q',0x5:'W',0x6:'E',0xD:'R',
+  0x7:'A',0x8:'S',0x9:'D',0xE:'F',0xA:'Z',0x0:'X',0xB:'C',0xF:'V'};
+
+const DEMO_ROM = Uint8Array.from([
+  0x60,0x20, // 200 LD V0,0x20     x = 32
+  0x61,0x10, // 202 LD V1,0x10     y = 16
+  0xF5,0x0A, // 204 LD V5,K        wait for a fresh keydown (any key) to start
+  0x22,0x40, // 206 CALL 0x240     initial draw
+  0x6A,0x06, // 208 LD VA,6        pacing: 6 timer ticks
+  0xFA,0x15, // 20A LD DT,VA
+  0xFB,0x07, // 20C LD VB,DT       pace loop: read delay timer
+  0x3B,0x00, // 20E SE VB,0        skip when DT==0
+  0x12,0x0C, // 210 JP 0x20C       keep waiting
+  0x22,0x40, // 212 CALL 0x240     erase (XOR same pattern at same place)
+  0x66,0x02, // 214 LD V6,2        keypad 2 (physical 2) = up
+  0xE6,0xA1, // 216 SKNP V6        skip next if not pressed
+  0x71,0xFF, // 218 ADD V1,-1      move up
+  0x66,0x08, // 21A LD V6,8        keypad 8 (physical S) = down
+  0xE6,0xA1, // 21C SKNP V6
+  0x71,0x01, // 21E ADD V1,1       move down
+  0x66,0x04, // 220 LD V6,4        keypad 4 (physical Q) = left
+  0xE6,0xA1, // 222 SKNP V6
+  0x70,0xFF, // 224 ADD V0,-1      move left
+  0x66,0x06, // 226 LD V6,6        keypad 6 (physical E) = right
+  0xE6,0xA1, // 228 SKNP V6
+  0x70,0x01, // 22A ADD V0,1       move right
+  0x6E,0x10, // 22C LD VE,0x10     beep length
+  0x67,0x00, // 22E LD V7,0        keypad 0 (physical X) = beep
+  0xE7,0xA1, // 230 SKNP V7
+  0xFE,0x18, // 232 LD ST,VE       start beep when key 0 held
+  0x22,0x40, // 234 CALL 0x240     redraw at new position
+  0x12,0x08, // 236 JP 0x208       next frame
+  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00, // 238-23F padding (not executed)
+  0xA2,0x48, // 240 LD I,0x248     subroutine: point I at sprite
+  0xD0,0x14, // 242 DRW V0,V1,4    draw 4-row sprite at (VX,VY)
+  0x00,0xEE, // 244 RET
+  0x00,0x00, // 246 padding
+  0x3C,0x7E,0xFF,0x66 // 248 sprite data
+]);
+
+function hex(v, w = 2) { return (Number(v) >>> 0).toString(16).toUpperCase().padStart(w, '0'); }
+function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function parseHexField(s, max) {
+  const t = String(s).trim().replace(/^0x/i, '');
+  if (!/^[0-9a-fA-F]+$/.test(t)) return null;
+  const v = parseInt(t, 16);
+  return v <= max ? v : null;
+}
+
+/* ---------- Decoder (shared by execution and disassembly) ---------- */
+function decode(op) {
+  const x = (op >> 8) & 0xF, y = (op >> 4) & 0xF, n = op & 0xF, nn = op & 0xFF, nnn = op & 0xFFF;
+  const vx = 'V' + hex(x, 1), vy = 'V' + hex(y, 1);
+  const R = (mn, ops, ex, kind = 'exec', target = null) => ({
+    mnemonic: mn, operands: ops, explanation: ex, kind, valid: kind !== 'invalid', target,
+    text: ops ? `${mn} ${ops}` : mn
+  });
+  const INV = ex => R('???', '', ex, 'invalid');
+  switch (op >> 12) {
+    case 0x0:
+      if (op === 0x00E0) return R('CLS', '', 'Clear the 64x32 framebuffer');
+      if (op === 0x00EE) return R('RET', '', 'Return: pop address from stack into PC');
+      return R('SYS', '0x' + hex(nnn, 3), 'Legacy SYS 0NNN: UNSUPPORTED (native routine not emulated)', 'unsupported');
+    case 0x1: return R('JP', '0x' + hex(nnn, 3), `Jump to 0x${hex(nnn, 3)}`, 'exec', nnn);
+    case 0x2: return R('CALL', '0x' + hex(nnn, 3), `Push return address, call 0x${hex(nnn, 3)}`, 'exec', nnn);
+    case 0x3: return R('SE', `${vx}, 0x${hex(nn)}`, `Skip next if ${vx} == 0x${hex(nn)}`);
+    case 0x4: return R('SNE', `${vx}, 0x${hex(nn)}`, `Skip next if ${vx} != 0x${hex(nn)}`);
+    case 0x5:
+      return n === 0 ? R('SE', `${vx}, ${vy}`, `Skip next if ${vx} == ${vy}`)
+                     : INV('Invalid: 5XYN requires N=0 (5XY1 is not a CHIP-8 opcode)');
+    case 0x6: return R('LD', `${vx}, 0x${hex(nn)}`, `${vx} = 0x${hex(nn)}`);
+    case 0x7: return R('ADD', `${vx}, 0x${hex(nn)}`, `${vx} += 0x${hex(nn)} (no carry, VF unchanged)`);
+    case 0x8: {
+      const L = {
+        0x0: ['LD', `${vx}, ${vy}`, `${vx} = ${vy}`],
+        0x1: ['OR', `${vx}, ${vy}`, `${vx} |= ${vy} (VF reset only if option on)`],
+        0x2: ['AND', `${vx}, ${vy}`, `${vx} &= ${vy} (VF reset only if option on)`],
+        0x3: ['XOR', `${vx}, ${vy}`, `${vx} ^= ${vy} (VF reset only if option on)`],
+        0x4: ['ADD', `${vx}, ${vy}`, `${vx} += ${vy}; VF = carry (written last)`],
+        0x5: ['SUB', `${vx}, ${vy}`, `${vx} -= ${vy}; VF = 1 if VX >= VY (no borrow)`],
+        0x6: ['SHR', `${vx} {, ${vy}}`, 'Shift right; VF = bit shifted out (source per option)'],
+        0x7: ['SUBN', `${vx}, ${vy}`, `${vx} = ${vy} - ${vx}; VF = 1 if VY >= VX`],
+        0xE: ['SHL', `${vx} {, ${vy}}`, 'Shift left; VF = bit shifted out (source per option)']
+      }[n];
+      return L ? R(L[0], L[1], L[2]) : INV('Invalid 8XYN: N must be 0-7 or E');
+    }
+    case 0x9:
+      return n === 0 ? R('SNE', `${vx}, ${vy}`, `Skip next if ${vx} != ${vy}`)
+                     : INV('Invalid: 9XYN requires N=0 (9XY1 is not a CHIP-8 opcode)');
+    case 0xA: return R('LD', `I, 0x${hex(nnn, 3)}`, `I = 0x${hex(nnn, 3)}`);
+    case 0xB: return R('JP', `V0, 0x${hex(nnn, 3)}`, `Jump to 0x${hex(nnn, 3)} + V0`);
+    case 0xC: return R('RND', `${vx}, 0x${hex(nn)}`, `${vx} = random & 0x${hex(nn)}`);
+    case 0xD:
+      return R('DRW', `${vx}, ${vy}, ${n}`,
+        n === 0 ? 'N=0: draws nothing, VF = 0' : `Draw ${n}-row sprite at I; VF = collision`);
+    case 0xE:
+      if (nn === 0x9E) return R('SKP', vx, `Skip next if key ${vx} is pressed`);
+      if (nn === 0xA1) return R('SKNP', vx, `Skip next if key ${vx} is not pressed`);
+      return INV('Unknown EX-- opcode');
+    case 0xF: {
+      const F = {
+        0x07: ['LD', `${vx}, DT`, `${vx} = delay timer`],
+        0x0A: ['LD', `${vx}, K`, 'Wait for a fresh key press (WAITING; not completed until then)'],
+        0x15: ['LD', `DT, ${vx}`, `Delay timer = ${vx}`],
+        0x18: ['LD', `ST, ${vx}`, `Sound timer = ${vx}`],
+        0x1E: ['ADD', `I, ${vx}`, 'I += VX, wrapped to 16 bits; VF unchanged'],
+        0x29: ['LD', `F, ${vx}`, 'I = 0x050 + 5*(VX & 0xF)'],
+        0x33: ['LD', `B, ${vx}`, 'Store BCD of VX at I, I+1, I+2'],
+        0x55: ['LD', `[I], V0-${vx}`, 'Store V0..VX at I (I preserved by default)'],
+        0x65: ['LD', `V0-${vx}, [I]`, 'Load V0..VX from I (I preserved by default)']
+      }[nn];
+      return F ? R(F[0], F[1], F[2]) : INV('Unknown FX-- opcode');
+    }
+  }
+  return INV('Unknown opcode');
+}
+
+/* ---------- Core (pure, no DOM) ---------- */
+class Chip8Core {
+  constructor() {
+    this.opts = {shiftSource: 'VX', loadStoreIncrementI: false, logicResetVF: false, spriteWrap: false};
+    this.seed = 1; this.rs = 1;
+    this.V = new Uint8Array(16);
+    this.stack = new Uint16Array(16);
+    this.mem = new Uint8Array(MEM_SIZE);
+    this.fb = new Uint8Array(64 * 32);
+    this.keys = new Uint8Array(16);
+    this.rom = new Uint8Array(0);
+    this.I = 0; this.PC = PROG_START; this.sp = 0; this.dt = 0; this.st = 0;
+    this.count = 0; this.fault = null; this.waitingKey = false; this.keyEdges = 0;
+    this.trace = []; this.traceSeq = 0; this.last = null; this.writes = [];
+    this.reset();
+  }
+  setSeed(s) { this.seed = (s >>> 0) || 1; this.rs = this.seed; }
+  rng() {
+    let x = this.rs;
+    x ^= x << 13; x ^= x >>> 17; x ^= x << 5;
+    this.rs = x >>> 0;
+    return this.rs & 0xFF;
+  }
+  reset() {
+    this.mem.fill(0);
+    this.mem.set(FONT, FONT_START);
+    this.mem.set(this.rom, PROG_START);
+    this.V.fill(0); this.I = 0; this.PC = PROG_START;
+    this.stack.fill(0); this.sp = 0; this.dt = 0; this.st = 0;
+    this.fb.fill(0); this.count = 0; this.fault = null;
+    this.waitingKey = false; this.keyEdges = 0;
+    this.trace = []; this.traceSeq = 0; this.last = null; this.writes = [];
+    this.rs = this.seed;
+  }
+  loadRom(bytes) {
+    const b = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes);
+    if (b.length === 0) return {ok: false, error: 'Rejected: ROM is empty (0 bytes). Current program kept.'};
+    if (b.length > MAX_ROM) return {ok: false, error: `Rejected: ${b.length} bytes exceeds the ${MAX_ROM}-byte limit. Current program kept.`};
+    this.rom = Uint8Array.from(b);
+    this.reset();
+    return {ok: true};
+  }
+  setKey(k, down) {
+    if (k < 0 || k > 15) return;
+    if (down) {
+      if (!this.keys[k]) this.keyEdges |= (1 << k);
+      this.keys[k] = 1;
+    } else {
+      this.keys[k] = 0;
+    }
+  }
+  tickTimers() {
+    if (this.dt > 0) this.dt--;
+    if (this.st > 0) this.st--;
+  }
+  fail(op, msg) {
+    this.fault = {pc: this.PC, opcode: op, message: msg};
+    return 'fault';
+  }
+  writeMem(addr, val) {
+    this.writes.push({addr, old: this.mem[addr], val});
+    this.mem[addr] = val;
+  }
+  execute(op) {
+    const d = decode(op);
+    if (d.kind === 'unsupported') return this.fail(op, 'SYS 0NNN is unsupported: native COSMAC 1802 routines are not emulated');
+    if (d.kind === 'invalid') return this.fail(op, `Invalid opcode 0x${hex(op, 4)}: ${d.explanation}`);
+    const V = this.V, o = this.opts;
+    const x = (op >> 8) & 0xF, y = (op >> 4) & 0xF, n = op & 0xF, nn = op & 0xFF, nnn = op & 0xFFF;
+    let next = this.PC + 2;
+    switch (op >> 12) {
+      case 0x0:
+        if (op === 0x00E0) { this.fb.fill(0); break; }
+        if (this.sp === 0) return this.fail(op, 'Stack underflow: RET with SP=0');
+        this.sp--; next = this.stack[this.sp];
+        break;
+      case 0x1: next = nnn; break;
+      case 0x2:
+        if (this.sp >= 16) return this.fail(op, 'Stack overflow: CALL with SP=16');
+        this.stack[this.sp++] = this.PC + 2; next = nnn;
+        break;
+      case 0x3: if (V[x] === nn) next += 2; break;
+      case 0x4: if (V[x] !== nn) next += 2; break;
+      case 0x5: if (V[x] === V[y]) next += 2; break;
+      case 0x6: V[x] = nn; break;
+      case 0x7: V[x] = (V[x] + nn) & 0xFF; break;
+      case 0x8: {
+        const a = V[x], b = V[y];
+        switch (n) {
+          case 0x0: V[x] = b; break;
+          case 0x1: V[x] = a | b; if (o.logicResetVF) V[15] = 0; break;
+          case 0x2: V[x] = a & b; if (o.logicResetVF) V[15] = 0; break;
+          case 0x3: V[x] = a ^ b; if (o.logicResetVF) V[15] = 0; break;
+          case 0x4: { const s = a + b; V[x] = s & 0xFF; V[15] = s > 0xFF ? 1 : 0; break; }
+          case 0x5: V[x] = (a - b) & 0xFF; V[15] = a >= b ? 1 : 0; break;
+          case 0x6: { const s = o.shiftSource === 'VY' ? b : a; V[x] = s >> 1; V[15] = s & 1; break; }
+          case 0x7: V[x] = (b - a) & 0xFF; V[15] = b >= a ? 1 : 0; break;
+          case 0xE: { const s = o.shiftSource === 'VY' ? b : a; V[x] = (s << 1) & 0xFF; V[15] = (s >> 7) & 1; break; }
+        }
+        break;
+      }
+      case 0x9: if (V[x] !== V[y]) next += 2; break;
+      case 0xA: this.I = nnn; break;
+      case 0xB: next = (nnn + V[0]) & 0xFFFF; break;
+      case 0xC: V[x] = this.rng() & nn; break;
+      case 0xD: {
+        const I = this.I, x0 = V[x] % 64, y0 = V[y] % 32;
+        if (n > 0 && I + n - 1 > MEM_SIZE - 1) return this.fail(op, `Sprite read out of bounds: I=0x${hex(I, 3)} + ${n} rows exceeds 0xFFF`);
+        V[15] = 0;
+        if (n === 0) break;
+        const wrap = o.spriteWrap;
+        for (let r = 0; r < n; r++) {
+          let py = y0 + r;
+          if (wrap) py %= 32; else if (py >= 32) break;
+          const bits = this.mem[I + r];
+          for (let c = 0; c < 8; c++) {
+            if (!((bits >> (7 - c)) & 1)) continue;
+            let px = x0 + c;
+            if (wrap) px %= 64; else if (px >= 64) break;
+            const idx = py * 64 + px;
+            if (this.fb[idx]) V[15] = 1;
+            this.fb[idx] ^= 1;
+          }
+        }
+        break;
+      }
+      case 0xE: {
+        const k = V[x];
+        const pressed = k < 16 && this.keys[k] === 1;
+        if (nn === 0x9E && pressed) next += 2;
+        if (nn === 0xA1 && !pressed) next += 2;
+        break;
+      }
+      case 0xF:
+        switch (nn) {
+          case 0x07: V[x] = this.dt; break;
+          case 0x0A:
+            if (!this.waitingKey) { this.waitingKey = true; this.keyEdges = 0; return 'wait'; }
+            if (!this.keyEdges) return 'wait';
+            { let k = 0; while (!((this.keyEdges >> k) & 1)) k++; V[x] = k; }
+            this.keyEdges = 0; this.waitingKey = false;
+            break;
+          case 0x15: this.dt = V[x]; break;
+          case 0x18: this.st = V[x]; break;
+          case 0x1E: this.I = (this.I + V[x]) & 0xFFFF; break;
+          case 0x29: this.I = FONT_START + 5 * (V[x] & 0xF); break;
+          case 0x33: {
+            if (this.I + 2 > MEM_SIZE - 1) return this.fail(op, `BCD write out of bounds: I=0x${hex(this.I, 3)}..+2 exceeds 0xFFF`);
+            const v = V[x];
+            this.writeMem(this.I, Math.floor(v / 100));
+            this.writeMem(this.I + 1, Math.floor(v / 10) % 10);
+            this.writeMem(this.I + 2, v % 10);
+            break;
+          }
+          case 0x55: {
+            if (this.I + x > MEM_SIZE - 1) return this.fail(op, `Store out of bounds: I=0x${hex(this.I, 3)} + X exceeds 0xFFF`);
+            for (let i = 0; i <= x; i++) this.writeMem(this.I + i, V[i]);
+            if (o.loadStoreIncrementI) this.I = (this.I + x + 1) & 0xFFFF;
+            break;
+          }
+          case 0x65: {
+            if (this.I + x > MEM_SIZE - 1) return this.fail(op, `Load out of bounds: I=0x${hex(this.I, 3)} + X exceeds 0xFFF`);
+            for (let i = 0; i <= x; i++) V[i] = this.mem[this.I + i];
+            if (o.loadStoreIncrementI) this.I = (this.I + x + 1) & 0xFFFF;
+            break;
+          }
+        }
+        break;
+    }
+    this.PC = next & 0xFFFF;
+    return 'ok';
+  }
+  step() {
+    if (this.fault) return 'fault';
+    const pc = this.PC;
+    if (pc > MEM_SIZE - 2) {
+      this.fault = {pc, opcode: null, message: `Invalid fetch: PC=0x${hex(pc, 3)} leaves no room for a 2-byte opcode`};
+      return 'fault';
+    }
+    const op = (this.mem[pc] << 8) | this.mem[pc + 1];
+    const V0 = this.V.slice(), I0 = this.I, sp0 = this.sp, dt0 = this.dt, st0 = this.st;
+    this.writes = [];
+    const res = this.execute(op);
+    if (res === 'fault') {
+      this.last = {pc, opcode: op, mnemonic: decode(op).text, nextPc: pc, regChanges: [], memWrites: [], spFrom: sp0, spTo: this.sp};
+      return 'fault';
+    }
+    if (res === 'wait') return 'wait';
+    const regChanges = [];
+    for (let i = 0; i < 16; i++) if (V0[i] !== this.V[i]) regChanges.push({name: 'V' + hex(i, 1), from: V0[i], to: this.V[i]});
+    if (I0 !== this.I) regChanges.push({name: 'I', from: I0, to: this.I});
+    if (dt0 !== this.dt) regChanges.push({name: 'DT', from: dt0, to: this.dt});
+    if (st0 !== this.st) regChanges.push({name: 'ST', from: st0, to: this.st});
+    this.count++;
+    const rec = {seq: ++this.traceSeq, pc, opcode: op, mnemonic: decode(op).text, nextPc: this.PC,
+      regChanges, memWrites: this.writes, spFrom: sp0, spTo: this.sp};
+    this.last = rec;
+    this.trace.push(rec);
+    if (this.trace.length > TRACE_MAX) this.trace.shift();
+    return 'ok';
+  }
+}
+
+/* ---------- Self-tests (isolated instances) ---------- */
+function runSelfTests() {
+  const out = [];
+  const mk = (bytes, opts) => {
+    const c = new Chip8Core();
+    if (opts) Object.assign(c.opts, opts);
+    c.loadRom(Uint8Array.from(bytes));
+    return c;
+  };
+  const vr = (c, ...ids) => ids.map(i => `V${hex(i, 1)}=${hex(c.V[i])}`).join(' ');
+  const lit = c => c.fb.reduce((a, b) => a + b, 0);
+  const T = (name, expected, fn) => {
+    let observed;
+    try { observed = String(fn()); } catch (e) { observed = 'exception: ' + e.message; }
+    out.push({name, expected, observed, pass: observed === expected});
+  };
+
+  T('8XY4 carry: VX=FF + VY=02', 'V0=01 VF=01', () => {
+    const c = mk([0x80, 0x14]); c.V[0] = 0xFF; c.V[1] = 2; c.step(); return vr(c, 0, 15);
+  });
+  T('8FF4 X=Y=F carry (VF written last)', 'VF=01', () => {
+    const c = mk([0x8F, 0xF4]); c.V[15] = 0x80; c.step(); return vr(c, 15);
+  });
+  T('8XY5 equality 5-5 (no borrow)', 'V0=00 VF=01', () => {
+    const c = mk([0x80, 0x15]); c.V[0] = 5; c.V[1] = 5; c.step(); return vr(c, 0, 15);
+  });
+  T('8XY5 borrow 3-5', 'V0=FE VF=00', () => {
+    const c = mk([0x80, 0x15]); c.V[0] = 3; c.V[1] = 5; c.step(); return vr(c, 0, 15);
+  });
+  T('8XY5 X=Y: 7-7', 'V0=00 VF=01', () => {
+    const c = mk([0x80, 0x05]); c.V[0] = 7; c.step(); return vr(c, 0, 15);
+  });
+  T('8XY7 SUBN 5-3', 'V0=02 VF=01', () => {
+    const c = mk([0x80, 0x17]); c.V[0] = 3; c.V[1] = 5; c.step(); return vr(c, 0, 15);
+  });
+  T('8XY6 SHR source VX (default)', 'V0=01 VF=01', () => {
+    const c = mk([0x80, 0x06]); c.V[0] = 3; c.V[1] = 0x80; c.step(); return vr(c, 0, 15);
+  });
+  T('8XY6 SHR source VY (option)', 'V0=40 VF=00', () => {
+    const c = mk([0x80, 0x16], {shiftSource: 'VY'}); c.V[0] = 0; c.V[1] = 0x80; c.step(); return vr(c, 0, 15);
+  });
+  T('8XYE SHL source VX', 'V0=02 VF=01', () => {
+    const c = mk([0x80, 0x0E]); c.V[0] = 0x81; c.step(); return vr(c, 0, 15);
+  });
+  T('3XNN skips when equal', 'PC=204', () => {
+    const c = mk([0x30, 0x05, 0x60, 0x22]); c.V[0] = 5; c.step(); return `PC=${hex(c.PC, 3)}`;
+  });
+  T('4XNN does not skip when equal', 'PC=202', () => {
+    const c = mk([0x40, 0x05, 0x60, 0x22]); c.V[0] = 5; c.step(); return `PC=${hex(c.PC, 3)}`;
+  });
+  T('5XY0 skips when equal', 'PC=204', () => {
+    const c = mk([0x50, 0x10, 0x60, 0x22]); c.V[0] = 3; c.V[1] = 3; c.step(); return `PC=${hex(c.PC, 3)}`;
+  });
+  T('9XY0 does not skip when equal', 'PC=202', () => {
+    const c = mk([0x90, 0x10, 0x60, 0x22]); c.V[0] = 3; c.V[1] = 3; c.step(); return `PC=${hex(c.PC, 3)}`;
+  });
+  T('CALL/RET round trip', 'PC=204 SP=0 V0=01 V1=05', () => {
+    const c = mk([0x22, 0x04, 0x60, 0x01, 0x61, 0x05, 0x00, 0xEE]);
+    for (let i = 0; i < 4; i++) c.step();
+    return `PC=${hex(c.PC, 3)} SP=${c.sp} ${vr(c, 0, 1)}`;
+  });
+  T('Stack overflow on 17th CALL', 'fault SP=16', () => {
+    const c = mk([0x22, 0x00]);
+    for (let i = 0; i < 16; i++) c.step();
+    const r = c.step();
+    return `${r} SP=${c.sp}`;
+  });
+  T('Stack underflow on RET', 'fault', () => {
+    const c = mk([0x00, 0xEE]); return c.step();
+  });
+  T('BCD of 254 -> 2,5,4', '2,5,4', () => {
+    const c = mk([0x60, 0xFE, 0xA3, 0x00, 0xF0, 0x33]);
+    for (let i = 0; i < 3; i++) c.step();
+    return `${c.mem[0x300]},${c.mem[0x301]},${c.mem[0x302]}`;
+  });
+  T('FX55 preserves I (default)', '1,2,3 I=300', () => {
+    const c = mk([0xA3, 0x00, 0xF2, 0x55]);
+    c.V[0] = 1; c.V[1] = 2; c.V[2] = 3;
+    c.step(); c.step();
+    return `${c.mem[0x300]},${c.mem[0x301]},${c.mem[0x302]} I=${hex(c.I, 3)}`;
+  });
+  T('FX55 increments I by X+1 (option)', '1,2,3 I=303', () => {
+    const c = mk([0xA3, 0x00, 0xF2, 0x55], {loadStoreIncrementI: true});
+    c.V[0] = 1; c.V[1] = 2; c.V[2] = 3;
+    c.step(); c.step();
+    return `${c.mem[0x300]},${c.mem[0x301]},${c.mem[0x302]} I=${hex(c.I, 3)}`;
+  });
+  T('FX65 loads V0..V2, I preserved', 'V0=09 V1=08 V2=07 I=300', () => {
+    const c = mk([0xA3, 0x00, 0xF2, 0x65]);
+    c.mem[0x300] = 9; c.mem[0x301] = 8; c.mem[0x302] = 7;
+    c.step(); c.step();
+    return `${vr(c, 0, 1, 2)} I=${hex(c.I, 3)}`;
+  });
+  T('FX1E wraps I to 16 bits, VF unchanged', 'I=001 VF=55', () => {
+    const c = mk([0xF0, 0x1E]); c.I = 0xFFF; c.V[0] = 2; c.V[15] = 0x55; c.step();
+    return `I=${hex(c.I, 3)} VF=${hex(c.V[15])}`;
+  });
+  T('FX29 font address for VX=A', 'I=082', () => {
+    const c = mk([0xF0, 0x29]); c.V[0] = 0x0A; c.step(); return `I=${hex(c.I, 3)}`;
+  });
+  T('DXYN collision erases glyph', 'VF=01 lit=0', () => {
+    const c = mk([0xA0, 0x50, 0xD0, 0x15, 0xD0, 0x15]);
+    for (let i = 0; i < 3; i++) c.step();
+    return `VF=${c.V[15]} lit=${lit(c)}`;
+  });
+  T('DXY0 draws nothing and sets VF=0', 'VF=00 lit=0', () => {
+    const c = mk([0xA0, 0x50, 0xD0, 0x10]); c.V[15] = 1;
+    c.step(); c.step();
+    return `VF=${c.V[15]} lit=${lit(c)}`;
+  });
+  T('Sprite clipped at right edge', 'lit=5 fb0=0', () => {
+    const c = mk([0xA0, 0x50, 0xD0, 0x15]); c.V[0] = 63; c.V[1] = 0;
+    c.step(); c.step();
+    return `lit=${lit(c)} fb0=${c.fb[0]}`;
+  });
+  T('Sprite wraps when option enabled', 'lit=14 fb0=1', () => {
+    const c = mk([0xA0, 0x50, 0xD0, 0x15], {spriteWrap: true}); c.V[0] = 63; c.V[1] = 0;
+    c.step(); c.step();
+    return `lit=${lit(c)} fb0=${c.fb[0]}`;
+  });
+  T('SKP skips when key pressed', 'PC=204', () => {
+    const c = mk([0xE0, 0x9E, 0x60, 0x01]); c.V[0] = 0; c.setKey(0, true); c.step();
+    return `PC=${hex(c.PC, 3)}`;
+  });
+  T('FX0A waits for a fresh keydown (held/repeat ignored)', 'wait,wait,wait,ok V5=03 PC=202 count=1', () => {
+    const c = mk([0xF5, 0x0A]);
+    c.setKey(3, true);
+    const r1 = c.step();
+    const r2 = c.step();
+    c.setKey(3, true);
+    const r3 = c.step();
+    c.setKey(3, false); c.setKey(3, true);
+    const r4 = c.step();
+    return `${r1},${r2},${r3},${r4} V5=${hex(c.V[5])} PC=${hex(c.PC, 3)} count=${c.count}`;
+  });
+  T('Timers tick 3x: DT 3->0, ST 2->0', 'DT=00 ST=00', () => {
+    const c = mk([0x00, 0xE0]); c.dt = 3; c.st = 2;
+    c.tickTimers(); c.tickTimers(); c.tickTimers();
+    return `DT=${hex(c.dt)} ST=${hex(c.st)}`;
+  });
+  T('5XY1 is invalid (fault)', 'fault', () => mk([0x50, 0x01]).step());
+  T('9XY1 is invalid (fault)', 'fault', () => mk([0x90, 0x11]).step());
+  T('Unknown opcode F000 faults', 'fault', () => mk([0xF0, 0x00]).step());
+  T('Legacy SYS 0123 reported unsupported', 'fault unsupported', () => {
+    const c = mk([0x01, 0x23]);
+    const r = c.step();
+    return `${r} ${c.fault && /unsupported/i.test(c.fault.message) ? 'unsupported' : '-'}`;
+  });
+  T('00E0 executes (CLS)', 'ok', () => mk([0x00, 0xE0]).step());
+  T('Invalid fetch at PC=0xFFF faults', 'fault', () => {
+    const c = mk([0x00, 0x00]); c.PC = 0xFFF; return c.step();
+  });
+  T('BNNN uses NNN+V0', 'PC=204', () => {
+    const c = mk([0xB2, 0x00]); c.V[0] = 4; c.step(); return `PC=${hex(c.PC, 3)}`;
+  });
+  T('7XNN leaves VF unchanged', 'VF=09', () => {
+    const c = mk([0x70, 0x01]); c.V[15] = 9; c.step(); return `VF=${hex(c.V[15])}`;
+  });
+  T('8XY1 keeps VF by default', 'VF=05', () => {
+    const c = mk([0x80, 0x11]); c.V[15] = 5; c.step(); return `VF=${hex(c.V[15])}`;
+  });
+  T('8XY1 resets VF when option on', 'VF=00', () => {
+    const c = mk([0x80, 0x11], {logicResetVF: true}); c.V[15] = 5; c.step(); return `VF=${hex(c.V[15])}`;
+  });
+  T('CXNN deterministic with seeded PRNG', 'true', () => {
+    const a = mk([0xC0, 0xFF]); a.setSeed(7); a.step();
+    const b = mk([0xC0, 0xFF]); b.setSeed(7); b.step();
+    return a.V[0] === b.V[0];
+  });
+  T('Self-modifying code, then reset restores ROM', 'AB then 12', () => {
+    const c = mk([0xA2, 0x08, 0x60, 0xAB, 0xF0, 0x55, 0x00, 0x00, 0x12, 0x00]);
+    for (let i = 0; i < 3; i++) c.step();
+    const before = c.mem[0x208];
+    c.reset();
+    return `${hex(before)} then ${hex(c.mem[0x208])}`;
+  });
+  T('Trace records completed instructions', '3 LD V0, 0x01', () => {
+    const c = mk([0x60, 0x01, 0x60, 0x02, 0x60, 0x03]);
+    for (let i = 0; i < 3; i++) c.step();
+    return `${c.trace.length} ${c.trace[0].mnemonic}`;
+  });
+  return out;
+}
+
+/* ---------- UI state ---------- */
+const core = new Chip8Core();
+const app = {
+  running: false, rafId: 0, last: 0, cpuAcc: 0, tAcc: 0, lastRefresh: 0,
+  rate: 600, bp: new Set(), bypassPc: -1, bpHit: false,
+  romLabel: '', followPc: true, disBase: PROG_START, spriteAddr: 0,
+  kbd: new Uint8Array(16), ptr: new Uint8Array(16),
+  muted: false, volume: 0.5, scale: '2', palette: 'green'
+};
+const FIELDS = [];
+
+function setMsg(text, kind = '') { const m = $('msg'); m.textContent = text; m.className = 'msg ' + kind; }
+
+const screen = $('screen');
+const sctx = screen.getContext('2d');
+const img = sctx.createImageData(64, 32);
+const PAL = {green: [[8, 22, 12], [124, 255, 140]], amber: [[22, 13, 0], [255, 184, 64]], mono: [[0, 0, 0], [236, 236, 236]]};
+
+function drawScreen() {
+  const pal = PAL[app.palette] || PAL.green;
+  const off = pal[0], on = pal[1];
+  const d = img.data;
+  for (let i = 0; i < 2048; i++) {
+    const c = core.fb[i] ? on : off;
+    const p = i * 4;
+    d[p] = c[0]; d[p + 1] = c[1]; d[p + 2] = c[2]; d[p + 3] = 255;
+  }
+  sctx.putImageData(img, 0, 0);
+}
+
+const audio = {ctx: null, gain: null, osc: null};
+function ensureAudio() {
+  if (audio.ctx) {
+    if (audio.ctx.state === 'suspended') audio.ctx.resume().catch(() => {});
+    return true;
+  }
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return false;
+  audio.ctx = new AC();
+  audio.osc = audio.ctx.createOscillator();
+  audio.osc.type = 'triangle';
+  audio.osc.frequency.value = 440;
+  audio.gain = audio.ctx.createGain();
+  audio.gain.gain.value = 0;
+  audio.osc.connect(audio.gain);
+  audio.gain.connect(audio.ctx.destination);
+  audio.osc.start();
+  return true;
+}
+function updateAudio() {
+  const on = app.running && !core.fault && core.st > 0 && !app.muted;
+  $('beepDot').classList.toggle('on', on);
+  if (audio.ctx && audio.gain) {
+    audio.gain.gain.setTargetAtTime(on ? app.volume * 0.08 : 0, audio.ctx.currentTime, 0.015);
+  }
+}
+
+function currentStatus() {
+  if (core.fault) return 'FAULT';
+  if (app.bpHit) return 'BREAKPOINT';
+  if (core.waitingKey) return 'WAITING';
+  return app.running ? 'RUNNING' : 'PAUSED';
+}
+
+function updateTopbar() {
+  const st = currentStatus();
+  const b = $('badge');
+  b.textContent = st;
+  b.className = 'badge b-' + st;
+  $('romName').textContent = app.romLabel || '—';
+  $('romSize').textContent = core.rom.length;
+  $('romRange').textContent = core.rom.length ? `0x200-0x${hex(PROG_START + core.rom.length - 1, 3)}` : '—';
+  $('btnPause').disabled = !app.running;
+}
+
+function renderFault() {
+  const fb = $('faultBox');
+  if (core.fault) {
+    fb.hidden = false;
+    const op = core.fault.opcode == null ? '(fetch)' : '0x' + hex(core.fault.opcode, 4);
+    fb.innerHTML = `<strong>FAULT</strong> at PC=0x${hex(core.fault.pc, 3)}, opcode ${op}<br>${escapeHtml(core.fault.message)}`;
+  } else {
+    fb.hidden = true;
+  }
+}
+
+function nextOpText() {
+  const pc = core.PC;
+  if (pc > MEM_SIZE - 2) return 'invalid fetch (PC beyond 0xFFE)';
+  const op = (core.mem[pc] << 8) | core.mem[pc + 1];
+  const d = decode(op);
+  return `0x${hex(op, 4)}  ${d.text}  — ${d.explanation}`;
+}
+
+function renderCpu() {
+  const changed = new Set(core.last ? core.last.regChanges.map(c => c.name) : []);
+  for (const f of FIELDS) {
+    f.el.disabled = app.running;
+    if (document.activeElement !== f.el) f.el.value = hex(f.get(), f.w);
+    f.row.classList.toggle('changed', changed.has(f.name));
+  }
+  for (let i = 0; i < 16; i++) $('d-V' + hex(i, 1)).textContent = core.V[i];
+  $('spDepth').textContent = core.sp;
+  $('icount').textContent = core.count;
+  $('nextOp').textContent = nextOpText();
+}
+
+function buildRegs() {
+  const body = $('regBody');
+  let html = '';
+  for (let i = 0; i < 16; i++) {
+    const nm = 'V' + hex(i, 1);
+    const vf = i === 15 ? ' class="vfrow"' : '';
+    html += `<tr id="row-${nm}"${vf}><td class="mono">${nm}</td><td><input id="f-${nm}" class="hexin" maxlength="2" aria-label="${nm} hex"></td><td id="d-${nm}" class="mono">0</td></tr>`;
+  }
+  body.innerHTML = html;
+  for (let i = 0; i < 16; i++) {
+    const nm = 'V' + hex(i, 1);
+    FIELDS.push({el: $('f-' + nm), row: $('row-' + nm), name: nm, max: 0xFF, w: 2,
+      get: () => core.V[i], set: v => { core.V[i] = v; }});
+  }
+  FIELDS.push({el: $('f-I'), row: $('f-I').parentElement, name: 'I', max: 0xFFF, w: 3,
+    get: () => core.I, set: v => { core.I = v; }});
+  FIELDS.push({el: $('f-PC'), row: $('f-PC').parentElement, name: 'PC', max: 0xFFF, w: 3,
+    get: () => core.PC, set: v => { core.PC = v; }});
+  FIELDS.push({el: $('f-DT'), row: $('f-DT').parentElement, name: 'DT', max: 0xFF, w: 2,
+    get: () => core.dt, set: v => { core.dt = v; }});
+  FIELDS.push({el: $('f-ST'), row: $('f-ST').parentElement, name: 'ST', max: 0xFF, w: 2,
+    get: () => core.st, set: v => { core.st = v; }});
+  for (const f of FIELDS) {
+    f.el.addEventListener('change', () => {
+      if (app.running) { f.el.value = hex(f.get(), f.w); return; }
+      const v = parseHexField(f.el.value, f.max);
+      if (v === null) {
+        setMsg(`${f.name}: enter hex 0 to ${hex(f.max, f.w)}`, 'err');
+        f.el.value = hex(f.get(), f.w);
+        return;
+      }
+      f.set(v);
+      core.fault = null;
+      app.bpHit = false;
+      setMsg(`${f.name} set to 0x${hex(v, f.w)}`, 'ok');
+      updateAll();
+    });
+  }
+}
+
+function renderStack() {
+  const rows = $('stackBody').children;
+  for (let i = 0; i < 16; i++) {
+    const tr = rows[i];
+    const active = i < core.sp;
+    const top = i === core.sp - 1;
+    tr.classList.toggle('active', active);
+    tr.classList.toggle('top', top);
+    const btn = tr.querySelector('button');
+    btn.textContent = active ? '0x' + hex(core.stack[i], 3) : '—';
+    btn.dataset.addr = active ? core.stack[i] : '';
+    btn.disabled = !active;
+    tr.children[2].textContent = top ? '◀ TOP' : (active ? '' : 'inactive');
+  }
+}
+
+function buildStack() {
+  let html = '';
+  for (let i = 0; i < 16; i++) {
+    html += `<tr><td class="mono">${i}</td><td><button class="linkbtn mono" type="button">—</button></td><td></td></tr>`;
+  }
+  $('stackBody').innerHTML = html;
+}
+
+function toggleBp(a) {
+  if (a < 0 || a > MEM_SIZE - 2) return;
+  if (app.bp.has(a)) app.bp.delete(a); else app.bp.add(a);
+  updateAll();
+}
+
+function renderDisasm() {
+  const base = app.followPc ? core.PC : app.disBase;
+  let html = '';
+  for (let i = 0; i < 48; i++) {
+    const a = base + 2 * i;
+    if (a > MEM_SIZE - 1) break;
+    const inRange = a <= MEM_SIZE - 2;
+    const b0 = hex(core.mem[a]);
+    const b1 = a + 1 < MEM_SIZE ? hex(core.mem[a + 1]) : '--';
+    const d = inRange ? decode((core.mem[a] << 8) | core.mem[a + 1])
+      : {mnemonic: '(end)', operands: '', explanation: 'No 2-byte instruction fits in memory', kind: 'invalid', target: null};
+    let cls = '';
+    let tags = '';
+    if (a === core.PC) { cls += ' next'; tags += '<span class="tag next">NEXT</span>'; }
+    if (core.last && a === core.last.pc) { cls += ' last'; tags += '<span class="tag last">LAST</span>'; }
+    if (d.kind === 'invalid') { cls += ' invalid'; tags += '<span class="tag bad">INVALID</span>'; }
+    if (d.kind === 'unsupported') { cls += ' unsup'; tags += '<span class="tag bad">UNSUPPORTED</span>'; }
+    const tgt = (d.target !== null && d.target !== undefined) ? `→ 0x${hex(d.target, 3)}` : '';
+    const bp = app.bp.has(a);
+    html += `<tr class="${cls.trim()}"><td><span class="gut${bp ? ' on' : ''}" data-gut="${a}" title="Toggle breakpoint at 0x${hex(a, 3)}"></span></td>` +
+      `<td class="mono">0x${hex(a, 3)}</td><td class="mono">${b0} ${b1}</td><td class="mono">${escapeHtml(d.mnemonic)}</td>` +
+      `<td class="mono">${escapeHtml(d.operands)}</td><td>${tags} ${tgt}</td><td class="exp">${escapeHtml(d.explanation)}</td></tr>`;
+  }
+  $('disBody').innerHTML = html;
+}
+
+function scrollMemTo(addr) {
+  const row = document.getElementById('m' + hex(addr & ~0xF, 3));
+  const dump = $('memDump');
+  if (row) dump.scrollTop = row.offsetTop;
+}
+
+function renderMemory() {
+  const pc = core.PC, I = core.I;
+  const writes = new Set((core.last ? core.last.memWrites : []).map(w => w.addr));
+  let html = '';
+  for (let row = 0; row < 256; row++) {
+    const base = row * 16;
+    let cells = '', asc = '';
+    for (let c = 0; c < 16; c++) {
+      const a = base + c, v = core.mem[a];
+      const cl = [];
+      if (a >= FONT_START && a < FONT_START + 80) cl.push('f');
+      if (a >= PROG_START) cl.push('r');
+      if (a === pc || a === pc + 1) cl.push('pc');
+      if (a === I) cl.push('i');
+      if (writes.has(a)) cl.push('w');
+      cells += `<span class="mb ${cl.join(' ')}" title="0x${hex(a, 3)}">${hex(v)}</span>`;
+      asc += (v >= 0x20 && v < 0x7F) ? String.fromCharCode(v) : '.';
+    }
+    html += `<div class="mrow" id="m${hex(base, 3)}"><span class="ma">${hex(base, 3)}</span>${cells}<span class="asc">${escapeHtml(asc)}</span></div>`;
+  }
+  $('memDump').innerHTML = html;
+}
+
+function renderSprite() {
+  const a = app.spriteAddr, h = +$('spH').value;
+  let html = '';
+  for (let r = 0; r < h; r++) {
+    const ad = a + r;
+    if (ad > MEM_SIZE - 1) {
+      html += `<div class="srow oor">+${r}: 0x${hex(ad, 4)} is out of range (max 0xFFF); not read</div>`;
+      continue;
+    }
+    const v = core.mem[ad];
+    let px = '';
+    for (let b = 7; b >= 0; b--) px += `<span class="${(v >> b) & 1 ? 'on' : ''}"></span>`;
+    html += `<div class="srow"><span class="mono">0x${hex(ad, 3)}</span><span class="mono">${hex(v)}</span><span class="px">${px}</span></div>`;
+  }
+  $('spOut').innerHTML = html || '<span class="mut">Height 0</span>';
+}
+
+function renderTrace() {
+  const rows = core.trace.map(e => {
+    const regs = e.regChanges.map(c => {
+      const w = c.name === 'I' ? 3 : 2;
+      return `${c.name} ${hex(c.from, w)}→${hex(c.to, w)}`;
+    }).join(', ') || '—';
+    const mw = e.memWrites.map(w => `${hex(w.addr, 3)}:${hex(w.old)}→${hex(w.val)}`).join(', ') || '—';
+    const sp = e.spFrom !== e.spTo ? `${e.spFrom}→${e.spTo}` : '—';
+    return `<tr><td>${e.seq}</td><td class="mono">0x${hex(e.pc, 3)}</td><td class="mono">${hex(e.opcode, 4)}</td>` +
+      `<td class="mono">${escapeHtml(e.mnemonic)}</td><td class="mono">0x${hex(e.nextPc, 3)}</td>` +
+      `<td class="mono">${escapeHtml(regs)}</td><td class="mono">${escapeHtml(mw)}</td><td>${sp}</td></tr>`;
+  });
+  $('trBody').innerHTML = rows.join('');
+  if ($('trFollow').checked) { const box = $('trBody').closest('.scroll'); box.scrollTop = box.scrollHeight; }
+}
+
+function renderBps() {
+  const arr = [...app.bp].sort((a, b) => a - b);
+  $('bpList').innerHTML = arr.length
+    ? arr.map(a => `<li><span class="mono">0x${hex(a, 3)}</span><button type="button" data-rm="${a}">Remove</button></li>`).join('')
+    : '<li class="mut">No breakpoints</li>';
+}
+
+function renderKeys() {
+  document.querySelectorAll('#keypad button').forEach(btn => {
+    const k = +btn.dataset.key;
+    btn.classList.toggle('held', core.keys[k] === 1);
+  });
+}
+
+function updateCompat() {
+  const sel = [['optShift', core.opts.shiftSource], ['optLS', core.opts.loadStoreIncrementI ? 'increment' : 'preserve'],
+    ['optWrap', core.opts.spriteWrap ? 'wrap' : 'clip']];
+  for (const [id, v] of sel) {
+    const el = $(id);
+    el.disabled = app.running;
+    if (document.activeElement !== el) el.value = v;
+  }
+  const lg = $('optLogic');
+  lg.disabled = app.running;
+  if (document.activeElement !== lg) lg.checked = core.opts.logicResetVF;
+  $('compatSummary').textContent =
+    `Active: shifts use ${core.opts.shiftSource}; FX55/65 ${core.opts.loadStoreIncrementI ? 'increment I by X+1' : 'preserve I'}; ` +
+    `logic VF ${core.opts.logicResetVF ? 'reset to 0' : 'unchanged'}; sprites ${core.opts.spriteWrap ? 'wrap' : 'clip'}. ` +
+    `Fixed: BNNN=NNN+V0; FX1E wraps 16-bit, VF unchanged; FX29=0x050+5*(VX&F); FX0A waits for fresh keydown; DXY0 draws nothing, VF=0; no vblank wait.`;
+}
+
+function updateEditable() {
+  $('bAddr').disabled = app.running;
+  $('bVal').disabled = app.running;
+  $('bWrite').disabled = app.running;
+  $('btnStep').disabled = false;
+}
+
+function updateAll() {
+  updateTopbar();
+  drawScreen();
+  renderFault();
+  renderCpu();
+  renderStack();
+  renderDisasm();
+  renderMemory();
+  renderSprite();
+  renderTrace();
+  renderBps();
+  renderKeys();
+  updateCompat();
+  updateAudio();
+  updateEditable();
+}
+
+/* ---------- Execution control ---------- */
+function startRun() {
+  if (core.fault) { setMsg('Machine is in FAULT. Reset, or edit state, before running.', 'err'); updateAll(); return; }
+  app.bpHit = false;
+  app.bypassPc = core.PC;
+  app.running = true;
+  app.last = performance.now();
+  app.cpuAcc = 0; app.tAcc = 0; app.lastRefresh = 0;
+  if (!app.rafId) app.rafId = requestAnimationFrame(frame);
+  setMsg('Running.', 'ok');
+  updateAll();
+}
+
+function pauseRun() {
+  app.running = false;
+  if (app.rafId) { cancelAnimationFrame(app.rafId); app.rafId = 0; }
+  updateAudio();
+}
+
+function frame(now) {
+  app.rafId = 0;
+  if (!app.running) return;
+  const el = Math.min(Math.max(now - app.last, 0), 100);
+  app.last = now;
+  app.cpuAcc += el * app.rate / 1000;
+  app.tAcc += el * 60 / 1000;
+  while (app.tAcc >= 1) { core.tickTimers(); app.tAcc -= 1; }
+
+  let stopWith = null, steps = 0;
+  while (app.cpuAcc >= 1) {
+    if (steps >= MAX_STEPS_FRAME) { app.cpuAcc = 0; break; }
+    if (app.bp.has(core.PC) && core.PC !== app.bypassPc) { stopWith = 'BP'; break; }
+    const r = core.step();
+    steps++;
+    if (r === 'ok') { app.cpuAcc -= 1; app.bypassPc = -1; }
+    else if (r === 'wait') { app.cpuAcc = 0; break; }
+    else { stopWith = 'FAULT'; break; }
+  }
+
+  if (stopWith === 'BP') {
+    app.bpHit = true;
+    pauseRun();
+    setMsg(`Breakpoint hit before executing 0x${hex(core.PC, 3)}.`, 'ok');
+    updateAll();
+    return;
+  }
+  if (stopWith === 'FAULT') {
+    pauseRun();
+    setMsg(core.fault.message, 'err');
+    updateAll();
+    return;
+  }
+  drawScreen();
+  updateAudio();
+  if (now - app.lastRefresh >= 100) { app.lastRefresh = now; updateAll(); }
+  app.rafId = requestAnimationFrame(frame);
+}
+
+function singleStep() {
+  if (app.running) pauseRun();
+  app.bpHit = false;
+  const r = core.step();
+  app.bypassPc = -1;
+  if (r === 'ok') setMsg(`Stepped: ${core.last.mnemonic} → PC=0x${hex(core.PC, 3)}`, 'ok');
+  else if (r === 'wait') setMsg('WAITING: FX0A needs a fresh key press; instruction not completed.');
+  else setMsg(core.fault.message, 'err');
+  updateAll();
+}
+
+function doReset() {
+  pauseRun();
+  core.reset();
+  app.bpHit = false; app.bypassPc = -1; app.cpuAcc = 0; app.tAcc = 0;
+  setMsg('Reset: ROM reloaded, state cleared, PC=0x200. Breakpoints and preferences kept.', 'ok');
+  updateAll();
+}
+
+function loadBytes(bytes, label) {
+  const r = core.loadRom(bytes);
+  if (!r.ok) { setMsg(r.error, 'err'); updateAll(); return false; }
+  pauseRun();
+  app.romLabel = label;
+  app.bpHit = false; app.bypassPc = -1; app.cpuAcc = 0; app.tAcc = 0;
+  setMsg(`Loaded ${label} (${bytes.length} bytes). Paused at 0x200.`, 'ok');
+  updateAll();
+  return true;
+}
+
+function readRomFile(file) {
+  if (file.size === 0) { setMsg('Rejected: file is empty. Current program kept.', 'err'); return; }
+  if (file.size > MAX_ROM) {
+    setMsg(`Rejected: ${file.name} is ${file.size} bytes; limit is ${MAX_ROM}. Current program kept.`, 'err');
+    return;
+  }
+  const fr = new FileReader();
+  fr.onload = () => loadBytes(new Uint8Array(fr.result), file.name);
+  fr.onerror = () => setMsg('Could not read file. Current program kept.', 'err');
+  fr.readAsArrayBuffer(file);
+}
+
+/* ---------- Keys ---------- */
+function syncKey(k) {
+  core.setKey(k, app.kbd[k] | app.ptr[k]);
+  renderKeys();
+}
+function isEditable(el) {
+  return !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
+}
+function buildKeypad() {
+  let html = '';
+  for (const row of KEY_LAYOUT) {
+    for (const k of row) {
+      html += `<button type="button" data-key="${k}" aria-label="CHIP-8 key ${hex(k, 1)} (keyboard ${KEY_PHYS[k]})">` +
+        `<span>${hex(k, 1)}</span><small>${KEY_PHYS[k]}</small></button>`;
+    }
+  }
+  $('keypad').innerHTML = html;
+  document.querySelectorAll('#keypad button').forEach(btn => {
+    const k = +btn.dataset.key;
+    btn.addEventListener('pointerdown', e => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      e.preventDefault();
+      try { btn.setPointerCapture(e.pointerId); } catch (_) {}
+      app.ptr[k] = 1;
+      syncKey(k);
+    });
+    const release = () => { app.ptr[k] = 0; syncKey(k); };
+    btn.addEventListener('pointerup', release);
+    btn.addEventListener('pointercancel', release);
+    btn.addEventListener('lostpointercapture', release);
+  });
+}
+
+/* ---------- Scale / display ---------- */
+function applyScale() {
+  const fit = app.scale === 'fit';
+  const s = fit ? 1 : +app.scale;
+  screen.style.width = fit ? '100%' : (64 * s) + 'px';
+  screen.style.height = fit ? 'auto' : (32 * s) + 'px';
+  $('screenWrap').style.display = fit ? 'block' : 'inline-block';
+  $('screenWrap').style.width = fit ? '100%' : '';
+  document.querySelectorAll('[data-scale]').forEach(b => b.classList.toggle('sel', b.dataset.scale === app.scale));
+}
+
+/* ---------- Self-test UI ---------- */
+function renderTests(res) {
+  const pass = res.filter(r => r.pass).length;
+  const fail = res.length - pass;
+  $('testBody').innerHTML = res.map(r =>
+    `<tr class="${r.pass ? 'pass' : 'fail'}"><td>${escapeHtml(r.name)}</td><td class="mono">${escapeHtml(r.expected)}</td>` +
+    `<td class="mono">${escapeHtml(r.observed)}</td><td>${r.pass ? 'PASS' : 'FAIL'}</td></tr>`).join('');
+  $('testSummary').textContent = `${pass} passed, ${fail} failed, ${res.length} total`;
+  setMsg(`Self-tests: ${pass} passed, ${fail} failed.`, fail ? 'err' : 'ok');
+}
+
+/* ---------- Build & bind ---------- */
+function buildSpriteHeights() {
+  let html = '';
+  for (let h = 1; h <= 15; h++) html += `<option value="${h}"${h === 5 ? ' selected' : ''}>${h}</option>`;
+  $('spH').innerHTML = html;
+}
+
+function init() {
+  buildKeypad();
+  buildRegs();
+  buildStack();
+  buildSpriteHeights();
+  applyScale();
+  app.spriteAddr = core.I;
+  $('spAddr').value = hex(app.spriteAddr, 3);
+
+  $('btnRun').addEventListener('click', () => { ensureAudio(); startRun(); });
+  $('btnPause').addEventListener('click', () => { pauseRun(); setMsg('Paused.'); updateAll(); });
+  $('btnStep').addEventListener('click', singleStep);
+  $('btnReset').addEventListener('click', doReset);
+  $('btnLoad').addEventListener('click', () => $('fileRom').click());
+  $('fileRom').addEventListener('change', () => {
+    const f = $('fileRom').files[0];
+    if (f) readRomFile(f);
+    $('fileRom').value = '';
+  });
+  $('btnDemo').addEventListener('click', () => loadBytes(DEMO_ROM, 'Demo (built-in)'));
+
+  const setRate = v => { app.rate = v; $('speed').value = v; $('speedNum').value = v; };
+  $('speed').addEventListener('input', () => setRate(+$('speed').value));
+  $('speedNum').addEventListener('change', () => {
+    const v = parseInt($('speedNum').value, 10);
+    if (!Number.isFinite(v) || v < 60 || v > 6000) {
+      setMsg('Speed must be an integer from 60 to 6000 instr/s.', 'err');
+      $('speedNum').value = app.rate;
+      return;
+    }
+    setRate(v);
+  });
+
+  document.querySelectorAll('[data-scale]').forEach(b => b.addEventListener('click', () => { app.scale = b.dataset.scale; applyScale(); }));
+  $('palette').addEventListener('change', () => { app.palette = $('palette').value; drawScreen(); });
+  $('gridChk').addEventListener('change', () => $('gridOv').classList.toggle('show', $('gridChk').checked));
+  $('scanChk').addEventListener('change', () => $('scanOv').classList.toggle('show', $('scanChk').checked));
+  $('btnFull').addEventListener('click', () => {
+    const wrap = $('screenWrap');
+    const fn = wrap.requestFullscreen || wrap.webkitRequestFullscreen;
+    if (!fn) { setMsg('Fullscreen is not supported in this browser.', 'err'); return; }
+    try {
+      const p = fn.call(wrap);
+      if (p && p.catch) p.catch(() => setMsg('Fullscreen request was refused.', 'err'));
+    } catch (_) { setMsg('Fullscreen is unavailable.', 'err'); }
+  });
+  $('btnPng').addEventListener('click', () => {
+    drawScreen();
+    const a = document.createElement('a');
+    a.href = screen.toDataURL('image/png');
+    a.download = `chip8-frame-${hex(core.count, 6)}.png`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setMsg('Framebuffer exported as PNG.', 'ok');
+  });
+  $('muteChk').addEventListener('change', () => { app.muted = $('muteChk').checked; updateAudio(); });
+  $('volRange').addEventListener('input', () => { app.volume = (+$('volRange').value) / 100; updateAudio(); });
+
+  $('optShift').addEventListener('change', () => { core.opts.shiftSource = $('optShift').value; setMsg(`Shift source: ${core.opts.shiftSource}`, 'ok'); updateAll(); });
+  $('optLS').addEventListener('change', () => { core.opts.loadStoreIncrementI = $('optLS').value === 'increment'; setMsg('FX55/FX65 I behaviour updated.', 'ok'); updateAll(); });
+  $('optLogic').addEventListener('change', () => { core.opts.logicResetVF = $('optLogic').checked; setMsg('Logic VF reset updated.', 'ok'); updateAll(); });
+  $('optWrap').addEventListener('change', () => { core.opts.spriteWrap = $('optWrap').value === 'wrap'; setMsg('Sprite clipping/wrapping updated.', 'ok'); updateAll(); });
+
+  document.addEventListener('dragover', e => e.preventDefault());
+  document.addEventListener('drop', e => {
+    e.preventDefault();
+    const f = e.dataTransfer && e.dataTransfer.files[0];
+    if (f) readRomFile(f);
+  });
+
+  window.addEventListener('keydown', e => {
+    if (isEditable(e.target)) return;
+    const k = KEYMAP[e.code];
+    if (k === undefined) return;
+    e.preventDefault();
+    app.kbd[k] = 1;
+    syncKey(k);
+  });
+  window.addEventListener('keyup', e => {
+    const k = KEYMAP[e.code];
+    if (k === undefined) return;
+    if (!isEditable(e.target)) e.preventDefault();
+    app.kbd[k] = 0;
+    syncKey(k);
+  });
+  window.addEventListener('blur', () => {
+    app.kbd.fill(0); app.ptr.fill(0);
+    for (let k = 0; k < 16; k++) syncKey(k);
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden && app.running) {
+      pauseRun();
+      setMsg('Auto-paused: page hidden.', 'err');
+      updateAll();
+    }
+  });
+
+  $('followPc').addEventListener('change', () => { app.followPc = $('followPc').checked; if (!app.followPc) app.disBase = core.PC; updateAll(); });
+  $('disGoBtn').addEventListener('click', () => {
+    const v = parseHexField($('disGo').value, 0xFFF);
+    if (v === null) { setMsg('Disassembly address: hex 0 to FFF.', 'err'); return; }
+    app.followPc = false; $('followPc').checked = false; app.disBase = v; updateAll();
+  });
+  $('disBody').addEventListener('click', e => {
+    const g = e.target.closest('[data-gut]');
+    if (g) toggleBp(+g.dataset.gut);
+  });
+  $('stackBody').addEventListener('click', e => {
+    const b = e.target.closest('button[data-addr]');
+    if (!b || b.dataset.addr === '') return;
+    app.followPc = false; $('followPc').checked = false;
+    app.disBase = +b.dataset.addr;
+    updateAll();
+    setMsg(`Disassembly moved to return address 0x${hex(app.disBase, 3)}.`, 'ok');
+  });
+
+  $('memGoBtn').addEventListener('click', () => {
+    const v = parseHexField($('memGo').value, 0xFFF);
+    if (v === null) { setMsg('Memory address: hex 0 to FFF.', 'err'); return; }
+    scrollMemTo(v);
+  });
+  $('memPc').addEventListener('click', () => scrollMemTo(core.PC));
+  $('memI').addEventListener('click', () => scrollMemTo(core.I));
+  $('bWrite').addEventListener('click', () => {
+    if (app.running) { setMsg('Byte editing is only allowed while paused.', 'err'); return; }
+    const a = parseHexField($('bAddr').value, 0xFFF);
+    const v = parseHexField($('bVal').value, 0xFF);
+    if (a === null) { setMsg('Byte address: hex 0 to FFF.', 'err'); return; }
+    if (v === null) { setMsg('Byte value: hex 00 to FF.', 'err'); return; }
+    core.mem[a] = v;
+    setMsg(`Wrote 0x${hex(v)} to 0x${hex(a, 3)}.`, 'ok');
+    updateAll();
+  });
+  $('spAddr').addEventListener('change', () => {
+    const v = parseHexField($('spAddr').value, 0xFFF);
+    if (v === null) { setMsg('Sprite address: hex 0 to FFF.', 'err'); $('spAddr').value = hex(app.spriteAddr, 3); return; }
+    app.spriteAddr = v;
+    updateAll();
+  });
+  $('spI').addEventListener('click', () => { app.spriteAddr = core.I; $('spAddr').value = hex(app.spriteAddr, 3); updateAll(); });
+  $('spPc').addEventListener('click', () => { app.spriteAddr = core.PC; $('spAddr').value = hex(app.spriteAddr, 3); updateAll(); });
+  $('spH').addEventListener('change', () => renderSprite());
+
+  $('bpAdd').addEventListener('click', () => {
+    const v = parseHexField($('bpAddr').value, 0xFFE);
+    if (v === null) { setMsg('Breakpoint address: hex 0 to FFE.', 'err'); return; }
+    app.bp.add(v);
+    setMsg(`Breakpoint added at 0x${hex(v, 3)}.`, 'ok');
+    updateAll();
+  });
+  $('bpList').addEventListener('click', e => {
+    const b = e.target.closest('button[data-rm]');
+    if (!b) return;
+    app.bp.delete(+b.dataset.rm);
+    updateAll();
+  });
+
+  $('trClear').addEventListener('click', () => { core.trace = []; renderTrace(); });
+  $('trFollow').addEventListener('change', renderTrace);
+  $('btnTests').addEventListener('click', () => renderTests(runSelfTests()));
+
+  loadBytes(DEMO_ROM, 'Demo (built-in)');
+}
+
+init();
+</script>
+</body>
+</html>

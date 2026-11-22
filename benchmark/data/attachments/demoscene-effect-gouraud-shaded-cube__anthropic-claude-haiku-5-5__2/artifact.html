@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Gouraud Shaded Cube</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #000;
+    overflow: hidden;
+  }
+  canvas {
+    display: block;
+  }
+  #hud {
+    position: fixed;
+    top: 8px;
+    left: 8px;
+    font-family: monospace;
+    font-size: 14px;
+    color: #e6e6e6;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">
+  <div id="fps">FPS: 0</div>
+  <div>W: wireframe &nbsp; P: pause</div>
+</div>
+
+<script>
+// ===== Constants =====
+const CAMERA_DISTANCE = 6;
+const AMBIENT = 0.15;
+const DIFFUSE = 0.85;
+const LIGHT_RADIUS = 3.0;
+const BACKGROUND_RGB = [0x10, 0x10, 0x18];
+const BACKGROUND_CSS = "#101018";
+const BACKGROUND_PIXEL = 0xFF000000 | (BACKGROUND_RGB[2] << 16) | (BACKGROUND_RGB[1] << 8) | BACKGROUND_RGB[0];
+const WIREFRAME_CSS = "rgba(0, 255, 200, 0.9)";
+const LIGHT_CSS = "#ffe066";
+const LIGHT_GLOW_CSS = "#ffd21f";
+const MAX_DELTA = 0.05;
+
+// ===== Math helpers =====
+// Matrices are 3x3 row-major arrays of 9 numbers.
+function mat3Multiply(a, b) {
+  const out = new Array(9);
+  for (let row = 0; row < 3; row++) {
+    for (let col = 0; col < 3; col++) {
+      out[row * 3 + col] =
+        a[row * 3] * b[col] +
+        a[row * 3 + 1] * b[3 + col] +
+        a[row * 3 + 2] * b[6 + col];
+    }
+  }
+  return out;
+}
+
+function rotX(angle) {
+  const c = Math.cos(angle);
+  const s = Math.sin(angle);
+  return [
+    1, 0, 0,
+    0, c, -s,
+    0, s, c
+  ];
+}
+
+function rotY(angle) {
+  const c = Math.cos(angle);
+  const s = Math.sin(angle);
+  return [
+    c, 0, s,
+    0, 1, 0,
+    -s, 0, c
+  ];
+}
+
+function rotZ(angle) {
+  const c = Math.cos(angle);
+  const s = Math.sin(angle);
+  return [
+    c, -s, 0,
+    s, c, 0,
+    0, 0, 1
+  ];
+}
+
+function mulVec(m, v) {
+  return [
+    m[0] * v[0] + m[1] * v[1] + m[2] * v[2],
+    m[3] * v[0] + m[4] * v[1] + m[5] * v[2],
+    m[6] * v[0] + m[7] * v[1] + m[8] * v[2]
+  ];
+}
+
+function dot(a, b) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+function cross(a, b) {
+  return [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0]
+  ];
+}
+
+function add(a, b) {
+  return [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+}
+
+function sub(a, b) {
+  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+}
+
+function scale(v, s) {
+  return [v[0] * s, v[1] * s, v[2] * s];
+}
+
+function normalize(v) {
+  const len = Math.sqrt(dot(v, v));
+  if (len < 1e-9) {
+    return [0, 0, 0];
+  }
+  return scale(v, 1 / len);
+}
+
+function clampChannel(value) {
+  return Math.min(255, Math.max(0, value));
+}
+
+// ===== Geometry =====
+// Cube corners at (+-1, +-1, +-1). Bit 0 = x, bit 1 = y, bit 2 = z.
+const corners = [];
+const cornerNormals = [];
+for (let i = 0; i < 8; i++) {
+  const corner = [
+    (i & 1) ? 1 : -1,
+    (i & 2) ? 1 : -1,
+    (i & 4) ? 1 : -1
+  ];
+  corners.push(corner);
+  cornerNormals.push(normalize(corner));
+}
+
+// Each face: four corner indices in cyclic order, plus a base color.
+const faceDefinitions = [
+  { quad: [1, 3, 7, 5], color: [230, 80, 80] },   // +X
+  { quad: [0, 2, 6, 4], color: [80, 200, 100] },  // -X
+  { quad: [2, 3, 7, 6], color: [80, 130, 235] },  // +Y
+  { quad: [0, 1, 5, 4], color: [235, 200, 70] },  // -Y
+  { quad: [4, 5, 7, 6], color: [200, 90, 220] },  // +Z
+  { quad: [0, 1, 3, 2], color: [70, 210, 220] }   // -Z
+];
+
+// Two triangles per face: 12 triangles, 36 indices in total.
+const triangles = [];
+for (const face of faceDefinitions) {
+  const q = face.quad;
+  triangles.push({ indices: [q[0], q[1], q[2]], color: face.color });
+  triangles.push({ indices: [q[0], q[2], q[3]], color: face.color });
+}
+
+// ===== Lighting =====
+function getLightPosition(t) {
+  const angle = t * 0.8;
+  return [
+    LIGHT_RADIUS * Math.cos(angle),
+    1.5 * Math.sin(t * 1.7),
+    LIGHT_RADIUS * Math.sin(angle)
+  ];
+}
+
+// Per-corner Lambert intensity (smooth normals per corner).
+function computeCornerIntensities(worldPositions, worldNormals, lightPos) {
+  const intensities = new Array(8);
+  for (let i = 0; i < 8; i++) {
+    const lightDir = normalize(sub(lightPos, worldPositions[i]));
+    const diffuse = Math.max(0, dot(worldNormals[i], lightDir));
+    intensities[i] = AMBIENT + DIFFUSE * diffuse;
+  }
+  return intensities;
+}
+
+// ===== Projection =====
+let width = 0;
+let height = 0;
+let focal = 0;
+let centerX = 0;
+let centerY = 0;
+
+function projectPoint(p) {
+  const viewZ = p[2] + CAMERA_DISTANCE;
+  return {
+    x: centerX + (p[0] * focal) / viewZ,
+    y: centerY - (p[1] * focal) / viewZ,
+    iz: 1 / viewZ,
+    viewZ: viewZ
+  };
+}
+
+// ===== Rasterizer =====
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+let imageData = null;
+let pixels = null;
+let zBuffer = null;
+
+function resizeCanvas() {
+  width = window.innerWidth;
+  height = window.innerHeight;
+  canvas.width = width;
+  canvas.height = height;
+  imageData = ctx.createImageData(width, height);
+  pixels = new Uint32Array(imageData.data.buffer);
+  zBuffer = new Float32Array(width * height);
+  focal = Math.min(width, height) * 1.2;
+  centerX = width / 2;
+  centerY = height / 2;
+}
+
+function edgeFunction(ax, ay, bx, by, px, py) {
+  return (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+}
+
+function rasterizeTriangle(a, b, c) {
+  const area = edgeFunction(a.x, a.y, b.x, b.y, c.x, c.y);
+  if (Math.abs(area) < 1e-9) {
+    return;
+  }
+
+  const minX = Math.max(0, Math.floor(Math.min(a.x, b.x, c.x)));
+  const maxX = Math.min(width - 1, Math.ceil(Math.max(a.x, b.x, c.x)));
+  const minY = Math.max(0, Math.floor(Math.min(a.y, b.y, c.y)));
+  const maxY = Math.min(height - 1, Math.ceil(Math.max(a.y, b.y, c.y)));
+  const invArea = 1 / area;
+
+  for (let y = minY; y <= maxY; y++) {
+    const py = y + 0.5;
+    for (let x = minX; x <= maxX; x++) {
+      const px = x + 0.5;
+
+      // Barycentric weights; dividing by area normalizes both winding orders.
+      const w0 = edgeFunction(b.x, b.y, c.x, c.y, px, py) * invArea;
+      const w1 = edgeFunction(c.x, c.y, a.x, a.y, px, py) * invArea;
+      const w2 = edgeFunction(a.x, a.y, b.x, b.y, px, py) * invArea;
+      if (w0 < 0 || w1 < 0 || w2 < 0) {
+        continue;
+      }
+
+      const index = y * width + x;
+      const depth = w0 * a.iz + w1 * b.iz + w2 * c.iz;
+      if (depth <= zBuffer[index]) {
+        continue;
+      }
+      zBuffer[index] = depth;
+
+      const r = w0 * a.r + w1 * b.r + w2 * c.r;
+      const g = w0 * a.g + w1 * b.g + w2 * c.g;
+      const bl = w0 * a.b + w1 * b.b + w2 * c.b;
+
+      pixels[index] =
+        0xFF000000 |
+        ((bl | 0) << 16) |
+        ((g | 0) << 8) |
+        (r | 0);
+    }
+  }
+}
+
+// ===== State =====
+const angles = { x: 0, y: 0, z: 0 };
+const angularSpeeds = { x: 0.6, y: 0.9, z: 0.4 };
+let lightTime = 0;
+let wireframe = false;
+let paused = false;
+
+// ===== Frame rendering =====
+function buildRotation() {
+  return mat3Multiply(
+    mat3Multiply(rotZ(angles.z), rotY(angles.y)),
+    rotX(angles.x)
+  );
+}
+
+function collectVisibleTriangles(worldPositions, worldNormals, cornerIntensities, projected) {
+  const visible = [];
+
+  for (const tri of triangles) {
+    const i0 = tri.indices[0];
+    const i1 = tri.indices[1];
+    const i2 = tri.indices[2];
+    const p0 = worldPositions[i0];
+    const p1 = worldPositions[i1];
+    const p2 = worldPositions[i2];
+
+    // Face normal; flipped so it points outward from the cube center.
+    let faceNormal = cross(sub(p1, p0), sub(p2, p0));
+    const centroid = scale(add(add(p0, p1), p2), 1 / 3);
+    if (dot(faceNormal, centroid) < 0) {
+      faceNormal = scale(faceNormal, -1);
+    }
+
+    // Backface culling: vector from the first vertex toward the camera (view space origin).
+    const viewPos0 = [p0[0], p0[1], p0[2] + CAMERA_DISTANCE];
+    const toCamera = scale(viewPos0, -1);
+    if (dot(faceNormal, toCamera) <= 0) {
+      continue;
+    }
+
+    const verts = tri.indices.map((index) => {
+      const proj = projected[index];
+      const intensity = cornerIntensities[index];
+      return {
+        x: proj.x,
+        y: proj.y,
+        iz: proj.iz,
+        r: clampChannel(tri.color[0] * intensity),
+        g: clampChannel(tri.color[1] * intensity),
+        b: clampChannel(tri.color[2] * intensity)
+      };
+    });
+
+    visible.push(verts);
+  }
+
+  return visible;
+}
+
+function drawShaded(visibleTriangles) {
+  zBuffer.fill(0);
+  pixels.fill(BACKGROUND_PIXEL);
+  for (const verts of visibleTriangles) {
+    rasterizeTriangle(verts[0], verts[1], verts[2]);
+  }
+  ctx.putImageData(imageData, 0, 0);
+}
+
+function drawWireframe(visibleTriangles) {
+  ctx.fillStyle = BACKGROUND_CSS;
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.strokeStyle = WIREFRAME_CSS;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (const verts of visibleTriangles) {
+    ctx.moveTo(verts[0].x, verts[0].y);
+    ctx.lineTo(verts[1].x, verts[1].y);
+    ctx.lineTo(verts[2].x, verts[2].y);
+    ctx.closePath();
+  }
+  ctx.stroke();
+}
+
+function drawLightIndicator(lightPos) {
+  const viewZ = lightPos[2] + CAMERA_DISTANCE;
+  if (viewZ <= 0) {
+    return;
+  }
+  const sx = centerX + (lightPos[0] * focal) / viewZ;
+  const sy = centerY - (lightPos[1] * focal) / viewZ;
+
+  ctx.save();
+  ctx.fillStyle = LIGHT_CSS;
+  ctx.shadowColor = LIGHT_GLOW_CSS;
+  ctx.shadowBlur = 16;
+  ctx.beginPath();
+  ctx.arc(sx, sy, 6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawPausedText() {
+  ctx.save();
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "20px monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.fillText("PAUSED", width / 2, 16);
+  ctx.restore();
+}
+
+function render() {
+  const rotation = buildRotation();
+  const lightPos = getLightPosition(lightTime);
+
+  // World-space (rotated) positions and normals per corner.
+  const worldPositions = new Array(8);
+  const worldNormals = new Array(8);
+  for (let i = 0; i < 8; i++) {
+    worldPositions[i] = mulVec(rotation, corners[i]);
+    worldNormals[i] = mulVec(rotation, cornerNormals[i]);
+  }
+
+  const cornerIntensities = computeCornerIntensities(worldPositions, worldNormals, lightPos);
+
+  const projected = new Array(8);
+  for (let i = 0; i < 8; i++) {
+    projected[i] = projectPoint(worldPositions[i]);
+  }
+
+  const visibleTriangles = collectVisibleTriangles(
+    worldPositions,
+    worldNormals,
+    cornerIntensities,
+    projected
+  );
+
+  if (wireframe) {
+    drawWireframe(visibleTriangles);
+  } else {
+    drawShaded(visibleTriangles);
+  }
+
+  drawLightIndicator(lightPos);
+
+  if (paused) {
+    drawPausedText();
+  }
+}
+
+// ===== UI and loop =====
+const fpsElement = document.getElementById("fps");
+let lastTime = performance.now();
+let fpsFrameCount = 0;
+let fpsWindowStart = lastTime;
+
+function frame() {
+  const now = performance.now();
+  const dt = Math.min(MAX_DELTA, (now - lastTime) / 1000);
+  lastTime = now;
+
+  if (!paused) {
+    angles.x += angularSpeeds.x * dt;
+    angles.y += angularSpeeds.y * dt;
+    angles.z += angularSpeeds.z * dt;
+    lightTime += dt;
+  }
+
+  render();
+
+  fpsFrameCount++;
+  if (now - fpsWindowStart >= 1000) {
+    fpsElement.textContent = "FPS: " + fpsFrameCount;
+    fpsFrameCount = 0;
+    fpsWindowStart = now;
+  }
+
+  requestAnimationFrame(frame);
+}
+
+window.addEventListener("keydown", (event) => {
+  const key = event.key.toLowerCase();
+  if (key === "w") {
+    wireframe = !wireframe;
+  } else if (key === "p") {
+    paused = !paused;
+  }
+});
+
+window.addEventListener("resize", resizeCanvas);
+
+resizeCanvas();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

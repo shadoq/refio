@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gouraud-Shaded Rotating Cube (Canvas 2D)</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0b0d12; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  #hud {
+    position: fixed; left: 10px; top: 8px;
+    color: #9fe8ff; font: 13px/1.5 Consolas, monospace;
+    background: rgba(0, 0, 0, 0.45); padding: 6px 10px; border-radius: 4px;
+    pointer-events: none; white-space: pre;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const hud = document.getElementById('hud');
+
+  // ---------- Framebuffer ----------
+  let W = 0, H = 0, imgData = null, buf32 = null;
+  function resize() {
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+    imgData = ctx.createImageData(W, H);
+    buf32 = new Uint32Array(imgData.data.buffer); // little-endian: ABGR packing
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  const BG = [0x0b, 0x0d, 0x12];
+  const BG_PACKED = 0xff000000 | (BG[2] << 16) | (BG[1] << 8) | BG[0];
+
+  // ---------- Geometry ----------
+  // Cube corners at (+-1, +-1, +-1)
+  const VERTS = [
+    [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
+    [-1, -1,  1], [1, -1,  1], [1, 1,  1], [-1, 1,  1]
+  ];
+
+  // Quads listed in cyclic order around each face, with outward normal and base colour.
+  const FACES = [
+    { idx: [4, 5, 6, 7], n: [ 0,  0,  1], col: [255,  90,  90] }, // front  (z+)
+    { idx: [1, 0, 3, 2], n: [ 0,  0, -1], col: [ 90, 200, 255] }, // back   (z-)
+    { idx: [5, 1, 2, 6], n: [ 1,  0,  0], col: [255, 200,  80] }, // right  (x+)
+    { idx: [0, 4, 7, 3], n: [-1,  0,  0], col: [120, 255, 140] }, // left   (x-)
+    { idx: [7, 6, 2, 3], n: [ 0,  1,  0], col: [200, 120, 255] }, // top    (y+)
+    { idx: [0, 1, 5, 4], n: [ 0, -1,  0], col: [240, 240, 240] }  // bottom (y-)
+  ];
+
+  // Smooth (per-face-corner) normals: blend of face normal and corner direction.
+  // Different normals at the 4 corners of a face make the Lambert term vary across
+  // the face, so Gouraud interpolation produces a visible gradient.
+  function normalize(v) {
+    const l = Math.hypot(v[0], v[1], v[2]) || 1;
+    return [v[0] / l, v[1] / l, v[2] / l];
+  }
+  FACES.forEach(f => {
+    f.smooth = f.idx.map(vi => {
+      const corner = normalize(VERTS[vi]);
+      return normalize([
+        f.n[0] * 0.5 + corner[0] * 0.5,
+        f.n[1] * 0.5 + corner[1] * 0.5,
+        f.n[2] * 0.5 + corner[2] * 0.5
+      ]);
+    });
+  });
+
+  // ---------- Math ----------
+  const EYE = [0, 0, -6];         // camera position (world space), looking along +z
+  const AMBIENT = 0.12;
+  const DIFFUSE = 0.9;
+  const SPEC_STRENGTH = 0.5;
+  const SHININESS = 40;
+
+  // Rotation: Rx(ax) then Ry(ay)
+  function rotate(p, ax, ay) {
+    const cxa = Math.cos(ax), sxa = Math.sin(ax);
+    const cya = Math.cos(ay), sya = Math.sin(ay);
+    // Rx
+    let y = p[1] * cxa - p[2] * sxa;
+    let z = p[1] * sxa + p[2] * cxa;
+    let x = p[0];
+    // Ry
+    const x2 = x * cya + z * sya;
+    const z2 = -x * sya + z * cya;
+    return [x2, y, z2];
+  }
+
+  // Moving light path (world space)
+  function lightPos(t) {
+    return [
+      Math.cos(t * 1.3) * 3.0,
+      Math.sin(t * 0.6) * 1.6,
+      Math.sin(t * 1.3) * 3.0
+    ];
+  }
+
+  // ---------- Rasterizer (Gouraud: barycentric colour interpolation) ----------
+  // a, b, c: { x, y, r, g, b } in screen space
+  function fillTriangle(a, b, c) {
+    const area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+    if (Math.abs(area) < 1e-9) return;
+    const inv = 1 / area;
+
+    const minX = Math.max(0, Math.floor(Math.min(a.x, b.x, c.x)));
+    const maxX = Math.min(W - 1, Math.ceil(Math.max(a.x, b.x, c.x)));
+    const minY = Math.max(0, Math.floor(Math.min(a.y, b.y, c.y)));
+    const maxY = Math.min(H - 1, Math.ceil(Math.max(a.y, b.y, c.y)));
+
+    for (let py = minY; py <= maxY; py++) {
+      const y = py + 0.5;
+      const rowOff = py * W;
+      for (let px = minX; px <= maxX; px++) {
+        const x = px + 0.5;
+        // Barycentric weights (signed areas / triangle area)
+        const w0 = ((c.x - b.x) * (y - b.y) - (c.y - b.y) * (x - b.x)) * inv; // weight of a
+        if (w0 < 0) continue;
+        const w1 = ((a.x - c.x) * (y - c.y) - (a.y - c.y) * (x - c.x)) * inv; // weight of b
+        if (w1 < 0) continue;
+        const w2 = 1 - w0 - w1;                                              // weight of c
+        if (w2 < 0) continue;
+
+        const r = (w0 * a.r + w1 * b.r + w2 * c.r) | 0;
+        const g = (w0 * a.g + w1 * b.g + w2 * c.g) | 0;
+        const bl = (w0 * a.b + w1 * b.b + w2 * c.b) | 0;
+        buf32[rowOff + px] = 0xff000000 | (bl << 16) | (g << 8) | r;
+      }
+    }
+  }
+
+  // ---------- State ----------
+  let t = 0;
+  let paused = false;
+  let wireframe = false;
+  let last = performance.now();
+  let fpsAccTime = 0, fpsAccFrames = 0, fps = 0;
+
+  window.addEventListener('keydown', e => {
+    if (e.repeat) return;
+    const k = e.key.toLowerCase();
+    if (k === 'w') wireframe = !wireframe;
+    else if (k === 'p') paused = !paused;
+  });
+
+  // ---------- Frame ----------
+  function renderScene(time) {
+    const ax = time * 0.6;
+    const ay = time * 0.9;
+    const f = Math.min(W, H) * 0.85;      // focal length in pixels
+    const light = lightPos(time);
+
+    const tris = []; // screen-space triangles to draw (for fill and wire)
+
+    for (const face of FACES) {
+      // World-space normal and centre for backface test
+      const nW = rotate(face.n, ax, ay);
+      const cW = [0, 0, 0];
+      const worldCorners = face.idx.map(vi => rotate(VERTS[vi], ax, ay));
+      worldCorners.forEach(p => { cW[0] += p[0]; cW[1] += p[1]; cW[2] += p[2]; });
+      cW[0] /= 4; cW[1] /= 4; cW[2] /= 4;
+
+      const toEye = [EYE[0] - cW[0], EYE[1] - cW[1], EYE[2] - cW[2]];
+      if (nW[0] * toEye[0] + nW[1] * toEye[1] + nW[2] * toEye[2] <= 0) continue; // backface
+
+      // Per-vertex: world position -> projected screen position + Lambert/Blinn colour
+      const sv = worldCorners.map((P, i) => {
+        const N = rotate(face.smooth[i], ax, ay);
+
+        const Lv = normalize([light[0] - P[0], light[1] - P[1], light[2] - P[2]]);
+        const Vv = normalize([EYE[0] - P[0], EYE[1] - P[1], EYE[2] - P[2]]);
+        const Hv = normalize([Lv[0] + Vv[0], Lv[1] + Vv[1], Lv[2] + Vv[2]]);
+
+        const lambert = Math.max(0, N[0] * Lv[0] + N[1] * Lv[1] + N[2] * Lv[2]);
+        const spec = Math.pow(Math.max(0, N[0] * Hv[0] + N[1] * Hv[1] + N[2] * Hv[2]), SHININESS);
+
+        const k = AMBIENT + DIFFUSE * lambert;
+        const r = Math.min(255, face.col[0] * k + 255 * SPEC_STRENGTH * spec);
+        const g = Math.min(255, face.col[1] * k + 255 * SPEC_STRENGTH * spec);
+        const b = Math.min(255, face.col[2] * k + 255 * SPEC_STRENGTH * spec);
+
+        // Perspective projection (view space z = world z - EYE.z)
+        const zv = P[2] - EYE[2];
+        return {
+          x: W / 2 + f * (P[0] - EYE[0]) / zv,
+          y: H / 2 - f * (P[1] - EYE[1]) / zv,
+          r, g, b
+        };
+      });
+
+      // Split quad into two triangles: (0,1,2) and (0,2,3)
+      tris.push([sv[0], sv[1], sv[2]]);
+      tris.push([sv[0], sv[2], sv[3]]);
+    }
+
+    // Background
+    if (wireframe) {
+      ctx.fillStyle = 'rgb(' + BG[0] + ',' + BG[1] + ',' + BG[2] + ')';
+      ctx.fillRect(0, 0, W, H);
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = 'rgba(180, 255, 220, 0.9)';
+      ctx.beginPath();
+      for (const [a, b, c] of tris) {
+        ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.lineTo(c.x, c.y); ctx.closePath();
+      }
+      ctx.stroke();
+    } else {
+      buf32.fill(BG_PACKED);
+      for (const [a, b, c] of tris) {
+        fillTriangle(a, b, c);
+      }
+      ctx.putImageData(imgData, 0, 0);
+    }
+
+    // Light source marker
+    const zl = light[2] - EYE[2];
+    if (zl > 0) {
+      const lx = W / 2 + f * (light[0] - EYE[0]) / zl;
+      const ly = H / 2 - f * (light[1] - EYE[1]) / zl;
+      ctx.save();
+      ctx.shadowColor = 'rgba(255, 255, 180, 1)';
+      ctx.shadowBlur = 18;
+      ctx.fillStyle = '#fffbd0';
+      ctx.beginPath();
+      ctx.arc(lx, ly, 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  function frame(now) {
+    const dt = Math.min(0.1, (now - last) / 1000);
+    last = now;
+
+    if (!paused) t += dt;
+    renderScene(t);
+
+    // FPS (updated twice per second)
+    fpsAccTime += dt;
+    fpsAccFrames++;
+    if (fpsAccTime >= 0.5) {
+      fps = Math.round(fpsAccFrames / fpsAccTime);
+      fpsAccTime = 0;
+      fpsAccFrames = 0;
+    }
+
+    hud.textContent =
+      'FPS: ' + fps + '\n' +
+      'W: wireframe [' + (wireframe ? 'ON' : 'off') + ']\n' +
+      'P: pause     [' + (paused ? 'ON' : 'off') + ']';
+
+    requestAnimationFrame(frame);
+  }
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

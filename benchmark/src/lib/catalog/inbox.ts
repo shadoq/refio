@@ -211,12 +211,14 @@ export function buildInboxEntry(input: InboxEntryInput): InboxEntry {
   return entry;
 }
 
+const QUEUE_AUTO_JUDGE = "e2e-deterministic";
+
 // Promote an inbox entry into results[] with the human's manual scores: it keeps
-// the artifact and metrics, but starts with no judgeScores - the strong judges
-// (claude-code, codex) score the result later in a dedicated judging pass, so the
-// deterministic auto-judge from the queue is intentionally not carried over. It
-// also drops the advisory autoVerdict (results have no such field) and removes the
-// entry from inbox[].
+// the artifact and metrics and any verdicts the strong judges (claude-code, codex)
+// already gave it while it waited in the queue. Only the queue's own deterministic
+// auto-judge is not carried over: it is advisory and results do not use it. It also
+// drops the advisory autoVerdict (results have no such field) and removes the entry
+// from inbox[].
 export function promoteInboxEntry(
   file: ResultsFile,
   entryId: string,
@@ -235,7 +237,7 @@ export function promoteInboxEntry(
     attemptNumber: entry.attemptNumber,
     scores,
     attachments: entry.attachments,
-    judgeScores: [],
+    judgeScores: entry.judgeScores.filter((j) => j.judgeId !== QUEUE_AUTO_JUDGE),
     runAt: entry.runAt,
     createdAt: now,
   };

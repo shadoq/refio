@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gouraud-Shaded Rotating Cube</title>
+<style>
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #0c0e14;
+}
+canvas {
+  display: block;
+}
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+<script>
+"use strict";
+
+const canvas = document.getElementById("view");
+const ctx = canvas.getContext("2d");
+
+const NEAR = 0.1;
+const CAMERA_DIST = 4.5;
+const MAX_DT = 0.05;
+const FPS_WINDOW = 0.5;
+const BG_R = 12;
+const BG_G = 14;
+const BG_B = 20;
+const BG_PACKED = 0xff000000 | (BG_B << 16) | (BG_G << 8) | BG_R;
+
+const state = {
+  wireframe: false,
+  paused: false,
+  t: 0,
+  fps: 0,
+  fpsFrames: 0,
+  fpsTime: 0,
+  width: 0,
+  height: 0,
+  imageData: null,
+  pixels: null,
+  depth: null
+};
+
+// Cube geometry: 6 faces, 4 duplicated corner vertices and outward normal per face
+function makeCube() {
+  const faceDefs = [
+    { normal: [0, 0, 1], color: [255, 60, 60], corners: [[-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]] },
+    { normal: [0, 0, -1], color: [60, 255, 60], corners: [[1, -1, -1], [-1, -1, -1], [-1, 1, -1], [1, 1, -1]] },
+    { normal: [1, 0, 0], color: [60, 120, 255], corners: [[1, -1, 1], [1, -1, -1], [1, 1, -1], [1, 1, 1]] },
+    { normal: [-1, 0, 0], color: [255, 255, 60], corners: [[-1, -1, -1], [-1, -1, 1], [-1, 1, 1], [-1, 1, -1]] },
+    { normal: [0, 1, 0], color: [60, 255, 255], corners: [[-1, 1, 1], [1, 1, 1], [1, 1, -1], [-1, 1, -1]] },
+    { normal: [0, -1, 0], color: [255, 60, 255], corners: [[-1, -1, -1], [1, -1, -1], [1, -1, 1], [-1, -1, 1]] }
+  ];
+  return faceDefs.map(f => ({
+    normal: f.normal,
+    color: f.color,
+    vertices: f.corners,
+    triangles: [[0, 1, 2], [0, 2, 3]]
+  }));
+}
+
+const cubeFaces = makeCube();
+
+// Flat row-major 3x3 matrices
+function rotationX(a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return [1, 0, 0, 0, c, -s, 0, s, c];
+}
+
+function rotationY(a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return [c, 0, s, 0, 1, 0, -s, 0, c];
+}
+
+function rotationZ(a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return [c, -s, 0, s, c, 0, 0, 0, 1];
+}
+
+function multiplyMatrix(a, b) {
+  const out = new Array(9).fill(0);
+  for (let i = 0; i < 3; i++) {
+    for (let j = 0; j < 3; j++) {
+      let sum = 0;
+      for (let k = 0; k < 3; k++) {
+        sum += a[i * 3 + k] * b[k * 3 + j];
+      }
+      out[i * 3 + j] = sum;
+    }
+  }
+  return out;
+}
+
+function transformPoint(m, v) {
+  return [
+    m[0] * v[0] + m[1] * v[1] + m[2] * v[2],
+    m[3] * v[0] + m[4] * v[1] + m[5] * v[2],
+    m[6] * v[0] + m[7] * v[1] + m[8] * v[2]
+  ];
+}
+
+function dot(a, b) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+function normalize(v) {
+  const len = Math.sqrt(dot(v, v)) || 1;
+  return [v[0] / len, v[1] / len, v[2] / len];
+}
+
+function projectPoint(v, f, cx, cy) {
+  return {
+    x: cx + f * v[0] / v[2],
+    y: cy - f * v[1] / v[2]
+  };
+}
+
+// Moving point light in world space
+function lightPosition(t) {
+  return [
+    3 * Math.cos(t * 0.7),
+    2 * Math.sin(t * 0.9),
+    3 * Math.sin(t * 0.7)
+  ];
+}
+
+// Per-vertex Lambert + ambient, returns [r, g, b]
+function shadeVertex(pos, normal, base, light) {
+  const toLight = normalize([
+    light[0] - pos[0],
+    light[1] - pos[1],
+    light[2] - pos[2]
+  ]);
+  const lambert = Math.max(0, dot(normal, toLight));
+  const intensity = 0.15 + 0.85 * lambert;
+  return [
+    Math.min(255, base[0] * intensity),
+    Math.min(255, base[1] * intensity),
+    Math.min(255, base[2] * intensity)
+  ];
+}
+
+// Gouraud rasterization with per-pixel depth buffer (stores 1/z)
+function rasterizeTriangle(a, b, c) {
+  const w = state.width;
+  const h = state.height;
+  const pixels = state.pixels;
+  const depth = state.depth;
+
+  const minX = Math.max(0, Math.floor(Math.min(a.x, b.x, c.x)));
+  const maxX = Math.min(w - 1, Math.ceil(Math.max(a.x, b.x, c.x)));
+  const minY = Math.max(0, Math.floor(Math.min(a.y, b.y, c.y)));
+  const maxY = Math.min(h - 1, Math.ceil(Math.max(a.y, b.y, c.y)));
+  if (minX > maxX || minY > maxY) return;
+
+  const area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+  if (Math.abs(area) < 1e-9) return;
+  const invArea = 1 / area;
+
+  const invA = 1 / a.z;
+  const invB = 1 / b.z;
+  const invC = 1 / c.z;
+
+  for (let py = minY; py <= maxY; py++) {
+    const sy = py + 0.5;
+    for (let px = minX; px <= maxX; px++) {
+      const sx = px + 0.5;
+
+      const w0 = ((c.x - b.x) * (sy - b.y) - (c.y - b.y) * (sx - b.x)) * invArea;
+      const w1 = ((a.x - c.x) * (sy - c.y) - (a.y - c.y) * (sx - c.x)) * invArea;
+      const w2 = ((b.x - a.x) * (sy - a.y) - (b.y - a.y) * (sx - a.x)) * invArea;
+
+      if (w0 < 0 || w1 < 0 || w2 < 0) continue;
+
+      const idx = py * w + px;
+      const invZ = w0 * invA + w1 * invB + w2 * invC;
+      if (invZ <= depth[idx]) continue;
+      depth[idx] = invZ;
+
+      const r = Math.round(w0 * a.r + w1 * b.r + w2 * c.r);
+      const g = Math.round(w0 * a.g + w1 * b.g + w2 * c.g);
+      const bl = Math.round(w0 * a.b + w1 * b.b + w2 * c.b);
+
+      pixels[idx] = 0xff000000 | (bl << 16) | (g << 8) | r;
+    }
+  }
+}
+
+function resizeBuffers() {
+  state.width = Math.max(1, window.innerWidth);
+  state.height = Math.max(1, window.innerHeight);
+  canvas.width = state.width;
+  canvas.height = state.height;
+  state.imageData = ctx.createImageData(state.width, state.height);
+  state.pixels = new Uint32Array(
+    state.imageData.data.buffer,
+    state.imageData.data.byteOffset,
+    state.width * state.height
+  );
+  state.depth = new Float32Array(state.width * state.height);
+}
+
+function drawFrame() {
+  const w = state.width;
+  const h = state.height;
+  const t = state.t;
+
+  const cx = w / 2;
+  const cy = h / 2;
+  const f = 0.8 * Math.min(w, h);
+
+  const angleX = t * 0.8;
+  const angleY = t * 1.3;
+  const angleZ = t * 0.5;
+  const model = multiplyMatrix(
+    multiplyMatrix(rotationY(angleY), rotationX(angleX)),
+    rotationZ(angleZ)
+  );
+
+  const light = lightPosition(t);
+
+  state.pixels.fill(BG_PACKED);
+  state.depth.fill(0);
+
+  const wireEdges = [];
+
+  for (const face of cubeFaces) {
+    const worldVerts = face.vertices.map(v => transformPoint(model, v));
+    const worldNormal = transformPoint(model, face.normal);
+    const viewVerts = worldVerts.map(p => [p[0], p[1], p[2] + CAMERA_DIST]);
+
+    // Clip: skip faces with any vertex behind near plane
+    if (viewVerts.some(v => v[2] <= NEAR)) continue;
+
+    // Backface culling: camera at origin in view space
+    const centroid = [0, 0, 0];
+    for (const v of viewVerts) {
+      centroid[0] += v[0];
+      centroid[1] += v[1];
+      centroid[2] += v[2];
+    }
+    centroid[0] /= 4;
+    centroid[1] /= 4;
+    centroid[2] /= 4;
+    if (dot(worldNormal, centroid) >= 0) continue;
+
+    // Per-vertex lighting and projection
+    const screenVerts = viewVerts.map((vv, i) => {
+      const color = shadeVertex(worldVerts[i], worldNormal, face.color, light);
+      const s = projectPoint(vv, f, cx, cy);
+      return { x: s.x, y: s.y, z: vv[2], r: color[0], g: color[1], b: color[2] };
+    });
+
+    for (const tri of face.triangles) {
+      const a = screenVerts[tri[0]];
+      const b = screenVerts[tri[1]];
+      const c = screenVerts[tri[2]];
+      if (state.wireframe) {
+        wireEdges.push([a, b, c]);
+      } else {
+        rasterizeTriangle(a, b, c);
+      }
+    }
+  }
+
+  state.imageData.data.set(new Uint8ClampedArray(state.imageData.data.buffer));
+  ctx.putImageData(state.imageData, 0, 0);
+
+  if (state.wireframe) {
+    ctx.strokeStyle = "rgba(170, 255, 170, 0.9)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (const [a, b, c] of wireEdges) {
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.lineTo(c.x, c.y);
+      ctx.lineTo(a.x, a.y);
+    }
+    ctx.stroke();
+  }
+
+  // Light source marker
+  const lightView = [light[0], light[1], light[2] + CAMERA_DIST];
+  if (lightView[2] > NEAR) {
+    const ls = projectPoint(lightView, f, cx, cy);
+    ctx.beginPath();
+    ctx.arc(ls.x, ls.y, 7, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255, 250, 200, 0.35)";
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(ls.x, ls.y, 3.5, 0, Math.PI * 2);
+    ctx.fillStyle = "#ffffff";
+    ctx.fill();
+  }
+
+  // Overlays
+  ctx.font = "16px monospace";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = "#e6e6e6";
+  ctx.fillText("FPS: " + Math.round(state.fps), 12, 24);
+
+  const mode = state.wireframe ? "Wireframe" : "Gouraud";
+  const run = state.paused ? "Paused" : "Running";
+  ctx.fillText(
+    "W: wireframe  P: pause  (current mode: " + mode + ", " + run + ")",
+    12,
+    h - 12
+  );
+}
+
+function updateFps(rawDt) {
+  state.fpsFrames++;
+  state.fpsTime += rawDt;
+  if (state.fpsTime >= FPS_WINDOW) {
+    state.fps = state.fpsFrames / state.fpsTime;
+    state.fpsFrames = 0;
+    state.fpsTime = 0;
+  }
+}
+
+let lastTime = null;
+
+function frame(now) {
+  if (lastTime === null) lastTime = now;
+  const rawDt = (now - lastTime) / 1000;
+  lastTime = now;
+  const dt = Math.min(rawDt, MAX_DT);
+
+  if (!state.paused) {
+    state.t += dt;
+  }
+
+  updateFps(rawDt);
+  drawFrame();
+  requestAnimationFrame(frame);
+}
+
+window.addEventListener("resize", resizeBuffers);
+
+window.addEventListener("keydown", e => {
+  if (e.repeat) return;
+  const key = e.key.toLowerCase();
+  if (key === "w") {
+    state.wireframe = !state.wireframe;
+  } else if (key === "p") {
+    state.paused = !state.paused;
+  }
+});
+
+resizeBuffers();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

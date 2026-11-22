@@ -1,0 +1,1648 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CHIP-8 Workbench</title>
+<style>
+:root{--bg:#121417;--panel:#1b1f24;--panel2:#252c34;--line:#2f373f;--text:#dbe2ea;--muted:#8d98a4;--cyan:#3fd8ea;--amber:#ffb84d;--bad:#ff6b6b;--ok:#6fe39a;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;--ui:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 var(--ui)}
+button,input,select{font:inherit;color:inherit}
+button{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:5px 10px;cursor:pointer}
+button:hover:not(:disabled){border-color:var(--cyan)}
+button:disabled,input:disabled,select:disabled{opacity:.45;cursor:not-allowed}
+button.primary{border-color:var(--cyan);color:var(--cyan)}
+button[aria-pressed=true]{border-color:var(--amber);color:var(--amber)}
+input[type=text],input[type=number],select{background:#0e1114;border:1px solid var(--line);border-radius:5px;padding:4px 6px;min-width:0}
+input[type=range]{accent-color:var(--cyan)}
+:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+header.top{display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:10px 14px;background:#171b20;border-bottom:1px solid var(--line)}
+.brand h1{margin:0;font-size:18px;color:var(--cyan)}
+.brand .model{color:var(--amber);font-family:var(--mono);font-size:12px}
+.rom{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.kv{color:var(--muted);font-size:12px}
+.kv b{color:var(--text);font-weight:600;font-family:var(--mono)}
+.badge{font-family:var(--mono);font-size:12px;font-weight:700;padding:3px 9px;border-radius:999px;border:1px solid var(--line);letter-spacing:.08em}
+.badge.paused{color:var(--muted)}
+.badge.running{color:var(--ok);border-color:var(--ok)}
+.badge.waiting{color:var(--amber);border-color:var(--amber)}
+.badge.breakpoint{color:var(--amber);border-color:var(--amber);background:#2b2210}
+.badge.fault{color:var(--bad);border-color:var(--bad);background:#2a1414}
+.msg{font-size:12px;color:var(--ok);min-height:16px;width:100%}
+.msg.err{color:var(--bad)}
+.transport{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:12px 12px 0}
+.transport .grp{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.compat{display:flex;flex-wrap:wrap;gap:10px;align-items:center;font-size:12px;color:var(--muted)}
+main{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:12px;padding:12px}
+@media(min-width:1100px){.span2{grid-column:span 2}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;min-width:0}
+.panel h2{font-size:12px;margin:0 0 10px;color:var(--cyan);text-transform:uppercase;letter-spacing:.08em}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px}
+.mono{font-family:var(--mono);font-size:12px}
+.muted{color:var(--muted);font-size:12px}
+.screen{position:relative;width:100%;max-width:640px;margin:0 auto 8px;border:1px solid var(--line);background:#000;line-height:0}
+.screen canvas{display:block;width:100%;height:auto;image-rendering:pixelated;image-rendering:crisp-edges}
+.gridov,.scanov{position:absolute;inset:0;pointer-events:none;display:none}
+.gridov{background-image:linear-gradient(to right,rgba(0,0,0,.45) 1px,transparent 1px),linear-gradient(to bottom,rgba(0,0,0,.45) 1px,transparent 1px);background-size:var(--cell,8px) var(--cell,8px)}
+.scanov{background:repeating-linear-gradient(to bottom,rgba(0,0,0,.35) 0 1px,transparent 1px 3px)}
+.screen.grid .gridov{display:block}
+.screen.scan .scanov{display:block}
+.keypad{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.key{height:50px;display:flex;flex-direction:column;align-items:center;justify-content:center;touch-action:none;user-select:none;-webkit-user-select:none}
+.key b{font-family:var(--mono);font-size:16px}
+.key small{font-size:10px;color:var(--muted)}
+.key.down{background:var(--cyan);color:#001}
+.key.down small{color:#023}
+table{border-collapse:collapse;width:100%}
+th,td{text-align:left;padding:3px 5px;border-bottom:1px solid #20262d;vertical-align:middle}
+th{font-weight:600;color:var(--muted)}
+.scroll{max-height:320px;overflow:auto;border:1px solid #20262d;border-radius:6px}
+.scroll thead th{position:sticky;top:0;background:var(--panel);z-index:1}
+.regs input.ed{width:96px;font-family:var(--mono)}
+.regs .hx{font-family:var(--mono);color:var(--cyan)}
+tr.chg td{background:#0d3a42}
+tr[data-reg=VF] th{color:var(--amber)}
+tr[data-reg=VF] .hx{color:var(--amber)}
+dl.ro{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:10px 0 0;font-family:var(--mono);font-size:12px}
+dl.ro dt{color:var(--muted)}
+dl.ro dd{margin:0}
+ol.stack{list-style:none;margin:0;padding:0;font-family:var(--mono);font-size:12px}
+ol.stack li{display:flex;gap:10px;align-items:center;padding:3px 6px;border-bottom:1px solid #20262d}
+ol.stack li.active{color:var(--text)}
+ol.stack li:not(.active){color:#4f5963}
+ol.stack li.top{background:#0d3a42}
+ol.stack button{padding:1px 6px;font-family:var(--mono);font-size:12px}
+td.gut{cursor:pointer;width:22px;text-align:center;color:#3c4650;user-select:none}
+td.gut.on{color:var(--bad)}
+tr.next{background:#0d3a42}
+tr.last{background:#352c15}
+tr.inv{color:var(--bad)}
+tr.noaddr{color:#4f5963}
+.mem td.b{font-family:var(--mono);font-size:12px;padding:2px 3px;cursor:pointer;text-align:center}
+.mem td.pc{background:#0b3b44;color:var(--cyan)}
+.mem td.ii{background:#4a3210;color:var(--amber)}
+.mem td.font{color:#9aa7b5}
+.mem td.rom{color:var(--ok)}
+.mem td.wr{outline:1px solid var(--bad);outline-offset:-1px}
+.mem th{font-family:var(--mono);font-size:12px;color:var(--cyan);padding:2px 5px}
+.mem td.asc{font-family:var(--mono);font-size:12px;color:var(--muted);letter-spacing:0;white-space:pre}
+.legend{display:flex;flex-wrap:wrap;gap:10px;font-size:11px;color:var(--muted)}
+.legend span::before{content:"";display:inline-block;width:10px;height:10px;margin-right:4px;vertical-align:-1px;border-radius:2px;background:#333}
+.legend .lpc::before{background:var(--cyan)}
+.legend .lii::before{background:var(--amber)}
+.legend .lfont::before{background:#9aa7b5}
+.legend .lrom::before{background:var(--ok)}
+.legend .lwr::before{background:var(--bad)}
+canvas.spc{width:96px;height:180px;image-rendering:pixelated;border:1px solid var(--line);background:#000}
+.bpl{list-style:none;margin:0;padding:0;font-family:var(--mono);font-size:12px}
+.bpl li{display:flex;justify-content:space-between;gap:8px;padding:3px 4px;border-bottom:1px solid #20262d}
+.pass{color:var(--ok)}
+.fail{color:var(--bad)}
+#dropHint{position:fixed;inset:0;background:rgba(0,0,0,.65);display:none;align-items:center;justify-content:center;font-size:20px;color:var(--cyan);z-index:9;pointer-events:none}
+#dropHint.show{display:flex}
+.note{font-size:12px;color:var(--muted);margin:8px 0 0}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <h1>CHIP-8 Workbench</h1>
+    <span class="model">anthropic-claude-haiku-5-5</span>
+  </div>
+  <div class="rom">
+    <button type="button" id="btnLoadRom">Load ROM</button>
+    <input type="file" id="romFile" accept=".ch8,.c8,.rom,.bin,application/octet-stream" hidden>
+    <button type="button" id="btnDemo">Load Demo</button>
+    <span class="kv">File <b id="romName">-</b></span>
+    <span class="kv">Size <b id="romSize">0 B</b></span>
+    <span class="kv">Range <b id="romRange">-</b></span>
+    <span id="badge" class="badge paused">PAUSED</span>
+  </div>
+  <div id="msg" class="msg" role="status" aria-live="polite"></div>
+</header>
+<div id="dropHint">Drop a CHIP-8 ROM to load it</div>
+
+<section class="transport panel" style="margin-left:12px;margin-right:12px;margin-top:12px">
+  <div class="grp">
+    <button type="button" id="btnRun" class="primary">Run</button>
+    <button type="button" id="btnPause">Pause</button>
+    <button type="button" id="btnStep">Single Step</button>
+    <button type="button" id="btnReset">Reset</button>
+  </div>
+  <div class="grp">
+    <label for="ipsRange" class="muted">Speed (IPS)</label>
+    <input type="range" id="ipsRange" min="60" max="6000" step="10" value="600">
+    <input type="number" id="ipsNum" min="60" max="6000" step="1" value="600" style="width:90px" aria-label="Instructions per second">
+  </div>
+  <div class="grp">
+    <button type="button" id="btnSelfTest">Run Self-tests</button>
+  </div>
+  <div class="compat">
+    <label>Shift source
+      <select id="optShift">
+        <option value="VX">VX (default)</option>
+        <option value="VY">VY</option>
+      </select>
+    </label>
+    <label><input type="checkbox" id="optLS"> FX55/FX65 increment I (I+X+1)</label>
+    <label><input type="checkbox" id="optLogic"> Logic ops reset VF</label>
+    <label><input type="checkbox" id="optWrap"> Sprite wrap (default clip)</label>
+  </div>
+</section>
+
+<main>
+  <section class="panel span2" id="pDisplay">
+    <h2>Display</h2>
+    <div class="row">
+      <label>Scale
+        <select id="scaleSel">
+          <option value="fit">Fit</option>
+          <option value="2">2x</option>
+          <option value="4">4x</option>
+          <option value="6">6x</option>
+          <option value="8" selected>8x</option>
+          <option value="10">10x</option>
+          <option value="12">12x</option>
+          <option value="16">16x</option>
+        </select>
+      </label>
+      <label>Palette
+        <select id="paletteSel">
+          <option value="green">Green</option>
+          <option value="amber">Amber</option>
+          <option value="mono">Monochrome</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="gridChk"> Pixel grid</label>
+      <label><input type="checkbox" id="scanChk"> Scanlines</label>
+      <button type="button" id="btnFull">Fullscreen</button>
+      <button type="button" id="btnPng">Export PNG</button>
+    </div>
+    <div id="screenWrap" class="screen" style="max-width:640px">
+      <canvas id="screen" width="64" height="32" aria-label="CHIP-8 display 64 by 32"></canvas>
+      <div id="gridOv" class="gridov"></div>
+      <div id="scanOv" class="scanov"></div>
+    </div>
+    <div class="row">
+      <button type="button" id="btnMute" aria-pressed="false">Mute</button>
+      <label>Volume <input type="range" id="volRange" min="0" max="100" value="40"></label>
+      <span id="audioAct" class="muted">Beep off</span>
+    </div>
+  </section>
+
+  <section class="panel" id="pKeypad">
+    <h2>Keypad</h2>
+    <div id="keypad" class="keypad"></div>
+    <p class="note">Demo bindings: 2 up (Digit2), 8 down (KeyS), 4 left (KeyQ), 6 right (KeyE), 0 beep (KeyX). The demo waits for any key to start.</p>
+  </section>
+
+  <section class="panel regs" id="pRegs">
+    <h2>Registers</h2>
+    <table>
+      <thead><tr><th>Reg</th><th>Hex</th><th>Dec (editable when paused)</th></tr></thead>
+      <tbody id="regBody"></tbody>
+    </table>
+    <dl class="ro">
+      <dt>SP</dt><dd id="vSP">0</dd>
+      <dt>Instr count</dt><dd id="vCount">0</dd>
+      <dt>Next opcode</dt><dd id="vNext">-</dd>
+    </dl>
+  </section>
+
+  <section class="panel" id="pStack">
+    <h2>Stack</h2>
+    <ol class="stack" id="stackList"></ol>
+  </section>
+
+  <section class="panel span2" id="pDisasm">
+    <h2>Disassembly</h2>
+    <div class="row">
+      <label><input type="checkbox" id="dFollow" checked> Follow PC</label>
+      <input type="text" id="dGotoIn" placeholder="0x200" style="width:110px" aria-label="Disassembly address">
+      <button type="button" id="dGo">Go</button>
+      <span class="muted">Click the gutter to toggle breakpoints. Linear disassembly can interpret sprite data as code.</span>
+    </div>
+    <div class="scroll">
+      <table class="mono">
+        <thead><tr><th></th><th>Addr</th><th>Bytes</th><th>Mnemonic</th><th>Mark</th><th>Explanation</th></tr></thead>
+        <tbody id="disBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel span2" id="pMem">
+    <h2>Memory</h2>
+    <div class="row">
+      <input type="text" id="memGotoIn" placeholder="0x000" style="width:110px" aria-label="Memory address">
+      <button type="button" id="memGo">Go</button>
+      <button type="button" id="memPrev">Prev page</button>
+      <button type="button" id="memNext">Next page</button>
+      <button type="button" id="memPC">Jump to PC</button>
+      <button type="button" id="memI">Jump to I</button>
+    </div>
+    <div class="row">
+      <input type="text" id="memAddr" placeholder="addr" style="width:110px" aria-label="Edit address">
+      <input type="text" id="memVal" placeholder="value 0-255" style="width:110px" aria-label="Edit value">
+      <button type="button" id="memWrite">Write byte (paused only)</button>
+    </div>
+    <div class="legend"><span class="lpc">PC</span><span class="lii">I</span><span class="lfont">Font</span><span class="lrom">ROM</span><span class="lwr">Written by last step</span></div>
+    <div class="scroll" style="max-height:360px;margin-top:8px">
+      <table class="mem">
+        <thead><tr><th>Addr</th><th colspan="16">Bytes</th><th>ASCII</th></tr></thead>
+        <tbody id="memBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel" id="pSprite">
+    <h2>Sprite preview</h2>
+    <div class="row">
+      <label><input type="checkbox" id="spTrack" checked> Track I</label>
+      <input type="text" id="spAddr" style="width:100px" aria-label="Sprite address">
+      <label>Height <input type="number" id="spH" min="1" max="15" value="5" style="width:70px"></label>
+    </div>
+    <div class="row" style="align-items:flex-start">
+      <canvas id="spCanvas" class="spc" width="8" height="15" aria-label="Sprite preview"></canvas>
+      <div class="mono" id="spBytes" style="word-break:break-word"></div>
+    </div>
+  </section>
+
+  <section class="panel" id="pBp">
+    <h2>Breakpoints</h2>
+    <div class="row">
+      <input type="text" id="bpIn" placeholder="0x200" style="width:110px" aria-label="Breakpoint address">
+      <button type="button" id="bpAdd">Add</button>
+    </div>
+    <ul class="bpl" id="bpList"></ul>
+  </section>
+
+  <section class="panel span2" id="pTrace">
+    <h2>Trace (last 200 completed instructions)</h2>
+    <div class="row">
+      <button type="button" id="traceClear">Clear</button>
+      <label><input type="checkbox" id="traceFollow" checked> Follow latest</label>
+    </div>
+    <div class="scroll" id="traceBox">
+      <table class="mono">
+        <thead><tr><th>#</th><th>Prev PC</th><th>Opcode</th><th>Mnemonic</th><th>Next PC</th><th>Registers</th><th>Memory writes</th><th>SP</th></tr></thead>
+        <tbody id="traceBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel span2" id="pTests">
+    <h2>Self-tests</h2>
+    <div class="row">
+      <span id="stSummary" class="mono muted">Not run yet.</span>
+    </div>
+    <div class="scroll">
+      <table class="mono">
+        <thead><tr><th>Group</th><th>Check</th><th>Expected</th><th>Observed</th><th>Result</th></tr></thead>
+        <tbody id="stBody"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script>
+"use strict";
+
+const FONT=[
+0xF0,0x90,0x90,0x90,0xF0, 0x20,0x60,0x20,0x20,0x70, 0xF0,0x10,0xF0,0x80,0xF0, 0xF0,0x10,0xF0,0x10,0xF0,
+0x90,0x90,0xF0,0x10,0x10, 0xF0,0x80,0xF0,0x10,0xF0, 0xF0,0x80,0xF0,0x90,0xF0, 0xF0,0x10,0x20,0x40,0x40,
+0xF0,0x90,0xF0,0x90,0xF0, 0xF0,0x90,0xF0,0x10,0xF0, 0xF0,0x90,0xF0,0x90,0x90, 0xE0,0x90,0xE0,0x90,0xE0,
+0xF0,0x80,0x80,0x80,0xF0, 0xE0,0x90,0x90,0x90,0xE0, 0xF0,0x80,0xF0,0x80,0xF0, 0xF0,0x80,0xF0,0x80,0x80
+];
+
+const DEMO_PROGRAM=[
+0x60,0x1C, // 0x200 LD V0,28       ; X = 28
+0x61,0x0E, // 0x202 LD V1,14       ; Y = 14
+0xF2,0x0A, // 0x204 LD V2,K        ; wait for a fresh key press to start
+0xA2,0x3E, // 0x206 LD I,0x23E     ; I = sprite data
+0x22,0x3A, // 0x208 CALL 0x23A     ; draw sprite at (V0,V1)
+0x22,0x3A, // 0x20A LOOP: CALL 0x23A ; erase at current position (XOR)
+0x63,0x02, // 0x20C LD V3,2        ; key 2 = up
+0xE3,0xA1, // 0x20E SKNP V3        ; skip next if key 2 is NOT held
+0x71,0xFF, // 0x210 ADD V1,0xFF    ; Y -= 1
+0x63,0x08, // 0x212 LD V3,8        ; key 8 = down
+0xE3,0xA1, // 0x214 SKNP V3
+0x71,0x01, // 0x216 ADD V1,1       ; Y += 1
+0x63,0x04, // 0x218 LD V3,4        ; key 4 = left
+0xE3,0xA1, // 0x21A SKNP V3
+0x70,0xFF, // 0x21C ADD V0,0xFF    ; X -= 1
+0x63,0x06, // 0x21E LD V3,6        ; key 6 = right
+0xE3,0xA1, // 0x220 SKNP V3
+0x70,0x01, // 0x222 ADD V0,1       ; X += 1
+0x66,0x00, // 0x224 LD V6,0        ; key 0 = beep
+0x6A,0x0A, // 0x226 LD VA,10       ; beep length
+0xE6,0xA1, // 0x228 SKNP V6        ; skip next if key 0 is NOT held
+0xFA,0x18, // 0x22A LD ST,VA       ; ST = 10 only while key 0 is held
+0x22,0x3A, // 0x22C CALL 0x23A     ; draw at new position
+0x67,0x05, // 0x22E LD V7,5        ; pacing: 5 timer ticks
+0xF7,0x15, // 0x230 LD DT,V7
+0xF7,0x07, // 0x232 WAIT: LD V7,DT
+0x37,0x00, // 0x234 SE V7,0        ; skip when DT == 0
+0x12,0x32, // 0x236 JP WAIT
+0x12,0x0A, // 0x238 JP LOOP
+0xD0,0x15, // 0x23A DRAW: DRW V0,V1,5 ; XOR 8x5 sprite (clips at right/bottom)
+0x00,0xEE, // 0x23C RET
+0xFF,0x81,0x81,0x81,0xFF // 0x23E sprite data (box)
+];
+
+const H=(v,w)=>(v>>>0).toString(16).toUpperCase().padStart(w,'0');
+const h1=v=>H(v,1), h2=v=>H(v,2), h3=v=>'0x'+H(v,3), h4=v=>'0x'+H(v,4);
+const VN=i=>'V'+H(i,1);
+
+function decode(op){
+  op&=0xFFFF;
+  const x=(op>>8)&0xF, y=(op>>4)&0xF, n=op&0xF, nn=op&0xFF, nnn=op&0xFFF;
+  const R=(kind,mnemonic,explanation)=>({op,x,y,n,nn,nnn,kind,mnemonic,explanation,valid:true});
+  const B=(kind,mnemonic,explanation)=>({op,x,y,n,nn,nnn,kind,mnemonic,explanation,valid:false});
+  const vx=VN(x), vy=VN(y);
+  const dw='DW '+h4(op);
+  switch(op>>12){
+    case 0x0:
+      if(op===0x00E0) return R('CLS','CLS','Clear the display');
+      if(op===0x00EE) return R('RET','RET','Return to the address on top of the stack');
+      return B('SYS','SYS '+h3(nnn),'Legacy 0NNN machine routine: unsupported (fault)');
+    case 0x1: return R('JP','JP '+h3(nnn),'Jump to '+h3(nnn));
+    case 0x2: return R('CALL','CALL '+h3(nnn),'Call subroutine at '+h3(nnn)+', pushing the return address');
+    case 0x3: return R('SE',`SE ${vx}, ${h2(nn)}`,`Skip next if ${vx} == ${h2(nn)}`);
+    case 0x4: return R('SNE',`SNE ${vx}, ${h2(nn)}`,`Skip next if ${vx} != ${h2(nn)}`);
+    case 0x5: return n===0?R('SE_R',`SE ${vx}, ${vy}`,`Skip next if ${vx} == ${vy}`):B('INVALID',dw,'5XY1 is invalid');
+    case 0x6: return R('LD',`LD ${vx}, ${h2(nn)}`,`${vx} = ${h2(nn)}`);
+    case 0x7: return R('ADD',`ADD ${vx}, ${h2(nn)}`,`${vx} += ${h2(nn)} (VF unchanged)`);
+    case 0x8:
+      switch(n){
+        case 0x0: return R('LD_R',`LD ${vx}, ${vy}`,`${vx} = ${vy}`);
+        case 0x1: return R('OR',`OR ${vx}, ${vy}`,`${vx} |= ${vy} (VF reset only if option enabled)`);
+        case 0x2: return R('AND',`AND ${vx}, ${vy}`,`${vx} &= ${vy} (VF reset only if option enabled)`);
+        case 0x3: return R('XOR',`XOR ${vx}, ${vy}`,`${vx} ^= ${vy} (VF reset only if option enabled)`);
+        case 0x4: return R('ADD_R',`ADD ${vx}, ${vy}`,`${vx} += ${vy}; VF = carry`);
+        case 0x5: return R('SUB',`SUB ${vx}, ${vy}`,`${vx} -= ${vy}; VF = 1 if no borrow`);
+        case 0x6: return R('SHR',`SHR ${vx} {, ${vy}}`,'Shift right; VF = shifted-out bit (source per setting, default VX)');
+        case 0x7: return R('SUBN',`SUBN ${vx}, ${vy}`,`${vx} = ${vy} - ${vx}; VF = 1 if no borrow`);
+        case 0xE: return R('SHL',`SHL ${vx} {, ${vy}}`,'Shift left; VF = old bit 7 (source per setting, default VX)');
+        default: return B('INVALID',dw,'Undefined 8XY opcode');
+      }
+    case 0x9: return n===0?R('SNE_R',`SNE ${vx}, ${vy}`,`Skip next if ${vx} != ${vy}`):B('INVALID',dw,'9XY1 is invalid');
+    case 0xA: return R('LDI','LD I, '+h3(nnn),'I = '+h3(nnn));
+    case 0xB: return R('JP0','JP V0, '+h3(nnn),'Jump to '+h3(nnn)+' + V0 (16-bit wrap)');
+    case 0xC: return R('RND',`RND ${vx}, ${h2(nn)}`,`${vx} = random & ${h2(nn)}`);
+    case 0xD: return R('DRW',`DRW ${vx}, ${vy}, ${h1(n)}`,n===0?'Draws nothing; VF = 0':`Draw ${n}-row sprite at I; VF = collision`);
+    case 0xE:
+      if(nn===0x9E) return R('SKP',`SKP ${vx}`,`Skip next if key ${vx}&F is held`);
+      if(nn===0xA1) return R('SKNP',`SKNP ${vx}`,`Skip next if key ${vx}&F is not held`);
+      return B('INVALID',dw,'Undefined EX opcode');
+    case 0xF:
+      switch(nn){
+        case 0x07: return R('LDDT',`LD ${vx}, DT`,`${vx} = DT`);
+        case 0x0A: return R('WAITKEY',`LD ${vx}, K`,'Wait for a fresh key press');
+        case 0x15: return R('SETDT',`LD DT, ${vx}`,`DT = ${vx}`);
+        case 0x18: return R('SETST',`LD ST, ${vx}`,`ST = ${vx}`);
+        case 0x1E: return R('ADDI',`ADD I, ${vx}`,`I = (I + ${vx}) & 0xFFFF; VF unchanged`);
+        case 0x29: return R('FONT',`LD F, ${vx}`,`I = font address of digit ${vx}&F`);
+        case 0x33: return R('BCD',`LD B, ${vx}`,'Store BCD of VX at I, I+1, I+2');
+        case 0x55: return R('STORE',`LD [I], ${vx}`,`Store V0..${vx} at I..`);
+        case 0x65: return R('LOAD',`LD ${vx}, [I]`,`Load V0..${vx} from I..`);
+        default: return B('INVALID',dw,'Undefined FX opcode');
+      }
+    default: return B('INVALID',dw,'Undefined opcode');
+  }
+}
+
+class Chip8Core{
+  constructor(seed){
+    this.memory=new Uint8Array(4096);
+    this.V=new Uint8Array(16);
+    this.I=0;
+    this.PC=0x200;
+    this.stack=new Uint16Array(16);
+    this.SP=0;
+    this.DT=0;
+    this.ST=0;
+    this.display=new Uint8Array(64*32);
+    this.keys=new Uint8Array(16);
+    this.freshKeys=new Uint8Array(16);
+    this.settings={shiftSource:'VX',loadStoreIncrement:false,logicResetVF:false,spriteWrap:false};
+    this.breakpoints=new Set();
+    this.romBytes=null;
+    this.romName='';
+    this.rngSeed=(seed>>>0)||1;
+    this.rng=this.rngSeed;
+    this.trace=[];
+    this.traceSeq=0;
+    this.instructionCount=0;
+    this.running=false;
+    this.bpHit=false;
+    this.fault=null;
+    this.waiting=false;
+    this.waitPC=-1;
+    this.skipBpAddr=-1;
+    this.lastPC=-1;
+    this.lastOpcode=-1;
+    this.lastWrites=[];
+    this.lastRegChanges=[];
+    this._writes=[];
+    this.reset();
+  }
+  get status(){
+    if(this.fault) return 'FAULT';
+    if(this.bpHit) return 'BREAKPOINT';
+    if(this.running) return this.waiting?'WAITING':'RUNNING';
+    return 'PAUSED';
+  }
+  rand8(){
+    let x=this.rng;
+    x=(x^(x<<13))>>>0;
+    x=(x^(x>>>17))>>>0;
+    x=(x^(x<<5))>>>0;
+    this.rng=x;
+    return x&0xFF;
+  }
+  loadRom(bytes,name){
+    if(!bytes||bytes.length===0) throw new Error('ROM is empty');
+    if(bytes.length>3584) throw new Error('ROM is larger than 3584 bytes');
+    this.romBytes=Uint8Array.from(bytes);
+    this.romName=name||'ROM';
+    this.reset();
+  }
+  reset(){
+    this.memory.fill(0);
+    this.memory.set(FONT,0x50);
+    if(this.romBytes) this.memory.set(this.romBytes,0x200);
+    this.V.fill(0);
+    this.I=0;
+    this.PC=0x200;
+    this.stack.fill(0);
+    this.SP=0;
+    this.DT=0;
+    this.ST=0;
+    this.display.fill(0);
+    this.freshKeys.fill(0);
+    this.waiting=false;
+    this.waitPC=-1;
+    this.running=false;
+    this.bpHit=false;
+    this.fault=null;
+    this.skipBpAddr=-1;
+    this.trace=[];
+    this.traceSeq=0;
+    this.instructionCount=0;
+    this.lastPC=-1;
+    this.lastOpcode=-1;
+    this.lastWrites=[];
+    this.lastRegChanges=[];
+    this._writes=[];
+  }
+  setKey(k,down){
+    k&=0xF;
+    if(down){
+      if(!this.keys[k]){ this.keys[k]=1; this.freshKeys[k]=1; }
+    }else{
+      this.keys[k]=0;
+    }
+  }
+  releaseAllKeys(){
+    this.keys.fill(0);
+    this.freshKeys.fill(0);
+  }
+  tick(){
+    if(this.DT>0) this.DT--;
+    if(this.ST>0) this.ST--;
+  }
+  pokeMemory(addr,val){
+    this.memory[addr]=val&0xFF;
+  }
+  writeMem(addr,val){
+    const old=this.memory[addr];
+    this.memory[addr]=val&0xFF;
+    this._writes.push({addr,old,val:this.memory[addr]});
+  }
+  _fault(op,message){
+    this.fault={addr:this.PC,opcode:op,message};
+    this.running=false;
+    this.waiting=false;
+    this.waitPC=-1;
+    return {status:'fault',fault:this.fault};
+  }
+  _execute(){
+    const prevPC=this.PC;
+    if(this.PC>4094) return this._fault(null,'Invalid fetch at '+h3(this.PC)+': instruction must lie within 0x000-0xFFE');
+    const op=(this.memory[this.PC]<<8)|this.memory[this.PC+1];
+    const d=decode(op);
+    if(!d.valid){
+      return this._fault(op,d.kind==='SYS'?'Unsupported legacy SYS routine '+h3(d.nnn):'Invalid or unknown opcode '+h4(op));
+    }
+    const V=this.V, x=d.x, y=d.y;
+    const regBefore=Uint8Array.from(V);
+    const iBefore=this.I;
+    const spBefore=this.SP;
+    this._writes=[];
+    let next=(prevPC+2)&0xFFFF;
+    switch(d.kind){
+      case 'CLS': this.display.fill(0); break;
+      case 'RET':
+        if(this.SP===0) return this._fault(op,'Stack underflow: RET with empty return stack');
+        this.SP--;
+        next=this.stack[this.SP];
+        break;
+      case 'JP': next=d.nnn; break;
+      case 'CALL':
+        if(this.SP>=16) return this._fault(op,'Stack overflow: CALL with all 16 return entries in use');
+        this.stack[this.SP++]=(prevPC+2)&0xFFFF;
+        next=d.nnn;
+        break;
+      case 'SE': if(V[x]===d.nn) next=prevPC+4; break;
+      case 'SNE': if(V[x]!==d.nn) next=prevPC+4; break;
+      case 'SE_R': if(V[x]===V[y]) next=prevPC+4; break;
+      case 'LD': V[x]=d.nn; break;
+      case 'ADD': V[x]=(V[x]+d.nn)&0xFF; break;
+      case 'LD_R': V[x]=V[y]; break;
+      case 'OR':
+        V[x]=V[x]|V[y];
+        if(this.settings.logicResetVF) V[15]=0;
+        break;
+      case 'AND':
+        V[x]=V[x]&V[y];
+        if(this.settings.logicResetVF) V[15]=0;
+        break;
+      case 'XOR':
+        V[x]=V[x]^V[y];
+        if(this.settings.logicResetVF) V[15]=0;
+        break;
+      case 'ADD_R': {
+        const a=V[x], b=V[y];
+        const s=a+b;
+        V[x]=s&0xFF;
+        V[15]=s>0xFF?1:0;
+        break;
+      }
+      case 'SUB': {
+        const a=V[x], b=V[y];
+        V[x]=(a-b)&0xFF;
+        V[15]=a>=b?1:0;
+        break;
+      }
+      case 'SUBN': {
+        const a=V[x], b=V[y];
+        V[x]=(b-a)&0xFF;
+        V[15]=b>=a?1:0;
+        break;
+      }
+      case 'SHR': {
+        const src=this.settings.shiftSource==='VY'?V[y]:V[x];
+        V[x]=src>>1;
+        V[15]=src&1;
+        break;
+      }
+      case 'SHL': {
+        const src=this.settings.shiftSource==='VY'?V[y]:V[x];
+        V[x]=(src<<1)&0xFF;
+        V[15]=(src>>7)&1;
+        break;
+      }
+      case 'SNE_R': if(V[x]!==V[y]) next=prevPC+4; break;
+      case 'LDI': this.I=d.nnn; break;
+      case 'JP0': next=(d.nnn+V[0])&0xFFFF; break;
+      case 'RND': V[x]=this.rand8()&d.nn; break;
+      case 'DRW': {
+        if(d.n===0){ V[15]=0; break; }
+        if(this.I+d.n-1>4095) return this._fault(op,'Sprite read out of range: I+'+(d.n-1)+' exceeds 0xFFF');
+        const cx=V[x], cy=V[y];
+        const x0=cx%64, y0=cy%32;
+        let collision=0;
+        for(let r=0;r<d.n;r++){
+          const row=this.memory[this.I+r];
+          for(let c=0;c<8;c++){
+            if(!((row>>(7-c))&1)) continue;
+            let px=x0+c, py=y0+r;
+            if(this.settings.spriteWrap){ px%=64; py%=32; }
+            else if(px>=64||py>=32) continue;
+            const idx=py*64+px;
+            if(this.display[idx]) collision=1;
+            this.display[idx]^=1;
+          }
+        }
+        V[15]=collision;
+        break;
+      }
+      case 'SKP': if(this.keys[V[x]&0xF]) next=prevPC+4; break;
+      case 'SKNP': if(!this.keys[V[x]&0xF]) next=prevPC+4; break;
+      case 'LDDT': V[x]=this.DT; break;
+      case 'WAITKEY': {
+        if(!this.waiting||this.waitPC!==prevPC){
+          this.waiting=true;
+          this.waitPC=prevPC;
+          this.freshKeys.fill(0);
+        }
+        let key=-1;
+        for(let k=0;k<16;k++){ if(this.freshKeys[k]){ key=k; break; } }
+        if(key<0) return {status:'waiting'};
+        this.freshKeys.fill(0);
+        this.waiting=false;
+        this.waitPC=-1;
+        V[x]=key;
+        break;
+      }
+      case 'SETDT': this.DT=V[x]; break;
+      case 'SETST': this.ST=V[x]; break;
+      case 'ADDI': this.I=(this.I+V[x])&0xFFFF; break;
+      case 'FONT': this.I=0x50+5*(V[x]&0xF); break;
+      case 'BCD': {
+        if(this.I+2>4095) return this._fault(op,'BCD write out of range: I+2 = '+h4(this.I+2)+' exceeds 0xFFF');
+        const v=V[x];
+        this.writeMem(this.I,Math.floor(v/100));
+        this.writeMem(this.I+1,Math.floor(v/10)%10);
+        this.writeMem(this.I+2,v%10);
+        break;
+      }
+      case 'STORE': {
+        if(this.I+x>4095) return this._fault(op,'Store out of range: I+'+x+' exceeds 0xFFF');
+        for(let i=0;i<=x;i++) this.writeMem(this.I+i,V[i]);
+        if(this.settings.loadStoreIncrement) this.I=(this.I+x+1)&0xFFFF;
+        break;
+      }
+      case 'LOAD': {
+        if(this.I+x>4095) return this._fault(op,'Load out of range: I+'+x+' exceeds 0xFFF');
+        for(let i=0;i<=x;i++) V[i]=this.memory[this.I+i];
+        if(this.settings.loadStoreIncrement) this.I=(this.I+x+1)&0xFFFF;
+        break;
+      }
+      default:
+        return this._fault(op,'Unknown opcode '+h4(op));
+    }
+    this.PC=next&0xFFFF;
+    const regChanges=[];
+    for(let i=0;i<16;i++){
+      if(V[i]!==regBefore[i]) regChanges.push({reg:VN(i),from:regBefore[i],to:V[i]});
+    }
+    if(this.I!==iBefore) regChanges.push({reg:'I',from:iBefore,to:this.I});
+    const rec={seq:++this.traceSeq,prevPC,opcode:op,mnemonic:d.mnemonic,nextPC:this.PC,regChanges,memWrites:this._writes,spDelta:this.SP-spBefore};
+    this.trace.push(rec);
+    if(this.trace.length>200) this.trace.shift();
+    this.instructionCount++;
+    this.lastPC=prevPC;
+    this.lastOpcode=op;
+    this.lastWrites=this._writes;
+    this.lastRegChanges=regChanges;
+    return {status:'ok',rec};
+  }
+  stepOnce(){
+    if(this.running) return {status:'busy'};
+    this.bpHit=false;
+    this.fault=null;
+    const r=this._execute();
+    this.skipBpAddr=-1;
+    return r;
+  }
+  start(){
+    this.fault=null;
+    this.bpHit=false;
+    this.skipBpAddr=this.PC;
+    this.running=true;
+  }
+  runBudget(limit){
+    let executed=0;
+    while(this.running&&executed<limit){
+      if(this.breakpoints.has(this.PC)&&this.skipBpAddr!==this.PC){
+        this.running=false;
+        this.bpHit=true;
+        break;
+      }
+      const r=this._execute();
+      this.skipBpAddr=-1;
+      if(r.status==='fault'||r.status==='waiting') break;
+      executed++;
+    }
+    return executed;
+  }
+}
+
+function parseNum(s,max){
+  const t=String(s).trim();
+  if(!t) return null;
+  let v;
+  if(/^0x[0-9a-f]+$/i.test(t)) v=parseInt(t.slice(2),16);
+  else if(/^[0-9]+$/.test(t)) v=parseInt(t,10);
+  else return null;
+  return (v>=0&&v<=max)?v:null;
+}
+
+const $=id=>document.getElementById(id);
+const core=new Chip8Core((Math.random()*0xFFFFFFFF)>>>0||1);
+const KEY_CODE=['KeyX','Digit1','Digit2','Digit3','KeyQ','KeyW','KeyE','KeyA','KeyS','KeyD','KeyZ','KeyC','Digit4','KeyR','KeyF','KeyV'];
+const CODE_TO_KEY={};
+KEY_CODE.forEach((c,k)=>{CODE_TO_KEY[c]=k;});
+const KEYPAD_LAYOUT=[[1,2,3,0xC],[4,5,6,0xD],[7,8,9,0xE],[0xA,0,0xB,0xF]];
+const PALETTES={green:{on:[157,255,157],off:[11,26,14]},amber:{on:[255,176,0],off:[26,18,0]},mono:{on:[255,255,255],off:[0,0,0]}};
+const ui={ips:600,followPC:true,disBase:0x200,memBase:0x200,spriteTrack:true,spriteAddr:0x50,spriteH:5,muted:false,volume:0.4,pointerKeys:new Map(),romLen:0,traceShown:-1,traceDirty:true,lastCount:-1};
+const audio={ctx:null,osc:null,gain:null};
+const canvas=$('screen');
+const cctx=canvas.getContext('2d');
+const imgData=cctx.createImageData(64,32);
+const spCanvas=$('spCanvas');
+const spctx=spCanvas.getContext('2d');
+const regRows={};
+const padBtns=[];
+const stackRows=[];
+
+function msg(text,isErr){
+  const m=$('msg');
+  m.textContent=text;
+  m.classList.toggle('err',!!isErr);
+}
+
+function loadRomBytes(bytes,name){
+  try{
+    core.loadRom(bytes,name);
+  }catch(e){
+    msg(e.message,true);
+    return false;
+  }
+  ui.romLen=bytes.length;
+  ui.followPC=true;
+  $('dFollow').checked=true;
+  ui.disBase=0x200;
+  ui.traceDirty=true;
+  msg('Loaded '+name+' ('+bytes.length+' bytes)',false);
+  refreshAll();
+  return true;
+}
+
+function loadDemo(){
+  loadRomBytes(Uint8Array.from(DEMO_PROGRAM),'demo.ch8');
+  msg('Demo loaded. Paused. Press Run, then any key to start.',false);
+}
+
+function loadFile(f){
+  const reader=new FileReader();
+  reader.onload=()=>{
+    loadRomBytes(new Uint8Array(reader.result),f.name);
+  };
+  reader.onerror=()=>msg('Could not read file',true);
+  reader.readAsArrayBuffer(f);
+}
+
+function drawScreen(){
+  const p=PALETTES[$('paletteSel').value]||PALETTES.green;
+  const d=imgData.data;
+  const fb=core.display;
+  for(let i=0;i<2048;i++){
+    const c=fb[i]?p.on:p.off;
+    const j=i*4;
+    d[j]=c[0];d[j+1]=c[1];d[j+2]=c[2];d[j+3]=255;
+  }
+  cctx.putImageData(imgData,0,0);
+}
+
+function updateGridCell(){
+  const cell=canvas.getBoundingClientRect().width/64;
+  $('gridOv').style.setProperty('--cell',cell+'px');
+}
+
+function applyScale(){
+  const wrap=$('screenWrap');
+  const s=$('scaleSel').value;
+  if(s==='fit'){
+    canvas.style.width='100%';
+    wrap.style.width='100%';
+    wrap.style.maxWidth='640px';
+  }else{
+    const px=64*Number(s);
+    canvas.style.width=px+'px';
+    wrap.style.width=px+'px';
+    wrap.style.maxWidth='none';
+  }
+  updateGridCell();
+}
+
+function exportPng(){
+  const off=document.createElement('canvas');
+  off.width=64*8;
+  off.height=32*8;
+  const c=off.getContext('2d');
+  c.imageSmoothingEnabled=false;
+  c.drawImage(canvas,0,0,off.width,off.height);
+  off.toBlob(b=>{
+    if(!b){ msg('PNG export failed',true); return; }
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(b);
+    a.download='chip8-frame.png';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+  },'image/png');
+}
+
+function ensureAudio(){
+  if(audio.ctx){
+    if(audio.ctx.state==='suspended') audio.ctx.resume();
+    return;
+  }
+  const AC=window.AudioContext||window.webkitAudioContext;
+  if(!AC){ msg('Web Audio is not available in this browser',true); return; }
+  audio.ctx=new AC();
+  audio.osc=audio.ctx.createOscillator();
+  audio.osc.type='square';
+  audio.osc.frequency.value=440;
+  audio.gain=audio.ctx.createGain();
+  audio.gain.gain.value=0;
+  audio.osc.connect(audio.gain);
+  audio.gain.connect(audio.ctx.destination);
+  audio.osc.start();
+}
+
+function audioSync(){
+  const on=!!audio.ctx&&core.running&&core.ST>0&&!ui.muted&&!core.fault;
+  if(audio.ctx){
+    audio.gain.gain.setTargetAtTime(on?ui.volume*0.2:0,audio.ctx.currentTime,0.01);
+  }
+  const el=$('audioAct');
+  el.textContent=on?'Beep ON':'Beep off';
+  el.style.color=on?'var(--amber)':'';
+}
+
+function setIps(v){
+  let n=Math.round(Number(v));
+  if(!Number.isFinite(n)) n=600;
+  n=Math.min(6000,Math.max(60,n));
+  ui.ips=n;
+  $('ipsRange').value=n;
+  $('ipsNum').value=n;
+}
+
+function buildStatic(){
+  const pad=$('keypad');
+  for(const row of KEYPAD_LAYOUT){
+    for(const k of row){
+      const b=document.createElement('button');
+      b.type='button';
+      b.className='key';
+      b.setAttribute('aria-label','CHIP-8 key '+H(k,1)+' (keyboard '+KEY_CODE[k].replace(/^(Digit|Key)/,'')+')');
+      b.innerHTML='<b>'+H(k,1)+'</b><small>'+KEY_CODE[k].replace(/^(Digit|Key)/,'')+'</small>';
+      b.addEventListener('pointerdown',e=>{
+        e.preventDefault();
+        try{ b.setPointerCapture(e.pointerId); }catch(_){}
+        ui.pointerKeys.set(e.pointerId,k);
+        core.setKey(k,true);
+        updatePad();
+      });
+      const release=e=>{
+        const kk=ui.pointerKeys.get(e.pointerId);
+        if(kk!==undefined){
+          ui.pointerKeys.delete(e.pointerId);
+          core.setKey(kk,false);
+          updatePad();
+        }
+      };
+      b.addEventListener('pointerup',release);
+      b.addEventListener('pointercancel',release);
+      b.addEventListener('lostpointercapture',release);
+      pad.appendChild(b);
+      padBtns[k]=b;
+    }
+  }
+
+  const tbody=$('regBody');
+  const names=[];
+  for(let i=0;i<16;i++) names.push(VN(i));
+  names.push('I','PC','DT','ST');
+  for(const n of names){
+    const tr=document.createElement('tr');
+    tr.dataset.reg=n;
+    const th=document.createElement('th');
+    th.scope='row';
+    th.textContent=n;
+    const tdHex=document.createElement('td');
+    tdHex.className='hx';
+    const tdDec=document.createElement('td');
+    const inp=document.createElement('input');
+    inp.type='text';
+    inp.className='ed';
+    inp.setAttribute('aria-label',n+' decimal value');
+    inp.addEventListener('change',()=>applyRegEdit(n,inp));
+    tdDec.appendChild(inp);
+    tr.append(th,tdHex,tdDec);
+    tbody.appendChild(tr);
+    regRows[n]={tr,hx:tdHex,inp};
+  }
+
+  const sl=$('stackList');
+  for(let i=0;i<16;i++){
+    const li=document.createElement('li');
+    const idx=document.createElement('span');
+    idx.textContent='['+H(i,1)+']';
+    idx.style.width='36px';
+    const btn=document.createElement('button');
+    btn.type='button';
+    btn.addEventListener('click',()=>{
+      ui.disBase=btn.dataset.addr|0;
+      ui.followPC=false;
+      $('dFollow').checked=false;
+      refreshAll();
+    });
+    const mark=document.createElement('span');
+    mark.className='muted';
+    li.append(idx,btn,mark);
+    sl.appendChild(li);
+    stackRows.push({li,btn,mark});
+  }
+}
+
+function applyRegEdit(name,inp){
+  if(core.running){
+    msg('Pause before editing registers',true);
+    refreshAll();
+    return;
+  }
+  const max=(name==='I'||name==='PC')?4095:255;
+  const v=parseNum(inp.value,max);
+  if(v===null){
+    msg(name+': enter 0-'+max+' (decimal or 0x hex)',true);
+    refreshAll();
+    return;
+  }
+  if(/^V[0-9A-F]$/.test(name)) core.V[parseInt(name.slice(1),16)]=v;
+  else if(name==='I') core.I=v;
+  else if(name==='PC'){ core.PC=v; core.fault=null; core.waiting=false; core.waitPC=-1; }
+  else if(name==='DT') core.DT=v;
+  else if(name==='ST') core.ST=v;
+  msg(name+' set to '+v,false);
+  refreshAll();
+}
+
+function renderRegs(){
+  const changed=new Set(core.lastRegChanges.map(c=>c.reg));
+  for(const n in regRows){
+    const r=regRows[n];
+    let v,w;
+    if(/^V[0-9A-F]$/.test(n)){ v=core.V[parseInt(n.slice(1),16)]; w=2; }
+    else if(n==='I'){ v=core.I; w=3; }
+    else if(n==='PC'){ v=core.PC; w=3; }
+    else if(n==='DT'){ v=core.DT; w=2; }
+    else { v=core.ST; w=2; }
+    r.hx.textContent='0x'+H(v,w);
+    if(document.activeElement!==r.inp) r.inp.value=String(v);
+    r.inp.disabled=core.running;
+    r.tr.classList.toggle('chg',changed.has(n));
+  }
+  $('vSP').textContent=String(core.SP);
+  $('vCount').textContent=String(core.instructionCount);
+  const op=(core.memory[core.PC]<<8)|core.memory[core.PC+1];
+  $('vNext').textContent=core.PC>4094?'-':(h4(op)+'  '+decode(op).mnemonic);
+}
+
+function renderStack(){
+  for(let i=0;i<16;i++){
+    const s=stackRows[i];
+    const active=i<core.SP;
+    const top=i===core.SP-1;
+    s.li.classList.toggle('active',active);
+    s.li.classList.toggle('top',top);
+    s.btn.textContent=active?h3(core.stack[i]):'---';
+    s.btn.dataset.addr=String(core.stack[i]);
+    s.btn.disabled=!active;
+    s.mark.textContent=top?'top':(active?'':'empty');
+  }
+}
+
+function renderDisasm(){
+  const base=ui.followPC?Math.max(0,core.PC-4):ui.disBase;
+  let html='';
+  for(let i=0;i<24;i++){
+    const a=base+2*i;
+    if(a>4095){ break; }
+    if(a>4094){
+      html+='<tr class="noaddr"><td class="gut"></td><td>'+h3(a)+'</td><td>--</td><td>-</td><td></td><td>Beyond fetch range</td></tr>';
+      continue;
+    }
+    const op=(core.memory[a]<<8)|core.memory[a+1];
+    const d=decode(op);
+    const bp=core.breakpoints.has(a);
+    let cls=[];
+    if(!d.valid) cls.push('inv');
+    if(a===core.PC) cls.push('next');
+    if(a===core.lastPC) cls.push('last');
+    let mark='';
+    if(a===core.PC) mark='NEXT';
+    if(a===core.lastPC) mark=mark?mark+' / LAST':'LAST';
+    if(!d.valid) mark=(mark?mark+' / ':'')+'INVALID';
+    html+='<tr class="'+cls.join(' ')+'">'
+      +'<td class="gut'+(bp?' on':'')+'" data-gutter="'+a+'" title="Toggle breakpoint">'+(bp?'●':'·')+'</td>'
+      +'<td>'+h3(a)+'</td>'
+      +'<td>'+H(core.memory[a],2)+' '+H(core.memory[a+1],2)+'</td>'
+      +'<td>'+d.mnemonic+'</td>'
+      +'<td>'+mark+'</td>'
+      +'<td>'+d.explanation+'</td></tr>';
+  }
+  $('disBody').innerHTML=html;
+  $('dFollow').checked=ui.followPC;
+}
+
+function setMemBase(a){
+  ui.memBase=Math.min(3840,Math.max(0,a&~0xF));
+}
+
+function renderMemory(){
+  const wset=new Set(core.lastWrites.map(w=>w.addr));
+  const base=ui.memBase;
+  let html='';
+  for(let r=0;r<16;r++){
+    const row=base+r*16;
+    html+='<tr><th>'+h3(row)+'</th>';
+    let asc='';
+    for(let c=0;c<16;c++){
+      const a=row+c;
+      if(a>4095){ html+='<td>--</td>'; asc+=' '; continue; }
+      const v=core.memory[a];
+      const cls=['b'];
+      if(a===core.PC) cls.push('pc');
+      else if(a===core.I) cls.push('ii');
+      if(a>=0x50&&a<0xA0) cls.push('font');
+      if(a>=0x200&&a<0x200+ui.romLen) cls.push('rom');
+      if(wset.has(a)) cls.push('wr');
+      html+='<td class="'+cls.join(' ')+'" data-addr="'+a+'" title="'+h3(a)+'">'+H(v,2)+'</td>';
+      asc+=(v>=0x20&&v<0x7F)?String.fromCharCode(v):'.';
+    }
+    html+='<td class="asc">'+asc.replace(/</g,'&lt;').replace(/&/g,'&amp;')+'</td></tr>';
+  }
+  $('memBody').innerHTML=html;
+}
+
+function renderSprite(){
+  const addr=ui.spriteTrack?core.I:ui.spriteAddr;
+  const hgt=ui.spriteH;
+  const spAddr=$('spAddr');
+  if(document.activeElement!==spAddr) spAddr.value=h3(addr);
+  spAddr.disabled=ui.spriteTrack;
+  spctx.fillStyle='#000';
+  spctx.fillRect(0,0,8,15);
+  spctx.fillStyle='#9dff9d';
+  let bytes=[];
+  for(let r=0;r<hgt;r++){
+    const a=addr+r;
+    if(a>4095){ bytes.push('--'); continue; }
+    const b=core.memory[a];
+    bytes.push(H(b,2));
+    for(let c=0;c<8;c++){
+      if((b>>(7-c))&1) spctx.fillRect(c,r,1,1);
+    }
+  }
+  $('spBytes').textContent='Addr '+h3(addr)+' | '+bytes.join(' ');
+}
+
+function renderBreakpoints(){
+  const list=$('bpList');
+  const items=[...core.breakpoints].sort((a,b)=>a-b);
+  let html='';
+  for(const a of items){
+    html+='<li><span>'+h3(a)+'</span><button type="button" data-rm="'+a+'">Remove</button></li>';
+  }
+  if(!items.length) html='<li class="muted">No breakpoints</li>';
+  list.innerHTML=html;
+}
+
+function renderTrace(){
+  const follow=$('traceFollow').checked;
+  if(ui.traceDirty||ui.traceShown!==core.traceSeq){
+    let html='';
+    const list=core.trace.slice().reverse();
+    for(const t of list){
+      const regs=t.regChanges.map(c=>c.reg+' '+H(c.from,c.reg==='I'?3:2)+'->'+H(c.to,c.reg==='I'?3:2)).join(', ');
+      const wr=t.memWrites.map(w=>h3(w.addr)+'='+H(w.val,2)).join(', ');
+      html+='<tr><td>'+t.seq+'</td><td>'+h3(t.prevPC)+'</td><td>'+h4(t.opcode)+'</td><td>'+t.mnemonic+'</td><td>'+h3(t.nextPC)+'</td><td>'+(regs||'-')+'</td><td>'+(wr||'-')+'</td><td>'+(t.spDelta>0?'+':'')+t.spDelta+'</td></tr>';
+    }
+    if(!html) html='<tr><td colspan="8" class="muted">No completed instructions yet</td></tr>';
+    $('traceBody').innerHTML=html;
+    ui.traceShown=core.traceSeq;
+    ui.traceDirty=false;
+    if(follow) $('traceBox').scrollTop=0;
+  }
+}
+
+function updatePad(){
+  for(let k=0;k<16;k++){
+    if(padBtns[k]) padBtns[k].classList.toggle('down',!!core.keys[k]);
+  }
+}
+
+function renderStatus(){
+  const st=core.status;
+  const b=$('badge');
+  b.textContent=st;
+  b.className='badge '+st.toLowerCase();
+  $('romName').textContent=core.romName||'-';
+  const len=core.romBytes?core.romBytes.length:0;
+  $('romSize').textContent=len+' B';
+  $('romRange').textContent=len?(h3(0x200)+'-'+h3(0x200+len-1)):'-';
+}
+
+function renderControls(){
+  const r=core.running;
+  $('btnRun').disabled=r;
+  $('btnPause').disabled=!r;
+  $('btnStep').disabled=r;
+  $('optShift').value=core.settings.shiftSource;
+  $('optLS').checked=core.settings.loadStoreIncrement;
+  $('optLogic').checked=core.settings.logicResetVF;
+  $('optWrap').checked=core.settings.spriteWrap;
+  $('optShift').disabled=r;
+  $('optLS').disabled=r;
+  $('optLogic').disabled=r;
+  $('optWrap').disabled=r;
+  $('memWrite').disabled=r;
+  $('memVal').disabled=r;
+  $('memAddr').disabled=r;
+  $('btnMute').setAttribute('aria-pressed',String(ui.muted));
+  $('btnMute').textContent=ui.muted?'Unmute':'Mute';
+}
+
+function refreshAll(){
+  drawScreen();
+  renderStatus();
+  renderControls();
+  renderRegs();
+  renderStack();
+  renderDisasm();
+  renderMemory();
+  renderSprite();
+  renderBreakpoints();
+  renderTrace();
+  updatePad();
+  updateGridCell();
+  audioSync();
+}
+
+function doRun(){
+  if(core.running) return;
+  ensureAudio();
+  core.start();
+  msg('Running',false);
+  refreshAll();
+}
+
+function doPause(){
+  core.running=false;
+  refreshAll();
+}
+
+function doStep(){
+  core.running=false;
+  const r=core.stepOnce();
+  if(r.status==='waiting') msg('Waiting for a fresh key press (FX0A)',false);
+  else if(r.status==='fault') msg('Fault: '+r.fault.message,true);
+  else if(r.status==='ok') msg('Stepped',false);
+  refreshAll();
+}
+
+function doReset(){
+  core.running=false;
+  core.reset();
+  ui.traceDirty=true;
+  msg('Reset to original ROM state',false);
+  refreshAll();
+}
+
+function runSelfTests(){
+  const rows=[];
+  const T=(group,name,expected,observed)=>{
+    const e=String(expected), o=String(observed);
+    rows.push({group,name,expected:e,observed:o,pass:e===o});
+  };
+  const mk=(ops,settings)=>{
+    const c=new Chip8Core(0x1234);
+    const bytes=[];
+    for(const o of ops) bytes.push((o>>8)&0xFF,o&0xFF);
+    c.loadRom(Uint8Array.from(bytes),'selftest');
+    if(settings) Object.assign(c.settings,settings);
+    return c;
+  };
+  const run=(c,n)=>{ for(let i=0;i<n;i++) c.stepOnce(); return c; };
+  const lit=c=>{ let n=0; for(let i=0;i<2048;i++) n+=c.display[i]; return n; };
+
+  let c;
+  c=run(mk([0x6AFF,0x6B01,0x8AB4]),3);
+  T('ALU','8XY4 carry: VA',0,c.V[10]); T('ALU','8XY4 carry: VF',1,c.V[15]);
+  c=run(mk([0x6A80,0x8AA4]),2);
+  T('ALU','8XY4 X=Y: VA',0,c.V[10]); T('ALU','8XY4 X=Y: VF',1,c.V[15]);
+  c=run(mk([0x6F80,0x6E80,0x8FE4]),3);
+  T('ALU','8XY4 X=F: VF is carry (flag written last)',1,c.V[15]);
+  c=run(mk([0x6A03,0x6F04,0x8AF4]),3);
+  T('ALU','8XY4 Y=F: VA',7,c.V[10]); T('ALU','8XY4 Y=F: VF',0,c.V[15]);
+  c=run(mk([0x6A03,0x6B05,0x8AB5]),3);
+  T('ALU','8XY5 borrow: VA',0xFE,c.V[10]); T('ALU','8XY5 borrow: VF',0,c.V[15]);
+  c=run(mk([0x6A05,0x6B05,0x8AB5]),3);
+  T('ALU','8XY5 equality: VA',0,c.V[10]); T('ALU','8XY5 equality: VF (no borrow)',1,c.V[15]);
+  c=run(mk([0x6A05,0x8AA5]),2);
+  T('ALU','8XY5 X=Y: VA',0,c.V[10]); T('ALU','8XY5 X=Y: VF',1,c.V[15]);
+  c=run(mk([0x6A03,0x6B05,0x8AB7]),3);
+  T('ALU','8XY7 VY>=VX: VA',2,c.V[10]); T('ALU','8XY7 VY>=VX: VF',1,c.V[15]);
+  c=run(mk([0x6A05,0x6B03,0x8AB7]),3);
+  T('ALU','8XY7 borrow: VA',0xFE,c.V[10]); T('ALU','8XY7 borrow: VF',0,c.V[15]);
+  c=run(mk([0x6A05,0x6B08,0x8AB6]),3);
+  T('Shift','8XY6 uses VX: VA',2,c.V[10]); T('Shift','8XY6 uses VX: VF',1,c.V[15]);
+  c=run(mk([0x6A05,0x6B08,0x8AB6],{shiftSource:'VY'}),3);
+  T('Shift','8XY6 VY source: VA',4,c.V[10]); T('Shift','8XY6 VY source: VF',0,c.V[15]);
+  c=run(mk([0x6A81,0x8ABE]),2);
+  T('Shift','8XYE: VA',2,c.V[10]); T('Shift','8XYE: VF',1,c.V[15]);
+  c=run(mk([0x6F81,0x8FFE]),2);
+  T('Shift','8XYE X=Y=F: VF is flag (written last)',1,c.V[15]);
+  c=run(mk([0x6A0F,0x6B33,0x8AB1]),3);
+  T('Logic','8XY1 OR',0x3F,c.V[10]);
+  c=run(mk([0x6A0F,0x6B33,0x8AB2]),3);
+  T('Logic','8XY2 AND',0x03,c.V[10]);
+  c=run(mk([0x6A0F,0x6B33,0x8AB3]),3);
+  T('Logic','8XY3 XOR',0x3C,c.V[10]);
+  c=run(mk([0x6F07,0x6A01,0x6B02,0x8AB1]),4);
+  T('Logic','Logic keeps VF by default',7,c.V[15]);
+  c=run(mk([0x6F07,0x6A01,0x6B02,0x8AB1],{logicResetVF:true}),4);
+  T('Logic','Logic resets VF when enabled',0,c.V[15]);
+  c=run(mk([0x6F05,0x7F01]),2);
+  T('ALU','7XNN does not change VF',5,c.V[15]);
+  c=run(mk([0x6A0C,0x8AA3]),2);
+  T('ALU','8XY3 X=Y: VA',0x0C,c.V[10]);
+
+  c=run(mk([0x6A05,0x3A05,0x6B01,0x6C02]),2);
+  T('Flow','3XNN skip taken: PC',0x206,h3(c.PC));
+  run(c,1);
+  T('Flow','Skipped instruction not run (VB)',0,c.V[11]);
+  T('Flow','Instruction after skip runs (VC)',2,c.V[12]);
+  c=run(mk([0x6A01,0x4A01,0x6B01]),2);
+  T('Flow','4XNN no skip when equal: PC',0x204,h3(c.PC));
+  c=run(mk([0x6A02,0x6B02,0x5AB0,0x6C01,0x6D01]),3);
+  T('Flow','5XY0 skip when equal: PC',0x208,h3(c.PC));
+  c=run(mk([0x6A01,0x6B02,0x9AB0,0x6C01]),3);
+  T('Flow','9XY0 skip when different: PC',0x208,h3(c.PC));
+  c=mk([0x5AB1]); c.stepOnce();
+  T('Invalid','5XY1 faults',true,c.fault!==null&&c.fault.opcode===0x5AB1);
+  c=mk([0x9AB1]); c.stepOnce();
+  T('Invalid','9XY1 faults',true,c.fault!==null&&c.fault.opcode===0x9AB1);
+  c=mk([0x8AB8]); c.stepOnce();
+  T('Invalid','8XY8 faults',true,c.fault!==null);
+  c=mk([0xE000]); c.stepOnce();
+  T('Invalid','EX00 faults',true,c.fault!==null);
+  c=mk([0xF099]); c.stepOnce();
+  T('Invalid','Unknown FX99 faults',true,c.fault!==null);
+  c=mk([0x0123]); c.stepOnce();
+  T('Invalid','0NNN SYS reports unsupported',true,c.fault!==null&&c.fault.message.indexOf('SYS')>=0);
+  c=mk([0x00EE]); c.stepOnce();
+  T('Stack','RET underflow faults',true,c.fault!==null);
+  c=mk([0x2200]); run(c,16);
+  T('Stack','16 nested calls: SP',16,c.SP);
+  T('Stack','16 calls no fault',true,c.fault===null);
+  c.stepOnce();
+  T('Stack','17th call faults',true,c.fault!==null);
+  T('Stack','SP unchanged after overflow',16,c.SP);
+  c=run(mk([0x2206,0x6B09,0x1210,0x6A07,0x00EE]),1);
+  T('Flow','CALL jumps to subroutine: PC',0x206,h3(c.PC));
+  T('Flow','CALL pushes return: SP',1,c.SP);
+  T('Flow','CALL pushes return: address',0x202,h3(c.stack[0]));
+  run(c,3);
+  T('Flow','RET returns to caller: PC',0x202,h3(c.PC));
+  T('Flow','RET pops stack: SP',0,c.SP);
+  run(c,1);
+  T('Flow','Subroutine body ran (VA)',7,c.V[10]);
+  T('Flow','Return continues (VB)',9,c.V[11]);
+  c=run(mk([0x1200]),1);
+  c.PC=4095; c.stepOnce();
+  T('Fetch','Fetch beyond 0xFFE faults',true,c.fault!==null);
+  c=run(mk([0x6A01,0x1200]),1);
+  c.PC=0x201;
+  T('Fetch','Odd PC allowed',0x201,h3(c.PC));
+  c=run(mk([0x6005,0xB200]),2);
+  T('Flow','BNNN jumps to NNN+V0',0x205,h3(c.PC));
+
+  c=run(mk([0x6AFE,0xA300,0xFA33]),3);
+  T('BCD','BCD digit 0',2,c.memory[0x300]);
+  T('BCD','BCD digit 1',5,c.memory[0x301]);
+  T('BCD','BCD digit 2',4,c.memory[0x302]);
+  c=mk([0xAFFF,0xFA33]); run(c,2);
+  T('BCD','BCD near end of memory faults',true,c.fault!==null);
+  c=run(mk([0x6001,0x6102,0x6203,0xA300,0xF255]),5);
+  T('Transfer','FX55 stores V0..VX',1+'/'+2+'/'+3,c.memory[0x300]+'/'+c.memory[0x301]+'/'+c.memory[0x302]);
+  T('Transfer','FX55 preserves I',0x300,h3(c.I));
+  c=run(mk([0x6001,0x6102,0x6203,0xA300,0xF255],{loadStoreIncrement:true}),5);
+  T('Transfer','FX55 increments I when enabled',0x303,h3(c.I));
+  c=run(mk([0x6001,0x6102,0x6203,0xA300,0xF255,0x6000,0x6100,0x6200,0xF265]),9);
+  T('Transfer','FX65 loads V0..VX',1+'/'+2+'/'+3,c.V[0]+'/'+c.V[1]+'/'+c.V[2]);
+  T('Transfer','FX65 preserves I',0x300,h3(c.I));
+  c=run(mk([0xAFFE,0xF255]),2);
+  T('Transfer','FX55 out of range faults',true,c.fault!==null);
+
+  c=run(mk([0x6A05,0xFA15,0xFA07]),3);
+  T('Timer','FX07 reads DT into VA',5,c.V[10]);
+  c.tick(); c.tick();
+  T('Timer','DT ticks down',3,c.DT);
+  c=run(mk([0x6A04,0xFA18]),2);
+  T('Timer','FX18 sets ST',4,c.ST);
+  c.tick();
+  T('Timer','ST ticks down',3,c.ST);
+
+  c=mk([0x6A05,0xEA9E,0x6B01,0x6C02]); c.setKey(5,true); run(c,2);
+  T('Keys','EX9E skip when pressed: PC',0x206,h3(c.PC));
+  c=mk([0x6A05,0xEAA1,0x6B01,0x6C02]); run(c,2);
+  T('Keys','EXA1 skip when not pressed: PC',0x206,h3(c.PC));
+  c=mk([0xF20A,0x6B01]); c.setKey(3,true); c.stepOnce();
+  T('Keys','FX0A waits, ignores held key: PC',0x200,h3(c.PC));
+  T('Keys','FX0A status waiting',true,c.waiting);
+  c.setKey(3,false); c.setKey(7,true); c.stepOnce();
+  T('Keys','FX0A fresh keydown stored in VX',7,c.V[2]);
+  T('Keys','FX0A completes: PC',0x202,h3(c.PC));
+  T('Keys','FX0A logged once in trace',1,c.trace.length);
+
+  c=run(mk([0x6A0C,0xFA29]),2);
+  T('Font','FX29 digit C address',0x08C,h3(c.I));
+  c=run(mk([0x6F55,0xAFFF,0x6AF1,0xFA1E]),4);
+  T('Index','FX1E adds VX to I',0x10F0,h3(c.I));
+  T('Index','FX1E leaves VF unchanged',0x55,c.V[15]);
+
+  c=run(mk([0x6F01,0xA050,0xD010]),3);
+  T('Draw','DXY0 draws nothing',0,lit(c));
+  T('Draw','DXY0 sets VF=0',0,c.V[15]);
+  c=run(mk([0x6000,0x6100,0xA050,0xD015]),4);
+  T('Draw','Font 0 lights 14 pixels',14,lit(c));
+  T('Draw','No collision: VF=0',0,c.V[15]);
+  c=run(mk([0x6000,0x6100,0xA050,0xD015,0xD015]),5);
+  T('Draw','XOR redraw erases: lit',0,lit(c));
+  T('Draw','XOR collision sets VF',1,c.V[15]);
+  c=mk([0x603E,0x6100,0xA300,0xD011]); c.memory[0x300]=0xFF; run(c,4);
+  T('Draw','Right edge clips: lit pixels',2,lit(c));
+  c=mk([0x603E,0x6100,0xA300,0xD011],{spriteWrap:true}); c.memory[0x300]=0xFF; run(c,4);
+  T('Draw','Sprite wrap: lit pixels',8,lit(c));
+  c=mk([0x6046,0x6100,0xA300,0xD011]); c.memory[0x300]=0xFF; run(c,4);
+  T('Draw','Start coordinate modulo 64',1,c.display[6]);
+  T('Draw','Start coordinate modulo 64: x=5 blank',0,c.display[5]);
+
+  c=mk([0x6A01]); c.pokeMemory(0x200,0x6B); c.pokeMemory(0x201,0x09);
+  c.reset();
+  T('Reset','Reset restores ROM after self-modification',0x6A,H(c.memory[0x200],2));
+  T('Reset','Reset restores PC',0x200,h3(c.PC));
+  c=mk([0x6A01,0x6B02,0x6C03]);
+  c.breakpoints.add(0x202);
+  c.start();
+  const ex=c.runBudget(10);
+  T('Breakpoint','Stops before breakpoint: executed',1,ex);
+  T('Breakpoint','Stops before breakpoint: PC',0x202,h3(c.PC));
+  T('Breakpoint','Breakpoint status',true,c.bpHit&&!c.running);
+  c.stepOnce();
+  T('Breakpoint','Single step executes through breakpoint',0x204,h3(c.PC));
+  T('Breakpoint','Breakpoint remains after step',true,c.breakpoints.has(0x202));
+  c.PC=0x200; c.start();
+  c.runBudget(10);
+  c.start();
+  const ex2=c.runBudget(2);
+  T('Breakpoint','Resume bypasses breakpoint once',2,ex2);
+
+  c=mk([0x1200]); run(c,250);
+  T('Trace','Ring buffer keeps 200 entries',200,c.trace.length);
+  T('Trace','Sequence counts all instructions',250,c.traceSeq);
+
+  c=mk([0xC00F]); c.stepOnce();
+  T('Random','CXNN masked to 0x0F',true,c.V[0]<=15);
+  const r1=new Chip8Core(42), r2=new Chip8Core(42);
+  let same=true;
+  for(let i=0;i<8;i++) if(r1.rand8()!==r2.rand8()) same=false;
+  T('Random','Same seed gives same sequence',true,same);
+
+  const pass=rows.filter(r=>r.pass).length;
+  return {rows,pass,total:rows.length};
+}
+
+function showSelfTests(){
+  const res=runSelfTests();
+  let html='';
+  for(const r of res.rows){
+    html+='<tr><td>'+r.group+'</td><td>'+r.name+'</td><td>'+r.expected+'</td><td>'+r.observed+'</td><td class="'+(r.pass?'pass':'fail')+'">'+(r.pass?'PASS':'FAIL')+'</td></tr>';
+  }
+  $('stBody').innerHTML=html;
+  $('stSummary').textContent='Passed '+res.pass+' / '+res.total+' ('+(res.total-res.pass)+' failed)';
+  $('stSummary').className=res.pass===res.total?'mono pass':'mono fail';
+  msg('Self-tests finished: '+res.pass+'/'+res.total+' passed',res.pass!==res.total);
+}
+
+let lastTs=0,cpuAcc=0,timerAcc=0,lastUi=0,wasRunning=false;
+function frame(ts){
+  const dt=lastTs?Math.min(ts-lastTs,250):0;
+  lastTs=ts;
+  if(core.running){
+    cpuAcc+=dt*ui.ips/1000;
+    let n=Math.floor(cpuAcc);
+    cpuAcc-=n;
+    if(n>2000){ n=2000; cpuAcc=0; }
+    core.runBudget(n);
+    timerAcc+=dt*60/1000;
+    while(timerAcc>=1){ core.tick(); timerAcc-=1; }
+    drawScreen();
+    if(ts-lastUi>=100){
+      refreshAll();
+      lastUi=ts;
+    }
+  }else{
+    cpuAcc=0;
+    timerAcc=0;
+    if(wasRunning) refreshAll();
+  }
+  if(!core.running&&wasRunning) msg(core.fault?('Fault: '+core.fault.message):(core.bpHit?'Stopped at breakpoint':'Paused'),!!core.fault);
+  wasRunning=core.running;
+  audioSync();
+  requestAnimationFrame(frame);
+}
+
+function setupEvents(){
+  $('btnLoadRom').addEventListener('click',()=>$('romFile').click());
+  $('romFile').addEventListener('change',e=>{
+    const f=e.target.files[0];
+    if(f) loadFile(f);
+    e.target.value='';
+  });
+  $('btnDemo').addEventListener('click',loadDemo);
+  $('btnRun').addEventListener('click',doRun);
+  $('btnPause').addEventListener('click',doPause);
+  $('btnStep').addEventListener('click',doStep);
+  $('btnReset').addEventListener('click',doReset);
+  $('ipsRange').addEventListener('input',e=>setIps(e.target.value));
+  $('ipsNum').addEventListener('change',e=>setIps(e.target.value));
+  $('btnSelfTest').addEventListener('click',showSelfTests);
+
+  $('optShift').addEventListener('change',e=>{ if(!core.running){ core.settings.shiftSource=e.target.value; refreshAll(); } });
+  $('optLS').addEventListener('change',e=>{ if(!core.running){ core.settings.loadStoreIncrement=e.target.checked; refreshAll(); } });
+  $('optLogic').addEventListener('change',e=>{ if(!core.running){ core.settings.logicResetVF=e.target.checked; refreshAll(); } });
+  $('optWrap').addEventListener('change',e=>{ if(!core.running){ core.settings.spriteWrap=e.target.checked; refreshAll(); } });
+
+  $('scaleSel').addEventListener('change',()=>{ applyScale(); });
+  $('paletteSel').addEventListener('change',()=>refreshAll());
+  $('gridChk').addEventListener('change',e=>{ $('screenWrap').classList.toggle('grid',e.target.checked); });
+  $('scanChk').addEventListener('change',e=>{ $('screenWrap').classList.toggle('scan',e.target.checked); });
+  $('btnFull').addEventListener('click',()=>{
+    const el=$('screenWrap');
+    if(!el.requestFullscreen){ msg('Fullscreen is not supported here',true); return; }
+    if(document.fullscreenElement) document.exitFullscreen();
+    else el.requestFullscreen().catch(()=>msg('Fullscreen was refused',true));
+  });
+  $('btnPng').addEventListener('click',exportPng);
+  $('btnMute').addEventListener('click',()=>{ ui.muted=!ui.muted; refreshAll(); });
+  $('volRange').addEventListener('input',e=>{ ui.volume=Number(e.target.value)/100; audioSync(); });
+  window.addEventListener('resize',updateGridCell);
+
+  $('dFollow').addEventListener('change',e=>{ ui.followPC=e.target.checked; refreshAll(); });
+  const gotoDis=()=>{
+    const v=parseNum($('dGotoIn').value,4095);
+    if(v===null){ msg('Disassembly address must be 0-0xFFF',true); return; }
+    ui.disBase=v;
+    ui.followPC=false;
+    refreshAll();
+  };
+  $('dGo').addEventListener('click',gotoDis);
+  $('dGotoIn').addEventListener('keydown',e=>{ if(e.key==='Enter') gotoDis(); });
+  $('disBody').addEventListener('click',e=>{
+    const g=e.target.closest('[data-gutter]');
+    if(!g) return;
+    const a=Number(g.dataset.gutter);
+    if(core.breakpoints.has(a)) core.breakpoints.delete(a);
+    else core.breakpoints.add(a);
+    refreshAll();
+  });
+
+  const gotoMem=()=>{
+    const v=parseNum($('memGotoIn').value,4095);
+    if(v===null){ msg('Memory address must be 0-0xFFF',true); return; }
+    setMemBase(v);
+    refreshAll();
+  };
+  $('memGo').addEventListener('click',gotoMem);
+  $('memGotoIn').addEventListener('keydown',e=>{ if(e.key==='Enter') gotoMem(); });
+  $('memPrev').addEventListener('click',()=>{ setMemBase(ui.memBase-256); refreshAll(); });
+  $('memNext').addEventListener('click',()=>{ setMemBase(ui.memBase+256); refreshAll(); });
+  $('memPC').addEventListener('click',()=>{ setMemBase(core.PC); refreshAll(); });
+  $('memI').addEventListener('click',()=>{ setMemBase(core.I); refreshAll(); });
+  $('memBody').addEventListener('click',e=>{
+    const td=e.target.closest('[data-addr]');
+    if(!td) return;
+    $('memAddr').value=h3(Number(td.dataset.addr));
+    $('memVal').value=String(core.memory[Number(td.dataset.addr)]);
+  });
+  $('memWrite').addEventListener('click',()=>{
+    if(core.running){ msg('Pause before editing memory',true); return; }
+    const a=parseNum($('memAddr').value,4095);
+    const v=parseNum($('memVal').value,255);
+    if(a===null){ msg('Address must be 0-0xFFF',true); return; }
+    if(v===null){ msg('Byte value must be 0-255',true); return; }
+    core.pokeMemory(a,v);
+    msg('Wrote '+H(v,2)+' to '+h3(a),false);
+    refreshAll();
+  });
+
+  $('spTrack').addEventListener('change',e=>{
+    ui.spriteTrack=e.target.checked;
+    refreshAll();
+  });
+  $('spAddr').addEventListener('change',e=>{
+    const v=parseNum(e.target.value,4095);
+    if(v===null){ msg('Sprite address must be 0-0xFFF',true); refreshAll(); return; }
+    ui.spriteAddr=v;
+    refreshAll();
+  });
+  $('spH').addEventListener('change',e=>{
+    let v=Math.round(Number(e.target.value));
+    if(!Number.isFinite(v)) v=5;
+    v=Math.min(15,Math.max(1,v));
+    ui.spriteH=v;
+    e.target.value=v;
+    refreshAll();
+  });
+
+  const addBp=()=>{
+    const v=parseNum($('bpIn').value,4095);
+    if(v===null){ msg('Breakpoint address must be 0-0xFFF',true); return; }
+    core.breakpoints.add(v);
+    $('bpIn').value='';
+    msg('Breakpoint added at '+h3(v),false);
+    refreshAll();
+  };
+  $('bpAdd').addEventListener('click',addBp);
+  $('bpIn').addEventListener('keydown',e=>{ if(e.key==='Enter') addBp(); });
+  $('bpList').addEventListener('click',e=>{
+    const b=e.target.closest('[data-rm]');
+    if(!b) return;
+    core.breakpoints.delete(Number(b.dataset.rm));
+    refreshAll();
+  });
+
+  $('traceClear').addEventListener('click',()=>{
+    core.trace=[];
+    ui.traceDirty=true;
+    refreshAll();
+  });
+  $('traceFollow').addEventListener('change',()=>{ ui.traceDirty=true; refreshAll(); });
+
+  const padKeyDown=e=>{
+    if(isTextTarget(e.target)) return;
+    const k=CODE_TO_KEY[e.code];
+    if(k===undefined) return;
+    e.preventDefault();
+    if(!e.repeat) core.setKey(k,true);
+    updatePad();
+  };
+  const padKeyUp=e=>{
+    const k=CODE_TO_KEY[e.code];
+    if(k===undefined) return;
+    core.setKey(k,false);
+    updatePad();
+  };
+  window.addEventListener('keydown',padKeyDown);
+  window.addEventListener('keyup',padKeyUp);
+  window.addEventListener('blur',()=>{
+    core.releaseAllKeys();
+    ui.pointerKeys.clear();
+    updatePad();
+  });
+  document.addEventListener('visibilitychange',()=>{
+    if(document.hidden&&core.running){
+      core.running=false;
+      msg('Paused: tab was hidden',false);
+    }
+    lastTs=0;
+    cpuAcc=0;
+    timerAcc=0;
+    refreshAll();
+  });
+
+  window.addEventListener('dragover',e=>{
+    e.preventDefault();
+    $('dropHint').classList.add('show');
+  });
+  window.addEventListener('dragleave',e=>{
+    if(!e.relatedTarget) $('dropHint').classList.remove('show');
+  });
+  window.addEventListener('drop',e=>{
+    e.preventDefault();
+    $('dropHint').classList.remove('show');
+    const f=e.dataTransfer&&e.dataTransfer.files[0];
+    if(f) loadFile(f);
+  });
+}
+
+function isTextTarget(t){
+  return !!t&&(t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.tagName==='SELECT'||t.isContentEditable);
+}
+
+function init(){
+  buildStatic();
+  setupEvents();
+  $('screenWrap').classList.add('grid');
+  $('gridChk').checked=true;
+  applyScale();
+  $('scaleSel').value='8';
+  applyScale();
+  loadDemo();
+  refreshAll();
+  requestAnimationFrame(frame);
+}
+
+init();
+</script>
+</body>
+</html>
