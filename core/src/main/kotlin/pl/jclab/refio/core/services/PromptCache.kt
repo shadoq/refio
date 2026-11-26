@@ -52,15 +52,16 @@ class PromptCache(
     fun getOrBuildStaticPrefix(
         mode: TaskMode,
         taskId: String,
-        tokenEstimator: PromptTokenEstimator
+        tokenEstimator: PromptTokenEstimator,
+        compact: Boolean = false
     ): StaticPromptPrefix {
-        val cacheKey = buildCacheKey(mode, taskId)
+        val cacheKey = buildCacheKey(mode, taskId, compact)
         val existing = cache.getIfPresent(cacheKey)
 
         if (existing != null) {
             hitCount++
             GlobalMetrics.recordCacheAccess("prompt_cache", hit = true)
-            logger.debug { "[CACHE_HIT] Using cached prefix for $mode/$taskId" }
+            logger.debug { "[CACHE_HIT] Using cached prefix for $mode/$taskId (compact=$compact)" }
             return StaticPromptPrefix(
                 systemPrompt = existing.systemPrompt,
                 toolDescriptions = existing.toolDescriptions,
@@ -74,7 +75,7 @@ class PromptCache(
 
         // Build new prefix
         val systemPrompt = buildSystemPrompt(mode)
-        val toolDescriptions = toolDescriptionBuilder.getToolDescriptions(mode, taskId)
+        val toolDescriptions = toolDescriptionBuilder.getToolDescriptions(mode, taskId, compact = compact)
 
         val fullPrefix = "$systemPrompt\n\n$toolDescriptions"
         val tokenEstimate = tokenEstimator.estimateString(fullPrefix)
@@ -152,10 +153,10 @@ class PromptCache(
         logger.info { "[CACHE_CLEAR] All entries and stats cleared" }
     }
 
-    private fun buildCacheKey(mode: TaskMode, taskId: String): String {
-        // Include config hash to invalidate on changes
+    private fun buildCacheKey(mode: TaskMode, taskId: String, compact: Boolean): String {
+        // Include config hash and compact mode to invalidate on changes
         val configHash = promptsService.hashCode()
-        return "${mode.name}:$configHash:$taskId"
+        return "${mode.name}:$configHash:$compact:$taskId"
     }
 
     private fun buildSystemPrompt(mode: TaskMode): String {

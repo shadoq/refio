@@ -145,518 +145,437 @@ class TuiInputHandler(private val terminal: Terminal) {
 
     internal fun dispatchAction(action: TuiAction, viewModel: TuiViewModel) {
         val rawState = viewModel.stateFlow.value
-        // In the narrow layout an open panel is the only pane on screen, so it receives the keys.
         val narrowPanel = layoutMode() == LayoutMode.Narrow && rawState.screen == TuiScreen.MAIN && rawState.activeTab != TuiTab.CHAT
         val state = if (narrowPanel && !rawState.panelFocused) rawState.copy(panelFocused = true) else rawState
 
-        // Clearing the RAG index waits for a second `c`; any other key cancels it.
         val secondClear = state.activeTab == TuiTab.RAG && action is TuiAction.TypeChar && action.char.lowercaseChar() == 'c'
         if (state.ragClearArmed && !secondClear) viewModel.disarmRagClear()
 
-        // If plan approval dialog is visible, intercept y/n keys
-        if (state.pendingPlanApproval != null) {
-            when (action) {
-                is TuiAction.TypeChar -> when (action.char.lowercaseChar()) {
-                    'y' -> { viewModel.approvePlan(); return }
-                    'n' -> { viewModel.rejectPlan(); return }
-                    else -> return
-                }
-                is TuiAction.SendMessage -> { viewModel.approvePlan(); return }
-                is TuiAction.BackToMain -> { viewModel.rejectPlan(); return }
-                else -> return
-            }
-        }
+        if (state.pendingPlanApproval != null) { handlePlanApprovalAction(action, viewModel); return }
+        if (state.fileViewerVisible) { handleFileViewerAction(action, state, viewModel); return }
 
-        // File viewer overlay: intercept keys for scrolling and actions
-        if (state.fileViewerVisible) {
-            when (action) {
-                is TuiAction.ScrollUp -> { viewModel.fileViewerScrollUp(); return }
-                is TuiAction.ScrollDown -> { viewModel.fileViewerScrollDown(); return }
-                is TuiAction.PageUp -> { viewModel.fileViewerPageUp(); return }
-                is TuiAction.PageDown -> { viewModel.fileViewerPageDown(); return }
-                is TuiAction.BackToMain -> { viewModel.closeFileViewer(); return }
-                is TuiAction.SendMessage -> { viewModel.closeFileViewer(); return }
-                is TuiAction.TypeChar -> {
-                    when (action.char.lowercaseChar()) {
-                        'a' -> { if (state.fileViewerAllowAddContext) viewModel.fileViewerAddAsContext(); return }
-                        'c' -> { viewModel.fileViewerCopyToClipboard(); return }
-                    }
-                    // The overlay swallows all other typing; tell the user how to
-                    // get out instead of silently eating keystrokes.
-                    viewModel.showFileViewerHint()
-                    return
-                }
-                is TuiAction.CancelOperation -> { viewModel.closeFileViewer(); return }
-                is TuiAction.Quit -> { viewModel.shutdown(); stop(); return }
-                else -> return // block other actions while viewer is open
-            }
-        }
-
-        // An approval waits at the end of the chat: its keys act while the chat has the keys and the prompt is
-        // empty, so a reply being typed when it appears is never taken as a choice. The prompt is read live: the
-        // state snapshot lags a few milliseconds, and pasted text arrives faster than that, one key at a time.
         if (ApprovalFrame.isPending(state) && state.screen == TuiScreen.MAIN && ApprovalFrame.keysActive(state) &&
             viewModel.liveInputBuffer().isEmpty() && handleApprovalKey(action, state, viewModel)
         ) {
             return
         }
 
-        // Settings screen: intercept keys for interactive editing
-        if (state.screen == TuiScreen.SETTINGS) {
-            // If editing a text field, capture all input
-            if (state.settingsEditingField != null) {
-                when (action) {
-                    is TuiAction.TypeChar -> {
-                        viewModel.settingsUpdateEditBuffer(state.settingsEditBuffer + action.char)
-                        return
-                    }
-                    is TuiAction.Backspace -> {
-                        if (state.settingsEditBuffer.isNotEmpty()) {
-                            viewModel.settingsUpdateEditBuffer(state.settingsEditBuffer.dropLast(1))
-                        }
-                        return
-                    }
-                    is TuiAction.SendMessage -> { viewModel.settingsCommitEdit(); return }
-                    is TuiAction.BackToMain -> { viewModel.settingsCancelEdit(); return }
-                    else -> return
-                }
-            }
+        if (state.screen == TuiScreen.SETTINGS && handleSettingsAction(action, state, viewModel)) return
+        if (state.screen == TuiScreen.HELP) { handleHelpAction(action, state, viewModel); return }
+        if (state.screen == TuiScreen.HISTORY) { handleHistoryAction(action, state, viewModel); return }
 
-            when (action) {
-                is TuiAction.BackToMain -> {
-                    if (viewModel.isSettingsResetArmed()) {
-                        viewModel.disarmSettingsReset()
-                    } else {
-                        viewModel.setScreen(TuiScreen.MAIN)
-                    }
-                    return
-                }
-                is TuiAction.ScrollUp -> { viewModel.disarmSettingsReset(); viewModel.settingsFieldUp(); return }
-                is TuiAction.ScrollDown -> { viewModel.disarmSettingsReset(); viewModel.settingsFieldDown(); return }
-                is TuiAction.ScrollLeft -> {
-                    viewModel.setSettingsTab((state.settingsTab - 1).coerceIn(0, 10))
-                    return
-                }
-                is TuiAction.ScrollRight -> {
-                    viewModel.setSettingsTab((state.settingsTab + 1).coerceIn(0, 10))
-                    return
-                }
-                is TuiAction.SendMessage -> {
-                    viewModel.disarmSettingsReset()
-                    // Toggle bool, cycle permission, or start editing text field
-                    val field = TuiSettingsScreen.getSelectedField(state.settingsTab, state.settingsSelectedField)
-                    if (field != null) {
-                        if (field.sectionKey.startsWith(TuiSettingsScreen.TOOL_PERMISSION_PREFIX)) {
-                            // toolperm.<tool>.<plan|agent> is persisted through the
-                            // tool-permissions API, not the raw key/value config.
-                            val rest = field.sectionKey.removePrefix(TuiSettingsScreen.TOOL_PERMISSION_PREFIX)
-                            val toolName = rest.substringBeforeLast(".")
-                            val agentMode = rest.substringAfterLast(".") == "agent"
-                            viewModel.cycleToolPermission(toolName, agentMode)
-                            return
-                        }
-                        val parts = field.sectionKey.split(".", limit = 2)
-                        if (parts.size == 2) {
-                            val section = parts[0]
-                            val key = parts[1]
-                            val config = viewModel.getConfigSection(section)
-                            when (field.type) {
-                                TuiSettingsScreen.FieldType.BOOL -> {
-                                    val current = config[key]?.lowercase() in listOf("true", "1", "yes")
-                                    viewModel.settingsToggleBool(section, key, current)
-                                }
-                                TuiSettingsScreen.FieldType.CYCLE -> {
-                                    val options = field.options
-                                    if (options.isNotEmpty()) {
-                                        val current = config[key] ?: field.default
-                                        val idx = options.indexOfFirst { it.equals(current, ignoreCase = true) }
-                                        viewModel.updateConfig(section, key, options[(idx + 1).mod(options.size)])
-                                    }
-                                }
-                                TuiSettingsScreen.FieldType.TEXT -> {
-                                    val raw = config[key] ?: ""
-                                    // Model slots store JSON {"modelId","provider"}; prefill the
-                                    // friendly provider/model form so the user edits that, not raw JSON.
-                                    val prefill = if (section == "default_model" && raw.trimStart().startsWith("{")) {
-                                        val id = Regex(""""modelId"\s*:\s*"([^"]*)"""").find(raw)?.groupValues?.get(1)
-                                        val prov = Regex(""""provider"\s*:\s*"([^"]*)"""").find(raw)?.groupValues?.get(1)
-                                        if (id != null && prov != null) "$prov/$id" else raw
-                                    } else {
-                                        raw
-                                    }
-                                    viewModel.settingsStartEdit(field.sectionKey, prefill)
-                                }
-                            }
-                        }
-                    }
-                    return
-                }
-                is TuiAction.TogglePanelFocus -> {
-                    // Tab: first field of the next group (frame).
-                    TuiSettingsScreen.nextGroupField(state.settingsTab, state.settingsSelectedField)?.let { viewModel.settingsSelectField(it) }
-                    return
-                }
-                is TuiAction.TypeChar -> {
-                    if (action.char == '-') {
-                        viewModel.setSettingsTab(10)
-                        return
-                    }
-                    // a/k/x on the Tools tab: ON/ASK/OFF for the whole group in the focused column.
-                    val groupValue = when (action.char) {
-                        'a' -> "ON"
-                        'k' -> "ASK"
-                        'x' -> "OFF"
-                        else -> null
-                    }
-                    if (groupValue != null && TuiSettingsScreen.tabTitle(state.settingsTab) == "Tools") {
-                        TuiSettingsScreen.toolGroupAt(state.settingsTab, state.settingsSelectedField)?.let { (tools, agentColumn) ->
-                            viewModel.setToolGroupPermission(tools, agentColumn, groupValue)
-                        }
-                        return
-                    }
-                    // Tab switching: 1-9, 0
-                    val tabNum = action.char.toString().toIntOrNull()
-                    if (tabNum != null) {
-                        val tabIndex = if (tabNum == 0) 9 else tabNum - 1
-                        if (tabIndex in 0..10) {
-                            viewModel.setSettingsTab(tabIndex)
-                            return
-                        }
-                    }
-                    // Shortcuts accept both cases; footer shows lowercase hints.
-                    when (action.char.uppercaseChar()) {
-                        'R' -> {
-                            if (viewModel.isSettingsResetArmed()) {
-                                viewModel.disarmSettingsReset()
-                                viewModel.resetAllSettings()
-                            } else {
-                                // First press only arms the reset; the footer asks for a second R.
-                                viewModel.armSettingsReset()
-                            }
-                            return
-                        }
-                        'E' -> { viewModel.disarmSettingsReset(); viewModel.exportUserConfig(); return }
-                        'P' -> { viewModel.disarmSettingsReset(); viewModel.exportProjectConfig(); return }
-                        'L' -> { viewModel.disarmSettingsReset(); viewModel.reloadConfig(); return }
-                        'F' -> {
-                            viewModel.disarmSettingsReset()
-                            // Refresh models from providers (Models tab = index 2)
-                            if (state.settingsTab == 2) {
-                                viewModel.refreshSettingsModels()
-                            }
-                            return
-                        }
-                    }
-                    // Unhandled characters are ignored on the Settings screen and must
-                    // never leak into the chat input buffer.
-                    viewModel.disarmSettingsReset()
-                    return
-                }
-                else -> {} // fall through: F-key navigation, Quit etc. stay global
-            }
-        }
-
-        // Help screen: scroll with arrows/PgUp/PgDn, Esc or F1 to close
-        if (state.screen == TuiScreen.HELP) {
-            // `/` starts a filter; while it is open, typing edits it and Esc clears it before closing help.
-            if (state.helpFilter != null) {
-                when (action) {
-                    is TuiAction.TypeChar -> { viewModel.setHelpFilter(state.helpFilter + action.char); return }
-                    is TuiAction.Backspace -> { viewModel.setHelpFilter(state.helpFilter.dropLast(1)); return }
-                    is TuiAction.BackToMain -> { viewModel.setHelpFilter(null); return }
-                    else -> {}
-                }
-            } else if (action is TuiAction.TypeChar && action.char == '/') {
-                viewModel.setHelpFilter("")
-                return
-            }
-            when (action) {
-                is TuiAction.ScrollUp -> { viewModel.helpScrollUp(); return }
-                is TuiAction.ScrollDown -> { viewModel.helpScrollDown(); return }
-                is TuiAction.PageUp -> { viewModel.helpPageUp(); return }
-                is TuiAction.PageDown -> { viewModel.helpPageDown(); return }
-                is TuiAction.BackToMain -> { viewModel.setScreen(TuiScreen.MAIN); return }
-                is TuiAction.SwitchScreen -> {
-                    if (action.screen == TuiScreen.HELP) { viewModel.setScreen(TuiScreen.MAIN); return }
-                    else { viewModel.setScreen(action.screen); return }
-                }
-                is TuiAction.SwitchTab -> { viewModel.setScreen(TuiScreen.MAIN); viewModel.setActiveTab(action.tab); return }
-                is TuiAction.Quit -> { viewModel.shutdown(); stop(); return }
-                else -> return // block other actions on help screen
-            }
-        }
-
-        // History screen: intercept navigation keys
-        if (state.screen == TuiScreen.HISTORY) {
-            when (action) {
-                is TuiAction.ScrollUp -> { viewModel.selectHistoryUp(); return }
-                is TuiAction.ScrollDown -> { viewModel.selectHistoryDown(); return }
-                is TuiAction.SendMessage -> { viewModel.loadSelectedSession(); return }
-                is TuiAction.BackToMain -> { viewModel.setScreen(TuiScreen.MAIN); return }
-                is TuiAction.TypeChar -> {
-                    when (action.char.lowercaseChar()) {
-                        'p' -> { viewModel.togglePinSession(); return }
-                        'r' -> { viewModel.refreshSessions(); return }
-                        'd' -> { viewModel.deleteSelectedSession(); return }
-                        'c' -> { viewModel.setHistoryFilter("CHAT"); return }
-                        'l' -> { viewModel.setHistoryFilter("PLAN"); return }
-                        'a' -> { viewModel.setHistoryFilter("AGENT"); return }
-                        '*' -> { viewModel.setHistoryFilter("*"); return }
-                        '/' -> { viewModel.setHistoryFilter("/"); return } // start search mode
-                    }
-                    // If in search mode (filter starts with /), append chars to search query
-                    if (state.historyFilter.startsWith("/")) {
-                        viewModel.setHistoryFilter(state.historyFilter + action.char)
-                        return
-                    }
-                }
-                is TuiAction.Backspace -> {
-                    if (state.historyFilter.startsWith("/") && state.historyFilter.length > 1) {
-                        viewModel.setHistoryFilter(state.historyFilter.dropLast(1))
-                        return
-                    } else if (state.historyFilter.startsWith("/")) {
-                        viewModel.setHistoryFilter("*") // exit search mode
-                        return
-                    }
-                }
-                else -> return // block other actions on history screen
-            }
-        }
-
-        // RAG tab: panel actions only when the panel has focus (Tab toggles);
-        // with focus on the input, Enter/arrows fall through to chat handling.
-        if (state.activeTab == TuiTab.RAG && state.screen == TuiScreen.MAIN) {
-            when (action) {
-                is TuiAction.ScrollUp -> { if (state.panelFocused) { viewModel.ragFileUp(); return } }
-                is TuiAction.ScrollDown -> { if (state.panelFocused) { viewModel.ragFileDown(); return } }
-                is TuiAction.SendMessage -> { if (state.panelFocused) { viewModel.ragOpenSelectedFile(); return } }
-                is TuiAction.TypeChar -> {
-                    if (state.panelFocused) {
-                        when (action.char.lowercaseChar()) {
-                            'r' -> { viewModel.ragReindex(); return }
-                            'e' -> { viewModel.ragGenerateEmbeddings(); return }
-                            's' -> { viewModel.ragStopIndexing(); return }
-                            'c' -> { viewModel.ragClearPressed(); return }
-                            'v' -> { viewModel.ragViewSelectedChunks(); return }
-                            'q' -> {
-                                viewModel.addSystemMessage("Type search query in the chat input and press Enter, or use /rag-search <query>")
-                                return
-                            }
-                        }
-                    }
-                }
-                else -> {} // fall through
-            }
-        }
-
-        // Context tab: navigate sections + detail view
-        if (state.activeTab == TuiTab.CONTEXT && state.screen == TuiScreen.MAIN) {
-            if (state.contextDetailVisible) {
-                // Detail view mode: scroll content
-                when (action) {
-                    is TuiAction.ScrollUp -> { viewModel.contextDetailScrollUp(); return }
-                    is TuiAction.ScrollDown -> { viewModel.contextDetailScrollDown(); return }
-                    is TuiAction.SendMessage, is TuiAction.BackToMain -> { viewModel.toggleContextDetail(); return }
-                    is TuiAction.PageUp -> { repeat(10) { viewModel.contextDetailScrollUp() }; return }
-                    is TuiAction.PageDown -> { repeat(10) { viewModel.contextDetailScrollDown() }; return }
-                    else -> return // block other actions in detail view
-                }
-            }
-            when (action) {
-                is TuiAction.ScrollUp -> { if (state.panelFocused) { viewModel.contextSectionUp(); return } }
-                is TuiAction.ScrollDown -> { if (state.panelFocused) { viewModel.contextSectionDown(); return } }
-                is TuiAction.SendMessage -> { if (state.panelFocused) { viewModel.toggleContextDetail(); return } }
-                is TuiAction.TypeChar -> {
-                    if (state.panelFocused && action.char.lowercaseChar() == 'i') { viewModel.toggleContextDetail(); return }
-                }
-                else -> {} // fall through
-            }
-        }
-
-        // Logs tab: navigate, pause, filter, detail (opens content viewer overlay)
-        if (state.activeTab == TuiTab.LOGS && state.screen == TuiScreen.MAIN) {
-            when (action) {
-                is TuiAction.ScrollUp -> { if (state.panelFocused) { viewModel.logUp(); return } }
-                is TuiAction.ScrollDown -> { if (state.panelFocused) { viewModel.logDown(); return } }
-                is TuiAction.SendMessage -> { if (state.panelFocused) { viewModel.openLogDetailViewer(); return } }
-                is TuiAction.TypeChar -> {
-                    if (state.panelFocused) {
-                        when (action.char.lowercaseChar()) {
-                            'p' -> { viewModel.toggleLogPause(); return }
-                            'f' -> { viewModel.cycleLogFilter(); return }
-                        }
-                    }
-                }
-                else -> {} // fall through
-            }
-        }
-
-        // API Logs tab: navigation, filter, detail via content viewer overlay
-        if (state.activeTab == TuiTab.API_LOGS && state.screen == TuiScreen.MAIN) {
-            when (action) {
-                is TuiAction.ScrollUp -> { if (state.panelFocused) { viewModel.apiLogUp(); return } }
-                is TuiAction.ScrollDown -> { if (state.panelFocused) { viewModel.apiLogDown(); return } }
-                is TuiAction.SendMessage -> {
-                    if (state.panelFocused) {
-                        if (state.apiLogs.isNotEmpty()) viewModel.openApiLogDetailViewer()
-                        return
-                    }
-                }
-                is TuiAction.TypeChar -> {
-                    if (state.panelFocused && action.char.lowercaseChar() == 'f') {
-                        viewModel.cycleApiLogsFilter()
-                        return
-                    }
-                }
-                else -> {} // fall through
-            }
-        }
-
-        // Files tab: file browser navigation (letter keys only when panel focused)
-        if (state.activeTab == TuiTab.FILES && state.screen == TuiScreen.MAIN) {
-            when (action) {
-                is TuiAction.ScrollUp -> { if (state.panelFocused) { viewModel.fileBrowserUp(); return } }
-                is TuiAction.ScrollDown -> { if (state.panelFocused) { viewModel.fileBrowserDown(); return } }
-                is TuiAction.SendMessage -> { if (state.panelFocused) { viewModel.fileBrowserEnter(); return } }
-                is TuiAction.Backspace -> {
-                    if (state.panelFocused) { viewModel.fileBrowserGoUp(); return }
-                }
-                is TuiAction.TypeChar -> {
-                    if (state.panelFocused) {
-                        when (action.char.lowercaseChar()) {
-                            'h' -> { viewModel.fileBrowserToggleHidden(); return }
-                            'a' -> { viewModel.fileBrowserAddAsContext(); return }
-                            'o' -> { viewModel.fileBrowserOpenExternal(); return }
-                            'i' -> { viewModel.fileBrowserShowInfo(); return }
-                            'r' -> { viewModel.fileBrowserRefresh(); return }
-                        }
-                    }
-                }
-                is TuiAction.PageUp -> { if (state.panelFocused) { repeat(10) { viewModel.fileBrowserUp() }; return } }
-                is TuiAction.PageDown -> { if (state.panelFocused) { repeat(10) { viewModel.fileBrowserDown() }; return } }
-                else -> {} // fall through
-            }
-        }
-
-        // Debug tab: scroll with arrow keys
-        if (state.activeTab == TuiTab.DEBUG && state.screen == TuiScreen.MAIN) {
-            when (action) {
-                is TuiAction.ScrollUp -> { viewModel.debugScrollUp(); return }
-                is TuiAction.ScrollDown -> { viewModel.debugScrollDown(); return }
-                is TuiAction.PageUp -> { repeat(10) { viewModel.debugScrollUp() }; return }
-                is TuiAction.PageDown -> { repeat(10) { viewModel.debugScrollDown() }; return }
-                else -> {} // fall through
-            }
-        }
-
-        // Steps tab: intercept navigation and action keys when Steps tab is active
-        // Letter keys only intercepted when panel is focused (Tab to toggle)
-        if (state.activeTab == TuiTab.STEPS && state.subtasks.isNotEmpty()) {
-            when (action) {
-                is TuiAction.ScrollUp -> { viewModel.selectStepUp(); return }
-                is TuiAction.ScrollDown -> { viewModel.selectStepDown(); return }
-                is TuiAction.TypeChar -> {
-                    if (state.panelFocused) {
-                        val idx = state.selectedStepIndex
-                        val subtask = state.subtasks.getOrNull(idx)
-                        when (action.char.lowercaseChar()) {
-                            'a' -> { subtask?.let { viewModel.approveSubtask(it.id) }; return }
-                            's' -> { subtask?.let { viewModel.skipSubtask(it.id) }; return }
-                            'd' -> { subtask?.let { viewModel.deleteSubtask(it.id) }; return }
-                            'u' -> { viewModel.moveStepUp(idx); return }
-                            'j' -> { viewModel.moveStepDown(idx); return }
-                            'p' -> { viewModel.togglePause(); return }
-                            // Only a lower-case r replans: R is not an action here and must not replan by accident.
-                            'r' -> if (action.char == 'r') { viewModel.replanSteps(); return }
-                            else -> {} // fall through for other chars (typing in input)
-                        }
-                        if (action.char == 'C') { viewModel.cancelAllPending(); return }
-                    }
-                    // When not panel-focused, fall through to input handling
-                }
-                else -> {} // fall through
-            }
-        }
-
-        // Model selector: intercept keys when model selector popup is visible
-        if (state.modelSelectorVisible) {
-            when (action) {
-                is TuiAction.ScrollUp -> { viewModel.modelSelectorPrev(); return }
-                is TuiAction.ScrollDown -> { viewModel.modelSelectorNext(); return }
-                is TuiAction.SendMessage -> { viewModel.modelSelectorAccept(); return }
-                is TuiAction.BackToMain -> { viewModel.dismissModelSelector(); return }
-                else -> return
-            }
-        }
-
-        // If autocomplete is visible, intercept navigation keys
-        if (state.autocompleteVisible) {
-            when (action) {
-                is TuiAction.ScrollDown, is TuiAction.AutocompleteNext -> {
-                    viewModel.autocompleteNext(); return
-                }
-                is TuiAction.ScrollUp, is TuiAction.AutocompletePrev -> {
-                    viewModel.autocompletePrev(); return
-                }
-                is TuiAction.SendMessage -> {
-                    // Enter runs a slash action at once; anything else is completed into the prompt.
-                    val selected = state.autocompleteCandidates.getOrNull(state.autocompleteSelectedIndex)
-                    if (selected != null && SlashActions.find(selected, viewModel.slashTemplateNames()) != null) {
-                        viewModel.autocompleteDismiss()
-                        handleCommand(selected, viewModel)
-                    } else {
-                        viewModel.autocompleteAccept()
-                    }
-                    return
-                }
-                is TuiAction.TogglePanelFocus, is TuiAction.AutocompleteAccept -> {
-                    viewModel.autocompleteAccept(); return
-                }
-                is TuiAction.BackToMain, is TuiAction.AutocompleteDismiss -> {
-                    viewModel.autocompleteDismiss(); return
-                }
-                is TuiAction.Backspace -> {
-                    // Let backspace through but also check if we should dismiss autocomplete
-                    val current = state.inputBuffer
-                    if (current.isNotEmpty()) {
-                        viewModel.updateInputBuffer(current.dropLast(1))
-                        viewModel.updateAutocompleteFilter()
-                    }
-                    return
-                }
-                is TuiAction.TypeChar -> {
-                    // Continue typing while autocomplete is visible
-                    viewModel.insertAtCursor(action.char)
-                    viewModel.updateAutocompleteFilter()
-                    return
-                }
-                else -> {
-                    viewModel.autocompleteDismiss()
-                    // Fall through to normal handling
-                }
-            }
-        }
+        if (handleActiveTabAction(action, state, viewModel)) return
+        if (state.modelSelectorVisible) { handleModelSelectorAction(action, viewModel); return }
+        if (state.autocompleteVisible && handleAutocompleteAction(action, state, viewModel)) return
 
         val chatVisible = state.screen == TuiScreen.MAIN && !narrowPanel && !(state.panelFocused && state.activeTab != TuiTab.CHAT)
-        if (chatVisible && state.selectedMessageIndex >= 0 && handleSelectionKey(action, viewModel)) {
-            return
-        }
-        if (chatVisible && action is TuiAction.TypeChar && OutputLimitNotice.isActive(state) && viewModel.liveInputBuffer().isEmpty() &&
-            handleNoticeKey(action.char, state, viewModel)
+        if (chatVisible && state.selectedMessageIndex >= 0 && handleSelectionKey(action, viewModel)) return
+        if (chatVisible && action is TuiAction.TypeChar && OutputLimitNotice.isActive(state) &&
+            viewModel.liveInputBuffer().isEmpty() && handleNoticeKey(action.char, state, viewModel)
         ) {
             return
         }
-        // Esc closes the open panel and the right column with it; a selection in the chat is cleared first (above).
         if (action is TuiAction.BackToMain && state.screen == TuiScreen.MAIN && state.activeTab != TuiTab.CHAT) {
             viewModel.setActiveTab(TuiTab.CHAT)
             return
         }
 
+        handleGlobalAction(action, rawState, state, viewModel)
+    }
+
+    private fun handlePlanApprovalAction(action: TuiAction, viewModel: TuiViewModel) {
+        when (action) {
+            is TuiAction.TypeChar -> when (action.char.lowercaseChar()) {
+                'y' -> viewModel.approvePlan()
+                'n' -> viewModel.rejectPlan()
+                else -> Unit
+            }
+            is TuiAction.SendMessage -> viewModel.approvePlan()
+            is TuiAction.BackToMain -> viewModel.rejectPlan()
+            else -> Unit
+        }
+    }
+
+    private fun handleFileViewerAction(action: TuiAction, state: TuiState, viewModel: TuiViewModel) {
+        when (action) {
+            is TuiAction.ScrollUp -> viewModel.fileViewerScrollUp()
+            is TuiAction.ScrollDown -> viewModel.fileViewerScrollDown()
+            is TuiAction.PageUp -> viewModel.fileViewerPageUp()
+            is TuiAction.PageDown -> viewModel.fileViewerPageDown()
+            is TuiAction.BackToMain, is TuiAction.SendMessage, is TuiAction.CancelOperation -> viewModel.closeFileViewer()
+            is TuiAction.TypeChar -> when (action.char.lowercaseChar()) {
+                'a' -> if (state.fileViewerAllowAddContext) viewModel.fileViewerAddAsContext()
+                'c' -> viewModel.fileViewerCopyToClipboard()
+                else -> viewModel.showFileViewerHint()
+            }
+            is TuiAction.Quit -> { viewModel.shutdown(); stop() }
+            else -> Unit
+        }
+    }
+
+    private fun handleSettingsAction(action: TuiAction, state: TuiState, viewModel: TuiViewModel): Boolean {
+        if (state.settingsEditingField != null) {
+            when (action) {
+                is TuiAction.TypeChar -> viewModel.settingsUpdateEditBuffer(state.settingsEditBuffer + action.char)
+                is TuiAction.Backspace -> if (state.settingsEditBuffer.isNotEmpty()) {
+                    viewModel.settingsUpdateEditBuffer(state.settingsEditBuffer.dropLast(1))
+                }
+                is TuiAction.SendMessage -> viewModel.settingsCommitEdit()
+                is TuiAction.BackToMain -> viewModel.settingsCancelEdit()
+                else -> Unit
+            }
+            return true
+        }
+
+        when (action) {
+            is TuiAction.BackToMain -> {
+                if (viewModel.isSettingsResetArmed()) viewModel.disarmSettingsReset()
+                else viewModel.setScreen(TuiScreen.MAIN)
+                return true
+            }
+            is TuiAction.ScrollUp -> { viewModel.disarmSettingsReset(); viewModel.settingsFieldUp(); return true }
+            is TuiAction.ScrollDown -> { viewModel.disarmSettingsReset(); viewModel.settingsFieldDown(); return true }
+            is TuiAction.ScrollLeft -> { viewModel.setSettingsTab((state.settingsTab - 1).coerceIn(0, 10)); return true }
+            is TuiAction.ScrollRight -> { viewModel.setSettingsTab((state.settingsTab + 1).coerceIn(0, 10)); return true }
+            is TuiAction.SendMessage -> { activateSelectedSettingsField(state, viewModel); return true }
+            is TuiAction.TogglePanelFocus -> {
+                TuiSettingsScreen.nextGroupField(state.settingsTab, state.settingsSelectedField)?.let { viewModel.settingsSelectField(it) }
+                return true
+            }
+            is TuiAction.TypeChar -> { handleSettingsChar(action.char, state, viewModel); return true }
+            else -> return false
+        }
+    }
+
+    private fun activateSelectedSettingsField(state: TuiState, viewModel: TuiViewModel) {
+        viewModel.disarmSettingsReset()
+        val field = TuiSettingsScreen.getSelectedField(state.settingsTab, state.settingsSelectedField) ?: return
+        if (field.sectionKey.startsWith(TuiSettingsScreen.TOOL_PERMISSION_PREFIX)) {
+            val rest = field.sectionKey.removePrefix(TuiSettingsScreen.TOOL_PERMISSION_PREFIX)
+            val toolName = rest.substringBeforeLast(".")
+            val agentMode = rest.substringAfterLast(".") == "agent"
+            viewModel.cycleToolPermission(toolName, agentMode)
+            return
+        }
+        val parts = field.sectionKey.split(".", limit = 2)
+        if (parts.size != 2) return
+        val (section, key) = parts
+        val config = viewModel.getConfigSection(section)
+        when (field.type) {
+            TuiSettingsScreen.FieldType.BOOL -> {
+                val current = config[key]?.lowercase() in listOf("true", "1", "yes")
+                viewModel.settingsToggleBool(section, key, current)
+            }
+            TuiSettingsScreen.FieldType.CYCLE -> {
+                val options = field.options
+                if (options.isNotEmpty()) {
+                    val current = config[key] ?: field.default
+                    val idx = options.indexOfFirst { it.equals(current, ignoreCase = true) }
+                    viewModel.updateConfig(section, key, options[(idx + 1).mod(options.size)])
+                }
+            }
+            TuiSettingsScreen.FieldType.TEXT -> {
+                val raw = config[key] ?: ""
+                val prefill = if (section == "default_model" && raw.trimStart().startsWith("{")) {
+                    val id = Regex(""""modelId"\s*:\s*"([^"]*)"""").find(raw)?.groupValues?.get(1)
+                    val prov = Regex(""""provider"\s*:\s*"([^"]*)"""").find(raw)?.groupValues?.get(1)
+                    if (id != null && prov != null) "$prov/$id" else raw
+                } else raw
+                viewModel.settingsStartEdit(field.sectionKey, prefill)
+            }
+        }
+    }
+
+    private fun handleSettingsChar(ch: Char, state: TuiState, viewModel: TuiViewModel) {
+        if (ch == '-') { viewModel.setSettingsTab(10); return }
+        val groupValue = when (ch) { 'a' -> "ON"; 'k' -> "ASK"; 'x' -> "OFF"; else -> null }
+        if (groupValue != null && TuiSettingsScreen.tabTitle(state.settingsTab) == "Tools") {
+            TuiSettingsScreen.toolGroupAt(state.settingsTab, state.settingsSelectedField)?.let { (tools, agentColumn) ->
+                viewModel.setToolGroupPermission(tools, agentColumn, groupValue)
+            }
+            return
+        }
+        val tabNum = ch.toString().toIntOrNull()
+        if (tabNum != null) {
+            val tabIndex = if (tabNum == 0) 9 else tabNum - 1
+            if (tabIndex in 0..10) { viewModel.setSettingsTab(tabIndex); return }
+        }
+        when (ch.uppercaseChar()) {
+            'R' -> {
+                if (viewModel.isSettingsResetArmed()) {
+                    viewModel.disarmSettingsReset()
+                    viewModel.resetAllSettings()
+                } else {
+                    viewModel.armSettingsReset()
+                }
+                return
+            }
+            'E' -> { viewModel.disarmSettingsReset(); viewModel.exportUserConfig(); return }
+            'P' -> { viewModel.disarmSettingsReset(); viewModel.exportProjectConfig(); return }
+            'L' -> { viewModel.disarmSettingsReset(); viewModel.reloadConfig(); return }
+            'F' -> {
+                viewModel.disarmSettingsReset()
+                if (state.settingsTab == 2) viewModel.refreshSettingsModels()
+                return
+            }
+        }
+        viewModel.disarmSettingsReset()
+    }
+
+    private fun handleHelpAction(action: TuiAction, state: TuiState, viewModel: TuiViewModel) {
+        if (state.helpFilter != null) {
+            when (action) {
+                is TuiAction.TypeChar -> { viewModel.setHelpFilter(state.helpFilter + action.char); return }
+                is TuiAction.Backspace -> { viewModel.setHelpFilter(state.helpFilter.dropLast(1)); return }
+                is TuiAction.BackToMain -> { viewModel.setHelpFilter(null); return }
+                else -> Unit
+            }
+        } else if (action is TuiAction.TypeChar && action.char == '/') {
+            viewModel.setHelpFilter("")
+            return
+        }
+        when (action) {
+            is TuiAction.ScrollUp -> viewModel.helpScrollUp()
+            is TuiAction.ScrollDown -> viewModel.helpScrollDown()
+            is TuiAction.PageUp -> viewModel.helpPageUp()
+            is TuiAction.PageDown -> viewModel.helpPageDown()
+            is TuiAction.BackToMain -> viewModel.setScreen(TuiScreen.MAIN)
+            is TuiAction.SwitchScreen -> {
+                if (action.screen == TuiScreen.HELP) viewModel.setScreen(TuiScreen.MAIN)
+                else viewModel.setScreen(action.screen)
+            }
+            is TuiAction.SwitchTab -> { viewModel.setScreen(TuiScreen.MAIN); viewModel.setActiveTab(action.tab) }
+            is TuiAction.Quit -> { viewModel.shutdown(); stop() }
+            else -> Unit
+        }
+    }
+
+    private fun handleHistoryAction(action: TuiAction, state: TuiState, viewModel: TuiViewModel) {
+        when (action) {
+            is TuiAction.ScrollUp -> viewModel.selectHistoryUp()
+            is TuiAction.ScrollDown -> viewModel.selectHistoryDown()
+            is TuiAction.SendMessage -> viewModel.loadSelectedSession()
+            is TuiAction.BackToMain -> viewModel.setScreen(TuiScreen.MAIN)
+            is TuiAction.TypeChar -> {
+                when (action.char.lowercaseChar()) {
+                    'p' -> { viewModel.togglePinSession(); return }
+                    'r' -> { viewModel.refreshSessions(); return }
+                    'd' -> { viewModel.deleteSelectedSession(); return }
+                    'c' -> { viewModel.setHistoryFilter("CHAT"); return }
+                    'l' -> { viewModel.setHistoryFilter("PLAN"); return }
+                    'a' -> { viewModel.setHistoryFilter("AGENT"); return }
+                    '*' -> { viewModel.setHistoryFilter("*"); return }
+                    '/' -> { viewModel.setHistoryFilter("/"); return }
+                }
+                if (state.historyFilter.startsWith("/")) {
+                    viewModel.setHistoryFilter(state.historyFilter + action.char)
+                }
+            }
+            is TuiAction.Backspace -> {
+                if (state.historyFilter.startsWith("/") && state.historyFilter.length > 1) {
+                    viewModel.setHistoryFilter(state.historyFilter.dropLast(1))
+                } else if (state.historyFilter.startsWith("/")) {
+                    viewModel.setHistoryFilter("*")
+                }
+            }
+            else -> Unit
+        }
+    }
+
+    private fun handleActiveTabAction(action: TuiAction, state: TuiState, viewModel: TuiViewModel): Boolean {
+        if (state.screen == TuiScreen.MAIN) {
+            when (state.activeTab) {
+                TuiTab.RAG -> if (handleRagTabAction(action, state, viewModel)) return true
+                TuiTab.CONTEXT -> if (handleContextTabAction(action, state, viewModel)) return true
+                TuiTab.LOGS -> if (handleLogsTabAction(action, state, viewModel)) return true
+                TuiTab.API_LOGS -> if (handleApiLogsTabAction(action, state, viewModel)) return true
+                TuiTab.FILES -> if (handleFilesTabAction(action, state, viewModel)) return true
+                TuiTab.DEBUG -> if (handleDebugTabAction(action, viewModel)) return true
+                else -> Unit
+            }
+        }
+        if (state.activeTab == TuiTab.STEPS && state.subtasks.isNotEmpty()) {
+            return handleStepsTabAction(action, state, viewModel)
+        }
+        return false
+    }
+
+    private fun handleRagTabAction(action: TuiAction, state: TuiState, viewModel: TuiViewModel): Boolean {
+        if (!state.panelFocused) return false
+        when (action) {
+            is TuiAction.ScrollUp -> { viewModel.ragFileUp(); return true }
+            is TuiAction.ScrollDown -> { viewModel.ragFileDown(); return true }
+            is TuiAction.SendMessage -> { viewModel.ragOpenSelectedFile(); return true }
+            is TuiAction.TypeChar -> when (action.char.lowercaseChar()) {
+                'r' -> { viewModel.ragReindex(); return true }
+                'e' -> { viewModel.ragGenerateEmbeddings(); return true }
+                's' -> { viewModel.ragStopIndexing(); return true }
+                'c' -> { viewModel.ragClearPressed(); return true }
+                'v' -> { viewModel.ragViewSelectedChunks(); return true }
+                'q' -> {
+                    viewModel.addSystemMessage("Type search query in the chat input and press Enter, or use /rag-search <query>")
+                    return true
+                }
+            }
+            else -> Unit
+        }
+        return false
+    }
+
+    private fun handleContextTabAction(action: TuiAction, state: TuiState, viewModel: TuiViewModel): Boolean {
+        if (state.contextDetailVisible) {
+            when (action) {
+                is TuiAction.ScrollUp -> viewModel.contextDetailScrollUp()
+                is TuiAction.ScrollDown -> viewModel.contextDetailScrollDown()
+                is TuiAction.SendMessage, is TuiAction.BackToMain -> viewModel.toggleContextDetail()
+                is TuiAction.PageUp -> repeat(10) { viewModel.contextDetailScrollUp() }
+                is TuiAction.PageDown -> repeat(10) { viewModel.contextDetailScrollDown() }
+                else -> Unit
+            }
+            return true
+        }
+        if (!state.panelFocused) return false
+        return when (action) {
+            is TuiAction.ScrollUp -> { viewModel.contextSectionUp(); true }
+            is TuiAction.ScrollDown -> { viewModel.contextSectionDown(); true }
+            is TuiAction.SendMessage -> { viewModel.toggleContextDetail(); true }
+            is TuiAction.TypeChar -> if (action.char.lowercaseChar() == 'i') { viewModel.toggleContextDetail(); true } else false
+            else -> false
+        }
+    }
+
+    private fun handleLogsTabAction(action: TuiAction, state: TuiState, viewModel: TuiViewModel): Boolean {
+        if (!state.panelFocused) return false
+        return when (action) {
+            is TuiAction.ScrollUp -> { viewModel.logUp(); true }
+            is TuiAction.ScrollDown -> { viewModel.logDown(); true }
+            is TuiAction.SendMessage -> { viewModel.openLogDetailViewer(); true }
+            is TuiAction.TypeChar -> when (action.char.lowercaseChar()) {
+                'p' -> { viewModel.toggleLogPause(); true }
+                'f' -> { viewModel.cycleLogFilter(); true }
+                else -> false
+            }
+            else -> false
+        }
+    }
+
+    private fun handleApiLogsTabAction(action: TuiAction, state: TuiState, viewModel: TuiViewModel): Boolean {
+        if (!state.panelFocused) return false
+        return when (action) {
+            is TuiAction.ScrollUp -> { viewModel.apiLogUp(); true }
+            is TuiAction.ScrollDown -> { viewModel.apiLogDown(); true }
+            is TuiAction.SendMessage -> {
+                if (state.apiLogs.isNotEmpty()) viewModel.openApiLogDetailViewer()
+                true
+            }
+            is TuiAction.TypeChar -> if (action.char.lowercaseChar() == 'f') { viewModel.cycleApiLogsFilter(); true } else false
+            else -> false
+        }
+    }
+
+    private fun handleFilesTabAction(action: TuiAction, state: TuiState, viewModel: TuiViewModel): Boolean {
+        if (!state.panelFocused) return false
+        return when (action) {
+            is TuiAction.ScrollUp -> { viewModel.fileBrowserUp(); true }
+            is TuiAction.ScrollDown -> { viewModel.fileBrowserDown(); true }
+            is TuiAction.SendMessage -> { viewModel.fileBrowserEnter(); true }
+            is TuiAction.Backspace -> { viewModel.fileBrowserGoUp(); true }
+            is TuiAction.TypeChar -> when (action.char.lowercaseChar()) {
+                'h' -> { viewModel.fileBrowserToggleHidden(); true }
+                'a' -> { viewModel.fileBrowserAddAsContext(); true }
+                'o' -> { viewModel.fileBrowserOpenExternal(); true }
+                'i' -> { viewModel.fileBrowserShowInfo(); true }
+                'r' -> { viewModel.fileBrowserRefresh(); true }
+                else -> false
+            }
+            is TuiAction.PageUp -> { repeat(10) { viewModel.fileBrowserUp() }; true }
+            is TuiAction.PageDown -> { repeat(10) { viewModel.fileBrowserDown() }; true }
+            else -> false
+        }
+    }
+
+    private fun handleDebugTabAction(action: TuiAction, viewModel: TuiViewModel): Boolean = when (action) {
+        is TuiAction.ScrollUp -> { viewModel.debugScrollUp(); true }
+        is TuiAction.ScrollDown -> { viewModel.debugScrollDown(); true }
+        is TuiAction.PageUp -> { repeat(10) { viewModel.debugScrollUp() }; true }
+        is TuiAction.PageDown -> { repeat(10) { viewModel.debugScrollDown() }; true }
+        else -> false
+    }
+
+    private fun handleStepsTabAction(action: TuiAction, state: TuiState, viewModel: TuiViewModel): Boolean = when (action) {
+        is TuiAction.ScrollUp -> { viewModel.selectStepUp(); true }
+        is TuiAction.ScrollDown -> { viewModel.selectStepDown(); true }
+        is TuiAction.TypeChar -> {
+            if (!state.panelFocused) false
+            else {
+                val idx = state.selectedStepIndex
+                val subtask = state.subtasks.getOrNull(idx)
+                when {
+                    action.char.lowercaseChar() == 'a' -> { subtask?.let { viewModel.approveSubtask(it.id) }; true }
+                    action.char.lowercaseChar() == 's' -> { subtask?.let { viewModel.skipSubtask(it.id) }; true }
+                    action.char.lowercaseChar() == 'd' -> { subtask?.let { viewModel.deleteSubtask(it.id) }; true }
+                    action.char.lowercaseChar() == 'u' -> { viewModel.moveStepUp(idx); true }
+                    action.char.lowercaseChar() == 'j' -> { viewModel.moveStepDown(idx); true }
+                    action.char.lowercaseChar() == 'p' -> { viewModel.togglePause(); true }
+                    action.char == 'r' -> { viewModel.replanSteps(); true }
+                    action.char == 'C' -> { viewModel.cancelAllPending(); true }
+                    else -> false
+                }
+            }
+        }
+        else -> false
+    }
+
+    private fun handleModelSelectorAction(action: TuiAction, viewModel: TuiViewModel) {
+        when (action) {
+            is TuiAction.ScrollUp -> viewModel.modelSelectorPrev()
+            is TuiAction.ScrollDown -> viewModel.modelSelectorNext()
+            is TuiAction.SendMessage -> viewModel.modelSelectorAccept()
+            is TuiAction.BackToMain -> viewModel.dismissModelSelector()
+            else -> Unit
+        }
+    }
+
+    private fun handleAutocompleteAction(action: TuiAction, state: TuiState, viewModel: TuiViewModel): Boolean {
+        when (action) {
+            is TuiAction.ScrollDown, is TuiAction.AutocompleteNext -> { viewModel.autocompleteNext(); return true }
+            is TuiAction.ScrollUp, is TuiAction.AutocompletePrev -> { viewModel.autocompletePrev(); return true }
+            is TuiAction.SendMessage -> {
+                val selected = state.autocompleteCandidates.getOrNull(state.autocompleteSelectedIndex)
+                if (selected != null && SlashActions.find(selected, viewModel.slashTemplateNames()) != null) {
+                    viewModel.autocompleteDismiss()
+                    handleCommand(selected, viewModel)
+                } else {
+                    viewModel.autocompleteAccept()
+                }
+                return true
+            }
+            is TuiAction.TogglePanelFocus, is TuiAction.AutocompleteAccept -> { viewModel.autocompleteAccept(); return true }
+            is TuiAction.BackToMain, is TuiAction.AutocompleteDismiss -> { viewModel.autocompleteDismiss(); return true }
+            is TuiAction.Backspace -> {
+                val current = state.inputBuffer
+                if (current.isNotEmpty()) {
+                    viewModel.updateInputBuffer(current.dropLast(1))
+                    viewModel.updateAutocompleteFilter()
+                }
+                return true
+            }
+            is TuiAction.TypeChar -> {
+                viewModel.insertAtCursor(action.char)
+                viewModel.updateAutocompleteFilter()
+                return true
+            }
+            else -> {
+                viewModel.autocompleteDismiss()
+                return false
+            }
+        }
+    }
+
+    private fun handleGlobalAction(action: TuiAction, rawState: TuiState, state: TuiState, viewModel: TuiViewModel) {
         when (action) {
             is TuiAction.SwitchTab -> {
                 viewModel.clearMessageSelection()
-                // F1-F8 from a full screen (Settings/Help/History) must bring the
-                // user back to the main screen, not switch tabs underneath it.
                 if (state.screen != TuiScreen.MAIN) viewModel.setScreen(TuiScreen.MAIN)
                 viewModel.setActiveTab(action.tab)
             }
@@ -678,24 +597,18 @@ class TuiInputHandler(private val terminal: Terminal) {
             is TuiAction.TypeChar -> {
                 viewModel.insertAtCursor(action.char)
                 val newBuffer = viewModel.stateFlow.value.inputBuffer
-                // Trigger autocomplete on '@', '!', '/'
                 when (action.char) {
                     '@' -> viewModel.triggerAutocomplete()
                     '!' -> viewModel.triggerSubagentAutocomplete()
                     '/' -> {
-                        // Trigger slash command autocomplete when "/" is typed at start of input
-                        // (allow leading whitespace)
                         if (newBuffer.trimStart().startsWith("/") && !newBuffer.trimStart().contains(" ")) {
                             viewModel.triggerCommandAutocomplete()
                         }
                     }
                 }
-                // Clear paste marker on manual typing
                 viewModel.clearPasteMarker()
             }
-            is TuiAction.Backspace -> {
-                viewModel.deleteAtCursor()
-            }
+            is TuiAction.Backspace -> viewModel.deleteAtCursor()
             is TuiAction.CycleMode -> viewModel.cycleMode()
             is TuiAction.ToggleThinking -> viewModel.cycleReasoningEffort()
             is TuiAction.ToggleNoEgress -> viewModel.toggleNoEgress()
@@ -706,71 +619,33 @@ class TuiInputHandler(private val terminal: Terminal) {
             is TuiAction.SummarizeConversation -> viewModel.summarizeConversation()
             is TuiAction.CopyLastMessage -> viewModel.copyLastMessageToClipboard()
             is TuiAction.CycleAgentFilter -> viewModel.cycleAgentFilter()
-            is TuiAction.MessageSelectionUp -> {
-                if (state.activeTab == TuiTab.CHAT) viewModel.messageSelectionUp()
-            }
-            is TuiAction.MessageSelectionDown -> {
-                if (state.activeTab == TuiTab.CHAT) viewModel.messageSelectionDown()
-            }
+            is TuiAction.MessageSelectionUp -> if (state.activeTab == TuiTab.CHAT) viewModel.messageSelectionUp()
+            is TuiAction.MessageSelectionDown -> if (state.activeTab == TuiTab.CHAT) viewModel.messageSelectionDown()
             is TuiAction.CancelOperation -> {
-                if (state.isStreaming) {
-                    viewModel.cancelCurrentOperation()
-                } else if (state.modelSelectorVisible) {
-                    viewModel.dismissModelSelector()
-                } else if (state.autocompleteVisible) {
-                    viewModel.autocompleteDismiss()
-                } else if (state.screen != TuiScreen.MAIN) {
-                    viewModel.setScreen(TuiScreen.MAIN)
+                when {
+                    state.isStreaming -> viewModel.cancelCurrentOperation()
+                    state.modelSelectorVisible -> viewModel.dismissModelSelector()
+                    state.autocompleteVisible -> viewModel.autocompleteDismiss()
+                    state.screen != TuiScreen.MAIN -> viewModel.setScreen(TuiScreen.MAIN)
                 }
             }
-            is TuiAction.Quit -> {
-                viewModel.shutdown()
-                stop()
-            }
-            is TuiAction.ScrollUp -> {
-                // On Chat tab: scroll chat up
-                if (state.activeTab == TuiTab.CHAT && state.screen == TuiScreen.MAIN) {
-                    viewModel.chatScrollUp()
-                }
-            }
-            is TuiAction.ScrollDown -> {
-                // On Chat tab: scroll chat down
-                if (state.activeTab == TuiTab.CHAT && state.screen == TuiScreen.MAIN) {
-                    viewModel.chatScrollDown()
-                }
-            }
-            is TuiAction.ScrollLeft -> {
-                // Move cursor left in input buffer
-                viewModel.moveCursorLeft()
-            }
-            is TuiAction.ScrollRight -> {
-                // Move cursor right in input buffer
-                viewModel.moveCursorRight()
-            }
-            is TuiAction.PageUp -> {
-                if (state.activeTab == TuiTab.CHAT && state.screen == TuiScreen.MAIN) {
-                    repeat(10) { viewModel.chatScrollUp() }
-                }
-            }
-            is TuiAction.PageDown -> {
-                if (state.activeTab == TuiTab.CHAT && state.screen == TuiScreen.MAIN) {
-                    repeat(10) { viewModel.chatScrollDown() }
-                }
-            }
-            is TuiAction.ToggleExpand -> { /* handled by view */ }
-            is TuiAction.NewLine -> viewModel.updateInputBuffer(
-                state.inputBuffer + "\n"
-            )
+            is TuiAction.Quit -> { viewModel.shutdown(); stop() }
+            is TuiAction.ScrollUp -> if (state.activeTab == TuiTab.CHAT && state.screen == TuiScreen.MAIN) viewModel.chatScrollUp()
+            is TuiAction.ScrollDown -> if (state.activeTab == TuiTab.CHAT && state.screen == TuiScreen.MAIN) viewModel.chatScrollDown()
+            is TuiAction.ScrollLeft -> viewModel.moveCursorLeft()
+            is TuiAction.ScrollRight -> viewModel.moveCursorRight()
+            is TuiAction.PageUp -> if (state.activeTab == TuiTab.CHAT && state.screen == TuiScreen.MAIN) repeat(10) { viewModel.chatScrollUp() }
+            is TuiAction.PageDown -> if (state.activeTab == TuiTab.CHAT && state.screen == TuiScreen.MAIN) repeat(10) { viewModel.chatScrollDown() }
+            is TuiAction.ToggleExpand -> Unit
+            is TuiAction.NewLine -> viewModel.updateInputBuffer(state.inputBuffer + "\n")
             is TuiAction.TogglePanelFocus -> {
-                // Tab moves between the prompt and an open panel beside it; with no panel beside the
-                // prompt there is nothing to move to (a stale focus flag is still cleared).
                 val panelBeside = state.activeTab != TuiTab.CHAT && layoutMode() != LayoutMode.Narrow
                 if (panelBeside || rawState.panelFocused) viewModel.togglePanelFocus()
             }
-            is TuiAction.AutocompleteNext -> { /* handled above */ }
-            is TuiAction.AutocompletePrev -> { /* handled above */ }
-            is TuiAction.AutocompleteAccept -> { /* handled above */ }
-            is TuiAction.AutocompleteDismiss -> { /* handled above */ }
+            is TuiAction.AutocompleteNext,
+            is TuiAction.AutocompletePrev,
+            is TuiAction.AutocompleteAccept,
+            is TuiAction.AutocompleteDismiss -> Unit
         }
     }
 
@@ -874,7 +749,7 @@ class TuiInputHandler(private val terminal: Terminal) {
             viewModel.applyLongTaskCommand(command)
             return true
         }
-        if (!input.startsWith("/goal")) return false
+        if (input != "/goal" && !input.startsWith("/goal ")) return false
         viewModel.updateInputBuffer("")
         val args = input.removePrefix("/goal").trim()
         when {

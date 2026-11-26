@@ -1,8 +1,7 @@
 package pl.jclab.refio.core.db.migrations
 
-import org.jetbrains.exposed.sql.Database
-import org.jetbrains.exposed.sql.transactions.transaction
 import pl.jclab.refio.core.logging.dualLogger
+import java.sql.Connection
 
 private val logger = dualLogger("V7SubtaskAgentInstance")
 
@@ -13,26 +12,23 @@ private val logger = dualLogger("V7SubtaskAgentInstance")
  * id and the agent instance id. Skips when the column is present: a fresh database gets it from the
  * table definition, and a second run must not touch rows the application has written since.
  */
-class V7SubtaskAgentInstance : Migration {
+class V7SubtaskAgentInstance : SqliteMigration() {
     override val version: Int = 7
 
-    override fun migrate(database: Database) {
-        transaction(database) {
-            val jdbc = (connection.connection as java.sql.Connection)
-            if (!tableExists(jdbc, "subtasks")) {
-                logger.info { "subtasks table does not exist (fresh DB); skipping V7" }
-                return@transaction
-            }
-            if (columnExists(jdbc, "subtasks", "agent_instance_id")) {
-                logger.info { "subtasks.agent_instance_id already present; skipping V7" }
-                return@transaction
-            }
-            jdbc.createStatement().use { st ->
-                st.executeUpdate("ALTER TABLE subtasks ADD COLUMN agent_instance_id VARCHAR(36) NULL")
-                if (tableExists(jdbc, "chat_messages")) {
-                    val filled = st.executeUpdate(BACKFILL_SQL)
-                    logger.info { "Added subtasks.agent_instance_id; owner set from tool messages for $filled steps" }
-                }
+    override fun migrateOnConnection(jdbc: Connection) {
+        if (!tableExists(jdbc, "subtasks")) {
+            logger.info { "subtasks table does not exist (fresh DB); skipping V7" }
+            return
+        }
+        if (columnExists(jdbc, "subtasks", "agent_instance_id")) {
+            logger.info { "subtasks.agent_instance_id already present; skipping V7" }
+            return
+        }
+        jdbc.createStatement().use { st ->
+            st.executeUpdate("ALTER TABLE subtasks ADD COLUMN agent_instance_id VARCHAR(36) NULL")
+            if (tableExists(jdbc, "chat_messages")) {
+                val filled = st.executeUpdate(BACKFILL_SQL)
+                logger.info { "Added subtasks.agent_instance_id; owner set from tool messages for $filled steps" }
             }
         }
     }

@@ -32,10 +32,18 @@ class UrlPolicyTest {
     }
 
     @Test
-    fun `opt-in permits loopback and private targets for a local fixture server`() {
+    fun `opt-in permits loopback targets while keeping cloud metadata and private LAN blocked`() {
         val policy = UrlPolicy(allowLoopback = { true })
         policy.validate("http://127.0.0.1:8723/data.json")
-        policy.validate("http://192.168.1.10/")
+        policy.validate("http://[::1]:8723/data.json")
+        for (blocked in listOf(
+            "http://169.254.169.254/latest/meta-data",
+            "http://192.168.1.10/",
+            "http://10.0.0.5/",
+            "http://0.0.0.0/"
+        )) {
+            assertThrows(SecurityException::class.java, { policy.validate(blocked) }, "must block $blocked")
+        }
     }
 
     @Test

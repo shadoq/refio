@@ -103,6 +103,7 @@ class AdapterCallMetadataAttributionTest {
         every { configService.get(key, ConfigScope.APP, any(), any()) } returns apiKey
         every { configService.getTyped(ConfigKeys.API_CALL_TIMEOUT, any()) } returns ConfigKeys.API_CALL_TIMEOUT.default
         every { configService.getTyped(ConfigKeys.MAX_OUTPUT_SIZE, any()) } returns ConfigKeys.MAX_OUTPUT_SIZE.default
+        every { configService.getTyped(ConfigKeys.GENERAL_NO_EGRESS_ENABLED, any()) } returns false
         return configService
     }
 

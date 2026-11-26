@@ -41,7 +41,7 @@ object GoldenScreen {
         actualDir.mkdirs()
         File(actualDir, fileName).writeText(actual)
         if (!file.exists()) fail("Missing pattern ${file.path}; run the tests with REFIO_GOLDEN_UPDATE=1 to create it")
-        val expected = file.readText()
+        val expected = file.readText().replace("\r\n", "\n")
         if (expected == actual) return
         val e = expected.lines()
         val a = actual.lines()

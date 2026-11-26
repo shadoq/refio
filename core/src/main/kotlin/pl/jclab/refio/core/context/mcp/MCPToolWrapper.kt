@@ -2,6 +2,7 @@ package pl.jclab.refio.core.context.mcp
 
 import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolCategory
+import pl.jclab.refio.core.tools.base.ToolInternalParams
 import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolOrigin
 import pl.jclab.refio.core.tools.base.ToolResult
@@ -27,7 +28,8 @@ class MCPToolWrapper(
 
     override suspend fun execute(params: Map<String, Any>): ToolResult {
         return try {
-            val result = mcpConnection.callTool(toolDefinition.name, params)
+            val cleanParams = params.filterKeys { it !in ToolInternalParams.ALL }
+            val result = mcpConnection.callTool(toolDefinition.name, cleanParams)
             if (result.isError) {
                 ToolResult.error(formatToolResult(result).ifBlank { "MCP tool error" })
             } else {

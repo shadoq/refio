@@ -286,7 +286,18 @@ abstract class OpenAICompatibleAdapter(
             }
 
             httpStatus = response.status.value
-            val rawResponse: Map<String, Any?> = response.body()
+            val rawBody = response.body<String>()
+            if (httpStatus !in 200..299) {
+                if (requestBody.containsKey("tools") && isToolsNotSupportedError(httpStatus, rawBody)) {
+                    throw pl.jclab.refio.core.llm.ToolsNotSupportedException(
+                        "$providerTag API error (HTTP $httpStatus): $rawBody"
+                    )
+                }
+                throw mapHttpError(httpStatus, rawBody)
+            }
+            @Suppress("UNCHECKED_CAST")
+            val rawResponse: Map<String, Any?> = gson.fromJson(rawBody, Map::class.java) as? Map<String, Any?>
+                ?: throw RefioError.MalformedResponse(provider, model, "Expected JSON object from $providerTag", rawBody)
             ensureSuccess(httpStatus, rawResponse, endpoint)
 
             val usage = extractUsage(rawResponse)
@@ -371,6 +382,8 @@ abstract class OpenAICompatibleAdapter(
                 source = source,
             )
             throw e
+        } catch (e: pl.jclab.refio.core.llm.ToolsNotSupportedException) {
+            throw e
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -421,6 +434,11 @@ abstract class OpenAICompatibleAdapter(
                         httpStatus = httpResponse.status.value
                         if (httpStatus !in 200..299) {
                             val errorBody = httpResponse.body<String>()
+                            if (requestBody.containsKey("tools") && isToolsNotSupportedError(httpStatus!!, errorBody)) {
+                                throw pl.jclab.refio.core.llm.ToolsNotSupportedException(
+                                    "$providerTag streaming error (HTTP $httpStatus): $errorBody"
+                                )
+                            }
                             throw mapHttpError(httpStatus!!, errorBody)
                         }
 
@@ -568,6 +586,8 @@ abstract class OpenAICompatibleAdapter(
                 source = source,
             )
             throw e
+        } catch (e: pl.jclab.refio.core.llm.ToolsNotSupportedException) {
+            throw e
         } catch (e: Exception) {
             logger.apiError(
                 provider = provider,
@@ -583,6 +603,17 @@ abstract class OpenAICompatibleAdapter(
             )
             throw RefioError.LLMError(providerName, model, e)
         }
+    }
+
+    protected fun isToolsNotSupportedError(httpStatus: Int, body: String): Boolean {
+        if (httpStatus !in listOf(400, 404, 422)) return false
+        val lower = body.lowercase()
+        return lower.contains("does not support tools") ||
+            lower.contains("tool use is not supported") ||
+            lower.contains("tools are not supported") ||
+            lower.contains("function calling is not supported") ||
+            lower.contains("no endpoints found that support tool use") ||
+            (lower.contains("tools") && lower.contains("not supported"))
     }
 
     open suspend fun listModels(): List<ModelConfig> = withContext(Dispatchers.IO) {

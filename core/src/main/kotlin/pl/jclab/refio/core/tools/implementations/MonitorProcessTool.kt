@@ -3,6 +3,7 @@ package pl.jclab.refio.core.tools.implementations
 import pl.jclab.refio.core.services.ProcessManager
 import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolCategory
+import pl.jclab.refio.core.tools.base.ToolInternalParams
 import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolResult
 
@@ -40,13 +41,21 @@ class MonitorProcessTool(
             )
         }
         if (action == ACTION_STOP) {
+            val modeStr = params[ToolInternalParams.MODE] as? String
+            if (modeStr.equals("PLAN", ignoreCase = true) || modeStr.equals("CHAT", ignoreCase = true)) {
+                return ToolResult.error(
+                    "Action 'stop' terminates background processes and is disabled in $modeStr mode. " +
+                        "Switch to AGENT mode to stop running processes."
+                )
+            }
             return stop(processId)
         }
         val maxLines = ((params["max_lines"] as? Number)?.toInt() ?: 200).coerceIn(1, 1000)
 
+        val existedBefore = processManager.get(processId) != null
         val (lines, isRunning) = processManager.readOutput(processId, maxLines)
 
-        if (processManager.get(processId) == null && lines.isEmpty()) {
+        if (!existedBefore && processManager.get(processId) == null && lines.isEmpty()) {
             return ToolResult.error("Process not found: $processId (may have already finished)")
         }
 

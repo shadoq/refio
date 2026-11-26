@@ -56,8 +56,10 @@ class UrlPolicy(
     private fun isBlocked(address: InetAddress): Boolean {
         // Multicast is never a legitimate tool target and stays blocked even under the opt-in.
         if (address.isMulticastAddress) return true
-        // Opt-in: trust loopback/private/local addresses (e.g. a local fixture server).
-        if (allowLoopback()) return false
+        // Opt-in: trust only loopback addresses (e.g. a local fixture server on 127.0.0.1 / ::1).
+        // Private LAN, link-local (169.254.169.254 cloud metadata), and unspecified addresses
+        // stay blocked even when allowLoopback is enabled.
+        if (allowLoopback() && address.isLoopbackAddress) return false
 
         if (
             address.isAnyLocalAddress ||

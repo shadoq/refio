@@ -42,8 +42,14 @@ class SnapshotService(
         data class Captured(val relPath: String, val content: String, val hash: String)
 
         val captured = filePaths.mapNotNull { relPath ->
-            val fullPath = projectRoot.resolve(relPath).normalize()
+            val fullPath = try {
+                sandbox.resolve(relPath)
+            } catch (e: SecurityException) {
+                logger.warn { "Snapshot capture skipped path outside sandbox: $relPath (${e.message})" }
+                return@mapNotNull null
+            }
             if (!fullPath.exists()) return@mapNotNull null
+            sandbox.revalidateBeforeIO(fullPath)
 
             val bytes = fullPath.readBytes()
             Captured(relPath, decodeLossless(bytes), sha256Hash(bytes))
@@ -115,7 +121,12 @@ class SnapshotService(
             .filter { filePaths == null || it.filePath in filePaths }
 
         val files = snapshots.map { snapshot ->
-            val fullPath = projectRoot.resolve(snapshot.filePath).normalize()
+            val fullPath = try {
+                sandbox.resolve(snapshot.filePath)
+            } catch (e: SecurityException) {
+                logger.warn { "Snapshot planRestore rejected path outside sandbox: ${snapshot.filePath}" }
+                return@map RestoreFileInfo(path = snapshot.filePath, state = RestoreFileState.MISSING_ON_DISK)
+            }
             val state = when {
                 !fullPath.exists() -> RestoreFileState.MISSING_ON_DISK
                 sha256Hash(fullPath.readBytes()) == snapshot.contentHash -> RestoreFileState.MATCHES_SNAPSHOT
@@ -164,6 +175,7 @@ class SnapshotService(
 
                 val content = snapshotRepository.decompressContent(snapshot)
                 fullPath.parent?.createDirectories()
+                sandbox.revalidateBeforeIO(fullPath)
                 Files.write(fullPath, encodeForRestore(content, snapshot.contentHash))
                 restored.add(relPath)
 
@@ -323,8 +335,9 @@ class SnapshotService(
      * end of a run cannot make.
      */
     fun currentContentHash(filePath: String): String? = try {
-        val fullPath = projectRoot.resolve(filePath).normalize()
+        val fullPath = sandbox.resolve(filePath)
         if (Files.exists(fullPath) && Files.isRegularFile(fullPath)) {
+            sandbox.revalidateBeforeIO(fullPath)
             sha256Hash(Files.readAllBytes(fullPath))
         } else {
             null

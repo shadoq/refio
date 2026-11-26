@@ -27,7 +27,7 @@ Local-first AI coding assistant for IntelliJ IDEA and the terminal. Kotlin/JVM p
 
 # Quality
 ./gradlew :intellij-plugin:check           # Includes detectSensitiveLogging task
-./gradlew :core:jacocoTestCoverageVerification # Coverage gate (35% minimum instructions, wired into :core:check)
+./gradlew :core:jacocoTestCoverageVerification # Coverage gate (50% minimum instructions, wired into :core:check)
 ./gradlew :intellij-plugin:jacocoTestReport    # Plugin coverage report (HTML/XML only, no threshold - tests live in :core)
 ```
 

@@ -24,6 +24,7 @@ import pl.jclab.refio.services.notification.NotificationService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.awt.*
 import javax.swing.*
@@ -1427,5 +1428,9 @@ class ModelsSettingsPanel(
                 logger.error(e) { "Failed to refresh models after provider update" }
             }
         }
+    }
+
+    fun dispose() {
+        coroutineScope.cancel()
     }
 }

@@ -4,6 +4,7 @@ import io.ktor.client.*
 import io.ktor.client.engine.cio.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
+import io.ktor.utils.io.core.readBytes
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.jsoup.Jsoup
@@ -25,6 +26,7 @@ import pl.jclab.refio.core.tools.base.ToolResult
 private val logger = dualLogger("FetchWebpageTool")
 
 private const val MAX_REDIRECTS = 5
+private const val MAX_HTML_BYTES = 5L * 1024 * 1024
 
 class FetchWebpageTool(
     private val llmClient: LLMClient,
@@ -74,7 +76,7 @@ class FetchWebpageTool(
 
         logger.info { "Fetching $url for AI processing" }
         val html = try {
-            fetchHtml(url)
+            fetchHtml(url, taskId)
         } catch (e: Exception) {
             return@withContext ToolResult.error("Failed to fetch URL: ${e.message}")
         }
@@ -133,11 +135,10 @@ class FetchWebpageTool(
         )
     }
 
-    private suspend fun fetchHtml(url: String): String {
+    private suspend fun fetchHtml(url: String, taskId: String? = null): String {
         val client = HttpClient(CIO) {
             engine { requestTimeout = 20_000 }
-            // Follow redirects manually so the SSRF guard (urlPolicy) re-applies to every hop -
-            // a 30x to a loopback/internal address would otherwise bypass the initial-URL check.
+            // Follow redirects manually so the egress + SSRF guards re-apply to every hop.
             followRedirects = false
         }
         try {
@@ -149,10 +150,15 @@ class FetchWebpageTool(
                     header("Accept", "text/html,application/xhtml+xml,*/*")
                 }
                 if (response.status.value !in 300..399 || hops >= MAX_REDIRECTS) {
-                    return response.bodyAsText()
+                    val bytes = response.bodyAsChannel().readRemaining(MAX_HTML_BYTES).readBytes()
+                    return String(bytes, Charsets.UTF_8)
                 }
-                val location = response.headers["Location"] ?: return response.bodyAsText()
+                val location = response.headers["Location"] ?: run {
+                    val bytes = response.bodyAsChannel().readRemaining(MAX_HTML_BYTES).readBytes()
+                    return String(bytes, Charsets.UTF_8)
+                }
                 currentUrl = java.net.URI(currentUrl).resolve(location).toString()
+                networkPolicy.assertEgressAllowed(name, currentUrl, taskId)
                 urlPolicy.validate(currentUrl)  // re-apply SSRF guard to each redirect hop
                 hops++
             }

@@ -32,13 +32,17 @@ abstract class FileBasedRegistry<T>(
 ) {
     protected val logger = dualLogger("FileBasedRegistry[" + resourceDir + "]")
 
-    protected val builtinItems = ConcurrentHashMap<String, T>()
-    protected val userFileItems = ConcurrentHashMap<String, T>()
-    protected val projectFileItems = ConcurrentHashMap<String, T>()
+    @Volatile
+    protected var builtinItems = ConcurrentHashMap<String, T>()
+    @Volatile
+    protected var userFileItems = ConcurrentHashMap<String, T>()
+    @Volatile
+    protected var projectFileItems = ConcurrentHashMap<String, T>()
 
     @Volatile
     private var lastLoadedAt: Long = 0
     private val cacheTtlMs = 60_000L // 1 minute
+    private val refreshLock = Any()
 
     // ==========================================
     // ABSTRACT - implemented by subclasses
@@ -63,25 +67,26 @@ abstract class FileBasedRegistry<T>(
      * Subclasses may override to use different directory paths.
      */
     open fun loadAll() {
-        builtinItems.clear()
-        userFileItems.clear()
-        projectFileItems.clear()
+        val nextBuiltin = ConcurrentHashMap<String, T>()
+        val nextUser = ConcurrentHashMap<String, T>()
+        val nextProject = ConcurrentHashMap<String, T>()
 
         // Layer 1: Builtin (lowest priority)
-        loadBuiltinResources()
+        loadBuiltinResourcesInto(nextBuiltin)
 
         // Layer 2: User files
         val userDir = RefioHome.resolve(resourceDir)
-        loadFromDirectory(userDir, DefinitionScope.USER, userFileItems)
+        loadFromDirectory(userDir, DefinitionScope.USER, nextUser)
 
         // Layer 3: Project files (highest priority)
         projectRoot?.let { root ->
-            loadFromDirectory(root.resolve(".refio/$resourceDir"), DefinitionScope.PROJECT, projectFileItems)
+            loadFromDirectory(root.resolve(".refio/$resourceDir"), DefinitionScope.PROJECT, nextProject)
         }
-        // Note: lastLoadedAt update lives in refresh() (the single public entry point that
-        // calls loadAll). This way subclass loadAll() overrides — e.g. SubagentRegistry —
-        // automatically get TTL bookkeeping without having to remember it. Otherwise every
-        // get()/size() call would see lastLoadedAt=0 and re-trigger refresh.
+
+        // Atomic reference swap so concurrent readers never observe half-cleared maps during TTL refresh.
+        builtinItems = nextBuiltin
+        userFileItems = nextUser
+        projectFileItems = nextProject
     }
 
     /**
@@ -126,16 +131,22 @@ abstract class FileBasedRegistry<T>(
 
     /** Force reload from all sources. */
     fun refresh() {
-        logger.info { "Refreshing cache..." }
-        loadAll()
-        lastLoadedAt = System.currentTimeMillis()
-        logger.info { "Loaded ${builtinItems.size} builtin, ${userFileItems.size} user, ${projectFileItems.size} project items" }
+        synchronized(refreshLock) {
+            logger.info { "Refreshing cache..." }
+            loadAll()
+            lastLoadedAt = System.currentTimeMillis()
+            logger.info { "Loaded ${builtinItems.size} builtin, ${userFileItems.size} user, ${projectFileItems.size} project items" }
+        }
     }
 
-    /** Reload if TTL has expired. */
+    /** Reload if TTL has expired (double-checked lock avoids concurrent refresh races). */
     fun refreshIfNeeded() {
         if (System.currentTimeMillis() - lastLoadedAt > cacheTtlMs) {
-            refresh()
+            synchronized(refreshLock) {
+                if (System.currentTimeMillis() - lastLoadedAt > cacheTtlMs) {
+                    refresh()
+                }
+            }
         }
     }
 
@@ -161,7 +172,7 @@ abstract class FileBasedRegistry<T>(
     // LOADING - classpath resources
     // ==========================================
 
-    private fun loadBuiltinResources() {
+    protected fun loadBuiltinResourcesInto(target: ConcurrentHashMap<String, T>) {
         val resourcePaths = discoverBuiltinResources()
 
         logger.info { "Loading builtin resources (${resourcePaths.size}): ${resourcePaths.joinToString()}" }
@@ -171,7 +182,7 @@ abstract class FileBasedRegistry<T>(
                 val content = readResourceContent(resourcePath)
                 if (content != null) {
                     val definition = parseFile(content, null, DefinitionScope.BUILTIN)
-                    builtinItems[getName(definition).lowercase()] = definition
+                    target[getName(definition).lowercase()] = definition
                 } else {
                     logger.warn { "Resource not found: $resourcePath" }
                 }

@@ -2,12 +2,16 @@ package pl.jclab.refio.core.db
 
 import kotlinx.coroutines.Dispatchers
 import org.jetbrains.exposed.sql.*
+import org.jetbrains.exposed.sql.transactions.TransactionManager
 import org.jetbrains.exposed.sql.transactions.experimental.newSuspendedTransaction
 import org.jetbrains.exposed.sql.transactions.transaction
 import pl.jclab.refio.core.db.migrations.MigrationRunner
-import pl.jclab.refio.core.db.MCPServersTable
+import pl.jclab.refio.core.db.migrations.V8ConfigAndMcpUniqueness
 import pl.jclab.refio.core.logging.dualLogger
 import java.sql.DriverManager
+import java.sql.SQLException
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 private val logger = dualLogger("DatabaseFactory")
 
@@ -15,6 +19,7 @@ object DatabaseFactory {
     @Volatile
     private var initialized = false
     private val initLock = Object()
+    private val writeLock = ReentrantLock()
 
     fun isInitialized(): Boolean = initialized
 
@@ -40,9 +45,12 @@ object DatabaseFactory {
                 throw e
             }
 
-            // Set WAL journal mode via direct JDBC (persistent, only needs to be set once per DB file)
+            // Set WAL journal mode via direct JDBC (persistent, only needs to be set once per DB file).
+            // Set busy_timeout first so startup waits instead of failing with SQLITE_BUSY when
+            // another process (IDE + CLI) holds a write lock on the shared database.
             DriverManager.getConnection(jdbcUrl).use { connection ->
                 connection.createStatement().use { statement ->
+                    statement.execute("PRAGMA busy_timeout=10000")
                     statement.execute("PRAGMA journal_mode=WAL")
                     logger.info { "Database WAL mode enabled (persistent)" }
                 }
@@ -101,6 +109,9 @@ object DatabaseFactory {
                     TaskStateTable
                 )
 
+                // Ensure partial unique indexes exist on fresh databases too (V8 runs before table creation).
+                V8ConfigAndMcpUniqueness.ensureUniqueIndexes(connection.connection as java.sql.Connection)
+
                 logger.info { "All tables created successfully" }
             }
 
@@ -113,6 +124,53 @@ object DatabaseFactory {
 
     fun <T> dbQuery(block: () -> T): T = transaction {
         block()
+    }
+
+    /**
+     * Serializes in-process SQLite writes and retries only transient SQLITE_BUSY/SQLITE_LOCKED
+     * failures (never deterministic constraint errors).
+     */
+    fun <T> dbWriteQuery(db: Database? = null, maxAttempts: Int = 5, block: () -> T): T {
+        return writeLock.withLock {
+            var delayMs = 50L
+            var lastError: Throwable? = null
+            for (attempt in 1..maxAttempts.coerceAtLeast(1)) {
+                try {
+                    return@withLock transaction(db) {
+                        repetitionAttempts = 1
+                        block()
+                    }
+                } catch (e: Throwable) {
+                    lastError = e
+                    if (attempt >= maxAttempts || !isSqliteBusyError(e)) {
+                        throw e
+                    }
+                    logger.warn { "SQLite busy on write (attempt $attempt/$maxAttempts), retrying in ${delayMs}ms" }
+                    Thread.sleep(delayMs)
+                    delayMs = (delayMs * 2).coerceAtMost(1000L)
+                }
+            }
+            throw lastError ?: IllegalStateException("dbWriteQuery failed without exception")
+        }
+    }
+
+    internal fun isSqliteBusyError(error: Throwable): Boolean {
+        return generateSequence(error) { it.cause }.any { cause ->
+            val msg = cause.message.orEmpty()
+            (cause is SQLException && (cause.errorCode == 5 || cause.errorCode == 6)) ||
+                msg.contains("SQLITE_BUSY", ignoreCase = true) ||
+                msg.contains("SQLITE_LOCKED", ignoreCase = true) ||
+                msg.contains("database is locked", ignoreCase = true)
+        }
+    }
+
+    internal fun isSqliteUniqueConstraintError(error: Throwable): Boolean {
+        return generateSequence(error) { it.cause }.any { cause ->
+            val msg = cause.message.orEmpty()
+            msg.contains("SQLITE_CONSTRAINT_UNIQUE", ignoreCase = true) ||
+                msg.contains("SQLITE_CONSTRAINT_PRIMARYKEY", ignoreCase = true) ||
+                msg.contains("UNIQUE constraint failed", ignoreCase = true)
+        }
     }
 
     /**

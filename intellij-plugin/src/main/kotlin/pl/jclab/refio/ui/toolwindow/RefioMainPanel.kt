@@ -126,6 +126,8 @@ class RefioMainPanel(private val project: Project) : JBPanel<RefioMainPanel>(Bor
 
     fun cycleMode() = run { it.cycleMode() }
 
+    fun addCodeSnippet(snippet: pl.jclab.refio.api.models.CodeSnippet) = run { it.addCodeSnippet(snippet) }
+
     fun createNewSession() = run { it.createNewSession() }
 
     fun showHistory() = run { it.showHistory() }

@@ -27,6 +27,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import pl.jclab.refio.core.logging.dualLogger
+import pl.jclab.refio.core.security.NetworkPolicy
+import pl.jclab.refio.core.security.UrlPolicy
 import java.net.URI
 
 private val httpLogger = dualLogger("MCPHttpTransport")
@@ -85,7 +87,9 @@ class MCPHttpTransport(
     private val onError: (Exception) -> Unit,
     private val engine: HttpClientEngine? = null,
     private val endpointWaitMs: Long = DEFAULT_ENDPOINT_WAIT_MS,
-    private val endpointGraceMs: Long = DEFAULT_ENDPOINT_GRACE_MS
+    private val endpointGraceMs: Long = DEFAULT_ENDPOINT_GRACE_MS,
+    private val networkPolicy: NetworkPolicy? = null,
+    private val urlPolicy: UrlPolicy? = null
 ) {
     private val client = buildClient {
         expectSuccess = false
@@ -158,6 +162,7 @@ class MCPHttpTransport(
     suspend fun connect() {
         sessionId = null
         postUrl = null
+        config.url?.let { validateTargetUrl(it) }
         if (config.type == MCPServerType.HTTP_SSE) {
             sseJob?.cancel()
             scope?.cancel()
@@ -185,6 +190,7 @@ class MCPHttpTransport(
      */
     suspend fun exchange(payload: String, isInitialize: Boolean = false): MCPHttpResponse {
         val url = postUrl ?: config.url ?: throw IllegalArgumentException("HTTP transport requires url")
+        validateTargetUrl(url)
         val startTime = System.currentTimeMillis()
         var httpStatus: Int? = null
         var loggedError = false
@@ -329,8 +335,15 @@ class MCPHttpTransport(
                         val line = channel.readUTF8Line() ?: break
                         val event = reader.feed(line) ?: continue
                         if (event.event == "endpoint") {
-                            postUrl = resolveEndpoint(url, event.data)
-                            httpLogger.debug { "[${config.id}] SSE endpoint announced: $postUrl" }
+                            val resolved = resolveEndpoint(url, event.data)
+                            if (isSameOrigin(url, resolved)) {
+                                postUrl = resolved
+                                httpLogger.debug { "[${config.id}] SSE endpoint announced: $postUrl" }
+                            } else {
+                                val msg = "Rejected cross-origin SSE endpoint '$resolved' (configured base: '$url')"
+                                httpLogger.warn { "[${config.id}] $msg" }
+                                onError(SecurityException(msg))
+                            }
                         } else {
                             onMessage(event.data)
                         }
@@ -347,8 +360,45 @@ class MCPHttpTransport(
         }
     }
 
+    private fun validateTargetUrl(targetUrl: String) {
+        val parsed = try {
+            URI(targetUrl)
+        } catch (e: Exception) {
+            throw SecurityException("Invalid MCP server URL '$targetUrl': ${e.message}")
+        }
+        val scheme = parsed.scheme?.lowercase()
+        if (scheme != "http" && scheme != "https") {
+            throw SecurityException("MCP HTTP transport only allows http/https URLs: $targetUrl")
+        }
+        networkPolicy?.assertRemoteEgressAllowed("mcp:${config.id}", targetUrl)
+        urlPolicy?.validate(targetUrl)
+    }
+
     private fun resolveEndpoint(base: String, announced: String): String =
         runCatching { URI(base).resolve(announced.trim()).toString() }.getOrElse { announced.trim() }
+
+    private fun isSameOrigin(baseUrl: String, targetUrl: String): Boolean {
+        return try {
+            val baseUri = URI(baseUrl)
+            val targetUri = URI(targetUrl)
+            val baseScheme = baseUri.scheme?.lowercase() ?: return false
+            val targetScheme = targetUri.scheme?.lowercase() ?: return false
+            val baseHost = baseUri.host?.lowercase() ?: return false
+            val targetHost = targetUri.host?.lowercase() ?: return false
+            val basePort = effectivePort(baseScheme, baseUri.port)
+            val targetPort = effectivePort(targetScheme, targetUri.port)
+            baseScheme == targetScheme && baseHost == targetHost && basePort == targetPort
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun effectivePort(scheme: String, port: Int): Int = when {
+        port > 0 -> port
+        scheme == "https" -> 443
+        scheme == "http" -> 80
+        else -> -1
+    }
 
     fun disconnect() {
         sseJob?.cancel()

@@ -160,6 +160,10 @@ tasks {
 
     test {
         useJUnitPlatform()
+        extensions.configure(JacocoTaskExtension::class) {
+            isIncludeNoLocationClasses = true
+            excludes = listOf("jdk.internal.*")
+        }
         testLogging {
             events("passed", "skipped", "failed")
             showStandardStreams = true
@@ -180,7 +184,7 @@ tasks {
                     exclude(
                         "**/generated/**",
                         "**/db/tables/**",
-                        "**/plugin/ui/**",
+                        "**/ui/**",
                         "**/startup/**"
                     )
                 }
@@ -209,21 +213,26 @@ tasks {
 }
 
 tasks.register("detectSensitiveLogging") {
-    description = "Detect potential API key logging in source code"
+    description = "Detect potential API key, token, secret, or password logging in source code"
     group = "verification"
     doLast {
-        val sourceFiles = fileTree("src") { include("**/*.kt") } +
-            fileTree("../core/src") { include("**/*.kt") }
+        val sourceFiles = fileTree("src/main") { include("**/*.kt") } +
+            fileTree("../core/src/main") { include("**/*.kt") } +
+            fileTree("../cli/src/main") { include("**/*.kt") }
         val unsafePatterns = listOf(
             Regex("""logger\..*\$\{?config\.apiKey"""),
             Regex("""logger\..*apiKey\s*=\s*["']?[^"'\s]+"""),
             Regex("""logger\..*Authorization.*Bearer"""),
-            Regex("""println.*apiKey"""),
-            Regex("""print.*apiKey""")
+            Regex("""logger\..*x-api-key\s*[:=]\s*\$""", RegexOption.IGNORE_CASE),
+            Regex("""logger\..*\$\{?[\w.]*(apiKey|apiSecret|clientSecret|authToken|accessToken|refreshToken|bearerToken|password)\b"""),
+            Regex("""println.*(apiKey|apiSecret|clientSecret|authToken|accessToken|password)"""),
+            Regex("""print\(.*(apiKey|apiSecret|clientSecret|authToken|accessToken|password)""")
         )
         val violations = mutableListOf<String>()
         sourceFiles.forEach { file ->
             file.readLines().forEachIndexed { index, line ->
+                val trimmed = line.trimStart()
+                if (trimmed.startsWith("//") || trimmed.startsWith("*")) return@forEachIndexed
                 unsafePatterns.forEach { pattern ->
                     if (pattern.containsMatchIn(line)) {
                         violations.add("${file.path}:${index + 1} - $line")
@@ -232,7 +241,7 @@ tasks.register("detectSensitiveLogging") {
             }
         }
         if (violations.isNotEmpty()) {
-            throw GradleException("Found ${violations.size} potential API key logging violations:\n" + violations.joinToString("\n"))
+            throw GradleException("Found ${violations.size} potential sensitive logging violations:\n" + violations.joinToString("\n"))
         }
         println("No sensitive logging detected")
     }

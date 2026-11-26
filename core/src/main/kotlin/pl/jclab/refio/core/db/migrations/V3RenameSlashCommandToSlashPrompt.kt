@@ -1,8 +1,7 @@
 package pl.jclab.refio.core.db.migrations
 
-import org.jetbrains.exposed.sql.Database
-import org.jetbrains.exposed.sql.transactions.transaction
 import pl.jclab.refio.core.logging.dualLogger
+import java.sql.Connection
 
 private val logger = dualLogger("V3RenameSlashCommandToSlashPrompt")
 
@@ -14,22 +13,19 @@ private val logger = dualLogger("V3RenameSlashCommandToSlashPrompt")
  * Existing databases stored the enum as its string name in `prompts.type`, so
  * we remap them in-place to keep user data (both built-in and custom entries).
  */
-class V3RenameSlashCommandToSlashPrompt : Migration {
+class V3RenameSlashCommandToSlashPrompt : SqliteMigration() {
     override val version: Int = 3
 
-    override fun migrate(database: Database) {
-        transaction(database) {
-            val jdbc = (connection.connection as java.sql.Connection)
-            if (!tableExists(jdbc, "prompts")) {
-                logger.info { "prompts table does not exist (fresh DB); skipping V3 rename" }
-                return@transaction
-            }
-            jdbc.createStatement().use { st ->
-                val updated = st.executeUpdate(
-                    "UPDATE prompts SET type = 'SLASH_PROMPT' WHERE type = 'SLASH_COMMAND'"
-                )
-                logger.info { "Renamed SLASH_COMMAND → SLASH_PROMPT for $updated row(s)" }
-            }
+    override fun migrateOnConnection(jdbc: Connection) {
+        if (!tableExists(jdbc, "prompts")) {
+            logger.info { "prompts table does not exist (fresh DB); skipping V3 rename" }
+            return
+        }
+        jdbc.createStatement().use { st ->
+            val updated = st.executeUpdate(
+                "UPDATE prompts SET type = 'SLASH_PROMPT' WHERE type = 'SLASH_COMMAND'"
+            )
+            logger.info { "Renamed SLASH_COMMAND -> SLASH_PROMPT for $updated row(s)" }
         }
     }
 }

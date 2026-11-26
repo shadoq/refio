@@ -919,7 +919,7 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
         type: NotificationType = NotificationType.INFORMATION
     ) {
         Notifications.Bus.notify(
-            Notification("Refio", title, content, type),
+            Notification("Refio.Notifications", title, content, type),
             project
         )
     }
@@ -947,6 +947,8 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
 
     fun dispose() {
         resizeDebounceTimer.stop()
+        busyIndicatorTimer?.stop()
+        busyIndicatorTimer = null
         disposeMessagePanels(messagePanelCache.values.map { it.panel })
         messagePanelCache.clear()
         cs.cancel()

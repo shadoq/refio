@@ -103,20 +103,25 @@ class TurnPromptBuilder(
      * single field that the next iteration overwrites, so only the sum kept here can answer whether
      * a long run kept losing the same section every time round.
      */
-    private fun recordContextDecision(taskId: String) {
-        val service = contextService ?: return
-        service.lastContextTrace?.let { trace ->
+    private fun recordContextDecision(
+        taskId: String,
+        turnResult: pl.jclab.refio.core.services.AgentTurnMessagesResult? = null
+    ) {
+        val trace = turnResult?.contextTrace ?: contextService?.lastContextTrace
+        trace?.let {
             pl.jclab.refio.core.debug.TurnContextTracker.recordIteration(
                 taskId = taskId,
-                budgetTokens = trace.totalBudget,
-                usedTokens = trace.totalUsed,
-                droppedSections = trace.droppedSections.map { it.section.name },
+                budgetTokens = it.totalBudget,
+                usedTokens = it.totalUsed,
+                droppedSections = it.droppedSections.map { s -> s.section.name },
             )
         }
+        val droppedMessages = turnResult?.conversationDropped ?: contextService?.lastConversationDropped ?: 0
+        val droppedSteps = turnResult?.stepsDropped ?: contextService?.lastStepsDropped ?: 0
         pl.jclab.refio.core.debug.TurnContextTracker.recordTrim(
             taskId = taskId,
-            droppedMessages = service.lastConversationDropped,
-            droppedSteps = service.lastStepsDropped,
+            droppedMessages = droppedMessages,
+            droppedSteps = droppedSteps,
         )
     }
 
@@ -381,16 +386,16 @@ $filteredContextPrompt
                     (if (contextProfile != null) ", contextProfile applied" else "") +
                     if (trailingLayout) ", trailing state=${turnResult.trailingState.length} chars" else "" }
 
-                // Fold this iteration's context decision into the task's running total. The trace
-                // itself is overwritten on the next build, so anything not accumulated here is
-                // gone - which is why a headless run could never say what it had dropped.
-                recordContextDecision(taskId)
+                // Fold this iteration's context decision into the task's running total.
+                recordContextDecision(taskId, turnResult)
 
                 return TurnPrompt(
                     systemPrompt = systemPrompt,
                     messages = appendInboxMessage(filteredMessages, sessionId, agentName),
                     cacheableSystemLength = cacheableSystemLen.takeIf { it > 0 }
                 )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 logger.warn(e) { "[BUILD_PROMPT] Failed to use ContextService, falling back to direct: ${e.message}" }
             }
@@ -577,7 +582,7 @@ $stickyRequirements
         profileOverrides: TurnProfileOverrides? = null
     ): String {
         // Auto-detect compact mode based on model context size
-        syncCompactMode(mode, taskId)
+        val compact = isCompactMode(mode, taskId)
 
         val responseContract = resolveResponseContract(nativeToolsActive)
         val multiAgentSection = resolveMultiAgentSection(mode, taskId, profileOverrides)
@@ -595,7 +600,7 @@ $stickyRequirements
 
         // Try to use cached static prefix
         if (promptCache != null) {
-            val cached = promptCache.getOrBuildStaticPrefix(mode, taskId, tokenEstimator)
+            val cached = promptCache.getOrBuildStaticPrefix(mode, taskId, tokenEstimator, compact = compact)
             if (cached.toolDescriptions.isNotBlank()) {
                 logger.info { "[PLAN_PROMPT] Using ${if (cached.fromCache) "CACHED" else "NEW"} prompt (~${cached.tokenEstimate} tokens)" }
                 return promptsService.getSystemPrompt(
@@ -610,7 +615,7 @@ $stickyRequirements
         }
 
         // Fallback: build directly
-        val toolDescriptions = toolDescriptionBuilder.getToolDescriptions(mode, taskId)
+        val toolDescriptions = toolDescriptionBuilder.getToolDescriptions(mode, taskId, compact = compact)
 
         logger.info { "[PLAN_PROMPT] Tool descriptions length=${toolDescriptions.length}" }
         if (toolDescriptions.isBlank()) {
@@ -706,21 +711,21 @@ $stickyRequirements
         nativeToolsActive: Boolean = false,
         profileOverrides: TurnProfileOverrides? = null
     ): String {
-        // Auto-detect compact mode based on model context size
-        syncCompactMode(mode, taskId)
+        // Auto-detect compact mode based on model context size without mutating shared builder state
+        val compact = isCompactMode(mode, taskId)
 
         val toolDescriptions = if (toolDescriptionsOverride != null) {
             toolDescriptionsOverride
         } else if (promptCache != null) {
-            val cached = promptCache.getOrBuildStaticPrefix(mode, taskId, tokenEstimator)
+            val cached = promptCache.getOrBuildStaticPrefix(mode, taskId, tokenEstimator, compact = compact)
             if (cached.toolDescriptions.isNotBlank()) {
                 logger.info { "[AGENT_PROMPT] Using ${if (cached.fromCache) "CACHED" else "NEW"} tools (~${cached.tokenEstimate} tokens)" }
                 cached.toolDescriptions
             } else {
-                toolDescriptionBuilder.getToolDescriptions(mode, taskId)
+                toolDescriptionBuilder.getToolDescriptions(mode, taskId, compact = compact)
             }
         } else {
-            toolDescriptionBuilder.getToolDescriptions(mode, taskId)
+            toolDescriptionBuilder.getToolDescriptions(mode, taskId, compact = compact)
         }
 
         // Filter the When-to-use matrix by profile too — otherwise subagents see all
@@ -820,11 +825,6 @@ $stickyRequirements
         writeToolsExecutedInTurn: Int = 0,
         nativeToolsActive: Boolean = false
     ): String {
-        // Sync compact mode early — before resolving tool descriptions for any profile.
-        // Without this, subagent tool descriptions are built with compactMode=false
-        // even on small-context models (e.g. Ollama 32k), wasting ~1.5k tokens.
-        syncCompactMode(mode, taskId)
-
         // Native function-calling: reuse the .md templates but substitute {{tool_descriptions}}
         // with a short note (schemas are attached via the API `tools` parameter) and select the
         // native response-contract fragment. All other guidance stays intact.
@@ -922,7 +922,7 @@ $stickyRequirements
             return null
         }
         val filteredTools = resolveToolsForProfile(mode, taskId, profileOverrides)
-        return toolDescriptionBuilder.getToolDescriptionsForTools(mode, filteredTools)
+        return toolDescriptionBuilder.getToolDescriptionsForTools(mode, filteredTools, compact = isCompactMode(mode, taskId))
     }
 
     /**
@@ -973,25 +973,24 @@ $stickyRequirements
     ): String {
         var result = contextPrompt
 
+        val ciFlags = setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE)
+
         if (!profile.includeFileTree) {
-            // Remove file tree sections
-            result = result.replace(Regex("<file_tree>.*?</file_tree>", RegexOption.DOT_MATCHES_ALL), "")
-            result = result.replace(Regex("<project_structure>.*?</project_structure>", RegexOption.DOT_MATCHES_ALL), "")
+            // Remove file tree sections (ContextFormatter emits uppercase XML tags)
+            result = result.replace(Regex("<file_tree>.*?</file_tree>", ciFlags), "")
+            result = result.replace(Regex("<project_structure>.*?</project_structure>", ciFlags), "")
         }
 
         if (!profile.includeDependencies) {
-            // Remove dependency sections
-            result = result.replace(Regex("<dependencies>.*?</dependencies>", RegexOption.DOT_MATCHES_ALL), "")
-            result = result.replace(Regex("<dependency_analysis>.*?</dependency_analysis>", RegexOption.DOT_MATCHES_ALL), "")
+            // Remove dependency sections (ContextFormatter emits <PROJECT_DEPENDENCIES>)
+            result = result.replace(Regex("<dependencies>.*?</dependencies>", ciFlags), "")
+            result = result.replace(Regex("<project_dependencies>.*?</project_dependencies>", ciFlags), "")
+            result = result.replace(Regex("<dependency_analysis>.*?</dependency_analysis>", ciFlags), "")
         }
 
         if (!profile.includeWorkingMemory) {
             // Remove working memory sections
-            // The context service tags it <WORKING_MEMORY>, the prompt provider <working_memory>.
-            result = result.replace(
-                Regex("<working_memory>.*?</working_memory>", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE)),
-                ""
-            )
+            result = result.replace(Regex("<working_memory>.*?</working_memory>", ciFlags), "")
         }
 
         // Clean up excessive blank lines
@@ -1001,13 +1000,12 @@ $stickyRequirements
     }
 
     /**
-     * Sync compact mode on ToolDescriptionBuilder based on resolved context size.
-     * When context is small (e.g. Ollama 32k), uses shorter tool descriptions to save tokens.
+     * Resolve compact mode for this call without mutating shared [ToolDescriptionBuilder.compactMode].
      */
-    private fun syncCompactMode(mode: TaskMode, taskId: String) {
-        if (configService == null) return
+    private fun isCompactMode(mode: TaskMode, taskId: String): Boolean {
+        if (configService == null) return toolDescriptionBuilder.compactMode
         val operation = pl.jclab.refio.core.api.ModelOperation.fromTaskMode(mode)
-        toolDescriptionBuilder.compactMode = configService.isCompactPrompts(operation, taskId)
+        return configService.isCompactPrompts(operation, taskId)
     }
 
     /**

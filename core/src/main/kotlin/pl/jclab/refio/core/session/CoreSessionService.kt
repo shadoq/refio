@@ -95,6 +95,55 @@ class CoreSessionService(
         return sendMessageUsingWorkflow(currentSession, input, contextRefs, model, provider, resumeLongTask)
     }
 
+    /**
+     * Truncate conversation history from [fromMessageId] (inclusive) and clear related
+     * subtasks, API logs, and file snapshots for [taskId]. Shared by IntelliJ and CLI TUI.
+     */
+    suspend fun rewindHistory(taskId: String, fromMessageId: String) {
+        projectRouter.chatRouter.truncateHistoryFromMessage(
+            taskId = taskId,
+            fromMessageId = fromMessageId,
+        )
+        projectRouter.subtaskRouter.deleteAllSubtasks(taskId)
+        projectRouter.apiLogsRouter.deleteApiLogsByTaskId(taskId)
+        projectRouter.snapshotRouter.deleteSnapshotsByTaskId(taskId)
+    }
+
+    /**
+     * Auto-name a task if it still carries a default placeholder name.
+     * Shared by IntelliJ and CLI TUI so both surfaces use identical title sanitization and fallback.
+     */
+    fun scheduleAutoNameIfDefault(taskId: String, userInput: String) {
+        if (userInput.isBlank()) return
+        scope.launch {
+            try {
+                val task = projectRouter.taskRouter.getTask(taskId) ?: return@launch
+                if (!isDefaultSessionName(task.name)) return@launch
+
+                val rawTitle = projectRouter.chatRouter.generateSessionTitle(taskId, userInput)
+                val generatedName = sanitizeSessionTitle(rawTitle)
+                    .ifBlank { generateSessionNameFallback(userInput) }
+
+                projectRouter.taskRouter.updateTask(taskId, UpdateTaskRequest(name = generatedName))
+                if (stateManager.getActiveSession()?.id == taskId) {
+                    pushSessionRefresh(name = generatedName)
+                }
+                logger.info { "Auto-named: '$generatedName'" }
+            } catch (e: Exception) {
+                val fallback = generateSessionNameFallback(userInput)
+                try {
+                    projectRouter.taskRouter.updateTask(taskId, UpdateTaskRequest(name = fallback))
+                    if (stateManager.getActiveSession()?.id == taskId) {
+                        pushSessionRefresh(name = fallback)
+                    }
+                    logger.info { "Auto-named with fallback: '$fallback'" }
+                } catch (inner: Exception) {
+                    logger.warn(inner) { "Auto-name failed" }
+                }
+            }
+        }
+    }
+
     private suspend fun sendMessageUsingWorkflow(
         session: Session,
         input: String,
@@ -208,98 +257,110 @@ class CoreSessionService(
             val streamStateMutex = Mutex()
             var streamUiFlushJob: Job? = null
             val streamFilter = IncrementalToolCallStreamFilter()
-
-            val streamCallback: StreamCallback? = if (stream) { chunk ->
+            // Ordered single-consumer channel prevents concurrent chunk coroutines from racing
+            // through streamFilter or creating ghost streaming bubbles after chunk.isComplete.
+            val streamChannel = if (stream) kotlinx.coroutines.channels.Channel<pl.jclab.refio.core.api.StreamChunk>(
+                kotlinx.coroutines.channels.Channel.UNLIMITED
+            ) else null
+            val streamConsumerJob = streamChannel?.let { channel ->
                 scope.launch {
-                    if (streamingClosed.get()) return@launch
+                    for (chunk in channel) {
+                        if (streamingClosed.get()) break
 
-                    streamStateMutex.withLock {
-                        val now = System.currentTimeMillis()
+                        streamStateMutex.withLock {
+                            if (streamingClosed.get()) return@withLock
+                            val now = System.currentTimeMillis()
 
-                        // Surface progressive native tool-call building to the UI. The
-                        // snapshot is transient: shown while arguments stream, cleared on completion.
-                        chunk.toolCallProgress?.let { stateManager.setToolCallProgress(it) }
+                            // Surface progressive native tool-call building to the UI.
+                            chunk.toolCallProgress?.let { stateManager.setToolCallProgress(it) }
 
-                        val filteredContent = streamFilter.filter(
-                            delta = chunk.delta,
-                            accumulated = chunk.accumulated,
-                            isComplete = chunk.isComplete,
-                        )
+                            val filteredContent = streamFilter.filter(
+                                delta = chunk.delta,
+                                accumulated = chunk.accumulated,
+                                isComplete = chunk.isComplete,
+                            )
 
-                        if (filteredContent.isNotBlank()) {
-                            if (streamingMessageId == null) {
-                                streamingMessageId = UUID.randomUUID().toString()
-                                stateManager.appendMessage(
-                                    Message(
-                                        id = streamingMessageId!!,
-                                        taskId = session.id,
-                                        role = "assistant",
-                                        content = "",
-                                        isStreaming = true,
-                                        streamStartedAt = now,
-                                        createdAt = now,
+                            if (filteredContent.isNotBlank()) {
+                                if (streamingMessageId == null) {
+                                    streamingMessageId = UUID.randomUUID().toString()
+                                    stateManager.appendMessage(
+                                        Message(
+                                            id = streamingMessageId!!,
+                                            taskId = session.id,
+                                            role = "assistant",
+                                            content = "",
+                                            isStreaming = true,
+                                            streamStartedAt = now,
+                                            createdAt = now,
+                                        )
                                     )
-                                )
+                                }
+                                pendingStreamContent.set(filteredContent)
                             }
-                            pendingStreamContent.set(filteredContent)
-                        }
 
-                        if (chunk.isComplete) {
-                            // The LLM stream ended — the tool call (if any) is now whole and about to
-                            // execute, so drop the transient "building…" indicator.
-                            stateManager.setToolCallProgress(null)
-                            val completedId = streamingMessageId
-                            val finalContent = pendingStreamContent.getAndSet(null)
-                            if (completedId != null) {
-                                stateManager.updateMessages { messages ->
-                                    messages.map { msg ->
-                                        if (msg.id == completedId) {
-                                            msg.copy(
-                                                content = finalContent ?: msg.content,
-                                                lastChunkAt = now,
-                                                isStreaming = false,
-                                            )
-                                        } else msg
+                            if (chunk.isComplete) {
+                                stateManager.setToolCallProgress(null)
+                                val completedId = streamingMessageId
+                                val finalContent = pendingStreamContent.getAndSet(null)
+                                if (completedId != null) {
+                                    stateManager.updateMessages { messages ->
+                                        messages.map { msg ->
+                                            if (msg.id == completedId) {
+                                                msg.copy(
+                                                    content = finalContent ?: msg.content,
+                                                    lastChunkAt = now,
+                                                    isStreaming = false,
+                                                )
+                                            } else msg
+                                        }
                                     }
                                 }
+                                streamingMessageId = null
+                                streamUiFlushJob?.cancel()
+                                streamUiFlushJob = null
+                                return@withLock
                             }
-                            streamingMessageId = null
-                            streamUiFlushJob?.cancel()
-                            streamUiFlushJob = null
-                            return@withLock
-                        }
 
-                        if (streamUiFlushJob?.isActive != true) {
-                            streamUiFlushJob = scope.launch {
-                                while (!streamingClosed.get()) {
-                                    val contentToFlush = streamStateMutex.withLock {
-                                        pendingStreamContent.getAndSet(null)
-                                    }
+                            if (streamUiFlushJob?.isActive != true) {
+                                streamUiFlushJob = scope.launch {
+                                    while (!streamingClosed.get()) {
+                                        val contentToFlush = streamStateMutex.withLock {
+                                            pendingStreamContent.getAndSet(null)
+                                        }
 
-                                    if (!contentToFlush.isNullOrBlank()) {
-                                        val activeMessageId = streamingMessageId
-                                        if (activeMessageId != null) {
-                                            stateManager.updateMessages { messages ->
-                                                messages.map { msg ->
-                                                    if (msg.id == activeMessageId) {
-                                                        msg.copy(
-                                                            content = contentToFlush,
-                                                            lastChunkAt = System.currentTimeMillis(),
-                                                            isStreaming = true,
-                                                        )
-                                                    } else msg
+                                        if (!contentToFlush.isNullOrBlank()) {
+                                            val activeMessageId = streamingMessageId
+                                            if (activeMessageId != null) {
+                                                stateManager.updateMessages { messages ->
+                                                    messages.map { msg ->
+                                                        if (msg.id == activeMessageId) {
+                                                            msg.copy(
+                                                                content = contentToFlush,
+                                                                lastChunkAt = System.currentTimeMillis(),
+                                                                isStreaming = true,
+                                                            )
+                                                        } else msg
+                                                    }
                                                 }
                                             }
                                         }
-                                    }
 
-                                    delay(500)
+                                        delay(500)
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            } else null
+            }
+
+            val streamCallback: StreamCallback? = streamChannel?.let { channel ->
+                { chunk ->
+                    if (!streamingClosed.get()) {
+                        channel.trySend(chunk)
+                    }
+                }
+            }
 
             val turnListener = CoreMessageToolCallListener(
                 scope = scope,
@@ -534,6 +595,13 @@ class CoreSessionService(
                         }
                     }
                 }
+                // Always stop the flush loop and stream consumer even on cancel/error so no
+                // background coroutine leaks on `scope`.
+                streamingClosed.set(true)
+                streamChannel?.close()
+                streamConsumerJob?.cancel()
+                streamUiFlushJob?.cancel()
+                streamUiFlushJob = null
             }
 
             logger.info {

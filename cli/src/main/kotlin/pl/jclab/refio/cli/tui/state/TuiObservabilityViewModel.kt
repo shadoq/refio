@@ -3,7 +3,10 @@ package pl.jclab.refio.cli.tui.state
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -82,6 +85,45 @@ class TuiObservabilityViewModel(
     val _helpScrollOffset = MutableStateFlow(0)
     /** Text typed after `/` on the help screen; null when not filtering. */
     val _helpFilter = MutableStateFlow<String?>(null)
+
+    internal fun stateSignals(): Flow<Unit> = merge(
+        _ragIndexingProgress.map { Unit },
+        _ragIndexingStatus.map { Unit },
+        _ragIndexedFiles.map { Unit },
+        _ragSelectedFileIndex.map { Unit },
+        _ragSearchQuery.map { Unit },
+        _ragSearchResults.map { Unit },
+        _contextSections.map { Unit },
+        _contextMaxTokens.map { Unit },
+        _selectedContextIndex.map { Unit },
+        _contextDetailVisible.map { Unit },
+        _contextDetailScrollOffset.map { Unit },
+        _logs.map { Unit },
+        _logsPaused.map { Unit },
+        _selectedLogIndex.map { Unit },
+        _logDetailVisible.map { Unit },
+        _logsFilter.map { Unit },
+        _apiLogs.map { Unit },
+        _apiLogsFilter.map { Unit },
+        _selectedApiLogIndex.map { Unit },
+        _apiLogDetailVisible.map { Unit },
+        _apiLogDetailScrollOffset.map { Unit },
+        _debugInfo.map { Unit },
+        _debugScrollOffset.map { Unit },
+        _fileBrowserPath.map { Unit },
+        _fileBrowserEntries.map { Unit },
+        _fileBrowserSelectedIndex.map { Unit },
+        _fileBrowserShowHidden.map { Unit },
+        _fileViewerVisible.map { Unit },
+        _fileViewerPath.map { Unit },
+        _fileViewerContent.map { Unit },
+        _fileViewerScrollOffset.map { Unit },
+        _fileViewerShowLineNumbers.map { Unit },
+        _fileViewerAllowAddContext.map { Unit },
+        _fileViewerHintVisible.map { Unit },
+        _helpScrollOffset.map { Unit },
+        _helpFilter.map { Unit },
+    )
 
     /** LogSink that feeds core log messages into the Logs tab. */
     val tuiLogSink = TuiLogSink(_logs, scope = scope)

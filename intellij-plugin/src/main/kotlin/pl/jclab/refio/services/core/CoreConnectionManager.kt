@@ -43,7 +43,7 @@ data class CoreHealth(
  * No HTTP calls, no health checks needed - core runs in-process.
  */
 @Service(Service.Level.APP)
-class CoreConnectionManager {
+class CoreConnectionManager : com.intellij.openapi.Disposable {
     private val logger = dualLogger("CoreConnectionManager")
 
     // Use proper coroutine scope for Application-level service
@@ -333,7 +333,7 @@ class CoreConnectionManager {
     /**
      * Dispose resources
      */
-    fun dispose() {
+    override fun dispose() {
         projectRouters.values.forEach { router ->
             runCatching { router.close() }
                 .onFailure { logger.warn { "Failed to close project router: ${it.message}" } }

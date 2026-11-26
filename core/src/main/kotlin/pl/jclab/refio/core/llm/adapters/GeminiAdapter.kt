@@ -99,7 +99,7 @@ class GeminiAdapter(
                 executeStandard(apiKey, requestBody, requestJson, startTime, logPrefix)
             }
         } catch (e: CancellationException) {
-            // Stream aborted by a guardrail (see core/llm/streaming/) — must propagate
+            // Stream aborted by a guardrail (see core/llm/streaming/) - must propagate
             // so the caller can see StreamAbortedException instead of RefioError.LLMError.
             throw e
         } catch (e: ToolsNotSupportedException) {
@@ -287,8 +287,7 @@ class GeminiAdapter(
             }
             httpStatus = httpResponse.status.value
 
-            val rawResponse: Map<String, Any?> = httpResponse.body()
-            val responseJson = gson.toJson(rawResponse)
+            val responseJson = httpResponse.body<String>()
             logger.debug { "$logPrefix Response: ${SecureLogger.redactAndTruncate(responseJson)}" }
             logger.info {
                 "$logPrefix Response received: status=$httpStatus, durationMs=${System.currentTimeMillis() - startTime}, " +
@@ -309,7 +308,7 @@ class GeminiAdapter(
                     subtaskId = subtaskId,
                     source = source
                 )
-                val errorMessage = "Gemini API error (HTTP $httpStatus): ${gson.toJson(rawResponse)}"
+                val errorMessage = "Gemini API error (HTTP $httpStatus): $responseJson"
                 if ((requestBody["tools"] as? List<*>)?.isNotEmpty() == true &&
                     isToolsNotSupportedError(httpStatus, errorMessage)
                 ) {
@@ -317,6 +316,10 @@ class GeminiAdapter(
                 }
                 throw LLMErrorMapper.fromHttpStatus(provider, model, httpStatus, errorMessage)
             }
+
+            @Suppress("UNCHECKED_CAST")
+            val rawResponse: Map<String, Any?> = gson.fromJson(responseJson, Map::class.java) as? Map<String, Any?>
+                ?: throw RefioError.MalformedResponse(provider, model, "Expected JSON object in Gemini response", responseJson)
 
             if (rawResponse["candidates"] !is List<*>) {
                 throw RefioError.MalformedResponse(
@@ -374,8 +377,6 @@ class GeminiAdapter(
                 rawResponse = rawResponse,
                 nativeToolCalls = nativeToolCalls
             )
-        } catch (e: ToolsNotSupportedException) {
-            throw e
         } catch (e: ToolsNotSupportedException) {
             throw e
         } catch (e: Exception) {
@@ -593,6 +594,8 @@ class GeminiAdapter(
                 finishReason = finalFinishReason,
                 nativeToolCalls = streamNativeToolCalls
             )
+        } catch (e: ToolsNotSupportedException) {
+            throw e
         } catch (e: CancellationException) {
             // Guardrail-triggered abort — log and rethrow as-is, do NOT wrap.
             val latencyMs = (System.currentTimeMillis() - startTime).toInt()
@@ -629,7 +632,13 @@ class GeminiAdapter(
 
     private fun extractContent(response: Map<String, Any?>): String {
         val parts = extractParts(response)
-        return parts.firstNotNullOfOrNull { it["text"] as? String } ?: ""
+        // Gemini 2.5+ returns reasoning parts tagged with `thought: true` before the actual answer.
+        // Skip thought parts so the real answer is never discarded in favor of thinking prose.
+        val answerText = parts
+            .filter { it["thought"] != true }
+            .mapNotNull { it["text"] as? String }
+            .joinToString("")
+        return answerText
     }
 
     private fun extractParts(response: Map<String, Any?>): List<Map<String, Any?>> {

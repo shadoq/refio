@@ -159,6 +159,7 @@ internal class AgentTurnLoopFactory(
             hookService = hookService,
             toolPermissionsService = toolPermissionsService,
             turnVerifier = turnVerifier,
+            pendingUserMessageQueue = support.pendingUserMessageQueue,
             taskLease = persistence.taskLease
         )
     }

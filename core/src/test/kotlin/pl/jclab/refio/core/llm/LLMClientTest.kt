@@ -26,6 +26,18 @@ class LLMClientTest {
         every {
             configService.getTyped(pl.jclab.refio.core.config.ConfigKeys.MAX_CONTEXT_SIZE, any<String>())
         } returns pl.jclab.refio.core.config.ConfigKeys.MAX_CONTEXT_SIZE.default
+        every {
+            configService.getTyped(pl.jclab.refio.core.config.ConfigKeys.GENERAL_NO_EGRESS_ENABLED, any<String>())
+        } returns pl.jclab.refio.core.config.ConfigKeys.GENERAL_NO_EGRESS_ENABLED.default
+        every {
+            configService.getTyped(pl.jclab.refio.core.config.ConfigKeys.GENERAL_NO_EGRESS_ENABLED, isNull())
+        } returns pl.jclab.refio.core.config.ConfigKeys.GENERAL_NO_EGRESS_ENABLED.default
+        every {
+            configService.getTyped(pl.jclab.refio.core.config.ConfigKeys.PROVIDER_OLLAMA_ENDPOINT, any<String>())
+        } returns pl.jclab.refio.core.config.ConfigKeys.PROVIDER_OLLAMA_ENDPOINT.default
+        every {
+            configService.getTyped(pl.jclab.refio.core.config.ConfigKeys.PROVIDER_OLLAMA_ENDPOINT, isNull())
+        } returns pl.jclab.refio.core.config.ConfigKeys.PROVIDER_OLLAMA_ENDPOINT.default
         llmClient = LLMClient(configService)
     }
 

@@ -2,9 +2,12 @@ package pl.jclab.refio.cli.tui.state
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import mu.KotlinLogging
@@ -99,6 +102,28 @@ class TuiSessionViewModel(
      */
     private val _reasoningEffort = MutableStateFlow(ReasoningEffort.OFF)
     val reasoningEffort: StateFlow<ReasoningEffort> = _reasoningEffort.asStateFlow()
+
+    internal fun stateSignals(): Flow<Unit> = merge(
+        subtasks.map { Unit },
+        activePlan.map { Unit },
+        isPaused.map { Unit },
+        pendingPlanApproval.map { Unit },
+        selectedStepIndex.map { Unit },
+        executionStatus.map { Unit },
+        executionMode.map { Unit },
+        sessions.map { Unit },
+        selectedHistoryIndex.map { Unit },
+        historyFilter.map { Unit },
+        modelSelectorVisible.map { Unit },
+        modelSelectorCandidates.map { Unit },
+        modelSelectorIndex.map { Unit },
+        totalCost.map { Unit },
+        cachedTokens.map { Unit },
+        totalTokens.map { Unit },
+        thinkingEnabled.map { Unit },
+        reasoningEffort.map { Unit },
+        noEgressEnabled.map { Unit },
+    )
 
     // --- Callbacks to parent TuiViewModel ---
 

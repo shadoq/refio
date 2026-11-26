@@ -187,51 +187,39 @@ class AdvanceCodeEditingTool(
         onChunk: StreamCallback? = null,
         conversationContext: String? = null
     ): ToolResult {
-        // 1. Read file or prepare for creation
+        // 1. Read file or prepare for creation under lock, then release the lock before LLM calls.
         val path = resolveSandboxPath(pathStr)
-        val fileExists = path.exists()
 
         if (limits.shouldExcludeFile(path.fileName.toString())) {
             return ToolResult.error("File extension not allowed: ${path.fileName}")
         }
 
-        return withLockedFile(path) {
-
-            val originalContent: String
-            val fileSize: Long
-
-            if (!fileExists) {
-                // File doesn't exist - will create it with LLM-generated content
+        val (readError, readState) = withLockedFile(path) {
+            val exists = path.exists()
+            if (!exists) {
                 logger.info { "LLM-assisted create: path=$pathStr, description='$editDescription' (file will be created)" }
-
-                // Create parent directories if needed
-                path.parent?.let { parent ->
-                    if (!Files.exists(parent)) {
-                        Files.createDirectories(parent)
-                        logger.info { "Created parent directories: ${path.parent}" }
+                null to Triple(false, "", 0L)
+            } else {
+                if (!path.isRegularFile()) {
+                    ToolResult.error("Not a regular file: $pathStr") to null
+                } else {
+                    val size = path.fileSize()
+                    if (size > limits.maxFileSize) {
+                        ToolResult.error(
+                            "File too large for LLM-assisted editing: $size bytes (max ${limits.maxFileSize} bytes). " +
+                                    "Use simple search-replace mode or split into smaller edits."
+                        ) to null
+                    } else {
+                        sandbox.revalidateBeforeIO(path)
+                        val content = Files.readString(path)
+                        logger.info { "LLM-assisted edit: path=$pathStr, description='$editDescription', size=$size bytes" }
+                        null to Triple(true, content, size)
                     }
                 }
-
-                originalContent = ""
-                fileSize = 0
-            } else {
-                // File exists - will edit it
-                if (!path.isRegularFile()) {
-                    return@withLockedFile ToolResult.error("Not a regular file: $pathStr")
-                }
-
-                // Check file size
-                fileSize = path.fileSize()
-                if (fileSize > limits.maxFileSize) {
-                    return@withLockedFile ToolResult.error(
-                        "File too large for LLM-assisted editing: $fileSize bytes (max ${limits.maxFileSize} bytes). " +
-                                "Use simple search-replace mode or split into smaller edits."
-                    )
-                }
-
-                originalContent = Files.readString(path)
-                logger.info { "LLM-assisted edit: path=$pathStr, description='$editDescription', size=$fileSize bytes" }
             }
+        }
+        if (readError != null) return readError
+        val (fileExists, originalContent, fileSize) = readState!!
 
             // 2. Get file extension for language detection
             val extension = path.fileName.toString().substringAfterLast('.', "")
@@ -346,7 +334,7 @@ class AdvanceCodeEditingTool(
                     completed
                 } catch (e: Exception) {
                     logger.error(e) { "LLM request failed" }
-                    return@withLockedFile ToolResult.error("LLM request failed: ${e.message}. Try again or use simple search-replace mode.")
+                    return ToolResult.error("LLM request failed: ${e.message}. Try again or use simple search-replace mode.")
                 }
                 response = attemptResponse
 
@@ -398,9 +386,9 @@ class AdvanceCodeEditingTool(
             }
 
             if (response == null || newContent == null) {
-                // 5. Exhausted the repair budget — fail loud with a diagnostic (Rule 12). Nothing
+                // 5. Exhausted the repair budget - fail loud with a diagnostic. Nothing
                 // has been written to disk, so there is no partial state to clean up.
-                return@withLockedFile ToolResult.error(
+                return ToolResult.error(
                     "LLM did not return a usable code block after $MAX_EXTRACTION_ATTEMPTS attempt(s). " +
                             "The coding model kept replying with prose or an unterminated block. " +
                             "Try rephrasing the edit description, set a stronger coding model via default_model.agent, " +
@@ -457,10 +445,20 @@ class AdvanceCodeEditingTool(
             // Note: Snapshots are created by AgentExecutor before tool execution
             // Tool itself doesn't create snapshots - this is handled at the workflow level
 
-            // 10. Write file
-            Files.writeString(path, newContent)
+            // 10. Re-acquire lock, create parent dirs only after LLM succeeded, revalidate and write
+            val finalNewContent = newContent
+            val newFileSize = withLockedFile(path) {
+                path.parent?.let { parent ->
+                    if (!Files.exists(parent)) {
+                        Files.createDirectories(parent)
+                        logger.info { "Created parent directories: ${path.parent}" }
+                    }
+                }
+                sandbox.revalidateBeforeIO(path)
+                Files.writeString(path, finalNewContent)
+                path.fileSize()
+            }
             val duration = (System.currentTimeMillis() - startTime).toInt()
-            val newFileSize = path.fileSize()
 
             logger.info {
                 "LLM-assisted edit completed: path=$pathStr, model=$model, " +
@@ -472,7 +470,7 @@ class AdvanceCodeEditingTool(
             // via taskId / subtaskId passed in the call above. No manual increment here.
 
             // 11. Return result (changes displayed as badge in UI)
-            ToolResult(
+            return ToolResult(
                 success = true,
                 output = buildString {
                     if (salvaged) {
@@ -533,7 +531,6 @@ class AdvanceCodeEditingTool(
                     "cost_usd" to cost
                 )
             )
-        }
     }
 
     /**
@@ -661,44 +658,20 @@ class AdvanceCodeEditingTool(
         return null
     }
 
-    private fun countOccurrences(text: String, substring: String): Int {
-        if (substring.isEmpty()) return 0
-
-        var count = 0
-        var index = 0
-
-        while (text.indexOf(substring, index).also { index = it } != -1) {
-            count++
-            index += substring.length
-        }
-
-        return count
-    }
-
     override fun getParameterSchema(): Map<String, Any> {
         return mapOf(
             "type" to "object",
             "properties" to mapOf(
                 "path" to mapOf(
                     "type" to "string",
-                    "description" to "Relative path to the file to edit"
+                    "description" to "Relative path to the file to create or edit"
                 ),
                 "edit_description" to mapOf(
                     "type" to "string",
-                    "description" to "Natural-language description of the change. " +
-                        "Provide this OR the (old_string, new_string) pair — not both."
-                ),
-                "old_string" to mapOf(
-                    "type" to "string",
-                    "description" to "Exact substring to replace. Use together with new_string " +
-                        "as an alternative to edit_description."
-                ),
-                "new_string" to mapOf(
-                    "type" to "string",
-                    "description" to "Replacement text for old_string."
+                    "description" to "Natural-language description of the file to create or changes to make"
                 ),
             ),
-            "required" to listOf("path")
+            "required" to listOf("path", "edit_description")
         )
     }
 

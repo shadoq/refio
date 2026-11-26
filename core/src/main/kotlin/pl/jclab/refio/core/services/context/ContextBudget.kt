@@ -12,7 +12,9 @@ data class StableContextCache(
     val content: String,
     val tokensUsed: Int,
     val contextVersion: Long,
-    val cachedAt: Long = System.currentTimeMillis()
+    val cachedAt: Long = System.currentTimeMillis(),
+    val sectionUsage: Map<ContextSection, Int> = emptyMap(),
+    val traceRecords: List<pl.jclab.refio.core.services.turn.ContextSectionRecord> = emptyList()
 )
 
 /**
@@ -20,18 +22,32 @@ data class StableContextCache(
  * - STABLE layer: cached, invalidated on project file change (not per-turn)
  * - Tool descriptions: cached, invalidated on permission change
  */
-class ContextLayerCache {
+class ContextLayerCache(
+    private val maxEntries: Int = DEFAULT_MAX_ENTRIES
+) {
     private val stableCache = ConcurrentHashMap<String, StableContextCache>()
     private val toolDescriptionsCache = ConcurrentHashMap<String, Pair<String, Long>>()
     private val contextVersionCounter = AtomicLong(0)
 
     fun getStableContext(taskId: String): StableContextCache? = stableCache[taskId]
 
-    fun putStableContext(taskId: String, content: String, tokensUsed: Int) {
+    fun putStableContext(
+        taskId: String,
+        content: String,
+        tokensUsed: Int,
+        sectionUsage: Map<ContextSection, Int> = emptyMap(),
+        traceRecords: List<pl.jclab.refio.core.services.turn.ContextSectionRecord> = emptyList()
+    ) {
+        if (stableCache.size >= maxEntries && !stableCache.containsKey(taskId)) {
+            val oldestKey = stableCache.entries.minByOrNull { it.value.cachedAt }?.key
+            if (oldestKey != null) stableCache.remove(oldestKey)
+        }
         stableCache[taskId] = StableContextCache(
             content = content,
             tokensUsed = tokensUsed,
-            contextVersion = contextVersionCounter.get()
+            contextVersion = contextVersionCounter.get(),
+            sectionUsage = sectionUsage,
+            traceRecords = traceRecords
         )
     }
 
@@ -41,7 +57,15 @@ class ContextLayerCache {
     }
 
     fun putToolDescriptions(taskId: String, descriptions: String) {
+        if (toolDescriptionsCache.size >= maxEntries && !toolDescriptionsCache.containsKey(taskId)) {
+            val oldestKey = toolDescriptionsCache.entries.minByOrNull { it.value.second }?.key
+            if (oldestKey != null) toolDescriptionsCache.remove(oldestKey)
+        }
         toolDescriptionsCache[taskId] = descriptions to contextVersionCounter.get()
+    }
+
+    companion object {
+        const val DEFAULT_MAX_ENTRIES = 64
     }
 
     fun invalidateStable(taskId: String) {
@@ -82,8 +106,11 @@ data class ContextBudget(
     }
 
     fun redistributeUnused(actualUsage: Map<ContextSection, Int>): ContextBudget {
-        val unused = sectionBudgets.entries.sumOf { (section, budget) ->
-            max(0, budget - (actualUsage[section] ?: 0))
+        // Only count slack from sections that actually reported usage; unrendered future
+        // sections are absent from actualUsage and must not donate their own budget to themselves.
+        val unused = actualUsage.entries.sumOf { (section, used) ->
+            val budget = sectionBudgets[section] ?: 0
+            max(0, budget - used)
         }
 
         if (unused <= 0) return this

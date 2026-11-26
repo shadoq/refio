@@ -29,36 +29,11 @@ private const val SMALL_CONTEXT_OVERFLOW_RATIO = 0.75
 // RECENT_WORK limits
 private const val RECENT_WORK_LAST_ENTRY_CHAR_BUFFER = 32256
 private const val RECENT_WORK_LAST_ENTRY_TOKEN_BUFFER = RECENT_WORK_LAST_ENTRY_CHAR_BUFFER / 4
-private const val RECENT_WORK_BUDGET_TIER_1 = 12_000
-private const val RECENT_WORK_BUDGET_TIER_2 = 8_000
-private const val RECENT_WORK_BUDGET_TIER_3 = 5_000
-private const val RECENT_WORK_BUDGET_TIER_4 = 3_500
-private const val RECENT_WORK_BUDGET_TIER_5 = 3_000
-private const val RECENT_WORK_BUDGET_TIER_6 = 2_500
-private const val RECENT_WORK_FULL_LIMIT_TIER_1 = 10
-private const val RECENT_WORK_FULL_LIMIT_TIER_2 = 8
-private const val RECENT_WORK_FULL_LIMIT_TIER_3 = 6
-private const val RECENT_WORK_FULL_LIMIT_TIER_4 = 5
-private const val RECENT_WORK_FULL_LIMIT_DEFAULT = 4
-private const val RECENT_WORK_DETAILED_LIMIT_TIER_1 = 10
-private const val RECENT_WORK_DETAILED_LIMIT_TIER_2 = 8
-private const val RECENT_WORK_DETAILED_LIMIT_TIER_3 = 6
-private const val RECENT_WORK_DETAILED_LIMIT_TIER_4 = 5
-private const val RECENT_WORK_DETAILED_LIMIT_TIER_5 = 4
-private const val RECENT_WORK_DETAILED_LIMIT_DEFAULT = 3
 
 // CONVERSATION_HISTORY limits
 private const val DEFAULT_CONVERSATION_HISTORY_LIMIT = 100
 private const val CONTEXT_CONVERSATION_HISTORY_LIMIT = DEFAULT_CONVERSATION_HISTORY_LIMIT
 private const val CONTEXT_INCLUDE_CONVERSATION_HISTORY = true
-private const val CONVERSATION_BUDGET_TIER_HIGH = 5_000
-private const val CONVERSATION_BUDGET_TIER_MEDIUM = 3_500
-private const val CONVERSATION_BUDGET_TIER_LOW = 2_000
-private const val CONVERSATION_MAX_MESSAGES_HIGH = 100
-private const val CONVERSATION_MAX_MESSAGES_MEDIUM = 75
-private const val CONVERSATION_MAX_MESSAGES_LOW = 50
-private const val CONVERSATION_MAX_MESSAGES_DEFAULT = 25
-private const val CONVERSATION_MIN_PER_MESSAGE_TOKENS = 128
 
 /**
  * Service for building context for LLM prompts.
@@ -99,6 +74,7 @@ class ContextService(
      * Last context decision trace from buildLLMContextPrompt().
      * Available after prompt building for PromptSnapshot construction.
      */
+    @Volatile
     var lastContextTrace: pl.jclab.refio.core.services.turn.ContextDecisionTrace? = null
         private set
 
@@ -116,19 +92,9 @@ class ContextService(
      * (e.g. "recent_work", "key_components") to token info.
      * Used by AgentTurnLoop to populate PromptSnapshot.sectionTokens.
      */
+    @Volatile
     var lastSectionTokens: Map<String, ContextSectionTokenInfo>? = null
         private set
-
-    /**
-     * Configuration for RECENT_WORK section generation.
-     * Refaktoryzacja Context Service.
-     */
-    private data class RecentWorkConfig(
-        val fullDataLimit: Int = 2,           // Ile ostatnich narzędzi ma pełne dane
-        val detailedMaxLength: Int = 800,     // Max długość szczegółowego skrótu
-        val summaryMaxLength: Int = 300,      // Max długość podsumowania
-        val includeMetadata: Boolean = true   // Czy dołączać metadane plików
-    )
 
     constructor(
         projectAnalyzer: ProjectAnalyzerService,
@@ -573,6 +539,14 @@ class ContextService(
             parts.add(stableCacheHit.content)
             val tokens = stableCacheHit.tokensUsed
             remainingTokens = (remainingTokens - tokens).coerceAtLeast(0)
+            if (stableCacheHit.sectionUsage.isNotEmpty()) {
+                actualUsage.putAll(stableCacheHit.sectionUsage)
+            } else {
+                actualUsage[ContextSection.PROJECT_CONTEXT] = tokens
+            }
+            if (stableCacheHit.traceRecords.isNotEmpty()) {
+                traceRecords.addAll(stableCacheHit.traceRecords)
+            }
             usage.add("STABLE_CONTEXT=$tokens (cached)")
             logger.debug { "[CONTEXT_BUDGET] Using cached STABLE layer: $tokens tokens" }
         } else {
@@ -623,11 +597,17 @@ class ContextService(
                 addSection(ContextSection.REFERENCE, referenceContent)
             }
 
-            // Cache stable layer for reuse across turns
+            // Cache stable layer for reuse across turns (including per-section usage and trace records)
             if (runScope != null) {
                 val stableContent = "<STABLE_CONTEXT>\n${stableParts.joinToString("\n\n")}\n</STABLE_CONTEXT>"
                 val stableTokens = ContextTokenEstimator.estimateTokens(stableContent, modelId)
-                contextLayerCache.putStableContext(runScope, stableContent, stableTokens)
+                contextLayerCache.putStableContext(
+                    taskId = runScope,
+                    content = stableContent,
+                    tokensUsed = stableTokens,
+                    sectionUsage = actualUsage.toMap(),
+                    traceRecords = traceRecords.toList()
+                )
             }
         }
 
@@ -726,18 +706,27 @@ class ContextService(
                     }"
         }
 
-        lastContextTrace = pl.jclab.refio.core.services.turn.ContextDecisionTrace(
+        val contextTrace = pl.jclab.refio.core.services.turn.ContextDecisionTrace(
             sections = traceRecords,
             totalBudget = budget.totalTokens,
             totalUsed = baseUsed + overflowUsed
         )
+        lastContextTrace = contextTrace
 
         // Parse XML tags from the built prompt for granular section token breakdown
-        lastSectionTokens = PromptSectionTokenReport.parsePromptSectionTokens(
+        val sectionTokens = PromptSectionTokenReport.parsePromptSectionTokens(
             if (stateText.isBlank()) contextPrompt else "$contextPrompt\n\n$stateText"
         )
+        lastSectionTokens = sectionTokens
 
-        return LLMContextParts(prompt = contextPrompt, trailingState = stateText)
+        return LLMContextParts(
+            prompt = contextPrompt,
+            trailingState = stateText,
+            contextTrace = contextTrace,
+            sectionTokens = sectionTokens,
+            conversationDropped = formatter.lastConversationDropped,
+            stepsDropped = formatter.lastStepsDropped
+        )
     }
 
     // ===========================
@@ -892,6 +881,8 @@ class ContextService(
                 threadMessages = summarizedMessages
             )
             buildLLMContext(projectContext, staticPrefixTokens, modelId, trailingState)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             logger.warn(e) { "[AGENT_TURN] Failed to build project context: ${e.message}" }
             LLMContextParts(prompt = "", trailingState = "")  // Continue without project context if it fails
@@ -906,7 +897,11 @@ class ContextService(
             messages = messages,
             projectContextPrompt = contextParts.prompt,
             historySize = filteredHistory.size,
-            trailingState = contextParts.trailingState
+            trailingState = contextParts.trailingState,
+            contextTrace = contextParts.contextTrace,
+            sectionTokens = contextParts.sectionTokens,
+            conversationDropped = contextParts.conversationDropped,
+            stepsDropped = contextParts.stepsDropped
         )
     }
 
@@ -961,75 +956,6 @@ class ContextService(
         return projectContextSummarizer.buildCompactProjectSummary(projectAnalysis, richReport, maxTokens)
     }
 
-    /**
-     * Build user-provided context section (from @ mentions)
-     */
-    private fun buildUserContextSection(context: ProjectContextDTO): String {
-        val parts = mutableListOf<String>()
-        parts.add("<USER_PROVIDED_CONTEXT>")
-        parts.add("The user has provided the following additional context:")
-        parts.add("")
-
-        context.userContextRefs.forEach { ref ->
-            val header = when {
-                ref.providerId == "file" -> "File: ${ref.path}"
-                ref.providerId == "selection" -> "Selection: ${ref.displayName}"
-                ref.providerId != null -> "${ref.providerId}: ${ref.displayName}"
-                else -> ref.displayName
-            }
-
-            parts.add("--- $header ---")
-            parts.add(ref.content)
-            parts.add("")
-        }
-
-        parts.add("</USER_PROVIDED_CONTEXT>")
-        return parts.joinToString("\n")
-    }
-
-    private fun buildFrameworkAnalysisSection(context: ProjectContextDTO): String {
-        val fa = context.frameworkAnalysis ?: return ""
-        if (fa.frameworks.isEmpty()) return ""
-
-        val parts = mutableListOf<String>()
-        parts.add("<FRAMEWORK_ANALYSIS>")
-
-        // Detected frameworks with conventions
-        val detected = fa.frameworks.joinToString(", ") { fw ->
-            val conventionSuffix = fa.conventions
-                .firstOrNull { it.startsWith(fw.name) }
-                ?.substringAfter(": ", "")
-                ?.let { " ($it)" } ?: ""
-            val versionSuffix = fw.version?.let { " $it" } ?: ""
-            "${fw.name}${versionSuffix}${conventionSuffix}"
-        }
-        parts.add("Detected: $detected")
-
-        // Layers with example files
-        if (fa.layers.isNotEmpty()) {
-            parts.add("Layers:")
-            for (layer in fa.layers) {
-                val examples = layer.exampleFiles.take(3).joinToString(", ") {
-                    it.substringAfterLast("/")
-                }
-                parts.add("- ${layer.name}: $examples")
-            }
-        }
-
-        // Endpoints (if any)
-        if (fa.endpoints.isNotEmpty()) {
-            parts.add("Endpoints: ${fa.endpoints.take(5).joinToString(", ")}")
-        }
-
-        // Config files (if any)
-        if (fa.configFiles.isNotEmpty()) {
-            parts.add("Config: ${fa.configFiles.take(5).joinToString(", ")}")
-        }
-
-        parts.add("</FRAMEWORK_ANALYSIS>")
-        return parts.joinToString("\n")
-    }
-
     private fun loadProjectInstructions(projectRoot: Path): String? {
         val loaded = projectInstructionsLoader.load(projectRoot)
         if (loaded.isEmpty) return null
@@ -1048,96 +974,6 @@ class ContextService(
         }
 
         return parts.joinToString("\n\n")
-    }
-
-    private fun buildProjectInstructionsSection(context: ProjectContextDTO): String {
-        return "<PROJECT_INSTRUCTIONS>\n${context.projectInstructions}\n</PROJECT_INSTRUCTIONS>"
-    }
-
-    private fun buildDependenciesSection(context: ProjectContextDTO): String? {
-        val depLines = mutableListOf<String>()
-
-        fun addDeps(label: String, deps: List<String>) {
-            if (deps.isNotEmpty()) {
-                val shown = deps.take(15).joinToString(", ")
-                val more = if (deps.size > 15) " (+${deps.size - 15} more)" else ""
-                depLines.add("$label: $shown$more")
-            }
-        }
-
-        addDeps("Kotlin/Java", (context.dependencies.kotlin + context.dependencies.java).distinct())
-        addDeps("Python", context.dependencies.python)
-        addDeps("JavaScript", context.dependencies.javascript)
-        addDeps("TypeScript", context.dependencies.typescript.filter { it !in context.dependencies.javascript })
-        addDeps("C/C++", context.dependencies.cpp)
-
-        if (depLines.isEmpty()) return null
-
-        if (context.dependencies.packageManagers.isNotEmpty()) {
-            depLines.add("Package managers: ${context.dependencies.packageManagers.joinToString(", ")}")
-        }
-
-        return "<PROJECT_DEPENDENCIES>\n${depLines.joinToString("\n")}\n</PROJECT_DEPENDENCIES>"
-    }
-
-    private fun buildKeyComponentsSection(context: ProjectContextDTO): String {
-        return """
-            |<KEY_COMPONENTS>
-            |${context.keyComponents.joinToString("\n") { "- $it" }}
-            |</KEY_COMPONENTS>
-        """.trimMargin()
-    }
-
-    private fun buildRecentWorkConfig(): RecentWorkConfig {
-        val summaryMax = configService.getTyped(ConfigKeys.RECENT_WORK_SUMMARY_MAX_LENGTH)
-        val detailedMax = (summaryMax * 5).coerceAtLeast(1024)
-
-        return RecentWorkConfig(
-            fullDataLimit = configService.getTyped(ConfigKeys.RECENT_WORK_FULL_DATA_LIMIT),
-            detailedMaxLength = detailedMax,
-            summaryMaxLength = summaryMax,
-            includeMetadata = true
-        )
-    }
-
-    private fun calculateFullDataLimit(stepsCount: Int, budgetTokens: Int, baseLimit: Int): Int {
-        if (stepsCount <= 0) return 0
-        val safeBase = baseLimit.coerceAtLeast(1)
-        val budgetLimit = when {
-            budgetTokens >= RECENT_WORK_BUDGET_TIER_1 -> RECENT_WORK_FULL_LIMIT_TIER_1
-            budgetTokens >= RECENT_WORK_BUDGET_TIER_2 -> RECENT_WORK_FULL_LIMIT_TIER_2
-            budgetTokens >= RECENT_WORK_BUDGET_TIER_3 -> RECENT_WORK_FULL_LIMIT_TIER_3
-            budgetTokens >= RECENT_WORK_BUDGET_TIER_5 -> RECENT_WORK_FULL_LIMIT_TIER_4
-            else -> RECENT_WORK_FULL_LIMIT_DEFAULT
-        }
-        val effective = minOf(safeBase, budgetLimit)
-        return minOf(stepsCount, effective)
-    }
-
-    private fun calculateDetailedLimit(budgetTokens: Int): Int = when {
-        budgetTokens >= RECENT_WORK_BUDGET_TIER_1 -> RECENT_WORK_DETAILED_LIMIT_TIER_1
-        budgetTokens >= RECENT_WORK_BUDGET_TIER_2 -> RECENT_WORK_DETAILED_LIMIT_TIER_2
-        budgetTokens >= RECENT_WORK_BUDGET_TIER_3 -> RECENT_WORK_DETAILED_LIMIT_TIER_3
-        budgetTokens >= RECENT_WORK_BUDGET_TIER_4 -> RECENT_WORK_DETAILED_LIMIT_TIER_4
-        budgetTokens >= RECENT_WORK_BUDGET_TIER_6 -> RECENT_WORK_DETAILED_LIMIT_TIER_5
-        else -> RECENT_WORK_DETAILED_LIMIT_DEFAULT
-    }
-
-    private fun compressionFallbacks(baseLevel: CompressionLevel): List<CompressionLevel> = when (baseLevel) {
-        CompressionLevel.FULL -> listOf(
-            CompressionLevel.FULL,
-            CompressionLevel.DETAILED,
-            CompressionLevel.SUMMARY
-        )
-
-        CompressionLevel.DETAILED -> listOf(
-            CompressionLevel.DETAILED,
-            CompressionLevel.SUMMARY
-        )
-
-        CompressionLevel.SUMMARY -> listOf(
-            CompressionLevel.SUMMARY
-        )
     }
 
     // ===========================
@@ -1296,13 +1132,25 @@ data class AgentTurnMessagesResult(
     /** Size of conversation history before filtering */
     val historySize: Int,
     /** Work state (WORKING_MEMORY, RECENT_WORK) for a trailing harness message; empty in the default layout */
-    val trailingState: String = ""
+    val trailingState: String = "",
+    /** Context decision trace produced by this call (avoids reading shared mutable lastContextTrace) */
+    val contextTrace: pl.jclab.refio.core.services.turn.ContextDecisionTrace? = null,
+    /** Granular section token breakdown produced by this call */
+    val sectionTokens: Map<String, ContextSectionTokenInfo>? = null,
+    /** Conversation messages omitted to fit the section budget */
+    val conversationDropped: Int = 0,
+    /** Older tool steps omitted from RECENT_WORK to fit the section budget */
+    val stepsDropped: Int = 0
 )
 
 /** Context prompt for the system prompt plus, in the trailing layout, the work state kept out of it. */
 data class LLMContextParts(
     val prompt: String,
-    val trailingState: String
+    val trailingState: String,
+    val contextTrace: pl.jclab.refio.core.services.turn.ContextDecisionTrace? = null,
+    val sectionTokens: Map<String, ContextSectionTokenInfo>? = null,
+    val conversationDropped: Int = 0,
+    val stepsDropped: Int = 0
 )
 
 

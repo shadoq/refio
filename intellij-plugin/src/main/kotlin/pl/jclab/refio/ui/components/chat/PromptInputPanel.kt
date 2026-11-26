@@ -41,9 +41,9 @@ import pl.jclab.refio.api.models.ExecutionMode
 import pl.jclab.refio.api.models.SlashPrompt
 import pl.jclab.refio.api.models.TaskMode
 import pl.jclab.refio.core.context.ContextProviderRegistry
-import pl.jclab.refio.core.context.ContextSubmenuItem
-import pl.jclab.refio.core.context.LoadSubmenuItemsArgs
 import pl.jclab.refio.core.context.ProviderType
+import pl.jclab.refio.core.prompts.PromptInputProcessor
+import pl.jclab.refio.core.prompts.PromptTemplateContext
 import pl.jclab.refio.core.services.longtask.LongTaskCommand
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
 import pl.jclab.refio.core.services.monitoring.OperationInfo
@@ -51,9 +51,6 @@ import pl.jclab.refio.services.execution.StepExecutionService
 import pl.jclab.refio.core.logging.dualLogger
 import pl.jclab.refio.services.session.SessionManager
 import pl.jclab.refio.ui.completion.RefioCompletionContributor
-import pl.jclab.refio.ui.components.autocomplete.AutocompletePopup
-import pl.jclab.refio.ui.components.autocomplete.PromptAutocompleteItem
-import pl.jclab.refio.ui.components.autocomplete.ContextAutocompleteItem
 import pl.jclab.refio.ui.components.autocomplete.ContextValidator
 import pl.jclab.refio.ui.components.input.InputPanelContainer
 import pl.jclab.refio.ui.components.input.SnippetsContainer
@@ -63,10 +60,6 @@ import java.awt.*
 import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
 import java.awt.event.KeyEvent
-import java.time.LocalDate
-import java.time.LocalDateTime
-import java.time.LocalTime
-import java.time.format.DateTimeFormatter
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.swing.*
 
@@ -120,14 +113,6 @@ class PromptInputPanel(
     private var lastPreferredEditorHeight: Int = -1
     private val editorShortcutsDisposable = Disposer.newDisposable(project, "refio.promptInputPanel.editorShortcuts")
 
-    // Autocomplete
-    private var contextAutocomplete: AutocompletePopup<ContextAutocompleteItem>
-    private var promptAutocomplete: AutocompletePopup<PromptAutocompleteItem>
-
-    // Current submenu provider ID (for tracking which provider's submenu is shown)
-    private var currentSubmenuProviderId: String? = null
-    private val docsPlaceholderId = "__no_docs__"
-
     // Autocomplete debouncing using Swing Timer (lazy initialization to avoid memory leaks)
     private val autocompleteTimer: Timer by lazy {
         Timer(AUTOCOMPLETE_DEBOUNCE_MS) {
@@ -140,11 +125,9 @@ class PromptInputPanel(
     private val CONTEXT_LIMIT = 50
     private val continuePromptText = "Continue from where you left off."
 
-    // Job for autocomplete coroutines (cancel previous when starting new)
-    private var autocompleteJob: kotlinx.coroutines.Job? = null
-
-    // Cached slash prompts (loaded once, used for prepending templates)
-    private var cachedSlashPrompts: List<SlashPrompt> = emptyList()
+    // Cached slash prompts (loaded asynchronously on Dispatchers.IO, read on EDT)
+    @Volatile
+    private var cachedSlashPrompts: List<SlashPrompt> = SlashPrompt.BUILTINS
 
     // Context references
     private val contextReferences = mutableListOf<ContextReference>()
@@ -167,15 +150,6 @@ class PromptInputPanel(
         border = LCATheme.paddedBorder(5)
 
         val gbc = GridBagConstraints()
-
-        // Initialize autocomplete popups
-        contextAutocomplete = AutocompletePopup { item ->
-            handleContextSelection(item)
-        }
-
-        promptAutocomplete = AutocompletePopup { item ->
-            insertSlashPrompt(item.slashPrompt)
-        }
 
         promptEditor = createPromptEditor()
         promptEditor.border = LCATheme.emptyBorder()
@@ -410,7 +384,7 @@ class PromptInputPanel(
 
                 if (session != null) {
                     logger.info { "Session changed: mode=${session.mode}, executionMode=${session.executionMode}" }
-                    updateSession(session)
+                    SwingUtilities.invokeLater { updateSession(session) }
                 }
             }
         }
@@ -519,6 +493,14 @@ class PromptInputPanel(
 
         logger.info { "[CONTEXT_DEBUG] Sending ${contextToSend.size} context references" }
 
+        // Snapshot Swing combo-box state on EDT before launching background coroutine.
+        val selectedMode = getSelectedMode()
+        val selectedExecutionMode = getCurrentExecutionMode()
+        val selectedItem = modelSelector.selectedItem as? ModelItem
+        val selectedModelId = selectedItem?.modelId
+        val selectedProvider = selectedItem?.provider
+        val isAutoMode = selectedModelId == "auto"
+
         val turnJob = cs.launch {
             try {
                 // Check if orchestrator is waiting for response
@@ -528,9 +510,11 @@ class PromptInputPanel(
                     // User is responding to orchestrator question
                     logger.info { "User responding to question: $questionId" }
                     sessionManager.answerQuestion(questionId, processedText)
-                    // Clear context and snippets after sending
-                    clearContext()
-                    clearSnippets()
+                    // Clear context and snippets on EDT after sending
+                    SwingUtilities.invokeLater {
+                        clearContext()
+                        clearSnippets()
+                    }
                 } else {
                     // Normal message flow
                     // Ensure we have an active session before sending message
@@ -538,35 +522,26 @@ class PromptInputPanel(
 
                     if (currentSession == null) {
                         logger.info { "No active session - creating new session before sending message" }
-                        val currentMode = getSelectedMode()
-                        val executionMode = getCurrentExecutionMode()
-                        sessionManager.createSession("Session (${currentMode.name})", currentMode, executionMode)
+                        sessionManager.createSession("Session (${selectedMode.name})", selectedMode, selectedExecutionMode)
                     }
-
-                    // Get currently selected model from dropdown
-                    val selectedItem = modelSelector.selectedItem as? ModelItem
-                    val modelId = selectedItem?.modelId
-                    val provider = selectedItem?.provider
-
-                    // If "Auto" is selected, pass null to use default model from settings
-                    // Otherwise, pass the selected model
-                    val isAutoMode = modelId == "auto"
 
                     sessionManager.sendMessage(
                         input = processedText,
                         contextRefs = contextToSend,
-                        model = if (!isAutoMode && modelId != null && provider != null) {
-                            modelId
+                        model = if (!isAutoMode && selectedModelId != null && selectedProvider != null) {
+                            selectedModelId
                         } else {
                             null  // Use default from Settings
                         },
-                        provider = if (!isAutoMode) provider?.lowercase() else null,
+                        provider = if (!isAutoMode) selectedProvider?.lowercase() else null,
                         resumeLongTask = resumeLongTask
                     )
 
-                    // Clear context and snippets after sending
-                    clearContext()
-                    clearSnippets()
+                    // Clear context and snippets on EDT after sending
+                    SwingUtilities.invokeLater {
+                        clearContext()
+                        clearSnippets()
+                    }
                 }
             } catch (e: Exception) {
                 logger.error(e) { "Failed to send message or answer question" }
@@ -642,7 +617,7 @@ class PromptInputPanel(
     }
 
     private fun notifyGoal(content: String, type: NotificationType) {
-        Notifications.Bus.notify(Notification("Refio", "Goal", content, type), project)
+        Notifications.Bus.notify(Notification("Refio.Notifications", "Goal", content, type), project)
     }
 
     /**
@@ -675,7 +650,7 @@ class PromptInputPanel(
     }
 
     private fun notifyLongTask(content: String, type: NotificationType) {
-        Notifications.Bus.notify(Notification("Refio", "Long task", content, type), project)
+        Notifications.Bus.notify(Notification("Refio.Notifications", "Long task", content, type), project)
     }
 
     /**
@@ -707,51 +682,15 @@ class PromptInputPanel(
         return sb.toString()
     }
 
-    private fun processSlashPrompt(text: String): String? {
-        // Find all slash prompts using regex.
-        // Only match /name after whitespace or at start of text (not in URLs like https://example.com/path)
-        val slashRegex = Regex("""(?<=\s|^)/([\w-]+)""")
-        val matches = slashRegex.findAll(text).toList()
-
-        if (matches.isEmpty()) {
-            return text
-        }
-
-        var result = text
-        var offset = 0  // Track position shift after replacements
-
-        for (match in matches) {
-            val promptName = match.groupValues[1]
-            val slashPrompt = cachedSlashPrompts.find { it.name.equals(promptName, ignoreCase = true) }
-
-            if (slashPrompt == null) {
-                logger.warn { "Slash prompt not found: /$promptName, skipping" }
-                continue
+    private fun processSlashPrompt(text: String): String {
+        return PromptInputProcessor.expandSlashPrompts(
+            text = text,
+            slashPrompts = cachedSlashPrompts,
+            selectionResolver = {
+                com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project)
+                    .selectedTextEditor?.selectionModel?.selectedText ?: ""
             }
-
-            // Build template with variable substitution
-            var template = slashPrompt.template
-
-            // Replace {selection} variable if present
-            if ("selection" in slashPrompt.variables) {
-                val editor = com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project).selectedTextEditor
-                val selection = editor?.selectionModel?.selectedText ?: ""
-                template = template.replace("{selection}", selection)
-            }
-
-            // Replace the slash prompt with its template
-            val originalStart = match.range.first + offset
-            val originalEnd = match.range.last + 1 + offset
-
-            result = result.substring(0, originalStart) + template + result.substring(originalEnd)
-
-            // Update offset for next replacement
-            offset += template.length - match.value.length
-
-            logger.info { "Replaced slash prompt /$promptName at position ${match.range.first} with template" }
-        }
-
-        return result
+        )
     }
 
     private fun showContextLimitError(count: Int) {
@@ -1058,12 +997,6 @@ class PromptInputPanel(
     private fun applyPromptTemplateVariables(text: String): String {
         if (!text.contains("{{")) return text
 
-        val now = LocalDateTime.now()
-        val mode = getSelectedMode().name
-        val executionMode = getCurrentExecutionMode().name
-        val projectNameSafe = sanitizeFileNameToken(project.name)
-        val sessionIdSafe = sanitizeFileNameToken(sessionManager.activeSession.value?.id ?: "no_session")
-
         val selectedItem = modelSelector.selectedItem as? ModelItem
         val modelRaw = when {
             selectedItem != null && !selectedItem.modelId.equals("auto", ignoreCase = true) ->
@@ -1071,38 +1004,16 @@ class PromptInputPanel(
             else -> sessionManager.selectedModel.value.ifBlank { "auto" }
         }
 
-        val providerRaw = modelRaw.substringBefore("/", missingDelimiterValue = "auto")
-        val modelIdSafe = sanitizeFileNameToken(modelRaw.replace("/", "_"))
-        val providerSafe = sanitizeFileNameToken(providerRaw)
-
-        val variables = mapOf(
-            "MODEL_ID" to modelIdSafe,
-            "MODEL_RAW" to modelRaw,
-            "PROVIDER" to providerSafe,
-            "MODE" to mode,
-            "EXECUTION_MODE" to executionMode,
-            "TIMESTAMP" to now.format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")),
-            "DATE" to LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE),
-            "TIME" to LocalTime.now().format(DateTimeFormatter.ofPattern("HHmmss")),
-            "PROJECT_NAME" to projectNameSafe,
-            "SESSION_ID" to sessionIdSafe
+        return PromptInputProcessor.applyTemplateVariables(
+            text = text,
+            context = PromptTemplateContext(
+                modelRaw = modelRaw,
+                mode = getSelectedMode().name,
+                executionMode = getCurrentExecutionMode().name,
+                projectName = project.name,
+                sessionId = sessionManager.activeSession.value?.id ?: "no_session",
+            ),
         )
-
-        val placeholderRegex = Regex("""\{\{([A-Za-z0-9_]+)}}""")
-        return placeholderRegex.replace(text) { match ->
-            val key = match.groupValues[1].uppercase()
-            variables[key] ?: match.value
-        }
-    }
-
-    private fun sanitizeFileNameToken(input: String): String {
-        val sanitized = input
-            .trim()
-            .replace(Regex("""[\\/:*?"<>|\s]+"""), "_")
-            .replace(Regex("""_+"""), "_")
-            .trim('_', '.')
-
-        return sanitized.ifBlank { "unknown" }
     }
 
     fun clearPrompt() {
@@ -1154,9 +1065,6 @@ class PromptInputPanel(
                 editorEx.putUserData(RefioCompletionContributor.REPLACE_CONTEXT_PREFIX_KEY) { displayName ->
                     replaceContextPrefixInInput(displayName)
                 }
-
-                contextAutocomplete.attach(editorEx)
-                promptAutocomplete.attach(editorEx)
 
                 installEditorKeyBindings(editorEx)
                 updatePromptEditorHeight()
@@ -1299,11 +1207,7 @@ class PromptInputPanel(
 
     private fun isAnyAutocompleteVisible(): Boolean {
         val editor = promptEditor.editor
-        val isNativeLookupVisible = editor != null && LookupManager.getActiveLookup(editor) != null
-
-        return isNativeLookupVisible ||
-                (contextAutocomplete.isVisible()) ||
-                (promptAutocomplete.isVisible())
+        return editor != null && LookupManager.getActiveLookup(editor) != null
     }
 
     private fun getPromptCaretOffset(): Int {
@@ -1376,18 +1280,13 @@ class PromptInputPanel(
                 val prefix = beforeCaret.substring(lastAt)
 
                 // Space after @ - SUBMENU provider pattern like "@file query"
-                // Use native IntelliJ completion instead of custom SubmenuPopup
                 if (' ' in prefix) {
-                    contextAutocomplete.hide()
-
                     val spaceIndex = prefix.indexOf(' ')
                     val providerNameWithSpace = prefix.substring(1, spaceIndex).lowercase()
 
-                    // If this is a SUBMENU provider, trigger native completion
                     val provider = ContextProviderRegistry.getProvider(providerNameWithSpace)
                     if (provider?.description?.type == ProviderType.SUBMENU) {
                         promptEditor.editor?.let { editor ->
-                            // Close any active lookup first
                             if (LookupManager.getActiveLookup(editor) != null) {
                                 LookupManager.getInstance(project).hideActiveLookup()
                             }
@@ -1401,243 +1300,28 @@ class PromptInputPanel(
                 }
 
                 // Trigger native IntelliJ completion (RefioCompletionContributor)
-                // Shows providers + file search fallback
-                contextAutocomplete.hide()
                 promptEditor.editor?.let { editor ->
-                    // Close any active lookup first to ensure fresh autocomplete
                     if (LookupManager.getActiveLookup(editor) != null) {
                         LookupManager.getInstance(project).hideActiveLookup()
                     }
 
-                    // Schedule autocomplete with slight delay to ensure lookup is closed
                     SwingUtilities.invokeLater {
                         AutoPopupController.getInstance(project).scheduleAutoPopup(editor)
                     }
                 }
             }
-
-            // / autocomplete - only when "/" is the FIRST character in input
-            beforeCaret.startsWith("/") && beforeCaret.all { it.isLetterOrDigit() || it == '/' } -> {
-                // Use native IntelliJ completion (RefioCompletionContributor) instead of custom popup
-                promptAutocomplete.hide()
-            }
-
-            else -> {
-                contextAutocomplete.hide()
-                promptAutocomplete.hide()
-            }
         }
     }
 
-//    private fun showDocsAutocomplete(prefix: String) {
-//        autocompleteJob?.cancel()
-//
-//        autocompleteJob = cs.launch {
-//            try {
-//                kotlinx.coroutines.delay(100)
-//                val filterPrefix = normalizeDocsFilter(prefix)
-//                val items = withContext(Dispatchers.IO) {
-//                    buildDocsAutocompleteItems(prefix)
-//                }
-//
-//                SwingUtilities.invokeLater {
-//                    if (items.isNotEmpty()) {
-//                        // Use contextAutocomplete for consistent appearance
-//                        contextAutocomplete.show(items, filterPrefix)
-//                    } else {
-//                        contextAutocomplete.hide()
-//                    }
-//                }
-//            } catch (e: kotlinx.coroutines.CancellationException) {
-//                // ignore
-//            } catch (e: Exception) {
-//                logger.error(e) { "Failed to build docs autocomplete" }
-//            }
-//        }
-//    }
-
     /**
-     * Build context autocomplete items
-     *
-     * Uses ContextProviderRegistry to dynamically load all available providers
-     * including built-in providers and MCP servers.
-     */
-    private suspend fun buildContextAutocompleteItems(prefix: String): List<ContextAutocompleteItem> {
-        val items = mutableListOf<ContextAutocompleteItem>()
-        val cleanPrefix = prefix.removePrefix("@").lowercase()
-
-        // Legacy plugin-specific context types (not in provider registry)
-        // @selection (if editor has selection)
-        if ("selection".startsWith(cleanPrefix)) {
-            // Editor API requires read action
-            ApplicationManager.getApplication().runReadAction {
-                val editor = com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project).selectedTextEditor
-                if (editor?.selectionModel?.hasSelection() == true) {
-                    val selection = editor.selectionModel.selectedText ?: ""
-                    val fileName = editor.virtualFile?.name ?: "unknown"
-                    items.add(
-                        ContextAutocompleteItem(
-                            ContextReference.selection(selection, fileName),
-                            iconValue = "✂️"
-                        )
-                    )
-                }
-            }
-        }
-
-        // @rules
-        if ("rules".startsWith(cleanPrefix)) {
-            items.add(ContextAutocompleteItem(ContextReference.rules(), iconValue = "📋"))
-        }
-
-        // Get all registered context providers
-        val allProviders = ContextProviderRegistry.getAllProviders()
-
-        // Filter providers matching the prefix
-        val matchingProviders = allProviders.filter { provider ->
-            val title = provider.description.title.lowercase()
-            cleanPrefix.isEmpty() || title.startsWith(cleanPrefix)
-        }
-
-        // Create autocomplete items from matching providers
-        matchingProviders.forEach { provider ->
-            val desc = provider.description
-            val providerIcon = desc.icon ?: ""
-
-            // Create ContextReference based on provider type
-            val contextRef = when (desc.type) {
-                ProviderType.NORMAL -> {
-                    // For NORMAL providers, create simple provider reference
-                    // Examples: @open, @current, @clipboard, @diff, @problems
-                    ContextReference.provider(
-                        providerId = desc.title,
-                        query = "",
-                        displayName = desc.displayTitle
-                    )
-                }
-
-                ProviderType.QUERY -> {
-                    // For QUERY providers, show with colon to indicate query needed
-                    // Examples: @grep:pattern, @codebase:query
-                    // Note: This is just the autocomplete item, actual query will be typed by user
-                    ContextReference.provider(
-                        providerId = desc.title,
-                        query = "",
-                        displayName = "${desc.displayTitle} (type query)"
-                    )
-                }
-
-                ProviderType.SUBMENU -> {
-                    // For SUBMENU providers, mark for submenu loading
-                    // Examples: @file, @recent (will show submenu popup)
-                    ContextReference.provider(
-                        providerId = desc.title,
-                        query = "",
-                        displayName = "${desc.displayTitle} ↓",
-                        additionalMetadata = mapOf("needsSubmenu" to true)
-                    )
-                }
-            }
-
-            items.add(ContextAutocompleteItem(contextRef, iconValue = providerIcon))
-        }
-
-        // Fallback: if prefix doesn't match any provider, search files by name
-        if (cleanPrefix.isNotEmpty() && matchingProviders.isEmpty()) {
-            val fileItems = searchFilesForAutocomplete(cleanPrefix)
-            items.addAll(fileItems)
-        }
-
-        // Sort items: use existing getSortKey() logic from ContextAutocompleteItem
-        return items.sortedBy { it.getSortKey() }
-    }
-
-    /**
-     * Search files by name pattern for autocomplete fallback.
-     * Used when @prefix doesn't match any provider.
-     */
-    private fun searchFilesForAutocomplete(pattern: String): List<ContextAutocompleteItem> {
-        val result = mutableListOf<ContextAutocompleteItem>()
-        try {
-            // FilenameIndex requires read action
-            ApplicationManager.getApplication().runReadAction {
-                val scope = com.intellij.psi.search.GlobalSearchScope.projectScope(project)
-
-                com.intellij.psi.search.FilenameIndex.processAllFileNames(
-                    { fileName ->
-                        if (fileName.contains(pattern, ignoreCase = true)) {
-                            com.intellij.psi.search.FilenameIndex.getVirtualFilesByName(fileName, scope)
-                                .forEach { file ->
-                                    if (result.size < 15) {
-                                        val contextRef = ContextReference.provider(
-                                            providerId = "file",
-                                            query = file.path,
-                                            displayName = file.name  // Use file name only (consistent with context menu)
-                                        )
-                                        result.add(ContextAutocompleteItem(contextRef, iconValue = "📄"))
-                                    }
-                                }
-                        }
-                        result.size < 15
-                    },
-                    scope,
-                    null
-                )
-            }
-        } catch (e: Exception) {
-            logger.error(e) { "Failed to search files for autocomplete: $pattern" }
-        }
-
-        return result
-    }
-
-    /**
-     * Load slash prompts from backend and cache them
+     * Load slash prompts from backend via shared [PromptInputProcessor] and cache them.
      */
     private suspend fun loadSlashPrompts(): List<SlashPrompt> = withContext(Dispatchers.IO) {
-        val fallback = SlashPrompt.BUILTINS
-
-        return@withContext try {
-            val client = coreApiClient ?: sessionManager.apiRouter
-            val response = client.promptsRouter.getPromptsByType(pl.jclab.refio.core.db.PromptType.SLASH_PROMPT)
-
-            val slashPrompts = response.prompts
-                .filter { it.isEnabled }
-                .map { prompt ->
-                    SlashPrompt(
-                        id = prompt.id,
-                        name = prompt.name.removePrefix("/"),
-                        description = prompt.description ?: "Custom prompt",
-                        template = prompt.content,
-                        variables = extractVariablesFromTemplate(prompt.content),
-                        category = "custom",
-                        isBuiltin = false
-                    )
-                }
-
-            val resolved = if (slashPrompts.isEmpty()) {
-                fallback
-            } else {
-                slashPrompts
-            }
-
-            cachedSlashPrompts = resolved
-            logger.info { "Loaded ${slashPrompts.size} slash prompts from database (enabled only)" }
-            resolved
-        } catch (e: Exception) {
-            logger.error(e) { "Failed to load slash prompts from database, using built-ins" }
-            cachedSlashPrompts = fallback
-            fallback
-        }
-    }
-
-    /**
-     * Extract template variables from a template string.
-     * Variables are in the format {variable_name}
-     */
-    private fun extractVariablesFromTemplate(template: String): List<String> {
-        val regex = Regex("""\{(\w+)\}""")
-        return regex.findAll(template).map { it.groupValues[1] }.toList()
+        val client = coreApiClient ?: sessionManager.apiRouter
+        val resolved = PromptInputProcessor.loadSlashPrompts(client.promptsRouter)
+        cachedSlashPrompts = resolved
+        logger.info { "Loaded ${resolved.size} slash prompts" }
+        resolved
     }
 
     // Subagent completion for "!" is provided by IntelliJ completion (RefioCompletionContributor).
@@ -1653,7 +1337,6 @@ class PromptInputPanel(
         val validationResult = ContextValidator.validateList(newList)
 
         if (!validationResult.isValid) {
-            // Show error dialog
             SwingUtilities.invokeLater {
                 JOptionPane.showMessageDialog(
                     this,
@@ -1666,7 +1349,6 @@ class PromptInputPanel(
             return
         }
 
-        // Show warnings if any
         if (validationResult.warnings.isNotEmpty()) {
             SwingUtilities.invokeLater {
                 val warningMessage = validationResult.warnings.joinToString("\n")
@@ -1679,104 +1361,10 @@ class PromptInputPanel(
             }
         }
 
-        // Add to context references FIRST
         contextReferences.add(ref)
         updateContextTags()
-
-        // Update SessionManager for live preview in ContextPanel
         sessionManager.updatePendingContextRefs(contextReferences.toList())
-
         logger.info { "Added context reference: ${ref.type}:${ref.path}" }
-    }
-
-    /**
-     * Handle context autocomplete item selection
-     *
-     * For SUBMENU providers: load and show submenu
-     * For docs placeholder: show info message
-     * For others: insert context reference directly
-     */
-    private fun handleContextSelection(item: ContextAutocompleteItem) {
-        val contextRef = item.contextRef
-        logger.info { "[CONTEXT_DEBUG] handleContextSelection: type=${contextRef.type}, providerId=${contextRef.metadata["providerId"]}, displayName=${contextRef.displayName}" }
-
-        // Check if this is a docs placeholder
-        val providerId = contextRef.metadata["providerId"] as? String
-        if (providerId == "docs" && contextRef.path == docsPlaceholderId) {
-            SwingUtilities.invokeLater {
-                Messages.showInfoMessage(
-                    this,
-                    "Brak zindeksowanej dokumentacji dla tego projektu.\nDodaj URL lub plik lokalny w Settings → Refio → Documentation, a następnie uruchom indeksowanie.",
-                    "Documentation"
-                )
-            }
-            return
-        }
-
-        // Check if this provider needs a submenu
-        val needsSubmenu = contextRef.metadata["needsSubmenu"] as? Boolean ?: false
-
-        if (needsSubmenu) {
-            val submenuProviderId = contextRef.metadata["providerId"] as? String ?: return
-
-            // Load and show submenu for this provider
-            // Store providerId for later use in handleSubmenuSelection
-            currentSubmenuProviderId = submenuProviderId
-
-            // Hide context autocomplete before showing submenu
-            contextAutocomplete.hide()
-        } else {
-            // No submenu needed, insert directly
-            insertContextReference(contextRef)
-            // Replace @... prefix with full display name in input
-            replaceContextPrefixInInput(contextRef.displayName)
-        }
-    }
-
-    /**
-     * Handle submenu item selection
-     *
-     * Creates a final ContextReference from the submenu item and inserts it
-     */
-    private fun handleSubmenuSelection(item: ContextSubmenuItem) {
-        // Use stored provider ID from handleContextSelection
-        val providerId = currentSubmenuProviderId
-        if (providerId == null) {
-            logger.error { "No provider ID stored for submenu selection" }
-            return
-        }
-
-        logger.info { "Submenu item selected: ${item.title} (id=${item.id}) for provider: $providerId" }
-
-        // Create final context reference using stored provider ID
-        // item.id contains the path/value (e.g., "/home/user/project/src/main.kt")
-        val contextRef = ContextReference.provider(
-            providerId = providerId,
-            query = item.id,  // Use full item.id as the query/path
-            displayName = item.title,
-            additionalMetadata = item.metadata
-        )
-
-        // Clear stored provider ID
-        currentSubmenuProviderId = null
-
-        insertContextReference(contextRef)
-        // Replace @... prefix with full display name in input
-        replaceContextPrefixInInput(contextRef.displayName)
-    }
-
-
-    /**
-     * Insert slash prompt name (not template).
-     * Template will be prepended when sending the message.
-     */
-    private fun insertSlashPrompt(slashPrompt: SlashPrompt) {
-        // Replace typed prefix with full prompt name + space
-        val promptText = "/${slashPrompt.name} "
-        promptEditor.text = promptText
-        promptEditor.editor?.caretModel?.moveToOffset(promptText.length)
-
-        logger.info { "Inserted slash prompt: /${slashPrompt.name}" }
     }
 
     /**
@@ -2300,64 +1888,20 @@ class PromptInputPanel(
         text: String,
         promptForMissingQuery: Boolean
     ): List<ContextReference> {
-        val refs = mutableListOf<ContextReference>()
-        val pattern = Regex("""(?<!\w)@([a-zA-Z0-9_]+)(?::([^\n@]+))?""")
-
-        pattern.findAll(text).forEach { match ->
-            val providerId = match.groupValues[1].lowercase()
-            val rawQuery = match.groupValues.getOrNull(2)?.trim().orEmpty()
-
-            when (providerId) {
-                "open", "open_files", "open_file" -> {
-                    refs.add(ContextReference.openFiles())
-                    return@forEach
+        return PromptInputProcessor.extractInlineContextRefs(
+            text = text,
+            selectionResolver = ::extractSelectionContextRef,
+            missingQueryPrompter = if (promptForMissingQuery) {
+                { title, displayTitle ->
+                    JOptionPane.showInputDialog(
+                        this@PromptInputPanel,
+                        "Enter query for $displayTitle:",
+                        title,
+                        JOptionPane.PLAIN_MESSAGE
+                    )
                 }
-                "rules" -> {
-                    refs.add(ContextReference.rules())
-                    return@forEach
-                }
-                "selection" -> {
-                    extractSelectionContextRef()?.let { refs.add(it) }
-                    return@forEach
-                }
-            }
-
-            val provider = ContextProviderRegistry.getProvider(providerId) ?: return@forEach
-            val desc = provider.description
-
-            var query = rawQuery
-            if (desc.type == ProviderType.QUERY && query.isBlank()) {
-                if (!promptForMissingQuery) {
-                    return@forEach
-                }
-                val input = JOptionPane.showInputDialog(
-                    this@PromptInputPanel,
-                    "Enter query for ${desc.displayTitle}:",
-                    desc.title,
-                    JOptionPane.PLAIN_MESSAGE
-                )
-                if (input.isNullOrBlank()) {
-                    return@forEach
-                }
-                query = input.trim()
-            }
-
-            val displayName = if (query.isNotBlank()) {
-                "${desc.displayTitle}: $query"
-            } else {
-                desc.displayTitle
-            }
-
-            refs.add(
-                ContextReference.provider(
-                    providerId = desc.title,
-                    query = query,
-                    displayName = displayName
-                )
-            )
-        }
-
-        return refs
+            } else null,
+        )
     }
 
     private fun extractSelectionContextRef(): ContextReference? {
@@ -2377,19 +1921,7 @@ class PromptInputPanel(
     private fun mergeContextRefs(
         base: List<ContextReference>,
         extras: List<ContextReference>
-    ): List<ContextReference> {
-        if (extras.isEmpty()) return base.toList()
-        val seen = mutableSetOf<String>()
-        val merged = mutableListOf<ContextReference>()
-        (base + extras).forEach { ref ->
-            val providerId = ref.metadata["providerId"]?.toString() ?: ""
-            val key = "${ref.type}:${ref.path}:$providerId"
-            if (seen.add(key)) {
-                merged.add(ref)
-            }
-        }
-        return merged
-    }
+    ): List<ContextReference> = PromptInputProcessor.mergeContextRefs(base, extras)
 }
 
 /**

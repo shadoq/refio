@@ -9,6 +9,7 @@ import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.isNull
 import org.jetbrains.exposed.sql.transactions.transaction
 import pl.jclab.refio.core.context.mcp.MCPServerConfig
+import pl.jclab.refio.core.db.DatabaseFactory
 import pl.jclab.refio.core.db.MCPServersTable
 import pl.jclab.refio.core.utils.GsonInstance
 import pl.jclab.refio.core.logging.dualLogger
@@ -38,47 +39,54 @@ class MCPServerRepository {
     }
 
     fun upsert(projectId: String?, config: MCPServerConfig) {
-        transaction {
-            val existing = if (projectId != null) {
-                MCPServersTable.selectAll().where {
-                    (MCPServersTable.id eq config.id) and (MCPServersTable.projectId eq projectId)
-                }
-            } else {
-                MCPServersTable.selectAll().where {
-                    (MCPServersTable.id eq config.id) and MCPServersTable.projectId.isNull()
-                }
-            }.firstOrNull()
-
+        DatabaseFactory.dbWriteQuery {
             val now = System.currentTimeMillis()
             val configJson = gson.toJson(config)
 
-            if (existing == null) {
-                MCPServersTable.insert {
-                    it[id] = config.id
-                    it[MCPServersTable.projectId] = projectId
-                    it[MCPServersTable.configJson] = configJson
-                    it[MCPServersTable.enabled] = config.enabled
-                    it[createdAt] = now
-                    it[updatedAt] = now
+            // Issue UPDATE first so SQLite acquires a RESERVED write lock immediately
+            // (avoiding read-to-write upgrade SQLITE_BUSY_SNAPSHOT races across processes).
+            val updated = MCPServersTable.update({
+                if (projectId != null) {
+                    (MCPServersTable.id eq config.id) and (MCPServersTable.projectId eq projectId)
+                } else {
+                    (MCPServersTable.id eq config.id) and MCPServersTable.projectId.isNull()
                 }
-            } else {
-                MCPServersTable.update({
-                    if (projectId != null) {
-                        (MCPServersTable.id eq config.id) and (MCPServersTable.projectId eq projectId)
-                    } else {
-                        (MCPServersTable.id eq config.id) and MCPServersTable.projectId.isNull()
+            }) {
+                it[MCPServersTable.configJson] = configJson
+                it[MCPServersTable.enabled] = config.enabled
+                it[updatedAt] = now
+            }
+
+            if (updated == 0) {
+                try {
+                    MCPServersTable.insert {
+                        it[id] = config.id
+                        it[MCPServersTable.projectId] = projectId
+                        it[MCPServersTable.configJson] = configJson
+                        it[MCPServersTable.enabled] = config.enabled
+                        it[createdAt] = now
+                        it[updatedAt] = now
                     }
-                }) {
-                    it[MCPServersTable.configJson] = configJson
-                    it[MCPServersTable.enabled] = config.enabled
-                    it[updatedAt] = now
+                } catch (e: Exception) {
+                    if (!DatabaseFactory.isSqliteUniqueConstraintError(e)) throw e
+                    MCPServersTable.update({
+                        if (projectId != null) {
+                            (MCPServersTable.id eq config.id) and (MCPServersTable.projectId eq projectId)
+                        } else {
+                            (MCPServersTable.id eq config.id) and MCPServersTable.projectId.isNull()
+                        }
+                    }) {
+                        it[MCPServersTable.configJson] = configJson
+                        it[MCPServersTable.enabled] = config.enabled
+                        it[updatedAt] = System.currentTimeMillis()
+                    }
                 }
             }
         }
     }
 
     fun delete(projectId: String?, serverId: String) {
-        transaction {
+        DatabaseFactory.dbWriteQuery {
             MCPServersTable.deleteWhere {
                 if (projectId != null) {
                     (MCPServersTable.id eq serverId) and (MCPServersTable.projectId eq projectId)

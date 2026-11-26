@@ -5,6 +5,7 @@ import io.ktor.client.engine.cio.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
+import io.ktor.utils.io.core.readBytes
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -18,6 +19,7 @@ import pl.jclab.refio.core.tools.base.ToolCategory
 import pl.jclab.refio.core.tools.base.ToolInternalParams
 import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolResult
+import pl.jclab.refio.core.tools.security.FileLimits
 import pl.jclab.refio.core.utils.GsonInstance
 import java.nio.file.Files
 import java.util.Base64
@@ -146,11 +148,20 @@ class HttpRequestTool(
             @Suppress("UNCHECKED_CAST")
             val headers = params["headers"] as? Map<String, String> ?: emptyMap()
 
-            // Resolve body_file path and read bytes if provided
+            // Resolve body_file path and read bytes if provided (sandbox required)
             val bodyFileBytes: ByteArray? = if (bodyFile != null && method in listOf("POST", "PUT", "PATCH")) {
-                val resolvedBodyFile = if (sandbox != null) sandbox.resolve(bodyFile) else java.nio.file.Paths.get(bodyFile)
+                val activeSandbox = sandbox
+                    ?: return@withContext ToolResult.error("Cannot read 'body_file' without a project sandbox")
+                val resolvedBodyFile = activeSandbox.resolve(bodyFile)
+                activeSandbox.revalidateBeforeIO(resolvedBodyFile)
                 if (!Files.exists(resolvedBodyFile)) {
                     return@withContext ToolResult.error("body_file not found: $resolvedBodyFile")
+                }
+                val fileSize = Files.size(resolvedBodyFile)
+                if (fileSize > FileLimits.DEFAULT.maxFileSize) {
+                    return@withContext ToolResult.error(
+                        "body_file too large: $fileSize bytes (max ${FileLimits.DEFAULT.maxFileSize} bytes)"
+                    )
                 }
                 Files.readAllBytes(resolvedBodyFile)
             } else null
@@ -173,10 +184,15 @@ class HttpRequestTool(
 
             val result = withTimeoutOrNull(timeoutMs) {
                 client.use { httpClient ->
-                    suspend fun issue(target: String) = httpClient.request(target) {
-                        this.method = HttpMethod.parse(method)
-                        headers.forEach { (key, value) -> header(key, value) }
-                        if (method in listOf("POST", "PUT", "PATCH")) {
+                    suspend fun issue(
+                        target: String,
+                        reqMethod: String,
+                        reqHeaders: Map<String, String>,
+                        includeBody: Boolean
+                    ) = httpClient.request(target) {
+                        this.method = HttpMethod.parse(reqMethod)
+                        reqHeaders.forEach { (key, value) -> header(key, value) }
+                        if (includeBody && reqMethod in listOf("POST", "PUT", "PATCH")) {
                             when {
                                 bodyFileBytes != null -> {
                                     contentType(ContentType.parse(contentType))
@@ -190,11 +206,13 @@ class HttpRequestTool(
                         }
                     }
 
-                    // Follow redirects manually, re-validating every hop against the SSRF guard
-                    // (auto-follow is off). A 30x to a loopback/link-local/internal address is
-                    // rejected instead of silently fetched.
-                    var response = issue(url)
+                    // Follow redirects manually, re-validating every hop against egress/SSRF guards.
+                    // Strip sensitive auth/cookie headers across origins and downgrade POST -> GET on 301/302/303.
                     var currentUrl = url
+                    var currentMethod = method
+                    var currentHeaders = headers
+                    var includeBody = true
+                    var response = issue(currentUrl, currentMethod, currentHeaders, includeBody)
                     var redirectHops = 0
                     while (response.status.value in 300..399 && redirectHops < MAX_REDIRECTS) {
                         val location = response.headers[HttpHeaders.Location] ?: break
@@ -205,8 +223,18 @@ class HttpRequestTool(
                         } catch (e: Exception) {
                             return@use ToolResult.error("Blocked redirect to '$nextUrl': ${e.message}")
                         }
+                        if (!isSameOrigin(currentUrl, nextUrl)) {
+                            currentHeaders = stripSensitiveHeaders(currentHeaders)
+                        }
+                        val status = response.status.value
+                        if ((status == 303 && currentMethod != "GET" && currentMethod != "HEAD") ||
+                            ((status == 301 || status == 302) && currentMethod == "POST")
+                        ) {
+                            currentMethod = "GET"
+                            includeBody = false
+                        }
                         currentUrl = nextUrl
-                        response = issue(nextUrl)
+                        response = issue(nextUrl, currentMethod, currentHeaders, includeBody)
                         redirectHops++
                     }
 
@@ -227,8 +255,22 @@ class HttpRequestTool(
                     // Build header summary for LLM context (only useful headers)
                     val headerSummary = buildHeaderSummary(statusCode, responseHeaders)
 
+                    val maxReadBytes = if (saveToFile != null) {
+                        maxOf(maxResponseSize.toLong(), MAX_SAVE_TO_FILE_BYTES)
+                    } else {
+                        maxResponseSize.toLong()
+                    }
+                    val rawBytes = response.bodyAsChannel().readRemaining(maxReadBytes + 1).readBytes()
+                    val readCapped = rawBytes.size.toLong() > maxReadBytes
+                    val boundedBytes = if (readCapped) rawBytes.copyOf(maxReadBytes.toInt()) else rawBytes
+
                     if (isBinary) {
-                        val bytes = response.readBytes()
+                        if (saveToFile != null && readCapped) {
+                            return@use ToolResult.error(
+                                "Binary HTTP response exceeded maximum allowed size of $maxReadBytes bytes"
+                            )
+                        }
+                        val bytes = boundedBytes
                         if (saveToFile != null && statusCode in 200..399) {
                             val savedOutput = saveBinaryResponseToFile(saveToFile, bytes, url, responseContentType)
                             ToolResult(
@@ -251,7 +293,7 @@ class HttpRequestTool(
                             // Binary without save_to_file (or save skipped on non-2xx): return base64 (capped at 1MB)
                             val cap = minOf(bytes.size, MAX_BINARY_INLINE_BYTES)
                             val b64 = Base64.getEncoder().encodeToString(bytes.take(cap).toByteArray())
-                            val truncated = bytes.size > MAX_BINARY_INLINE_BYTES
+                            val truncated = readCapped || bytes.size > MAX_BINARY_INLINE_BYTES
                             val saveSkippedNote = if (saveToFile != null) {
                                 "NOTE: save_to_file was skipped because HTTP status $statusCode is not 2xx/3xx. Response body is returned inline for inspection."
                             } else null
@@ -264,9 +306,6 @@ class HttpRequestTool(
                                 appendLine("Base64:")
                                 append(b64)
                             }
-                            // Tool succeeds whenever we received an HTTP response. Status code is
-                            // returned in exitCode + output for the agent to react on. Only network
-                            // failures / timeouts / exceptions map to success=false.
                             ToolResult(
                                 success = true,
                                 output = headerSummary + output,
@@ -285,7 +324,12 @@ class HttpRequestTool(
                             )
                         }
                     } else {
-                        val responseBody = response.bodyAsText()
+                        if (saveToFile != null && readCapped) {
+                            return@use ToolResult.error(
+                                "HTTP response exceeded maximum allowed size of $maxReadBytes bytes"
+                            )
+                        }
+                        val responseBody = String(boundedBytes, Charsets.UTF_8)
                         // If save_to_file is specified, save to disk and return summary
                         if (saveToFile != null && statusCode in 200..399) {
                             val savedOutput = saveResponseToFile(saveToFile, responseBody, url)
@@ -439,17 +483,16 @@ class HttpRequestTool(
     }
 
     private fun saveBinaryResponseToFile(filePath: String, bytes: ByteArray, url: String, contentType: String): String {
-        val resolvedPath = if (sandbox != null) {
-            sandbox.resolve(filePath)
-        } else {
-            java.nio.file.Paths.get(filePath)
-        }
+        val activeSandbox = sandbox
+            ?: throw SecurityException("Cannot write 'save_to_file' without a project sandbox")
+        val resolvedPath = activeSandbox.resolve(filePath)
 
         resolvedPath.parent?.let { parentDir ->
             if (!Files.exists(parentDir)) {
                 Files.createDirectories(parentDir)
             }
         }
+        activeSandbox.revalidateBeforeIO(resolvedPath)
 
         Files.write(resolvedPath, bytes)
 
@@ -474,11 +517,9 @@ class HttpRequestTool(
      * - For JSON: structure summary (array length or top-level keys)
      */
     private fun saveResponseToFile(filePath: String, responseBody: String, url: String): String {
-        val resolvedPath = if (sandbox != null) {
-            sandbox.resolve(filePath)
-        } else {
-            java.nio.file.Paths.get(filePath)
-        }
+        val activeSandbox = sandbox
+            ?: throw SecurityException("Cannot write 'save_to_file' without a project sandbox")
+        val resolvedPath = activeSandbox.resolve(filePath)
 
         // Ensure parent directory exists
         resolvedPath.parent?.let { parentDir ->
@@ -486,6 +527,7 @@ class HttpRequestTool(
                 Files.createDirectories(parentDir)
             }
         }
+        activeSandbox.revalidateBeforeIO(resolvedPath)
 
         Files.writeString(resolvedPath, responseBody)
 
@@ -708,6 +750,35 @@ class HttpRequestTool(
         const val MAX_REDIRECTS = 5
         const val PREVIEW_CHARS = 500
         const val MAX_BINARY_INLINE_BYTES = 1 * 1024 * 1024 // 1MB base64 inline cap
+        const val MAX_SAVE_TO_FILE_BYTES = 25L * 1024 * 1024 // 25MB hard memory cap for save_to_file
+
+        private val SENSITIVE_REDIRECT_HEADERS = setOf("authorization", "proxy-authorization", "cookie")
+
+        internal fun isSameOrigin(baseUrl: String, targetUrl: String): Boolean {
+            return try {
+                val baseUri = java.net.URI(baseUrl)
+                val targetUri = java.net.URI(targetUrl)
+                val baseScheme = baseUri.scheme?.lowercase() ?: return false
+                val targetScheme = targetUri.scheme?.lowercase() ?: return false
+                val baseHost = baseUri.host?.lowercase() ?: return false
+                val targetHost = targetUri.host?.lowercase() ?: return false
+                val basePort = effectivePort(baseScheme, baseUri.port)
+                val targetPort = effectivePort(targetScheme, targetUri.port)
+                baseScheme == targetScheme && baseHost == targetHost && basePort == targetPort
+            } catch (_: Exception) {
+                false
+            }
+        }
+
+        private fun effectivePort(scheme: String, port: Int): Int = when {
+            port > 0 -> port
+            scheme == "https" -> 443
+            scheme == "http" -> 80
+            else -> -1
+        }
+
+        internal fun stripSensitiveHeaders(headers: Map<String, String>): Map<String, String> =
+            headers.filterKeys { it.lowercase() !in SENSITIVE_REDIRECT_HEADERS }
 
         private val BINARY_CONTENT_TYPE_PREFIXES = listOf(
             "image/",

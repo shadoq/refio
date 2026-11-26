@@ -70,4 +70,18 @@ class V5RenameThinkingEnabledToReasoningEffortTest {
 
         assertEquals("HIGH", valueOf("general.reasoning_effort", ConfigScope.APP))
     }
+
+    @Test
+    fun `drops legacy key instead of failing when target reasoning_effort already exists in the same scope`() {
+        insert("general.thinking_enabled", "true", ConfigScope.APP)
+        insert("general.reasoning_effort", "HIGH", ConfigScope.APP)
+        insert("general.thinking_enabled", "false", ConfigScope.PROJECT, projectId = "proj-1")
+        insert("general.reasoning_effort", "LOW", ConfigScope.PROJECT, projectId = "proj-1")
+
+        V5RenameThinkingEnabledToReasoningEffort().migrate(db)
+
+        assertEquals("HIGH", valueOf("general.reasoning_effort", ConfigScope.APP))
+        assertEquals("LOW", valueOf("general.reasoning_effort", ConfigScope.PROJECT))
+        assertEquals(0L, countOf("general.thinking_enabled"))
+    }
 }

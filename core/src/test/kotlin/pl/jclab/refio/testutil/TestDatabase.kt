@@ -1,8 +1,10 @@
 package pl.jclab.refio.testutil
 
 import org.jetbrains.exposed.sql.*
+import org.jetbrains.exposed.sql.transactions.TransactionManager
 import org.jetbrains.exposed.sql.transactions.transaction
 import pl.jclab.refio.core.db.*
+import pl.jclab.refio.core.db.migrations.V8ConfigAndMcpUniqueness
 import java.nio.file.Files
 import java.nio.file.Path
 import java.sql.DriverManager
@@ -149,6 +151,8 @@ object TestDatabase {
             AgentEventsTable,
             TaskStateTable
         )
+        val jdbc = TransactionManager.current().connection.connection as java.sql.Connection
+        V8ConfigAndMcpUniqueness.ensureUniqueIndexes(jdbc)
     }
 
     /**

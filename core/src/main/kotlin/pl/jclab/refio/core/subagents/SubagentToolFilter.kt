@@ -57,9 +57,11 @@ object SubagentToolFilter {
         val normalized = toolName.lowercase()
         val allowed = allowedTools?.map { it.lowercase() }?.toSet()
         val disallowed = disallowedTools?.map { it.lowercase() }?.toSet()
+        if (disallowed != null && normalized in disallowed) {
+            return false
+        }
         return when {
             allowed != null -> normalized in allowed || normalized in SYSTEM_TOOLS
-            disallowed != null -> normalized !in disallowed
             else -> true
         }
     }

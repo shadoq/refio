@@ -172,6 +172,14 @@ object GlobalMetrics {
     }
 
     /**
+     * Request cancellation scoped to a specific task/agent without cancelling sibling tasks.
+     */
+    fun requestCancellation(taskId: String) {
+        forAgent(taskId).requestCancellation()
+        logger.info { "Operation cancellation requested for task=$taskId" }
+    }
+
+    /**
      * Reset cancellation flag (call at start of new operation).
      */
     fun resetCancellation() {
@@ -180,10 +188,24 @@ object GlobalMetrics {
     }
 
     /**
+     * Reset cancellation flag scoped to a specific task/agent.
+     */
+    fun resetCancellation(taskId: String) {
+        agentMetricsMap[taskId]?.resetCancellation()
+        logger.debug { "Cancellation flag reset for task=$taskId" }
+    }
+
+    /**
      * Check if current operation is cancelled.
      * @return true if user requested cancellation
      */
     fun isCancelled(): Boolean = _isCancelled.get()
+
+    /**
+     * Check if global cancellation or cancellation for [taskId] has been requested.
+     */
+    fun isCancelled(taskId: String?): Boolean =
+        _isCancelled.get() || (taskId != null && agentMetricsMap[taskId]?.isCancelled() == true)
 
     /**
      * Mark an agent turn as active. Pairs with [endAgentTurn] in a try/finally so the

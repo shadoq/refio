@@ -60,12 +60,18 @@ class AddCodeToCurrentSessionAction : AnAction(
         }
 
         toolWindow.show {
-            val panel = findPromptInputPanel(toolWindow.component)
-            if (panel != null) {
-                logger.info { "Found PromptInputPanel, adding snippet" }
-                panel.addCodeSnippet(snippet)
+            val mainPanel = findRefioMainPanel(toolWindow.component)
+            if (mainPanel != null) {
+                logger.info { "Routing snippet through RefioMainPanel (handles async init queue)" }
+                mainPanel.addCodeSnippet(snippet)
             } else {
-                logger.error { "PromptInputPanel not found in tool window!" }
+                val panel = findPromptInputPanel(toolWindow.component)
+                if (panel != null) {
+                    logger.info { "Found PromptInputPanel, adding snippet" }
+                    panel.addCodeSnippet(snippet)
+                } else {
+                    logger.error { "RefioMainPanel / PromptInputPanel not found in tool window!" }
+                }
             }
         }
     }
@@ -73,6 +79,17 @@ class AddCodeToCurrentSessionAction : AnAction(
     override fun update(e: AnActionEvent) {
         val editor = e.getData(CommonDataKeys.EDITOR)
         e.presentation.isEnabled = editor?.selectionModel?.hasSelection() == true
+    }
+
+    private fun findRefioMainPanel(component: java.awt.Component): RefioMainPanel? {
+        if (component is RefioMainPanel) return component
+        if (component is Container) {
+            for (child in component.components) {
+                val found = findRefioMainPanel(child)
+                if (found != null) return found
+            }
+        }
+        return null
     }
 
     /**

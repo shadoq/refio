@@ -42,13 +42,15 @@ jobs:
       - name: Run checks
         run: ./gradlew check
 
-      - name: Build plugin distribution
-        run: ./gradlew :intellij-plugin:buildPlugin
+      - name: Build plugin and CLI distributions
+        run: ./gradlew :intellij-plugin:buildPlugin :cli:distZip
 
-      - name: Create GitHub release with plugin ZIP
+      - name: Create GitHub release with plugin and CLI ZIPs
         uses: softprops/action-gh-release@v2
         with:
-          files: intellij-plugin/build/distributions/*.zip
+          files: |
+            intellij-plugin/build/distributions/*.zip
+            cli/build/distributions/*.zip
           generate_release_notes: true
 
       - name: Publish to JetBrains Marketplace

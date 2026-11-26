@@ -45,6 +45,7 @@ jobs:
           path: |
             core/build/reports/jacoco/test/html/
             intellij-plugin/build/reports/jacoco/test/html/
+            cli/build/reports/jacoco/test/html/
           retention-days: 7
 
       - name: Upload test results
@@ -84,6 +85,9 @@ jobs:
       - name: Catalog drift check
         run: npm run gen-catalog:check
         working-directory: tools/e2e
+
+      - name: E2E harness assertion self-test
+        run: bash tools/e2e/e2e-run.sh --self-test
 
   plugin-verifier:
     runs-on: ubuntu-latest

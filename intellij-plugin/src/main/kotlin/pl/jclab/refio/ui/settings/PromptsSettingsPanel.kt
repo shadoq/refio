@@ -590,8 +590,12 @@ class PromptsSettingsPanel(
         )
     }
 
+    fun dispose() {
+        coroutineScope.cancel()
+    }
+
     override fun removeNotify() {
         super.removeNotify()
-        coroutineScope.cancel()
+        dispose()
     }
 }

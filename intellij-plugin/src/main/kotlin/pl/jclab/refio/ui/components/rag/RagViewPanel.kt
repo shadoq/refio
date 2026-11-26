@@ -62,7 +62,7 @@ class RagViewPanel(private val project: Project) : JBPanel<RagViewPanel>(BorderL
         isVisible = false
     }
     private val lastRefreshLabel = JBLabel("")
-    private var isRefreshing = false
+    private val isRefreshing = java.util.concurrent.atomic.AtomicBoolean(false)
     private var refreshDebounceJob: Job? = null
     private val refreshDebounceMs = 1500L
 
@@ -189,13 +189,14 @@ class RagViewPanel(private val project: Project) : JBPanel<RagViewPanel>(BorderL
     }
 
     private fun refreshData(updateButton: Boolean = false) {
-        if (isRefreshing) {
+        if (!isRefreshing.compareAndSet(false, true)) {
             logger.debug { "Refresh already in progress, skipping" }
             return
         }
 
         val projectRoot = project.basePath
         if (projectRoot == null) {
+            isRefreshing.set(false)
             SwingUtilities.invokeLater {
                 statsLabel.text = "No project root"
                 (filesTable.model as DefaultTableModel).rowCount = 0
@@ -208,7 +209,6 @@ class RagViewPanel(private val project: Project) : JBPanel<RagViewPanel>(BorderL
 
         // Visual feedback: disable button and change text only if manually triggered
         SwingUtilities.invokeLater {
-            isRefreshing = true
             if (updateButton) {
                 refreshButton.isEnabled = false
                 refreshButton.text = "⏳ Refreshing..."
@@ -242,8 +242,8 @@ class RagViewPanel(private val project: Project) : JBPanel<RagViewPanel>(BorderL
                     lastRefreshLabel.text = "Failed to refresh"
                 }
             } finally {
+                isRefreshing.set(false)
                 SwingUtilities.invokeLater {
-                    isRefreshing = false
                     if (updateButton) {
                         refreshButton.isEnabled = true
                         refreshButton.text = "🔄 Refresh"

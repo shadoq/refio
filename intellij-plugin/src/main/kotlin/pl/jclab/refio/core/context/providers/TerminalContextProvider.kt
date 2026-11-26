@@ -1,11 +1,15 @@
 package pl.jclab.refio.core.context.providers
 
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindowManager
 import pl.jclab.refio.core.context.*
 import pl.jclab.refio.core.logging.dualLogger
 import java.awt.Component
 import java.awt.Container
+import java.util.concurrent.atomic.AtomicReference
+import javax.swing.SwingUtilities
 
 private val logger = dualLogger("TerminalContextProvider")
 
@@ -59,17 +63,32 @@ class TerminalContextProvider : BaseContextProvider() {
 
     private fun getTerminalOutput(project: com.intellij.openapi.project.Project): String {
         return try {
-            val toolWindow = ToolWindowManager.getInstance(project).getToolWindow("Terminal")
-
-            if (toolWindow == null) {
-                logger.debug { "Terminal tool window not found" }
-                return "[No terminal window available]"
+            val widgetRef = AtomicReference<Any?>(null)
+            val statusRef = AtomicReference<String?>(null)
+            val findWidgetOnEdt = {
+                val toolWindow = ToolWindowManager.getInstance(project).getToolWindow("Terminal")
+                if (toolWindow == null) {
+                    logger.debug { "Terminal tool window not found" }
+                    statusRef.set("[No terminal window available]")
+                } else {
+                    val content = toolWindow.contentManager.selectedContent
+                    val widget = content?.let { findTerminalWidget(it.component) }
+                    if (widget == null) {
+                        statusRef.set("[No active terminal sessions]")
+                    } else {
+                        widgetRef.set(widget)
+                    }
+                }
             }
 
-            val content = toolWindow.contentManager.selectedContent
-                ?: return "[No active terminal sessions]"
-            val widget = findTerminalWidget(content.component)
-                ?: return "[No active terminal sessions]"
+            if (SwingUtilities.isEventDispatchThread()) {
+                findWidgetOnEdt()
+            } else {
+                ApplicationManager.getApplication().invokeAndWait(findWidgetOnEdt, ModalityState.any())
+            }
+
+            statusRef.get()?.let { return it }
+            val widget = widgetRef.get() ?: return "[No active terminal sessions]"
 
             val output = readWidgetOutput(widget)
             if (output.isBlank()) {

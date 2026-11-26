@@ -65,7 +65,9 @@ class LLMClient(
     // Test seam: when supplied, every adapter is built with this HttpClient instead of one from
     // the pool. Mirrors the per-adapter `httpClientOverride` so LLMClient can be exercised against
     // a Ktor MockEngine without real network I/O.
-    private val httpClientOverride: HttpClient? = null
+    private val httpClientOverride: HttpClient? = null,
+    private val networkPolicy: pl.jclab.refio.core.security.NetworkPolicy? =
+        configService?.let { pl.jclab.refio.core.security.NetworkPolicy(it) }
 ) {
     // Bug #18: Load HTTP client configuration from database
     private val httpClientConfig: HttpClientConfig by lazy {
@@ -196,17 +198,20 @@ class LLMClient(
         )
         val allSystemMessages = preparedRequest.systemMessages
 
+        // No-egress enforcement: consult NetworkPolicy directly so internal callers (editing tools,
+        // webpage summarizer, etc.) cannot bypass no-egress by omitting the boolean parameter.
+        val effectiveNoEgress = noEgressEnabled || (networkPolicy?.isNoEgressEnabled(taskId) == true)
+
         logger.info {
             "[LLM_CLIENT] Starting request to: $provider/$model " +
                     "messages: ${messages.size} systemMessages: ${allSystemMessages.size} " +
                     "max_tokens: $maxTokens temperature: $temperature stream: $stream " +
-                    "response_format: $responseFormat thinking: $thinking noEgress: $noEgressEnabled"
+                    "response_format: $responseFormat thinking: $thinking noEgress: $effectiveNoEgress"
         }
 
-        // No-egress enforcement
         // Known local providers are allowed only if their endpoint is actually local.
         // All other providers are blocked.
-        if (noEgressEnabled) {
+        if (effectiveNoEgress) {
             val providerLower = provider.lowercase()
             val localProviders = listOf("ollama", "lmstudio")
             if (providerLower !in localProviders) {

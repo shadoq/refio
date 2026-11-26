@@ -7,7 +7,9 @@ import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import pl.jclab.refio.core.db.*
 import pl.jclab.refio.testutil.TestDatabase
+import java.util.zip.DataFormatException
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 
 class SnapshotRepositoryTest {
@@ -159,6 +161,29 @@ class SnapshotRepositoryTest {
                 val deleted = repository.delete(snapshot.id)
 
                 assertEquals(true, deleted)
+            }
+        }
+    }
+
+    @Nested
+    inner class CompressionTests {
+
+        @Test
+        fun `should fail fast on truncated zlib payload instead of looping forever`() {
+            val corrupted = Snapshot(
+                id = "snap-corrupt",
+                taskId = "task-123",
+                groupId = "group-1",
+                filePath = "/file.txt",
+                contentHash = "hash",
+                contentCompressed = byteArrayOf(0x78, 0x9C.toByte()), // valid zlib header, truncated body
+                originalSize = 10,
+                compressionRatio = 1.0,
+                createdAt = 1L
+            )
+
+            assertFailsWith<DataFormatException> {
+                repository.decompressContent(corrupted)
             }
         }
     }

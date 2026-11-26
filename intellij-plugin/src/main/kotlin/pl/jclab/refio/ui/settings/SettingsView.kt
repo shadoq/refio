@@ -625,11 +625,15 @@ class SettingsView(
         // Cancel the coroutine scope
         coroutineScope.cancel()
 
-        // Dispose panels with their own coroutine scopes
+        // Dispose all child panels with coroutine scopes
         contextSettingsPanel.dispose()
         mcpPanel.disposePanel()
         providersPanel.dispose()
         subagentPanel.dispose()
+        modelsPanel.dispose()
+        docsPanel.dispose()
+        toolsPanel.dispose()
+        promptsPanel.dispose()
 
         logger.debug { "SettingsView cleanup completed" }
     }

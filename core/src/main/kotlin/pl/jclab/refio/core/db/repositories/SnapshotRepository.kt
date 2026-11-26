@@ -6,8 +6,8 @@ import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.statements.api.ExposedBlob
 import org.jetbrains.exposed.sql.transactions.transaction
-import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.util.zip.DataFormatException
 import java.util.zip.Deflater
 import java.util.zip.Inflater
 
@@ -164,19 +164,20 @@ class SnapshotRepository {
     private fun compress(content: String): ByteArray {
         val input = content.toByteArray(Charsets.UTF_8)
         val deflater = Deflater()
-        deflater.setInput(input)
-        deflater.finish()
+        try {
+            deflater.setInput(input)
+            deflater.finish()
 
-        val outputStream = ByteArrayOutputStream()
-        val buffer = ByteArray(1024)
-        while (!deflater.finished()) {
-            val count = deflater.deflate(buffer)
-            outputStream.write(buffer, 0, count)
+            val outputStream = ByteArrayOutputStream()
+            val buffer = ByteArray(1024)
+            while (!deflater.finished()) {
+                val count = deflater.deflate(buffer)
+                outputStream.write(buffer, 0, count)
+            }
+            return outputStream.toByteArray()
+        } finally {
+            deflater.end()
         }
-        outputStream.close()
-        deflater.end()
-
-        return outputStream.toByteArray()
     }
 
     /**
@@ -184,18 +185,27 @@ class SnapshotRepository {
      */
     private fun decompress(compressed: ByteArray): String {
         val inflater = Inflater()
-        inflater.setInput(compressed)
+        try {
+            inflater.setInput(compressed)
 
-        val outputStream = ByteArrayOutputStream()
-        val buffer = ByteArray(1024)
-        while (!inflater.finished()) {
-            val count = inflater.inflate(buffer)
-            outputStream.write(buffer, 0, count)
+            val outputStream = ByteArrayOutputStream()
+            val buffer = ByteArray(1024)
+            while (!inflater.finished()) {
+                val count = inflater.inflate(buffer)
+                if (count == 0) {
+                    if (inflater.needsDictionary()) {
+                        throw DataFormatException("Snapshot payload requires an unsupported zlib dictionary")
+                    }
+                    if (inflater.needsInput()) {
+                        throw DataFormatException("Truncated or corrupted snapshot zlib payload (${compressed.size} bytes)")
+                    }
+                }
+                outputStream.write(buffer, 0, count)
+            }
+            return outputStream.toByteArray().toString(Charsets.UTF_8)
+        } finally {
+            inflater.end()
         }
-        outputStream.close()
-        inflater.end()
-
-        return outputStream.toByteArray().toString(Charsets.UTF_8)
     }
 
     /**

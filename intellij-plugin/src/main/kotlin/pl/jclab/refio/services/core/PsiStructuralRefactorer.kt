@@ -44,8 +44,15 @@ class PsiStructuralRefactorer(
         "falls back to word-boundary text replace when the symbol cannot be resolved"
 
     override suspend fun renameSymbol(file: String, line: Int, oldName: String, newName: String): RenameResult {
-        val target = ReadAction.compute<PsiNamedElement?, RuntimeException> {
-            findNamedElement(file, line, oldName)
+        // VFS synchronous refresh must run outside ReadAction to avoid EDT/write-lock deadlocks.
+        val absolute = projectRoot.resolve(file).normalize()
+        val virtualFile = LocalFileSystem.getInstance().refreshAndFindFileByPath(absolute.toString().replace('\\', '/'))
+        val target = if (virtualFile != null) {
+            ReadAction.compute<PsiNamedElement?, RuntimeException> {
+                findNamedElement(virtualFile, line, oldName)
+            }
+        } else {
+            null
         }
         if (target == null) {
             logger.info { "PSI anchor not resolved for '$oldName' at $file:$line, using text fallback" }
@@ -116,10 +123,11 @@ class PsiStructuralRefactorer(
      * Finds the named PSI element for [name] anchored at [file]:[line]. Works both when the
      * anchor points at the declaration and when it points at a reference (resolves it).
      */
-    private fun findNamedElement(file: String, line: Int, name: String): PsiNamedElement? {
-        val absolute = projectRoot.resolve(file).normalize()
-        val virtualFile = LocalFileSystem.getInstance().refreshAndFindFileByPath(absolute.toString().replace('\\', '/'))
-            ?: return null
+    private fun findNamedElement(
+        virtualFile: com.intellij.openapi.vfs.VirtualFile,
+        line: Int,
+        name: String
+    ): PsiNamedElement? {
         val psiFile: PsiFile = com.intellij.psi.PsiManager.getInstance(project).findFile(virtualFile) ?: return null
         val document = FileDocumentManager.getInstance().getDocument(virtualFile) ?: return null
 

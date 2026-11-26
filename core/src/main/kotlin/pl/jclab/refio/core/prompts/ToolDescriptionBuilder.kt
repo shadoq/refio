@@ -31,8 +31,8 @@ class ToolDescriptionBuilder(
      * @param taskId Optional task ID for task-level permissions
      * @return Tool descriptions string with parameter schemas
      */
-    fun getToolDescriptions(mode: TaskMode, taskId: String? = null): String {
-        return getToolDescriptionsForTools(mode, getToolsForMode(mode, taskId))
+    fun getToolDescriptions(mode: TaskMode, taskId: String? = null, compact: Boolean = this.compactMode): String {
+        return getToolDescriptionsForTools(mode, getToolsForMode(mode, taskId), compact = compact)
     }
 
     /**
@@ -50,7 +50,7 @@ class ToolDescriptionBuilder(
      * Get tool descriptions for a pre-filtered tool list.
      * Groups tools by logical sections (Reading, Web, Editing, etc.) with headers.
      */
-    fun getToolDescriptionsForTools(mode: TaskMode, tools: List<Tool>): String {
+    fun getToolDescriptionsForTools(mode: TaskMode, tools: List<Tool>, compact: Boolean = this.compactMode): String {
         val modeNote = when (mode) {
             TaskMode.CHAT, TaskMode.PLAN -> "READ-ONLY TOOLS (you can use these in ${mode.name} mode):"
             TaskMode.AGENT -> "AVAILABLE TOOLS (read-only and write operations):"
@@ -66,7 +66,7 @@ class ToolDescriptionBuilder(
             sb.appendLine("### $groupName\n")
             for (tool in groupTools) {
                 val schema = tool.getParameterSchema()
-                sb.append(buildToolDescription(number, tool.name, tool.description, schema))
+                sb.append(buildToolDescription(number, tool.name, tool.description, schema, compact))
                 number++
             }
         }
@@ -138,9 +138,10 @@ class ToolDescriptionBuilder(
         number: Int,
         name: String,
         description: String,
-        schema: Map<String, Any>
+        schema: Map<String, Any>,
+        compact: Boolean = this.compactMode
     ): String {
-        if (compactMode) {
+        if (compact) {
             return buildCompactToolDescription(number, name, description, schema)
         }
 

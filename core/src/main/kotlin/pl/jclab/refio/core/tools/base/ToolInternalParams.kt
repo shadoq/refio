@@ -15,4 +15,16 @@ object ToolInternalParams {
     const val SUBTASK_ID = "_subtask_id"
     /** Set for subagent runs only: the invocation whose own memory space the tool should use. */
     const val AGENT_INSTANCE_ID = "_agent_instance_id"
+
+    val ALL: Set<String> = setOf(
+        TASK_ID,
+        MODE,
+        ITERATION,
+        SESSION_ID,
+        AGENT_NAME,
+        AGENT_ID,
+        PARENT_RUN_ID,
+        SUBTASK_ID,
+        AGENT_INSTANCE_ID
+    )
 }

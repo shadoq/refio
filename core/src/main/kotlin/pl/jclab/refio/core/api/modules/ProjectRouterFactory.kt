@@ -36,26 +36,31 @@ internal object ProjectRouterFactory {
     ): CoreApiRouter {
         val toolRegistry = ToolRegistry()
 
-        val maxFileSizeBytes = configService.getTyped(ConfigKeys.MAX_FILE_SIZE).toLong() * 1024 * 1024
-        val fileLimits = FileLimits(maxFileSize = maxFileSizeBytes)
-
-        val toolFactory = ToolFactory(
-            projectRoot = projectRoot,
-            toolRegistry = toolRegistry,
-            llmClient = llmClient,
-            configService = configService,
-            promptsService = promptsService,
-            taskRepository = taskRepository,
-            fileLimits = fileLimits,
-        )
-        toolFactory.createAllTools().forEach { toolRegistry.register(it) }
-
-        return CoreApiRouter(
+        // Build the project-scoped router first so ToolFactory receives the project's own
+        // ConfigService (.refio/config.yaml + PROJECT DB scope + runConfigOverrides), LLMClient,
+        // and PromptsService instead of the app-level parent instances.
+        val router = CoreApiRouter(
             toolRegistry = toolRegistry,
             projectRoot = projectRoot,
             platformProjectOverride = platformProject,
             projectHandle = projectHandle,
             runConfigOverrides = runConfigOverrides,
         )
+
+        val maxFileSizeBytes = router.configService.getTyped(ConfigKeys.MAX_FILE_SIZE).toLong() * 1024 * 1024
+        val fileLimits = FileLimits(maxFileSize = maxFileSizeBytes)
+
+        val toolFactory = ToolFactory(
+            projectRoot = projectRoot,
+            toolRegistry = toolRegistry,
+            llmClient = router.llmClient,
+            configService = router.configService,
+            promptsService = router.promptsService,
+            taskRepository = router.taskRepository,
+            fileLimits = fileLimits,
+        )
+        toolFactory.createAllTools().forEach { toolRegistry.register(it) }
+
+        return router
     }
 }

@@ -59,7 +59,9 @@ class TurnFinalizer(
             )
         }
 
-        GlobalMetrics.setCurrentOperation(OperationInfo.Idle)
+        if (depth == 0) {
+            GlobalMetrics.setCurrentOperation(OperationInfo.Idle)
+        }
         listener?.onTurnCompleted(taskId, result, runId, parentRunId, depth)
         return result
     }

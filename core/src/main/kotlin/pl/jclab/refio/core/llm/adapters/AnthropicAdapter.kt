@@ -378,23 +378,23 @@ class AnthropicAdapter(
             }
 
             httpStatus = httpResponse.status.value
-            val response: Map<String, Any?> = httpResponse.body()
+            val responseJson = httpResponse.body<String>()
 
-            val responseJson = gson.toJson(response)
             logger.debug { "$logPrefix Response: ${SecureLogger.redactAndTruncate(responseJson)}" }
             logger.info {
                 "$logPrefix Response received: status=$httpStatus, durationMs=${System.currentTimeMillis() - startTime}, " +
                     "bodySize=${responseJson.length}"
             }
 
-            // Check for error response
+            // Check for error response BEFORE parsing JSON so non-JSON 502/503 proxy bodies keep HTTP status.
             if (httpStatus !in 200..299) {
                 val latencyMs = (System.currentTimeMillis() - startTime).toInt()
 
-                // Extract error details from Anthropic error response
                 @Suppress("UNCHECKED_CAST")
-                val errorObj = response["error"] as? Map<String, Any?>
-                val errorMessage = errorObj?.get("message") as? String ?: "Unknown error"
+                val errorObj = runCatching {
+                    (gson.fromJson(responseJson, Map::class.java) as? Map<String, Any?>)?.get("error") as? Map<String, Any?>
+                }.getOrNull()
+                val errorMessage = errorObj?.get("message") as? String ?: responseJson.ifBlank { "Unknown error" }
                 val errorType = errorObj?.get("type") as? String
 
                 val fullErrorMessage = buildString {
@@ -423,6 +423,10 @@ class AnthropicAdapter(
                 }
                 throw LLMErrorMapper.fromHttpStatus(provider, model, httpStatus, fullErrorMessage)
             }
+
+            @Suppress("UNCHECKED_CAST")
+            val response: Map<String, Any?> = gson.fromJson(responseJson, Map::class.java) as? Map<String, Any?>
+                ?: throw RefioError.MalformedResponse(provider, model, "Expected JSON object from Anthropic", responseJson)
 
             val latencyMs = (System.currentTimeMillis() - startTime).toInt()
 

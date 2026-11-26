@@ -85,6 +85,10 @@ internal object CoreApiRouterBootstrap {
         reconcileOnce(router)
         startLogRetentionOnce(router, dbPath)
         router.promptsService.initializeDefaults()
+        // Wire global MCP network policy so remote MCP HTTP/SSE servers obey --no-egress.
+        pl.jclab.refio.core.context.mcp.MCPManager.setNetworkPolicy(
+            pl.jclab.refio.core.security.NetworkPolicy(router.configService)
+        )
         // Project settings are stored per project, so this is the first point where they can be
         // applied - the app-level router has no project to apply them for. No-op without one.
         router.configService.materializeProjectConfig()

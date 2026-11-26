@@ -127,6 +127,7 @@ class RunTerminalCommandTool(
             // Decode as UTF-8 explicitly: the Windows console emits OEM/ANSI bytes that the JVM
             // (default UTF-8 since JEP 400) would otherwise turn into replacement characters.
             val outputBuffer = StringBuilder()
+            val hardBufferCap = (limits.maxOutputSize + 4096).coerceAtLeast(16_384)
             val reader = thread(isDaemon = true, name = "rtc-reader") {
                 try {
                     process.inputStream.bufferedReader(Charsets.UTF_8).use { br ->
@@ -137,7 +138,10 @@ class RunTerminalCommandTool(
                                 break
                             }
                             synchronized(outputBuffer) {
-                                outputBuffer.append(buffer, 0, read)
+                                val remaining = hardBufferCap - outputBuffer.length
+                                if (remaining > 0) {
+                                    outputBuffer.append(buffer, 0, minOf(read, remaining))
+                                }
                             }
                         }
                     }

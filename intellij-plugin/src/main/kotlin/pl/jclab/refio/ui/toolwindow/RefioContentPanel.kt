@@ -256,8 +256,16 @@ class RefioContentPanel(
         promptInputPanel.cycleMode()
     }
 
+    fun addCodeSnippet(snippet: pl.jclab.refio.api.models.CodeSnippet) {
+        promptInputPanel.addCodeSnippet(snippet)
+    }
+
     fun createNewSession() {
         logger.info { "Creating new session" }
+
+        // Read Swing dropdown values on EDT before launching background coroutine.
+        val currentMode = promptInputPanel.getSelectedMode()
+        val executionMode = promptInputPanel.getCurrentExecutionMode()
 
         cs.launch {
             try {
@@ -269,8 +277,6 @@ class RefioContentPanel(
                 logger.warn(e) { "Failed to cancel operations (may not be running)" }
             }
 
-            val currentMode = promptInputPanel.getSelectedMode()
-            val executionMode = promptInputPanel.getCurrentExecutionMode()
             sessionManager.createSession("Session (${currentMode.name})", currentMode, executionMode)
 
             SwingUtilities.invokeLater {
@@ -443,6 +449,9 @@ class RefioContentPanel(
         statusBar.dispose()
         logsPanel?.dispose()
         debugPanel?.dispose()
+        apiLogsPanel?.dispose()
+        ragViewPanel?.dispose()
+        agentExecutionPanel.dispose()
     }
 
     /**

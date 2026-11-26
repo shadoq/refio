@@ -132,6 +132,7 @@ class RunCodeTool(
             // Drain on a plain daemon thread: a blocking pipe read ignores coroutine cancellation,
             // and as a child coroutine it would keep this withContext from ever returning.
             val outputBuffer = StringBuilder()
+            val hardBufferCap = (maxOutputSize + 4096).coerceAtLeast(16_384)
             val reader = thread(isDaemon = true, name = "run-code-reader") {
                 try {
                     process.inputStream.bufferedReader(Charsets.UTF_8).use { br ->
@@ -142,7 +143,10 @@ class RunCodeTool(
                                 break
                             }
                             synchronized(outputBuffer) {
-                                outputBuffer.append(buffer, 0, read)
+                                val remaining = hardBufferCap - outputBuffer.length
+                                if (remaining > 0) {
+                                    outputBuffer.append(buffer, 0, minOf(read, remaining))
+                                }
                             }
                         }
                     }

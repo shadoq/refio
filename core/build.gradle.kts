@@ -108,6 +108,7 @@ tasks {
 
     test {
         useJUnitPlatform()
+        maxParallelForks = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(1, 4)
         testLogging {
             events("passed", "skipped", "failed")
             showStandardStreams = true
@@ -130,7 +131,7 @@ tasks {
             rule {
                 limit {
                     counter = "INSTRUCTION"
-                    minimum = "0.35".toBigDecimal()
+                    minimum = "0.50".toBigDecimal()
                 }
             }
         }

@@ -8,6 +8,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import pl.jclab.refio.core.context.ContextProviderRegistry
 import pl.jclab.refio.core.db.repositories.MCPServerRepository
+import pl.jclab.refio.core.security.NetworkPolicy
 import pl.jclab.refio.core.tools.base.ToolRegistry
 import pl.jclab.refio.core.logging.dualLogger
 import java.util.concurrent.ConcurrentHashMap
@@ -59,11 +60,20 @@ object MCPManager {
     /** One lock per project+server, so a slow connect cannot be started twice in parallel. */
     private val connectLocks = ConcurrentHashMap<String, Mutex>()
 
+    @Volatile
+    private var networkPolicy: NetworkPolicy? = null
+
+    fun setNetworkPolicy(policy: NetworkPolicy?) {
+        networkPolicy = policy
+    }
+
     /**
      * Creates the connection for a server config. Overridable so the manager's connection and
      * tool bookkeeping can be exercised without spawning real MCP servers.
      */
-    internal var connectionFactory: (MCPServerConfig) -> MCPConnection = { config -> MCPConnection(config) }
+    internal var connectionFactory: (MCPServerConfig) -> MCPConnection = { config ->
+        MCPConnection(config, networkPolicy = networkPolicy)
+    }
 
     /**
      * Initialize MCP manager for a project.

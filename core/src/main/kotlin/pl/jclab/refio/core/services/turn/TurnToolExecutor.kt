@@ -655,6 +655,8 @@ class TurnToolExecutor(
         agentName: String? = null,
         /** Multi-agent session id used by send_message / answer_message + inbox lookups. Defaults to taskId. */
         sessionId: String? = null,
+        /** Per-turn phase callback; falls back to legacy [turnStateUpdater] property if omitted. */
+        stateUpdater: ((TurnPhase) -> Unit)? = this.turnStateUpdater,
     ): List<Pair<ToolCallData, ToolResultData>> = coroutineScope {
         // Create subtasks for all tool calls (PENDING status).
         // Allocate each order_index via createNext: parallel subagents share this parent taskId,
@@ -774,42 +776,17 @@ class TurnToolExecutor(
                                 depth = depth,
                                 profileOverrides = profileOverrides,
                                 _subtaskIds = subtaskIds,
-                                taskStep = subtaskSteps[toolCall.id] ?: iteration
+                                taskStep = subtaskSteps[toolCall.id] ?: iteration,
+                                agentName = agentName,
+                                sessionId = sessionId,
+                                stateUpdater = stateUpdater,
                             )
                             originalIndex to (toolCall to result)
                         }
                     }.awaitAll()
                 }
 
-                val writeResults = writeIndexed.map { (originalIndex, toolCall) ->
-                    if (GlobalMetrics.isCancelled()) {
-                        throw kotlinx.coroutines.CancellationException("Operation cancelled by user")
-                    }
-                    val subtaskId = subtaskIds[toolCall.id]!!
-
-                    // Snapshot-before-write is centralized in executeSingleTool (covers the
-                    // non-streaming write path uniformly), so the parallel branch needs no extra block.
-                    val result = executeSingleTool(
-                        taskId = taskId,
-                        toolCall = toolCall,
-                        subtaskId = subtaskId,
-                        listener = listener,
-                        iteration = iteration,
-                        _config = config,
-                        mode = mode,
-                        executionMode = executionMode,
-                        runId = runId,
-                        depth = depth,
-                        profileOverrides = profileOverrides,
-                        _subtaskIds = subtaskIds,
-                        taskStep = subtaskSteps[toolCall.id] ?: iteration,
-                        agentName = agentName,
-                        sessionId = sessionId,
-                    )
-                    originalIndex to (toolCall to result)
-                }
-
-                val allResults = (blockedResults + readOnlyResults + writeResults)
+                val allResults = (blockedResults + readOnlyResults)
                     .sortedBy { it.first }
                     .map { it.second }
 
@@ -824,7 +801,7 @@ class TurnToolExecutor(
         // Sequential execution
         val sequentialResults = mutableListOf<Pair<Int, Pair<ToolCallData, ToolResultData>>>()
         for ((index, toolCall) in allowedIndexed) {
-            if (GlobalMetrics.isCancelled()) {
+            if (GlobalMetrics.isCancelled(taskId)) {
                 throw kotlinx.coroutines.CancellationException("Operation cancelled by user")
             }
             val subtaskId = subtaskIds[toolCall.id]!!
@@ -841,7 +818,10 @@ class TurnToolExecutor(
                 depth = depth,
                 profileOverrides = profileOverrides,
                 _subtaskIds = subtaskIds,
-                taskStep = subtaskSteps[toolCall.id] ?: iteration
+                taskStep = subtaskSteps[toolCall.id] ?: iteration,
+                agentName = agentName,
+                sessionId = sessionId,
+                stateUpdater = stateUpdater,
             )
             sequentialResults.add(index to (toolCall to resultData))
         }
@@ -1045,6 +1025,8 @@ class TurnToolExecutor(
         sessionId: String? = null,
         /** The call's position in the whole task (its subtask's order index). */
         taskStep: Int = iteration,
+        /** Per-turn phase callback; falls back to legacy [turnStateUpdater] property if omitted. */
+        stateUpdater: ((TurnPhase) -> Unit)? = this.turnStateUpdater,
     ): ToolResultData {
         if (toolCall.error != null) {
             val errorText = "Error: ${toolCall.error}"
@@ -1074,7 +1056,7 @@ class TurnToolExecutor(
             val permissionLevel = permissionsService.getPermission(toolCall.name, mode)
             if (permissionLevel == PermissionLevel.ASK) {
                 val argumentsMap = TurnJsonUtils.parseJsonToMap(toolCall.arguments)
-                turnStateUpdater?.invoke(TurnPhase.WAITING_FOR_PERMISSION)
+                stateUpdater?.invoke(TurnPhase.WAITING_FOR_PERMISSION)
 
                 val request = ToolApprovalService.ApprovalRequest(
                     requestId = "${taskId}_${toolCall.id}",
@@ -1087,7 +1069,7 @@ class TurnToolExecutor(
 
                 val decision = approvalService.requestApproval(request)
 
-                turnStateUpdater?.invoke(TurnPhase.EXECUTING_TOOLS)
+                stateUpdater?.invoke(TurnPhase.EXECUTING_TOOLS)
 
                 when (decision) {
                     is ToolApprovalService.ApprovalDecision.Approved -> { /* continue */ }

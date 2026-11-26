@@ -87,11 +87,40 @@ class PathSandbox(
      * @throws SecurityException if the path's real location is now outside the sandbox
      */
     fun revalidateBeforeIO(path: Path) {
-        if (!path.exists()) return // Non-existent paths can't be symlink-swapped
+        val normalized = path.normalize().toAbsolutePath()
+        if (!normalized.exists()) {
+            // Even when the target file does not yet exist, its nearest existing parent directory
+            // could have been swapped with a symlink pointing outside the sandbox.
+            var ancestor = normalized.parent
+            while (ancestor != null && !ancestor.exists()) {
+                ancestor = ancestor.parent
+            }
+            if (ancestor == null) {
+                throw SecurityException("Path has no existing ancestor within sandbox: $path")
+            }
+            if (!allowSymlinksProvider()) {
+                rejectSymlinks(normalized)
+            }
+            val realAncestor = try {
+                ancestor.toRealPath()
+            } catch (e: Exception) {
+                throw SecurityException("Cannot resolve parent directory for $path: ${e.message}")
+            }
+            if (!realAncestor.startsWith(normalizedRoot)) {
+                throw SecurityException(
+                    "Parent directory escaped sandbox between validation and I/O: " +
+                        "$path (real ancestor: $realAncestor, sandbox: $normalizedRoot)"
+                )
+            }
+            return
+        }
+        if (!allowSymlinksProvider()) {
+            rejectSymlinks(normalized)
+        }
         val realPath = try {
-            path.toRealPath()
+            normalized.toRealPath()
         } catch (_: Exception) {
-            return // Can't resolve — will fail on the actual I/O anyway
+            return // Can't resolve - will fail on the actual I/O anyway
         }
         if (!realPath.startsWith(normalizedRoot)) {
             throw SecurityException(

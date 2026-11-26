@@ -3,11 +3,15 @@ package pl.jclab.refio.cli.tui.state
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import mu.KotlinLogging
+import pl.jclab.refio.api.models.ContextReference
 import pl.jclab.refio.api.models.SlashPrompt
 import pl.jclab.refio.cli.tui.input.TuiContextValidator
 import pl.jclab.refio.core.agents.events.AgentEvent
@@ -19,6 +23,8 @@ import pl.jclab.refio.core.db.ExecutionMode as CoreExecutionMode
 import pl.jclab.refio.core.models.api.ChatRequest
 import pl.jclab.refio.core.models.api.LLMParams
 import pl.jclab.refio.core.db.ToolCallData
+import pl.jclab.refio.core.prompts.PromptInputProcessor
+import pl.jclab.refio.core.prompts.PromptTemplateContext
 import pl.jclab.refio.core.services.AgentTurnLoop
 import pl.jclab.refio.core.services.TurnResult
 import pl.jclab.refio.core.services.longtask.LongTaskListener
@@ -26,6 +32,7 @@ import pl.jclab.refio.core.services.longtask.LongTaskState
 import pl.jclab.refio.core.services.longtask.LongTaskStatusLine
 import pl.jclab.refio.core.services.longtask.RoundRecord
 import pl.jclab.refio.core.services.monitoring.GlobalMetrics
+import pl.jclab.refio.core.session.CoreSessionService
 import kotlin.coroutines.cancellation.CancellationException
 import java.nio.file.Path
 import java.time.Instant
@@ -45,7 +52,8 @@ class TuiChatViewModel(
     internal val mode: StateFlow<String>,
     internal val model: StateFlow<String?>,
     internal val executionMode: StateFlow<String>,
-    internal val agentEventBus: AgentEventBus
+    internal val agentEventBus: AgentEventBus,
+    internal val getCoreSession: () -> CoreSessionService? = { null },
 ) {
     /** Set by coordinator after construction (breaks circular dependency with TuiWorkflowListener). */
     internal lateinit var workflowListener: TuiWorkflowListener
@@ -85,8 +93,36 @@ class TuiChatViewModel(
     private val PASTE_THRESHOLD_CHARS = 20 // chars in rapid succession to detect paste
     private val PASTE_THRESHOLD_MS = 100L // time window for rapid insertion
 
-    // --- Agent trust (auto-approve) ---
-    private val trustedAgents = mutableSetOf<String>()
+    // --- Agent trust (auto-approve, thread-safe) ---
+    private val trustedAgents: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    // --- Cached slash prompts (custom from DB + built-in fallback) ---
+    @Volatile private var cachedSlashPrompts: List<SlashPrompt> = SlashPrompt.BUILTINS
+    @Volatile private var slashPromptsLoadedAt: Long = 0L
+
+    internal fun stateSignals(): Flow<Unit> = merge(
+        _messages.map { Unit },
+        _isStreaming.map { Unit },
+        _inputBuffer.map { Unit },
+        _cursorPosition.map { Unit },
+        _scrollOffset.map { Unit },
+        _selectedMessageIndex.map { Unit },
+        _expandedToolRows.map { Unit },
+        _approvalChoice.map { Unit },
+        _trustRules.map { Unit },
+        _pastedContent.map { Unit },
+        _pendingQuestionId.map { Unit },
+        _longTaskLine.map { Unit },
+        _pendingQuestionOptions.map { Unit },
+        _pendingApprovals.map { Unit },
+        _pendingToolApproval.map { Unit },
+        _agentFilter.map { Unit },
+        _agents.map { Unit },
+        _panelFocused.map { Unit },
+        _autocompleteVisible.map { Unit },
+        _autocompleteCandidates.map { Unit },
+        _autocompleteSelectedIndex.map { Unit },
+    )
 
     // --- Current operation job ---
     internal var currentJob: kotlinx.coroutines.Job? = null
@@ -253,54 +289,42 @@ class TuiChatViewModel(
     // --- Slash prompts (prompt templates) ---
 
     fun getSlashPrompts(): List<SlashPrompt> {
-        return SlashPrompt.BUILTINS
+        val router = getRouter() ?: return SlashPrompt.BUILTINS
+        val now = System.currentTimeMillis()
+        if (now - slashPromptsLoadedAt > 5_000L) {
+            cachedSlashPrompts = PromptInputProcessor.loadSlashPrompts(router.promptsRouter)
+            slashPromptsLoadedAt = now
+        }
+        return cachedSlashPrompts
     }
 
     /**
-     * Expand slash prompts inline (same as plugin's PromptInputPanel.processSlashPrompt).
-     * Replaces each "/name" with its template, supporting multiple occurrences anywhere in text.
-     * Only matches /name after whitespace or at start (not in URLs like https://example.com).
+     * Expand slash prompts inline and substitute all 10 standard template variables
+     * using the shared [PromptInputProcessor] in `:core`.
      */
     fun processSlashPrompts(text: String): String {
-        val slashRegex = Regex("""(?<=\s|^)/([\w-]+)""")
-        val matches = slashRegex.findAll(text).toList()
-        if (matches.isEmpty()) return text
-
-        val slashPrompts = getSlashPrompts()
-        var result = text
-        var offset = 0
-
-        for (match in matches) {
-            val promptName = match.groupValues[1]
-            val sp = slashPrompts.find { it.name.equals(promptName, ignoreCase = true) } ?: continue
-
-            var template = sp.template
-
-            // Substitute template variables
-            template = template
-                .replace("{{MODEL_ID}}", model.value ?: "default")
-                .replace("{{PROJECT_NAME}}", projectPath.fileName?.toString() ?: "project")
-                .replace("{{MODE}}", mode.value)
-                .replace("{{EXECUTION_MODE}}", executionMode.value)
-
-            val originalStart = match.range.first + offset
-            val originalEnd = match.range.last + 1 + offset
-
-            result = result.substring(0, originalStart) + template + result.substring(originalEnd)
-            offset += template.length - match.value.length
-        }
-
-        return result
+        val expanded = PromptInputProcessor.expandSlashPrompts(text, getSlashPrompts())
+        return PromptInputProcessor.applyTemplateVariables(
+            expanded,
+            PromptTemplateContext(
+                modelRaw = model.value ?: "auto",
+                mode = mode.value,
+                executionMode = executionMode.value,
+                projectName = projectPath.fileName?.toString() ?: "project",
+                sessionId = getTaskId() ?: "no_session",
+            ),
+        )
     }
 
     // --- Approve / Reject ---
 
     fun approve(approvalId: String) {
+        val sid = getTaskId() ?: ""
         scope.launch {
             agentEventBus.emit(
                 AgentEvent.ApprovalDecision(
                     id = UUID.randomUUID().toString(),
-                    sessionId = "",
+                    sessionId = sid,
                     sourceAgentId = "user",
                     timestamp = System.currentTimeMillis(),
                     correlationId = approvalId,
@@ -313,11 +337,12 @@ class TuiChatViewModel(
     }
 
     fun reject(approvalId: String) {
+        val sid = getTaskId() ?: ""
         scope.launch {
             agentEventBus.emit(
                 AgentEvent.ApprovalDecision(
                     id = UUID.randomUUID().toString(),
-                    sessionId = "",
+                    sessionId = sid,
                     sourceAgentId = "user",
                     timestamp = System.currentTimeMillis(),
                     correlationId = approvalId,
@@ -438,6 +463,23 @@ class TuiChatViewModel(
 
     // --- Rewind, resend, edit ---
 
+    private suspend fun truncatePersistedHistoryFrom(messageId: String) {
+        val tid = getTaskId() ?: return
+        val coreSession = getCoreSession()
+        if (coreSession != null) {
+            runCatching { coreSession.rewindHistory(tid, messageId) }
+                .onFailure { logger.warn(it) { "Failed to rewind history via CoreSessionService for task=$tid" } }
+            return
+        }
+        val r = getRouter() ?: return
+        runCatching {
+            r.chatRouter.truncateHistoryFromMessage(tid, messageId)
+            r.subtaskRouter.deleteAllSubtasks(tid)
+            r.apiLogsRouter.deleteApiLogsByTaskId(tid)
+            r.snapshotRouter.deleteSnapshotsByTaskId(tid)
+        }.onFailure { logger.warn(it) { "Failed to rewind history in DB for task=$tid" } }
+    }
+
     fun rewindToMessage(messageIndex: Int) {
         val messages = _messages.value
         if (messageIndex < 0 || messageIndex >= messages.size) return
@@ -446,9 +488,17 @@ class TuiChatViewModel(
             addSystemMessage("Can only rewind to user messages")
             return
         }
-        // Keep messages up to (not including) the target, then resend it
+        // Keep messages up to (not including) the target, truncate persisted DB rows, then resend
         _messages.value = messages.take(messageIndex)
-        sendMessage(targetMsg.content)
+        scope.launch {
+            truncatePersistedHistoryFrom(targetMsg.id)
+            val r = getRouter()
+            val tid = getTaskId()
+            if (r != null && tid != null) {
+                onLoadSubtasksFromDb(r, tid)
+            }
+            sendMessage(targetMsg.content)
+        }
     }
 
     fun resendLastMessage() {
@@ -480,9 +530,18 @@ class TuiChatViewModel(
             addSystemMessage("Can only edit user messages. Message $messageIndex is a ${targetMsg.role} message.")
             return
         }
-        // Truncate conversation to before this message and pre-fill input
+        // Truncate conversation in memory + SQLite to before this message and pre-fill input
         _messages.value = messages.take(idx)
         _inputBuffer.value = targetMsg.content
+        _cursorPosition.value = targetMsg.content.length
+        scope.launch {
+            truncatePersistedHistoryFrom(targetMsg.id)
+            val r = getRouter()
+            val tid = getTaskId()
+            if (r != null && tid != null) {
+                onLoadSubtasksFromDb(r, tid)
+            }
+        }
         addSystemMessage("Editing message ${idx + 1}. Modify and press Enter to resend.")
     }
 
@@ -607,6 +666,7 @@ class TuiChatViewModel(
             if (router != null && taskId != null) {
                 router.pendingUserMessageQueue.enqueue(taskId, input)
                 _inputBuffer.value = ""
+                _cursorPosition.value = 0
                 addSystemMessage("Message queued for next iteration")
             }
             return
@@ -617,11 +677,12 @@ class TuiChatViewModel(
         // If orchestrator is waiting for a question response, route as answer
         if (_pendingQuestionId.value != null) {
             _inputBuffer.value = ""
+            _cursorPosition.value = 0
             answerQuestion(input)
             return
         }
 
-        // Expand slash prompts inline (like the plugin does)
+        // Expand slash prompts inline and substitute template variables
         val processedInput = processSlashPrompts(input)
 
         // Validate context references before sending
@@ -631,6 +692,8 @@ class TuiChatViewModel(
             return
         }
 
+        val extractedRefs = PromptInputProcessor.extractInlineContextRefs(processedInput)
+
         val userMsg = TuiChatMessage(
             id = UUID.randomUUID().toString(),
             timestamp = System.currentTimeMillis(),
@@ -639,7 +702,8 @@ class TuiChatViewModel(
         )
         _messages.update { it + userMsg }
         _inputBuffer.value = ""
-        launchTurn(processedInput, resume = false)
+        _cursorPosition.value = 0
+        launchTurn(processedInput, resume = false, contextRefs = extractedRefs)
     }
 
     /**
@@ -647,7 +711,11 @@ class TuiChatViewModel(
      * [resume] is set. A task with `/until` or `/long on` runs in rounds, and each round's messages
      * show up as soon as the round ends.
      */
-    private fun launchTurn(processedInput: String, resume: Boolean) {
+    private fun launchTurn(
+        processedInput: String,
+        resume: Boolean,
+        contextRefs: List<ContextReference> = emptyList(),
+    ) {
         currentJob = scope.launch {
             val r = getRouter() ?: run {
                 addSystemMessage("Core not initialized")
@@ -661,6 +729,7 @@ class TuiChatViewModel(
 
                 // Ensure we have a valid DB-persisted task
                 val tid = getTaskId() ?: onCreateNewTaskInDb(r).also { onSetTaskId(it) }
+                GlobalMetrics.resetCancellation(tid)
                 var loopSummary: String? = null
 
                 val taskMode = try {
@@ -687,6 +756,7 @@ class TuiChatViewModel(
                             taskId = tid,
                             mode = taskMode,
                             input = processedInput,
+                            contextRefs = contextRefs,
                             params = LLMParams(
                                 model = selectedModel,
                                 provider = selectedProvider
@@ -724,7 +794,8 @@ class TuiChatViewModel(
                             mode = taskMode,
                             executionMode = execMode,
                             model = selectedModel,
-                            provider = selectedProvider
+                            provider = selectedProvider,
+                            userContextRefs = contextRefs,
                         )
                         val rounds = RoundListener(r, tid)
                         val streamCallback: (pl.jclab.refio.core.api.StreamChunk) -> Unit = { chunk -> workflowListener.onStreamChunk(chunk.delta) }
@@ -760,9 +831,14 @@ class TuiChatViewModel(
 
                 onUpdateDebugInfo(_messages.value.size)
 
-                // Auto-name session if still using default name
+                // Auto-name session via shared CoreSessionService if still using default name
                 if (processedInput.isNotBlank()) {
-                    autoNameSessionIfNeeded(r, tid, processedInput)
+                    val coreSession = getCoreSession()
+                    if (coreSession != null) {
+                        coreSession.scheduleAutoNameIfDefault(tid, processedInput)
+                    } else {
+                        autoNameSessionIfNeeded(r, tid, processedInput)
+                    }
                 }
 
                 // Refresh API logs from database
@@ -886,9 +962,9 @@ class TuiChatViewModel(
 
     // --- Autocomplete (@context, !subagent, /command) ---
 
+    // CLI-supported context prefixes only (IDE-only providers like @selection/@current/@open_files/@recent/@problems/@terminal are excluded)
     private val allContextPrefixes = listOf(
-        "@file:", "@folder:", "@selection", "@current", "@open_files",
-        "@recent", "@problems", "@terminal", "@git_diff", "@git_commit:",
+        "@file:", "@folder:", "@git_diff", "@git_commit:",
         "@grep:", "@codebase:", "@docs:", "@url:"
     )
 
@@ -1067,7 +1143,9 @@ class TuiChatViewModel(
                 else -> -1
             }
             if (triggerIdx >= 0) {
-                _inputBuffer.value = input.substring(0, triggerIdx) + selected + " "
+                val updated = input.substring(0, triggerIdx) + selected + " "
+                _inputBuffer.value = updated
+                _cursorPosition.value = updated.length
             }
         }
         autocompleteDismiss()

@@ -37,16 +37,17 @@ class ApiLogRepository {
         errorType: String? = null
     ): ApiLog {
         return transaction {
-            // Error #15: Redact secrets before saving
+            val safeEndpoint = pl.jclab.refio.core.security.SecureLogger.redact(endpoint)
             val safeRequestPayload = pl.jclab.refio.core.security.SecureLogger.redact(requestPayload)
             val safeResponsePayload = responsePayload?.let { pl.jclab.refio.core.security.SecureLogger.redact(it) }
+            val safeErrorMessage = errorMessage?.let { pl.jclab.refio.core.security.SecureLogger.redact(it) }
 
             val logId = ApiLogsTable.insert {
                 it[ApiLogsTable.taskId] = taskId
                 it[ApiLogsTable.subtaskId] = subtaskId
                 it[ApiLogsTable.provider] = provider
                 it[ApiLogsTable.model] = model
-                it[ApiLogsTable.endpoint] = endpoint
+                it[ApiLogsTable.endpoint] = safeEndpoint
                 it[requestSource] = source
                 it[ApiLogsTable.requestPayload] = safeRequestPayload
                 it[ApiLogsTable.responsePayload] = safeResponsePayload
@@ -55,7 +56,7 @@ class ApiLogRepository {
                 it[ApiLogsTable.outputTokens] = outputTokens
                 it[ApiLogsTable.costUsd] = costUsd
                 it[ApiLogsTable.latencyMs] = latencyMs
-                it[ApiLogsTable.errorMessage] = errorMessage
+                it[ApiLogsTable.errorMessage] = safeErrorMessage
                 it[ApiLogsTable.errorType] = errorType
             } get ApiLogsTable.id
 

@@ -87,7 +87,8 @@ class ReadFileTool(
             // in plugin sessions where the agent walks a 500-line file in 40-line offsets
             // (4–5 round-trips). Caps at MAX_AUTO_EXPAND_LIMIT so we don't accidentally
             // pull a multi-MB log into one prompt. See [readHistory] for the tracker.
-            val taskId = params["taskId"] as? String
+            val taskId = (params[pl.jclab.refio.core.tools.base.ToolInternalParams.TASK_ID] as? String)
+                ?: (params["taskId"] as? String)
             val limit = maybeAutoExpand(taskId, pathStr, baseLimit)
             val limitAutoExpanded = limit != null && baseLimit != null && limit > baseLimit
             val pageStart = toIntOrNull(params["page_start"])

@@ -3,13 +3,23 @@ package pl.jclab.refio.core.tools.implementations
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import pl.jclab.refio.core.logging.dualLogger
+import pl.jclab.refio.core.security.ExecutionIntent
+import pl.jclab.refio.core.security.ExecutionIsolationMode
+import pl.jclab.refio.core.security.ExecutionPolicy
+import pl.jclab.refio.core.security.ExecutionSandbox
+import pl.jclab.refio.core.security.HostExecutionSandbox
 import pl.jclab.refio.core.tools.PathSandbox
 import pl.jclab.refio.core.tools.base.Tool
 import pl.jclab.refio.core.tools.base.ToolCategory
+import pl.jclab.refio.core.tools.base.ToolInternalParams
 import pl.jclab.refio.core.tools.base.ToolMode
 import pl.jclab.refio.core.tools.base.ToolResult
+import pl.jclab.refio.core.tools.security.CommandRuleDefaults
+import pl.jclab.refio.core.tools.security.CommandRuleMatcher
 import pl.jclab.refio.core.tools.security.FileLimits
+import pl.jclab.refio.core.tools.security.RuleAction
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 import kotlin.io.path.isRegularFile
@@ -31,7 +41,9 @@ private val logger = dualLogger("CodeIntelligenceTool")
  */
 class CodeIntelligenceTool(
     private val sandbox: PathSandbox,
-    private val limits: FileLimits = FileLimits.DEFAULT
+    private val limits: FileLimits = FileLimits.DEFAULT,
+    private val commandRuleMatcher: CommandRuleMatcher = CommandRuleDefaults.createDefaultMatcher(),
+    private val executionSandbox: ExecutionSandbox = HostExecutionSandbox { ExecutionIsolationMode.AUTO }
 ) : Tool {
     override val name = "code_intelligence"
     override val description = "Analyze code structure: find symbol usages, definitions, list symbols, get compiler diagnostics. " +
@@ -64,7 +76,17 @@ class CodeIntelligenceTool(
             "find_usages" -> findUsages(symbol!!, path, startTime)
             "find_definition" -> findDefinition(symbol!!, path, language, startTime)
             "list_symbols" -> listSymbols(path, language, startTime)
-            "get_diagnostics" -> getDiagnostics(path, language, startTime)
+            "get_diagnostics" -> {
+                val modeStr = params[ToolInternalParams.MODE] as? String
+                if (modeStr.equals("PLAN", ignoreCase = true) || modeStr.equals("CHAT", ignoreCase = true)) {
+                    ToolResult.error(
+                        "Action 'get_diagnostics' executes external build/lint commands and is disabled in $modeStr mode. " +
+                            "Switch to AGENT mode to run compiler diagnostics."
+                    )
+                } else {
+                    getDiagnostics(path, language, startTime)
+                }
+            }
             else -> ToolResult.error("Unknown action: $action")
         }
     }
@@ -230,8 +252,16 @@ class CodeIntelligenceTool(
             )
         }
 
+        val commandStr = cmd.joinToString(" ")
+        val ruleResult = commandRuleMatcher.match(commandStr)
+        if (ruleResult.action == RuleAction.BLOCK) {
+            return ToolResult.error(
+                "Diagnostics command blocked by security rule: ${ruleResult.matchedRule?.description?.ifBlank { commandStr } ?: commandStr}"
+            )
+        }
+
         return try {
-            val output = runCommandWithTimeout(cmd, root.toFile(), timeoutSeconds = 120)
+            val output = runCommandWithTimeout(cmd, root, timeoutSeconds = 120, useExecutionSandbox = true)
             val lines = output.lines()
 
             val errors = lines.filter { line ->
@@ -280,7 +310,10 @@ class CodeIntelligenceTool(
                     val rel = try { root.relativize(p) } catch (_: Exception) { p }
                     rel.none { seg -> limits.shouldExcludeDirectory(seg.toString()) }
                 }
-                .filter { it.isRegularFile() }
+                .filter { p ->
+                    Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS) ||
+                        (Files.isSymbolicLink(p) && sandbox.isPathAllowed(p) && p.isRegularFile())
+                }
                 .filter { it.fileName.toString().substringAfterLast('.', "").lowercase() in extensions }
                 .iterator()
 
@@ -357,27 +390,57 @@ class CodeIntelligenceTool(
     }
 
     private fun runCommand(cmd: List<String>, workDir: java.io.File): String =
-        runProcess(cmd, workDir, timeoutSeconds = 30, throwOnTimeout = false)
+        runProcess(cmd, workDir.toPath(), timeoutSeconds = 30, throwOnTimeout = false, useExecutionSandbox = false)
 
-    private fun runCommandWithTimeout(cmd: List<String>, workDir: java.io.File, timeoutSeconds: Long): String =
-        runProcess(cmd, workDir, timeoutSeconds, throwOnTimeout = true)
+    private fun runCommandWithTimeout(
+        cmd: List<String>,
+        workDir: Path,
+        timeoutSeconds: Long,
+        useExecutionSandbox: Boolean = false
+    ): String = runProcess(cmd, workDir, timeoutSeconds, throwOnTimeout = true, useExecutionSandbox = useExecutionSandbox)
 
     private fun runProcess(
         cmd: List<String>,
-        workDir: java.io.File,
+        workDir: Path,
         timeoutSeconds: Long,
-        throwOnTimeout: Boolean
+        throwOnTimeout: Boolean,
+        useExecutionSandbox: Boolean
     ): String {
-        val process = ProcessBuilder(cmd)
-            .directory(workDir)
+        val processBuilder = if (useExecutionSandbox) {
+            executionSandbox.newProcessBuilder(
+                cmd,
+                ExecutionPolicy(
+                    intent = ExecutionIntent.PROJECT_TOOLCHAIN,
+                    workingDirectory = workDir,
+                    writableRoots = listOf(workDir),
+                    networkAllowed = false
+                )
+            )
+        } else {
+            ProcessBuilder(cmd).directory(workDir.toFile())
+        }
+        val process = processBuilder
             .redirectErrorStream(true)
             .start()
-        // Drain output on a daemon thread so a hung or chatty child cannot block this
-        // thread past the timeout or deadlock on a full pipe buffer.
+        // Drain output on a daemon thread with a hard cap so a chatty child cannot OOM the JVM.
         val output = StringBuilder()
+        var truncated = false
         val reader = Thread {
             process.inputStream.bufferedReader().forEachLine { line ->
-                synchronized(output) { output.appendLine(line) }
+                synchronized(output) {
+                    if (output.length < MAX_PROCESS_OUTPUT_CHARS) {
+                        val remaining = MAX_PROCESS_OUTPUT_CHARS - output.length
+                        if (line.length + 1 <= remaining) {
+                            output.appendLine(line)
+                        } else {
+                            output.append(line, 0, (remaining - 1).coerceAtLeast(0))
+                            output.appendLine()
+                            truncated = true
+                        }
+                    } else {
+                        truncated = true
+                    }
+                }
             }
         }
         reader.isDaemon = true
@@ -389,16 +452,21 @@ class CodeIntelligenceTool(
             if (throwOnTimeout) {
                 throw RuntimeException("Command timed out after ${timeoutSeconds}s")
             }
-            return synchronized(output) { output.toString() }
+            return synchronized(output) {
+                if (truncated) "${output}\n... (output truncated at $MAX_PROCESS_OUTPUT_CHARS chars)" else output.toString()
+            }
         }
         reader.join(2000)
-        return synchronized(output) { output.toString() }
+        return synchronized(output) {
+            if (truncated) "${output}\n... (output truncated at $MAX_PROCESS_OUTPUT_CHARS chars)" else output.toString()
+        }
     }
 
     private fun elapsed(start: Long) = (System.currentTimeMillis() - start).toInt()
 
     companion object {
         val VALID_ACTIONS = setOf("find_usages", "find_definition", "list_symbols", "get_diagnostics")
+        private const val MAX_PROCESS_OUTPUT_CHARS = 256_000
     }
 
     override fun getParameterSchema(): Map<String, Any> = mapOf(

@@ -209,8 +209,11 @@ class OllamaAdapter(
         return try {
             chatInternal(messages, systemMessages, maxTokens, temperature, streaming, onStreamChunk, kwargs)
         } catch (e: CancellationException) {
-            // Stream aborted by a guardrail (see core/llm/streaming/) — must propagate
+            // Stream aborted by a guardrail (see core/llm/streaming/) - must propagate
             // so the caller can see StreamAbortedException instead of RefioError.LLMError.
+            throw e
+        } catch (e: pl.jclab.refio.core.llm.ToolsNotSupportedException) {
+            // Let TurnExecutor demote native tools to the text channel instead of wrapping as LLMError.
             throw e
         } catch (e: Exception) {
             throw LLMErrorMapper.fromThrowable(provider, model, timeout, e, baseUrl)
@@ -430,26 +433,26 @@ class OllamaAdapter(
             }
 
             httpStatus = httpResponse.status.value
-            val response: Map<String, Any?> = httpResponse.body()
+            val rawResponseText = httpResponse.body<String>()
 
-            val responseJson = gson.toJson(response)
-            logger.debug { "$logPrefix Response: ${SecureLogger.redactAndTruncate(responseJson)}" }
+            logger.debug { "$logPrefix Response: ${SecureLogger.redactAndTruncate(rawResponseText)}" }
             logger.info {
                 "$logPrefix Response received: status=$httpStatus, durationMs=${System.currentTimeMillis() - startTime}, " +
-                        "bodySize=${responseJson.length}"
+                        "bodySize=${rawResponseText.length}"
             }
 
-            // Check for error response
+            // Check for error response BEFORE parsing JSON so non-JSON 502/503 proxy bodies keep HTTP status.
             if (httpStatus !in 200..299) {
                 val latencyMs = (System.currentTimeMillis() - startTime).toInt()
 
-                // Extract error details from Ollama error response
-                val errorMessage = response["error"] as? String ?: "Unknown error"
+                val errorMessage = runCatching {
+                    @Suppress("UNCHECKED_CAST")
+                    (gson.fromJson(rawResponseText, Map::class.java) as? Map<String, Any?>)?.get("error") as? String
+                }.getOrNull() ?: rawResponseText.ifBlank { "Unknown error" }
                 val fullErrorMessage = "Ollama API error (HTTP $httpStatus): $errorMessage"
 
                 logger.error { "$logPrefix $fullErrorMessage" }
 
-                // Log error to API logs
                 logger.apiError(
                     provider = provider,
                     model = model,
@@ -468,6 +471,11 @@ class OllamaAdapter(
                 }
                 throw LLMErrorMapper.fromHttpStatus(provider, model, httpStatus, fullErrorMessage)
             }
+
+            @Suppress("UNCHECKED_CAST")
+            val response: Map<String, Any?> = gson.fromJson(rawResponseText, Map::class.java) as? Map<String, Any?>
+                ?: throw RefioError.MalformedResponse(provider, model, "Expected JSON object from Ollama", rawResponseText)
+            val responseJson = rawResponseText
 
             val latencyMs = (System.currentTimeMillis() - startTime).toInt()
 
@@ -564,8 +572,10 @@ class OllamaAdapter(
                 nativeToolCalls = nativeToolCalls
             )
 
+        } catch (e: pl.jclab.refio.core.llm.ToolsNotSupportedException) {
+            throw e
         } catch (e: CancellationException) {
-            // Guardrail-triggered abort — log and rethrow as-is, do NOT wrap.
+            // Guardrail-triggered abort - log and rethrow as-is, do NOT wrap.
             val latencyMs = (System.currentTimeMillis() - startTime).toInt()
             logger.apiError(
                 provider = provider,
@@ -665,8 +675,7 @@ class OllamaAdapter(
                     )
 
                     if (requestBody.containsKey("tools") &&
-                        httpStatus == 400 &&
-                        errorBody.contains("does not support tools", ignoreCase = true)
+                        isToolsNotSupportedError(httpStatus ?: 500, errorBody)
                     ) {
                         throw pl.jclab.refio.core.llm.ToolsNotSupportedException(errorMessage)
                     }
@@ -950,6 +959,8 @@ class OllamaAdapter(
                 thinking = finalThinking,
                 nativeToolCalls = streamNativeToolCalls
             )
+        } catch (e: pl.jclab.refio.core.llm.ToolsNotSupportedException) {
+            throw e
         } catch (e: CancellationException) {
             // Guardrail-triggered abort — log and rethrow as-is, do NOT wrap.
             val latencyMs = (System.currentTimeMillis() - startTime).toInt()
@@ -1199,11 +1210,16 @@ class OllamaAdapter(
         if (httpStatus != 400 && httpStatus != 422) return false
         val lower = errorMessage.lowercase()
         val mentionsTooling =
-            lower.contains("\"tools\"") ||
+            lower.contains("does not support tool") ||
+                lower.contains("doesn't support tool") ||
+                lower.contains("\"tools\"") ||
                 lower.contains("tool calling") ||
+                lower.contains("tool use") ||
                 lower.contains("function calling")
         val unsupportedShape =
-            lower.contains("not supported") ||
+            lower.contains("does not support") ||
+                lower.contains("doesn't support") ||
+                lower.contains("not supported") ||
                 lower.contains("unsupported") ||
                 lower.contains("unknown field") ||
                 lower.contains("unknown parameter") ||

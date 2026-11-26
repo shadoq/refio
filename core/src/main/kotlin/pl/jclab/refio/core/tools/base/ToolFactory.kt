@@ -126,7 +126,7 @@ class ToolFactory(
             FetchWebpageTool(llmClient, configService, networkPolicy, urlPolicy),
 
             // Code intelligence
-            CodeIntelligenceTool(sandbox, fileLimits),
+            CodeIntelligenceTool(sandbox, fileLimits, CommandRuleDefaults.createDefaultMatcher(), executionSandbox),
             FindUsagesTool(refactorer),
 
             // Process monitoring (read-only — only reads output)

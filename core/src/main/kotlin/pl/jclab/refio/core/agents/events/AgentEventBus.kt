@@ -26,6 +26,19 @@ class AgentEventBus : AutoCloseable {
     )
     val events: SharedFlow<AgentEvent> = _events.asSharedFlow()
 
+    /**
+     * Dedicated channel for non-stream control/lifecycle/A2A events (DataRequest, DataResponse,
+     * AgentStarted/Completed/Failed, TurnStarted/Ended, ApprovalRequired, ToolCalled).
+     * Separating these from high-frequency StreamChunk tokens ensures token bursts from parallel
+     * subagents can never evict A2A replies or lifecycle notifications from the replay buffer.
+     */
+    private val _controlEvents = MutableSharedFlow<AgentEvent>(
+        replay = 200,
+        extraBufferCapacity = 500,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    val controlEvents: SharedFlow<AgentEvent> = _controlEvents.asSharedFlow()
+
     @Volatile
     private var eventRepository: AgentEventRepository? = null
     private val persistenceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -56,6 +69,9 @@ class AgentEventBus : AutoCloseable {
      * unavailable. Persistence is now best-effort and logged on failure.
      */
     suspend fun emit(event: AgentEvent) {
+        if (event !is AgentEvent.StreamChunk) {
+            _controlEvents.emit(event)
+        }
         _events.emit(event)
         if (eventRepository != null && persistenceQueue.trySend(PersistenceItem.Event(event)).isFailure) {
             logger.warn { "Agent event persistence queue is full; dropping persistence for ${event::class.simpleName}" }
@@ -92,7 +108,7 @@ class AgentEventBus : AutoCloseable {
 
     /** Lifecycle events only (for DAG visualization) */
     fun lifecycleEvents(sessionId: String): Flow<AgentEvent> =
-        events.filter {
+        controlEvents.filter {
             it.sessionId == sessionId && (
                 it is AgentEvent.AgentStarted ||
                 it is AgentEvent.AgentCompleted ||
@@ -116,12 +132,12 @@ class AgentEventBus : AutoCloseable {
 
     /** Pending approval events */
     fun approvalEvents(sessionId: String): Flow<AgentEvent.ApprovalRequired> =
-        events.filterIsInstance<AgentEvent.ApprovalRequired>()
+        controlEvents.filterIsInstance<AgentEvent.ApprovalRequired>()
             .filter { it.sessionId == sessionId }
 
     /** Turn lifecycle events (for Session Trace panel) */
     fun turnEvents(sessionId: String): Flow<AgentEvent> =
-        events.filter {
+        controlEvents.filter {
             it.sessionId == sessionId && (
                 it is AgentEvent.TurnStarted ||
                 it is AgentEvent.TurnEnded ||
@@ -135,7 +151,12 @@ class AgentEventBus : AutoCloseable {
      * Non-suspend emit for callers that cannot suspend (e.g. Swing listeners).
      * Skips repository persistence. Returns false if the event buffer is full.
      */
-    fun tryEmit(event: AgentEvent): Boolean = _events.tryEmit(event)
+    fun tryEmit(event: AgentEvent): Boolean {
+        if (event !is AgentEvent.StreamChunk) {
+            _controlEvents.tryEmit(event)
+        }
+        return _events.tryEmit(event)
+    }
 
     /**
      * Load persisted events for a session from the backing repository (if any).
@@ -184,7 +205,11 @@ class AgentEventBus : AutoCloseable {
 
     /** Events of a specific type */
     inline fun <reified T : AgentEvent> eventsOfType(): Flow<T> =
-        events.filterIsInstance<T>()
+        if (T::class == AgentEvent.StreamChunk::class) {
+            events.filterIsInstance<T>()
+        } else {
+            controlEvents.filterIsInstance<T>()
+        }
 
     private sealed interface PersistenceItem {
         data class Event(val value: AgentEvent) : PersistenceItem

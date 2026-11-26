@@ -4,6 +4,7 @@ import pl.jclab.refio.core.services.longtask.LongTaskCommand
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.isActive
@@ -142,7 +143,8 @@ class TuiViewModel(
         mode = _mode.asStateFlow(),
         model = _model.asStateFlow(),
         executionMode = session._executionMode.asStateFlow(),
-        agentEventBus = agentEventBus
+        agentEventBus = agentEventBus,
+        getCoreSession = { coreSession },
     )
 
     private val workflowListener = TuiWorkflowListener(
@@ -173,9 +175,7 @@ class TuiViewModel(
     // stateFlow — merges all sub-VM and coordinator flows into TuiState
     // ========================================================================
 
-    @OptIn(kotlinx.coroutines.FlowPreview::class)
-    val stateFlow: StateFlow<TuiState> = merge(
-        // Coordinator flows
+    private fun coordinatorSignals(): Flow<Unit> = merge(
         _activeTab.map { Unit },
         _screen.map { Unit },
         _settingsTab.map { Unit },
@@ -190,87 +190,15 @@ class TuiViewModel(
         _settingsCacheVersion.map { Unit },
         _contextMaxTokens.map { Unit },
         _contextWindowSource.map { Unit },
-        // Session execution flows
         sessionStateManager.toolCallProgress.map { Unit },
-        // Chat sub-VM flows
-        chat._messages.map { Unit },
-        chat._isStreaming.map { Unit },
-        chat._inputBuffer.map { Unit },
-        chat._cursorPosition.map { Unit },
-        chat._scrollOffset.map { Unit },
-        chat._selectedMessageIndex.map { Unit },
-        chat._expandedToolRows.map { Unit },
-        chat._approvalChoice.map { Unit },
-        chat._trustRules.map { Unit },
-        chat._pastedContent.map { Unit },
-        chat._pendingQuestionId.map { Unit },
-        chat._longTaskLine.map { Unit },
-        chat._pendingQuestionOptions.map { Unit },
-        chat._pendingApprovals.map { Unit },
-        chat._pendingToolApproval.map { Unit },
-        chat._agentFilter.map { Unit },
-        chat._agents.map { Unit },
-        chat._panelFocused.map { Unit },
-        chat._autocompleteVisible.map { Unit },
-        chat._autocompleteCandidates.map { Unit },
-        chat._autocompleteSelectedIndex.map { Unit },
-        // Session sub-VM flows
-        session.subtasks.map { Unit },
-        session.activePlan.map { Unit },
-        session.isPaused.map { Unit },
-        session.pendingPlanApproval.map { Unit },
-        session.selectedStepIndex.map { Unit },
-        session.executionStatus.map { Unit },
-        session.executionMode.map { Unit },
-        session.sessions.map { Unit },
-        session.selectedHistoryIndex.map { Unit },
-        session.historyFilter.map { Unit },
-        session.modelSelectorVisible.map { Unit },
-        session.modelSelectorCandidates.map { Unit },
-        session.modelSelectorIndex.map { Unit },
-        session.totalCost.map { Unit },
-        session.cachedTokens.map { Unit },
-        session.totalTokens.map { Unit },
-        session.thinkingEnabled.map { Unit },
-        session.reasoningEffort.map { Unit },
-        session.noEgressEnabled.map { Unit },
-        // Observability sub-VM flows
-        obs._ragIndexingProgress.map { Unit },
-        obs._ragIndexingStatus.map { Unit },
-        obs._ragIndexedFiles.map { Unit },
-        obs._ragSelectedFileIndex.map { Unit },
-        obs._ragSearchQuery.map { Unit },
-        obs._ragSearchResults.map { Unit },
-        obs._contextSections.map { Unit },
-        obs._contextMaxTokens.map { Unit },
-        obs._selectedContextIndex.map { Unit },
-        obs._contextDetailVisible.map { Unit },
-        obs._contextDetailScrollOffset.map { Unit },
-        obs._logs.map { Unit },
-        obs._logsPaused.map { Unit },
-        obs._selectedLogIndex.map { Unit },
-        obs._logDetailVisible.map { Unit },
-        obs._logsFilter.map { Unit },
-        obs._apiLogs.map { Unit },
-        obs._apiLogsFilter.map { Unit },
-        obs._selectedApiLogIndex.map { Unit },
-        obs._apiLogDetailVisible.map { Unit },
-        obs._apiLogDetailScrollOffset.map { Unit },
-        obs._debugInfo.map { Unit },
-        obs._debugScrollOffset.map { Unit },
-        obs._fileBrowserPath.map { Unit },
-        obs._fileBrowserEntries.map { Unit },
-        obs._fileBrowserSelectedIndex.map { Unit },
-        obs._fileBrowserShowHidden.map { Unit },
-        obs._fileViewerVisible.map { Unit },
-        obs._fileViewerPath.map { Unit },
-        obs._fileViewerContent.map { Unit },
-        obs._fileViewerScrollOffset.map { Unit },
-        obs._fileViewerShowLineNumbers.map { Unit },
-        obs._fileViewerAllowAddContext.map { Unit },
-        obs._fileViewerHintVisible.map { Unit },
-        obs._helpScrollOffset.map { Unit },
-        obs._helpFilter.map { Unit },
+    )
+
+    @OptIn(kotlinx.coroutines.FlowPreview::class)
+    val stateFlow: StateFlow<TuiState> = merge(
+        coordinatorSignals(),
+        chat.stateSignals(),
+        session.stateSignals(),
+        obs.stateSignals(),
     ).debounce(16)
     .map { buildCurrentState() }
     .stateIn(scope, SharingStarted.Eagerly, TuiState(mode = _mode.value, model = initialModel))
@@ -569,6 +497,11 @@ class TuiViewModel(
     }
 
     fun shutdown() {
+        taskId?.let { pl.jclab.refio.core.services.monitoring.GlobalMetrics.removeAgent(it) }
+        chat.currentJob?.cancel()
+        chat.currentJob = null
+        scope.cancel()
+        pl.jclab.refio.cli.tui.screens.TuiSettingsScreen.clearViewModel()
         LogSinkRegistry.clear()
         TuiChatMessageMapper.reset()
         bootstrap?.shutdown()
@@ -638,10 +571,8 @@ class TuiViewModel(
     internal fun loadMessagesFromDb(r: CoreApiRouter, tid: String) {
         try {
             val response = r.chatRouter.getMessages(tid)
-            if (response.messages.isNotEmpty()) {
-                chat._messages.value = StoredChatMessages.toChatMessages(response.messages, chat.toolDurations)
-                logger.info { "Loaded ${response.messages.size} messages from DB" }
-            }
+            chat._messages.value = StoredChatMessages.toChatMessages(response.messages, chat.toolDurations)
+            logger.info { "Loaded ${response.messages.size} messages from DB" }
         } catch (e: Exception) {
             logger.debug(e) { "Failed to load messages from DB" }
         }
@@ -650,10 +581,8 @@ class TuiViewModel(
     internal fun loadSubtasksFromDb(r: CoreApiRouter, tid: String) {
         try {
             val response = r.subtaskRouter.getSubtasks(tid)
-            if (response.subtasks.isNotEmpty()) {
-                session.setSubtasks(response.subtasks)
-                logger.info { "Loaded ${response.subtasks.size} subtasks from DB" }
-            }
+            session.setSubtasks(response.subtasks)
+            logger.info { "Loaded ${response.subtasks.size} subtasks from DB" }
         } catch (e: Exception) {
             logger.debug(e) { "Failed to load subtasks from DB" }
         }

@@ -77,41 +77,22 @@ class SubagentRegistry(
      * Subagents use "subagents/" for builtin resources but "agents/" for user/project directories.
      */
     override fun loadAll() {
-        builtinItems.clear()
-        userFileItems.clear()
-        projectFileItems.clear()
+        val nextBuiltin = ConcurrentHashMap<String, SubagentDefinition>()
+        val nextUser = ConcurrentHashMap<String, SubagentDefinition>()
+        val nextProject = ConcurrentHashMap<String, SubagentDefinition>()
 
         // Layer 1: Builtin (from resources/subagents/)
-        // Handled by base class discoverBuiltinResources() which scans "subagents/" resourceDir
-        loadBuiltinResourcesInternal()
+        loadBuiltinResourcesInto(nextBuiltin)
 
         // Layer 2: User files (~/.refio/agents/)
-        loadFromDirectory(userAgentsDir, DefinitionScope.USER, userFileItems)
+        loadFromDirectory(userAgentsDir, DefinitionScope.USER, nextUser)
 
         // Layer 3: Project files (.refio/agents/)
-        loadFromDirectory(projectAgentsDir, DefinitionScope.PROJECT, projectFileItems)
-    }
+        loadFromDirectory(projectAgentsDir, DefinitionScope.PROJECT, nextProject)
 
-    private fun loadBuiltinResourcesInternal() {
-        val resourcePaths = discoverBuiltinResources()
-
-        logger.info { "Loading builtin subagents (${resourcePaths.size}): ${resourcePaths.joinToString()}" }
-
-        for (resourcePath in resourcePaths) {
-            try {
-                val content = readResourceContent(resourcePath)
-                if (content != null) {
-                    val definition = parseFile(content, null, DefinitionScope.BUILTIN)
-                    builtinItems[getName(definition).lowercase()] = definition
-                } else {
-                    logger.warn { "Resource not found: $resourcePath" }
-                }
-            } catch (e: Exception) {
-                logger.error(e) { "Failed to load builtin subagent: $resourcePath" }
-            }
-        }
-
-        logger.info { "Finished loading builtin subagents: ${builtinItems.size} total" }
+        builtinItems = nextBuiltin
+        userFileItems = nextUser
+        projectFileItems = nextProject
     }
 
     // ==========================================
@@ -357,8 +338,8 @@ class SubagentRegistry(
     private fun buildSubagentFileContent(definition: SubagentDefinition): String {
         val sb = StringBuilder()
         sb.appendLine("---")
-        sb.appendLine("name: ${definition.name}")
-        sb.appendLine("description: ${definition.description}")
+        sb.appendLine("name: ${yamlScalar(definition.name)}")
+        sb.appendLine("description: ${yamlScalar(definition.description)}")
 
         definition.allowedTools?.let { tools ->
             if (tools.isNotEmpty()) {
@@ -373,11 +354,17 @@ class SubagentRegistry(
         }
 
         if (definition.model != "default") {
-            sb.appendLine("model: ${definition.model}")
+            sb.appendLine("model: ${yamlScalar(definition.model)}")
+        }
+
+        definition.reasoningEffort?.let { effort ->
+            if (effort.isNotBlank()) {
+                sb.appendLine("reasoningEffort: ${yamlScalar(effort)}")
+            }
         }
 
         if (definition.skills.isNotEmpty()) {
-            sb.appendLine("skills: [${definition.skills.joinToString(", ")}]")
+            sb.appendLine("skills: [${definition.skills.joinToString(", ") { yamlScalar(it) }}]")
         }
 
         if (!definition.enabled) {
@@ -398,6 +385,20 @@ class SubagentRegistry(
         sb.appendLine(definition.systemPrompt)
 
         return sb.toString()
+    }
+
+    private fun yamlScalar(value: String): String {
+        val needsQuoting = value.isEmpty() ||
+            value.first().isWhitespace() ||
+            value.last().isWhitespace() ||
+            value.any { it in ":{}[],&*#?|-<>=!%@`\"'\n\r" }
+        if (!needsQuoting) return value
+        val escaped = value
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
+        return "\"$escaped\""
     }
 }
 

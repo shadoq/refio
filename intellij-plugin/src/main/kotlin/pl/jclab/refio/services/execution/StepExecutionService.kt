@@ -22,7 +22,7 @@ import kotlinx.coroutines.flow.asStateFlow
  * - Handles execution completion/cancellation
  */
 @Service(Service.Level.PROJECT)
-class StepExecutionService(private val project: Project) : ExecutionStateController {
+class StepExecutionService(private val project: Project) : ExecutionStateController, com.intellij.openapi.Disposable {
 
     private val logger = dualLogger("StepExecutionService")
 
@@ -104,6 +104,12 @@ class StepExecutionService(private val project: Project) : ExecutionStateControl
         }
 
         logger.info { "Mode will be applied when execution starts" }
+    }
+
+    override fun dispose() {
+        executionJob?.cancel()
+        executionJob = null
+        cs.cancel()
     }
 
     companion object {

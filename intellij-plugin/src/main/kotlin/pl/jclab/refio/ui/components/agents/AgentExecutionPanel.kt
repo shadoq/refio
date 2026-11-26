@@ -85,32 +85,25 @@ class AgentExecutionPanel : JPanel(BorderLayout()), Disposable {
         subscriptionJob?.cancel()
         this.eventBus = eventBus
         currentSessionId = sessionId
-        agentNames.clear()
 
         subscriptionJob = scope.launch {
-            // Clear panels on EDT and wait for it to complete before replaying
-            // persisted events. Without this, the clear and replay invokeLater
-            // calls can interleave, causing the clear to wipe replayed data.
-            val latch = java.util.concurrent.CountDownLatch(1)
+            // Clear panels and agentNames strictly on EDT using non-blocking CompletableDeferred
+            // instead of blocking a Dispatchers.Default thread with CountDownLatch.await().
+            val cleared = CompletableDeferred<Unit>()
             SwingUtilities.invokeLater {
-                tracePanel.setSession(sessionId)
-                timelinePanel.setSession(sessionId)
-                graphPanel.clear()
-                timelinePanel.clear()
-                tracePanel.clear()
-                latch.countDown()
+                try {
+                    agentNames.clear()
+                    tracePanel.setSession(sessionId)
+                    timelinePanel.setSession(sessionId)
+                    graphPanel.clear()
+                    timelinePanel.clear()
+                    tracePanel.clear()
+                } finally {
+                    cleared.complete(Unit)
+                }
             }
-            latch.await()
+            cleared.await()
 
-            // One stream: what was persisted, then what happens next, with nothing delivered
-            // twice. Replaying the history and then subscribing separately used to hand every
-            // recent event to the panels a second time — the bus keeps a replay buffer for late
-            // subscribers and those are the same events the repository returns — so the Timeline
-            // table showed 44 rows for 22 events and the Trace showed every turn twice.
-            //
-            // IMPORTANT: history is best-effort inside the bus. A repository failure must NOT stop
-            // the live stream — that was the cause of the "nothing shows up" regression after the
-            // repo was first wired in.
             eventBus.sessionEventsWithHistory(sessionId).collect { event ->
                 handleEvent(event)
             }
@@ -118,17 +111,12 @@ class AgentExecutionPanel : JPanel(BorderLayout()), Disposable {
     }
 
     private fun handleEvent(event: AgentEvent) {
-        // StreamChunk events fire per-token — they belong to the per-agent chat bubble pipeline
-        // (consumed in CoreSessionService), not to the Trace / Timeline diagnostic views which
-        // would otherwise be flooded with hundreds of empty rows per second.
         if (event is AgentEvent.StreamChunk) return
 
-        // Always feed the trace panel — it knows which events to render
-        tracePanel.handleEvent(event)
-        // Timeline shows everything
-        timelinePanel.addEvent(event)
-
         SwingUtilities.invokeLater {
+            // Marshal all Swing panel mutations (trace, timeline, graph, and agentNames) onto EDT.
+            tracePanel.handleEvent(event)
+            timelinePanel.addEvent(event)
             // Subagent invocations share the parent's sourceAgentId but spawn their own
             // runId per TurnStarted. Key graph nodes on runId for depth > 0 so each
             // subagent run shows up as its own indented node; keep sourceAgentId for

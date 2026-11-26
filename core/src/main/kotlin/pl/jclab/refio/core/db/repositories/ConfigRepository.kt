@@ -34,29 +34,40 @@ class ConfigRepository {
         projectId: String? = null,
         taskId: String? = null,
         description: String? = null
-    ): Config = transaction {
+    ): Config = DatabaseFactory.dbWriteQuery {
         validateScope(scope, projectId, taskId)
 
+        val now = System.currentTimeMillis()
         val updated = ConfigTable.update({ scopeCriteria(key, scope, projectId, taskId) }) {
             it[ConfigTable.value] = value
             it[ConfigTable.description] = description
-            it[updatedAt] = System.currentTimeMillis()
+            it[updatedAt] = now
         }
 
         if (updated > 0) {
             logger.info { "Updated config: key=$key, scope=$scope, projectId=$projectId, taskId=$taskId" }
             get(key, scope, projectId, taskId)!!
         } else {
-            ConfigTable.insert {
-                it[ConfigTable.key] = key
-                it[ConfigTable.value] = value
-                it[ConfigTable.scope] = scope
-                it[ConfigTable.projectId] = projectId
-                it[ConfigTable.taskId] = taskId
-                it[ConfigTable.description] = description
+            try {
+                ConfigTable.insert {
+                    it[ConfigTable.key] = key
+                    it[ConfigTable.value] = value
+                    it[ConfigTable.scope] = scope
+                    it[ConfigTable.projectId] = projectId
+                    it[ConfigTable.taskId] = taskId
+                    it[ConfigTable.description] = description
+                }
+                logger.info { "Created config: key=$key, scope=$scope, projectId=$projectId, taskId=$taskId" }
+            } catch (e: Exception) {
+                if (!DatabaseFactory.isSqliteUniqueConstraintError(e)) throw e
+                // Concurrent cross-process writer inserted the same scoped key first; update it instead.
+                ConfigTable.update({ scopeCriteria(key, scope, projectId, taskId) }) {
+                    it[ConfigTable.value] = value
+                    it[ConfigTable.description] = description
+                    it[updatedAt] = System.currentTimeMillis()
+                }
+                logger.info { "Resolved concurrent insert with update: key=$key, scope=$scope" }
             }
-
-            logger.info { "Created config: key=$key, scope=$scope, projectId=$projectId, taskId=$taskId" }
             get(key, scope, projectId, taskId)!!
         }
     }

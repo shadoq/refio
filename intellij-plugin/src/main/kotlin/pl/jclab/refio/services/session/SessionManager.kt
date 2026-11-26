@@ -39,7 +39,7 @@ import pl.jclab.refio.ui.components.toolbar.StatusBar
 import java.util.*
 
 @Service(Service.Level.PROJECT)
-class SessionManager(private val project: Project) {
+class SessionManager(private val project: Project) : com.intellij.openapi.Disposable {
 
     private val logger = dualLogger("SessionManager")
 
@@ -62,10 +62,8 @@ class SessionManager(private val project: Project) {
             content = "Error: ${exception.message}\n\nStack trace: ${exception.stackTraceToString()}",
             createdAt = System.currentTimeMillis()
         )
-        // We can't use `cs` here because it's not yet initialized (exceptionHandler is
-        // defined before cs). GlobalScope is acceptable here as a last-resort error reporter.
-        @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
-        kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
+        // Show error message in chat without GlobalScope by dispatching on our error-safe scope
+        errorReporterScope.launch {
             try {
                 stateManager.appendMessage(errorMessage)
             } catch (e: Exception) {
@@ -74,6 +72,7 @@ class SessionManager(private val project: Project) {
         }
     }
 
+    private val errorReporterScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val cs = CoroutineScope(SupervisorJob() + Dispatchers.IO + exceptionHandler)
 
     private val stateManager = SessionStateManager()
@@ -411,16 +410,8 @@ class SessionManager(private val project: Project) {
         cancelStreaming()
         cancelExecution()
 
-        // 1) Truncate chat history from pivot (inclusive)
-        projectRouter.chatRouter.truncateHistoryFromMessage(
-            taskId = session.id,
-            fromMessageId = fromMessageId
-        )
-
-        // 2) Clear related execution data (subtasks/logs/snapshots)
-        projectRouter.subtaskRouter.deleteAllSubtasks(session.id)
-        projectRouter.apiLogsRouter.deleteApiLogsByTaskId(session.id)
-        projectRouter.snapshotRouter.deleteSnapshotsByTaskId(session.id)
+        // 1-2) Truncate chat history from pivot (inclusive) and clear related execution data
+        coreSessionService.rewindHistory(session.id, fromMessageId)
 
         // 3) Clear planning state if in PLAN mode (plans are tied to session)
         if (session.mode == TaskMode.PLAN) {
@@ -609,8 +600,9 @@ class SessionManager(private val project: Project) {
     /**
      * Dispose resources.
      */
-    fun dispose() {
+    override fun dispose() {
         cs.cancel()
+        errorReporterScope.cancel()
     }
 
     /**

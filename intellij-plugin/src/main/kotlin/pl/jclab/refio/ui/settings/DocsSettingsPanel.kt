@@ -563,4 +563,8 @@ class DocsSettingsPanel(
             source.title ?: source.url
         }
     }
+
+    fun dispose() {
+        cs.cancel()
+    }
 }

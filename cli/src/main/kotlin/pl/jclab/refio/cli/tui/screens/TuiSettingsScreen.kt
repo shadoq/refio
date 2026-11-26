@@ -54,6 +54,10 @@ object TuiSettingsScreen {
 
     private var viewModel: TuiViewModel? = null
 
+    fun clearViewModel() {
+        viewModel = null
+    }
+
     /** Prefix marking fields persisted through the tool-permissions API, not raw config. */
     const val TOOL_PERMISSION_PREFIX = "toolperm."
 

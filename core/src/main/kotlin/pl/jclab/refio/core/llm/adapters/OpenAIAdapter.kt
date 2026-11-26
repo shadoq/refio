@@ -669,33 +669,24 @@ class OpenAIAdapter(
             }
 
             httpStatus = httpResponse.status.value
-            val rawResponse: Map<String, Any?> = httpResponse.body()
+            val rawResponseText = httpResponse.body<String>()
 
-            // Transform response if using Responses API format
-            val response = if (definition?.apiFormat == pl.jclab.refio.core.llm.ApiFormat.RESPONSES) {
-                logger.info { "[OPENAI] Transforming response from Responses API format" }
-                logger.info { "[OPENAI] Raw response keys: ${rawResponse.keys}" }
-                logger.info { "[OPENAI] Raw response size: ${gson.toJson(rawResponse).length} chars" }
-                transformResponseFromResponses(rawResponse)
-            } else {
-                rawResponse
-            }
-
-            val responseJson = gson.toJson(response)
-            logger.debug { "$logPrefix Response: ${SecureLogger.redactAndTruncate(responseJson)}" }
+            logger.debug { "$logPrefix Response: ${SecureLogger.redactAndTruncate(rawResponseText)}" }
             logger.info {
                 "$logPrefix Response received: status=$httpStatus, durationMs=${System.currentTimeMillis() - startTime}, " +
-                    "bodySize=${responseJson.length}"
+                    "bodySize=${rawResponseText.length}"
             }
 
-            // Check for error response
+            // Check for error response BEFORE parsing/transforming Responses API so 401/429/500
+            // never turn into MalformedResponse and non-JSON proxy errors retain their HTTP status.
             if (httpStatus !in 200..299) {
                 val latencyMs = (System.currentTimeMillis() - startTime).toInt()
 
-                // Extract error details from OpenAI error response
                 @Suppress("UNCHECKED_CAST")
-                val errorObj = response["error"] as? Map<String, Any?>
-                val errorMessage = errorObj?.get("message") as? String ?: "Unknown error"
+                val errorObj = runCatching {
+                    (gson.fromJson(rawResponseText, Map::class.java) as? Map<String, Any?>)?.get("error") as? Map<String, Any?>
+                }.getOrNull()
+                val errorMessage = errorObj?.get("message") as? String ?: rawResponseText.ifBlank { "Unknown error" }
                 val errorType = errorObj?.get("type") as? String
                 val errorCode = errorObj?.get("code") as? String
 
@@ -726,6 +717,21 @@ class OpenAIAdapter(
                 }
                 throw LLMErrorMapper.fromHttpStatus(provider, model, httpStatus, fullErrorMessage)
             }
+
+            @Suppress("UNCHECKED_CAST")
+            val rawResponse: Map<String, Any?> = gson.fromJson(rawResponseText, Map::class.java) as? Map<String, Any?>
+                ?: throw RefioError.MalformedResponse(provider, model, "Expected JSON object from OpenAI", rawResponseText)
+
+            // Transform response if using Responses API format
+            val response = if (definition?.apiFormat == pl.jclab.refio.core.llm.ApiFormat.RESPONSES) {
+                logger.info { "[OPENAI] Transforming response from Responses API format" }
+                logger.info { "[OPENAI] Raw response keys: ${rawResponse.keys}" }
+                logger.info { "[OPENAI] Raw response size: ${rawResponseText.length} chars" }
+                transformResponseFromResponses(rawResponse)
+            } else {
+                rawResponse
+            }
+            val responseJson = gson.toJson(response)
 
             val latencyMs = (System.currentTimeMillis() - startTime).toInt()
 

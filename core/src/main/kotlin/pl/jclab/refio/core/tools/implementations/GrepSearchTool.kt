@@ -135,7 +135,10 @@ class GrepSearchTool(
                                 limits.shouldExcludeDirectory(segment.toString())
                             }
                         }
-                        .filter { it.isRegularFile() }
+                        .filter { filePath ->
+                            java.nio.file.Files.isRegularFile(filePath, java.nio.file.LinkOption.NOFOLLOW_LINKS) ||
+                                (java.nio.file.Files.isSymbolicLink(filePath) && sandbox.isPathAllowed(filePath) && filePath.isRegularFile())
+                        }
                         .filter { fileRegex.matches(it.fileName.toString()) }
                         .iterator()
 

@@ -13,6 +13,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
+import pl.jclab.refio.core.security.NetworkPolicy
 import pl.jclab.refio.core.utils.GsonInstance
 import pl.jclab.refio.core.logging.dualLogger
 import java.util.concurrent.ConcurrentHashMap
@@ -27,7 +28,8 @@ private val logger = dualLogger("MCPConnection")
  */
 class MCPConnection(
     private val config: MCPServerConfig,
-    private val httpEngine: HttpClientEngine? = null
+    private val httpEngine: HttpClientEngine? = null,
+    private val networkPolicy: NetworkPolicy? = null
 ) {
     companion object {
         private const val RESOURCE_CACHE_TTL_MS = 5 * 60 * 1000L
@@ -288,7 +290,8 @@ class MCPConnection(
             config = config,
             onMessage = { raw -> handleIncomingMessage(raw) },
             onError = { error -> logger.warn(error) { "MCP http error for ${config.id}" } },
-            engine = httpEngine
+            engine = httpEngine,
+            networkPolicy = networkPolicy
         )
         transport.connect()
         this.httpTransport = transport

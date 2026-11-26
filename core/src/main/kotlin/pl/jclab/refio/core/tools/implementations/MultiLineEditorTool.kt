@@ -165,193 +165,190 @@ class MultiLineEditorTool(
         onChunk: StreamCallback?,
         conversationContext: String? = null
     ): ToolResult {
-        // 1. Read file and validate
+        // 1. Read and validate file under lock, then release the lock before the LLM network call
+        // so other agents are not blocked for minutes while the model generates edits.
         val path = resolveSandboxPath(pathStr)
-
-        if (!path.exists()) {
-            return ToolResult.error("File not found: $pathStr. Use advance_code_editing to create new files.")
-        }
-
-        if (!path.isRegularFile()) {
-            return ToolResult.error("Not a regular file: $pathStr")
-        }
-
-        // Check file size
-        val fileSize = path.fileSize()
-        if (fileSize > limits.maxFileSize) {
-            return ToolResult.error(
-                "File too large: $fileSize bytes (max ${limits.maxFileSize} bytes). " +
-                "Use advance_code_editing for large files or split into smaller edits."
-            )
-        }
-
-        return withLockedFile(path) {
-
-            // Read content
-            val originalContent = Files.readString(path)
-            val lines = originalContent.lines()
-
-            logger.info {
-                "Multi-line edit: path=$pathStr, description='$editDescription', " +
-                "file_size=$fileSize bytes, line_count=${lines.size}"
-            }
-
-            // 2. Prepare file with line numbers for LLM
-            val numberedContent = lines.mapIndexed { index, line ->
-                "${index + 1}: $line"
-            }.joinToString("\n")
-
-            // 3. Detect language
-            val extension = path.fileName.toString().substringAfterLast('.', "")
-            val language = detectLanguage(extension)
-
-            // 4. Build prompts
-            val systemPrompt = promptsService.getSystemPrompt(
-                type = PromptType.MULTI_LINE_EDITING_SYSTEM
-            )
-
-            val userPrompt = promptsService.getSystemPrompt(
-                type = PromptType.MULTI_LINE_EDITING_USER,
-                variables = mapOf(
-                    "FILE_PATH" to pathStr,
-                    "LANGUAGE" to language,
-                    "EDIT_DESCRIPTION" to editDescription,
-                    "NUMBERED_CONTENT" to numberedContent
-                )
-            )
-
-            // 5. Call LLM
-            // Include optional conversation_context from agent turn (recent tool results, user data)
-            val messages = buildList {
-                if (!conversationContext.isNullOrBlank()) {
-                    add(LLMMessage(
-                        role = "user",
-                        content = "<conversation_context>\n$conversationContext\n</conversation_context>"
-                    ))
-                    add(LLMMessage(
-                        role = "assistant",
-                        content = "I understand the context. I'll use this information when editing the file."
-                    ))
-                }
-                add(LLMMessage(role = "user", content = userPrompt))
-            }
-
-            val (model, provider) = configService.getModel(
-                operation = ModelOperation.CODING,
-                taskId = taskId
-            )
-
-            logger.info {
-                "Using model for multi-line edit: $model ($provider), file has ${lines.size} lines, stream=$stream, hasOnChunk=${onChunk != null}"
-            }
-
-            var didStream = false
-            val streamingCallback: StreamCallback? = if (stream && onChunk != null) { chunk ->
-                didStream = true
-                onChunk(chunk)
+        val (readError, readState) = withLockedFile(path) {
+            if (!path.exists()) {
+                ToolResult.error(
+                    "File not found: $pathStr. Use advance_code_editing to create new files."
+                ) to null
+            } else if (!path.isRegularFile()) {
+                ToolResult.error("Not a regular file: $pathStr") to null
             } else {
-                null
-            }
-
-            val response = try {
-                llmClient.complete(
-                    provider = provider,
-                    model = model,
-                    messages = messages,
-                    systemPrompt = systemPrompt,
-                    temperature = 0.1, // Low temp for precision
-                    maxTokens = configService.getTyped(ConfigKeys.MAX_OUTPUT_SIZE),
-                    stream = stream,
-                    onChunk = streamingCallback,
-                    taskId = taskId,
-                    subtaskId = subtaskId,
-                    source = "MultiLineEditor"
-                )
-            } catch (e: Exception) {
-                logger.error(e) { "LLM request failed" }
-                return@withLockedFile ToolResult.error("LLM request failed: ${e.message}. Try rephrasing the edit description.")
-            }
-
-            val responseContent = response.content
-            val usage = response.usage
-            val cost = response.cost
-
-            if (stream && onChunk != null && !didStream) {
-                onChunk(
-                    StreamChunk(
-                        delta = responseContent,
-                        accumulated = responseContent,
-                        isComplete = true,
-                        source = "MultiLineEditor",
-                        usage = usage,
-                        cost = cost
-                    )
-                )
-            }
-
-            // 6. Parse JSON response
-            val edits = try {
-                parseEdits(responseContent, lines.size)
-            } catch (e: Exception) {
-                logger.warn {
-                    "Failed to parse LLM response as JSON: ${e.message}. " +
-                        "Response preview: ${responseContent.take(200)}"
+                val size = path.fileSize()
+                if (size > limits.maxFileSize) {
+                    ToolResult.error(
+                        "File too large: $size bytes (max ${limits.maxFileSize} bytes). " +
+                        "Use advance_code_editing for large files or split into smaller edits."
+                    ) to null
+                } else {
+                    sandbox.revalidateBeforeIO(path)
+                    null to (Files.readString(path) to size)
                 }
-                return@withLockedFile ToolResult.error(
-                    "Failed to parse LLM response. Response was: ${responseContent.take(200)}... " +
-                    "Try rephrasing the edit description or use advance_code_editing."
-                )
             }
+        }
+        if (readError != null) return readError
+        val (originalContent, fileSize) = readState!!
 
-            if (edits.isEmpty()) {
-                logger.warn { "LLM returned no edits for description: $editDescription" }
-                return@withLockedFile ToolResult.error(
-                    "LLM did not identify any changes to make. Try being more specific in the edit description."
-                )
-            }
+        val lines = originalContent.lines()
 
-            logger.info { "LLM identified ${edits.size} edits" }
+        logger.info {
+            "Multi-line edit: path=$pathStr, description='$editDescription', " +
+            "file_size=$fileSize bytes, line_count=${lines.size}"
+        }
 
-            // 7. Validate edits
-            val validationError = validateEdits(edits, lines.size)
-            if (validationError != null) {
-                return@withLockedFile ToolResult.error(validationError)
-            }
+        // 2. Prepare file with line numbers for LLM
+        val numberedContent = lines.mapIndexed { index, line ->
+            "${index + 1}: $line"
+        }.joinToString("\n")
 
-            // 8. Apply edits (from end to start to preserve line numbers)
-            // The line list was split on any line terminator, and the model answers in LF, so the
-            // rebuilt content is LF. Re-express it in the file's own convention before writing:
-            // otherwise a one-line edit rewrites every line ending on a CRLF checkout and shows up
-            // in review as a whole-file change.
-            val newContent = LineEndings.toFileEol(applyEdits(lines, edits), originalContent)
+        // 3. Detect language
+        val extension = path.fileName.toString().substringAfterLast('.', "")
+        val language = detectLanguage(extension)
 
-            // 9. Generate diff and stats (single pass, delegated to shared DiffUtils)
-            val changeSummary = DiffUtils.buildChangeSummary(
-                originalContent = originalContent,
-                newContent = newContent,
-                filePath = pathStr,
-                replacements = edits.size
+        // 4. Build prompts
+        val systemPrompt = promptsService.getSystemPrompt(
+            type = PromptType.MULTI_LINE_EDITING_SYSTEM
+        )
+
+        val userPrompt = promptsService.getSystemPrompt(
+            type = PromptType.MULTI_LINE_EDITING_USER,
+            variables = mapOf(
+                "FILE_PATH" to pathStr,
+                "LANGUAGE" to language,
+                "EDIT_DESCRIPTION" to editDescription,
+                "NUMBERED_CONTENT" to numberedContent
             )
-            val diff = changeSummary.unifiedDiff ?: ""
-            val addedLines = changeSummary.addedLines
-            val removedLines = changeSummary.removedLines
+        )
 
-            // 10. Write file
-            Files.writeString(path, newContent)
-            val duration = (System.currentTimeMillis() - startTime).toInt()
-            val newFileSize = path.fileSize()
-
-            logger.info {
-                "Multi-line edit completed: path=$pathStr, model=$model, " +
-                "edits=${edits.size}, tokens_in=${usage.inputTokens}, tokens_out=${usage.outputTokens}, " +
-                "cost_usd=$cost, duration=${duration}ms"
+        // 5. Call LLM (outside file lock)
+        val messages = buildList {
+            if (!conversationContext.isNullOrBlank()) {
+                add(LLMMessage(
+                    role = "user",
+                    content = "<conversation_context>\n$conversationContext\n</conversation_context>"
+                ))
+                add(LLMMessage(
+                    role = "assistant",
+                    content = "I understand the context. I'll use this information when editing the file."
+                ))
             }
+            add(LLMMessage(role = "user", content = userPrompt))
+        }
 
-            // Task / subtask metrics auto-incremented inside LLMClient.complete()
-            // via taskId / subtaskId passed in the call above. No manual increment here.
+        val (model, provider) = configService.getModel(
+            operation = ModelOperation.CODING,
+            taskId = taskId
+        )
 
-            // 12. Return result
-            ToolResult(
+        logger.info {
+            "Using model for multi-line edit: $model ($provider), file has ${lines.size} lines, stream=$stream, hasOnChunk=${onChunk != null}"
+        }
+
+        var didStream = false
+        val streamingCallback: StreamCallback? = if (stream && onChunk != null) { chunk ->
+            didStream = true
+            onChunk(chunk)
+        } else {
+            null
+        }
+
+        val response = try {
+            llmClient.complete(
+                provider = provider,
+                model = model,
+                messages = messages,
+                systemPrompt = systemPrompt,
+                temperature = 0.1, // Low temp for precision
+                maxTokens = configService.getTyped(ConfigKeys.MAX_OUTPUT_SIZE),
+                stream = stream,
+                onChunk = streamingCallback,
+                taskId = taskId,
+                subtaskId = subtaskId,
+                source = "MultiLineEditor"
+            )
+        } catch (e: Exception) {
+            logger.error(e) { "LLM request failed" }
+            return ToolResult.error("LLM request failed: ${e.message}. Try rephrasing the edit description.")
+        }
+
+        val responseContent = response.content
+        val usage = response.usage
+        val cost = response.cost
+
+        if (stream && onChunk != null && !didStream) {
+            onChunk(
+                StreamChunk(
+                    delta = responseContent,
+                    accumulated = responseContent,
+                    isComplete = true,
+                    source = "MultiLineEditor",
+                    usage = usage,
+                    cost = cost
+                )
+            )
+        }
+
+        // 6. Parse JSON response
+        val edits = try {
+            parseEdits(responseContent, lines.size)
+        } catch (e: Exception) {
+            logger.warn {
+                "Failed to parse LLM response as JSON: ${e.message}. " +
+                    "Response preview: ${responseContent.take(200)}"
+            }
+            return ToolResult.error(
+                "Failed to parse LLM response. Response was: ${responseContent.take(200)}... " +
+                "Try rephrasing the edit description or use advance_code_editing."
+            )
+        }
+
+        if (edits.isEmpty()) {
+            logger.warn { "LLM returned no edits for description: $editDescription" }
+            return ToolResult.error(
+                "LLM did not identify any changes to make. Try being more specific in the edit description."
+            )
+        }
+
+        logger.info { "LLM identified ${edits.size} edits" }
+
+        // 7. Validate edits
+        val validationError = validateEdits(edits, lines.size)
+        if (validationError != null) {
+            return ToolResult.error(validationError)
+        }
+
+        // 8. Apply edits (from end to start to preserve line numbers)
+        val newContent = LineEndings.toFileEol(applyEdits(lines, edits), originalContent)
+
+        // 9. Generate diff and stats (single pass, delegated to shared DiffUtils)
+        val changeSummary = DiffUtils.buildChangeSummary(
+            originalContent = originalContent,
+            newContent = newContent,
+            filePath = pathStr,
+            replacements = edits.size
+        )
+        val diff = changeSummary.unifiedDiff ?: ""
+        val addedLines = changeSummary.addedLines
+        val removedLines = changeSummary.removedLines
+
+        // 10. Re-acquire lock and write file
+        val newFileSize = withLockedFile(path) {
+            sandbox.revalidateBeforeIO(path)
+            Files.writeString(path, newContent)
+            path.fileSize()
+        }
+        val duration = (System.currentTimeMillis() - startTime).toInt()
+
+        logger.info {
+            "Multi-line edit completed: path=$pathStr, model=$model, " +
+            "edits=${edits.size}, tokens_in=${usage.inputTokens}, tokens_out=${usage.outputTokens}, " +
+            "cost_usd=$cost, duration=${duration}ms"
+        }
+
+        // 12. Return result
+        return ToolResult(
                 success = true,
                 output = buildString {
                     if (changeSummary.noop) {
@@ -392,7 +389,6 @@ class MultiLineEditorTool(
                     "diff" to diff
                 )
             )
-        }
     }
 
     /**
@@ -443,6 +439,12 @@ class MultiLineEditorTool(
         for (edit in edits) {
             if (edit.line_start < 1) {
                 return "Invalid edit: line_start ${edit.line_start} is less than 1"
+            }
+            if (edit.line_start > totalLines + 1) {
+                return "Invalid edit: line_start ${edit.line_start} exceeds file length + 1 (${totalLines + 1})"
+            }
+            if (edit.line_end < 0) {
+                return "Invalid edit: line_end ${edit.line_end} is negative"
             }
             if (edit.line_end > totalLines) {
                 return "Invalid edit: line_end ${edit.line_end} exceeds file length ($totalLines lines)"
