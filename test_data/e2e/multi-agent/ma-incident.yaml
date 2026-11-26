@@ -1,0 +1,40 @@
+name: "Linux incident response: triage, contain, review"
+description: "A triager rebuilds the intrusion timeline, a responder contains the compromised stand-in host per the runbook, and a reviewer confirms."
+on_failure: stop
+max_minutes: 45
+agents:
+  - name: triager
+    profile: triager
+    mode: plan
+    max_iterations: 12
+    task: >
+      The directory is a stand-in image of a compromised host (see runbook.md and
+      README.md). Read the evidence under `etc/`, `var/` and `opt/` and write
+      `report/timeline.md` with exactly these lines (plus any prose you like):
+      `first_access_time = <UTC timestamp of the first successful attacker access in var/log/auth.log>`,
+      `attacker_ip = <source IP of the attacker>` and
+      `persistence_count = <number of persistence mechanisms you count>`.
+      Do not modify any existing file.
+  - name: responder
+    profile: responder
+    mode: agent
+    depends_on: [triager]
+    max_iterations: 25
+    task: >
+      Read `runbook.md` and the triager report and execute the containment steps
+      exactly in runbook order (1 to 5). Log each step you perform to
+      `report/actions.md` as one line per step, format exactly
+      `action = <n> | <what you did>` with n numbered in runbook order. Do not
+      do anything the runbook does not ask for, and keep the evidence
+      (var/log/auth.log, the quarantined implant) intact.
+  - name: reviewer
+    profile: reviewer
+    mode: plan
+    depends_on: [responder]
+    max_iterations: 12
+    task: >
+      Re-check every runbook step against the host tree and write
+      `report/review.md` with the lines `residual_risk = <low|medium|high>` and
+      `evidence_preserved = yes` (only if the evidence really is preserved). You
+      are the last agent: run `python3 verify.py` yourself and make sure it
+      prints PASS before you finish.

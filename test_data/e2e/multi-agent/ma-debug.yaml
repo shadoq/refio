@@ -1,0 +1,37 @@
+name: "Debug war room: reproduce, fix, review"
+description: "A reproducer pins a real defect with a failing regression test, a fixer repairs the package, a reviewer signs off."
+on_failure: stop
+max_minutes: 45
+agents:
+  - name: reproducer
+    profile: reproducer
+    mode: agent
+    max_iterations: 15
+    task: >
+      `docs/contract.md` is the authoritative contract for
+      `business_days_between` in `pagerank/utils.py`. Derive failing inputs from
+      the contract, write `tests/test_regression.py` (unittest style, runnable
+      with `python3 -m unittest -v tests/test_regression.py`) that FAILS on the
+      current code, and document the failing inputs in `report/repro.md` as
+      lines of the exact form `failing_input = <expr>`. Do not fix the package.
+  - name: fixer
+    profile: fixer
+    mode: agent
+    depends_on: [reproducer]
+    max_iterations: 20
+    task: >
+      Fix `pagerank/utils.py` so the contract in `docs/contract.md` holds and
+      the whole suite passes, including `tests/test_regression.py`. You must
+      NOT edit, move or delete anything under `tests/` - the reproducer owns the
+      tests - and you must not weaken the contract.
+  - name: reviewer
+    profile: reviewer
+    mode: plan
+    depends_on: [fixer]
+    max_iterations: 12
+    task: >
+      Re-check the fix against `docs/contract.md` and write `report/review.md`
+      with the lines `verdict = approved` (only if it really holds) and
+      `root_cause = business_days_between`. You are the last agent: run
+      `python3 verify.py` yourself and make sure it prints PASS before you
+      finish.
