@@ -1,0 +1,31 @@
+{
+  "id": "white-team-security-headers",
+  "mode": "AGENT",
+  "description": "White-team hardening: a Node status portal sends no security headers, sets the sid cookie without HttpOnly or SameSite, reflects /?q= unescaped and redirects /login?next= to any absolute URL. Add the header set (Content-Security-Policy without unsafe-inline or unsafe-eval for scripts, nosniff, X-Frame-Options DENY with frame-ancestors none, no-referrer, HSTS), fix the cookie, escape the reflection, limit the sign-in target to site-relative paths, keep login, dashboard, the JSON API and the static files working, and report the headers added. check.js drives the app on an ephemeral port.",
+  "category": "security",
+  "max_iterations": 40,
+  "fixture": "fixtures/headers-app",
+  "prompt_file": "prompts/white-team-security-headers.md",
+  "assert": {
+    "tool_order": ["read_file", "run_terminal_command"],
+    "tool_invoked": [ { "name": "run_terminal_command", "args_regex": "check\\.js" } ],
+    "needles_in_file": [
+      { "path": "server.js", "regex": "[Hh][Tt][Tt][Pp][Oo]nly" },
+      { "path": "server.js", "regex": "[Ss]ame[Ss]ite" },
+      { "path": "report/hardening.md", "regex": "^header[[:space:]]*=[[:space:]]*[A-Za-z0-9-]+[[:space:]]*$", "min_count": 5 }
+    ],
+    "file_unchanged": [
+      "check.js",
+      "README.md",
+      "public/style.css"
+    ],
+    "build_cmd": "node check.js",
+    "enforce_max_iterations": true,
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "server.js sends Content-Security-Policy (no unsafe-inline or unsafe-eval for scripts, frame-ancestors 'none'), X-Content-Type-Options: nosniff, X-Frame-Options: DENY, Referrer-Policy: no-referrer and Strict-Transport-Security on every HTML response, and the pages no longer depend on inline script; the sid cookie is set with HttpOnly, SameSite=Lax or Strict and Path=/; the /?q= reflection is escaped; the /login next target is limited to site-relative paths (absolute URLs, //host and backslash variants refused) while /account still works; dashboard and account answer 401 without the cookie and 200 with it, the JSON API and the static files still work; report/hardening.md lists each added header as a header = <name> line and explains the changes and the verification; check.js, README.md and public/style.css are untouched."
+    ]
+  }
+}

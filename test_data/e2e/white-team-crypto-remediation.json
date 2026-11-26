@@ -1,0 +1,43 @@
+{
+  "id": "white-team-crypto-remediation",
+  "mode": "AGENT",
+  "description": "White-team remediation: a document vault encrypts with a home-made stream cipher (static MD5 keystream, MD5(ciphertext) as MAC, unsalted MD5 passwords, timing-unsafe comparisons). Build the replacement module (fresh nonce, PBKDF2-HMAC-SHA256 key, HMAC-SHA256 keystream chain, encrypt-then-MAC, salted PBKDF2 passwords), migrate the data files with reencrypt_all, keep the CLI working and document the legacy weaknesses. check.py proves by experiment that the attacks are closed and legitimate use still works.",
+  "category": "security",
+  "max_iterations": 45,
+  "fixture": "fixtures/white-team-crypto",
+  "prompt_file": "prompts/white-team-crypto-remediation.md",
+  "assert": {
+    "tool_order": ["read_file", "create_new_file", "run_terminal_command"],
+    "tool_invoked": [ { "name": "run_terminal_command", "args_regex": "check\\.py" } ],
+    "needles_in_file": [
+      { "path": "vault/crypto.py", "regex": "pbkdf2_hmac" },
+      { "path": "vault/crypto.py", "regex": "compare_digest" },
+      { "path": "vault/crypto.py", "regex": "^import secrets|^from secrets import" },
+      { "path": "vault/cli.py", "regex": "crypto" },
+      { "path": "vault/cli.py", "regex": "legacy", "absent": true },
+      { "path": "vault/vault.db", "regex": "\"body\":[[:space:]]*\"A[g-v]" },
+      { "path": "vault/users.db", "regex": "pbkdf2_sha256\\$" },
+      { "path": "report/remediation.md", "regex": "^legacy_weakness[[:space:]]*=[[:space:]]*CWE-[0-9]+[[:space:]]*\\|[[:space:]]*[A-Za-z_]+[[:space:]]*$", "min_count": 4, "max_count": 4 },
+      { "path": "report/remediation.md", "regex": "^migrated_records[[:space:]]*=[[:space:]]*[0-9]+[[:space:]]*$", "min_count": 1, "max_count": 1 }
+    ],
+    "file_unchanged": [
+      "check.py",
+      "README.md",
+      "migration/PLAN.md",
+      "migration/rollout.json",
+      "vault/__init__.py",
+      "vault/__main__.py",
+      "vault/legacy.py",
+      "vault/vault.legacy.db",
+      "vault/users.legacy.db"
+    ],
+    "build_cmd": "python3 check.py",
+    "enforce_max_iterations": true,
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "vault/crypto.py replaces the legacy cipher with a per-record random nonce from secrets, a PBKDF2-HMAC-SHA256 derived key (at least 200000 rounds), an HMAC-SHA256 keystream chain and encrypt-then-MAC verified with hmac.compare_digest, passwords as salted PBKDF2 records; vault/vault.db and vault/users.db are migrated to format 0x02 through reencrypt_all, the CLI uses the new module and still works, report/remediation.md names the four legacy weaknesses with the legacy function that carries each and the number of migrated records; the gate, the legacy module, the plan, the rollout passwords and the frozen snapshot files are untouched."
+    ]
+  }
+}

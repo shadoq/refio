@@ -1,0 +1,9 @@
+Variant analysis for SEC-ADV-2026-031 is done. The advisory fixed only `find_offer`; I found seven more functions that splice caller input into the SQL text the same way and fixed all of them with bound parameters:
+
+- shop/orders.py: orders_for_customer, orders_between
+- shop/customers.py: search_customers, customers_in_region
+- shop/inventory.py: products_in_category
+- shop/reviews.py: reviews_by_customer
+- shop/reports.py: top_customers_by_region
+
+The report is in report/variants.md (one `variant = path | function` line per sibling, plus the functions I checked and ruled out: bound-parameter lookups, the placeholder-only f-string in customers_by_ids, the allow-listed fragment in orders_in_status and the already fixed find_offer). The queries return the same rows for legitimate input, including names with apostrophes such as Maggie O'Brien, and the payloads from the advisory now return nothing. `python3 check.py` and `python3 -m unittest` both pass. The gate, the seed data, the advisory files and shop/offers.py are untouched.

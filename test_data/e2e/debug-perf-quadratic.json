@@ -1,0 +1,29 @@
+{
+  "id": "debug-perf-quadratic",
+  "mode": "AGENT",
+  "description": "Debug a 3 minute nightly ledger reconciliation down to two hot spots (a linear scan per row inside the pairing loop and per-row re-sorting), fix them with a dict index and one sort while keeping the output byte-identical, and prove it with check.py (reference implementation on a hidden seeded input plus a deterministic comparison-count complexity bound).",
+  "category": "debugging",
+  "max_iterations": 40,
+  "fixture": "fixtures/perf-hotspot",
+  "prompt_file": "prompts/debug-perf-quadratic.md",
+  "assert": {
+    "tool_invoked": [ { "name": "run_terminal_command" } ],
+    "file_unchanged": [
+      "check.py",
+      "README.md",
+      "profile.txt",
+      "docs/incident/PERF-1181.md",
+      "data/ledgers-a.csv",
+      "data/ledgers-b.csv",
+      "data/expected.out"
+    ],
+    "build_cmd": "python3 check.py",
+    "enforce_max_iterations": true,
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The quadratic pairing in reconcile.py is replaced by a per-account dict index (and any per-row sorting or recompilation is hoisted out of the loop) so comparisons grow linearly with the input, while the output stays byte-identical to data/expected.out and to the gate reference on the hidden input, with duplicates still paired one at a time, and the gate, data, profile and ticket untouched."
+    ]
+  }
+}

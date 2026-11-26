@@ -1,0 +1,22 @@
+{
+  "id": "tb-sanitize-git-history",
+  "mode": "AGENT",
+  "description": "Terminal-Bench style git hygiene: three different old commits leaked a deploy key, a db password and an api token; rewrite the history of repo/ so no object anywhere contains any marker or fragment while every tracked file stays byte-identical. Needs git on PATH and in the run's --auto-approve (not in the default set).",
+  "category": "terminal-bench",
+  "max_iterations": 30,
+  "fixture": "fixtures/tb-git-history",
+  "prompt_file": "prompts/tb-sanitize-git-history.md",
+  "assert": {
+    "file_unchanged": [
+      "README.md",
+      "check.py"
+    ],
+    "build_cmd": "python3 check.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "No object anywhere in repo/.git (reachable or not) contains any of the three markers or their fragments, every tracked file is byte-identical to the golden tree, and README.md and check.py are untouched."
+    ]
+  }
+}

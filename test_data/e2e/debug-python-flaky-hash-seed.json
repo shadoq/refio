@@ -1,0 +1,31 @@
+{
+  "id": "debug-python-flaky-hash-seed",
+  "mode": "AGENT",
+  "description": "Debug an intermittently failing stdlib test suite: set iteration order breaks the documented ranking tie-break, a helper mutates a dict while iterating it (RuntimeError on larger inputs), and daily_report reads datetime.now() with no injectable clock. Fix the root causes without pinning PYTHONHASHSEED anywhere.",
+  "category": "debugging",
+  "max_iterations": 40,
+  "fixture": "fixtures/py-flaky",
+  "prompt_file": "prompts/debug-python-flaky-hash-seed.md",
+  "assert": {
+    "tool_invoked": [ { "name": "run_terminal_command" } ],
+    "file_unchanged": [
+      "check.py",
+      "README.md",
+      "ci/failures.txt",
+      "docs/incident/FLAKY-77.md",
+      "docs/tie-break.md",
+      ".github/workflows/ci.yml",
+      "tests/test_ranking.py",
+      "tests/test_merge.py",
+      "tests/test_report.py"
+    ],
+    "build_cmd": "python3 check.py",
+    "enforce_max_iterations": true,
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "All three root causes are fixed in pyflaky/ - the ranking follows the documented tie-break deterministically without relying on set order, the merge helper no longer mutates the dict while iterating it, and daily_report accepts an injected clock - with no PYTHONHASHSEED pinning anywhere, the tests, evidence files and gate untouched, and every check in check.py green."
+    ]
+  }
+}

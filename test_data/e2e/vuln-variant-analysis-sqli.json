@@ -1,0 +1,36 @@
+{
+  "id": "vuln-variant-analysis-sqli",
+  "mode": "AGENT",
+  "description": "Variant analysis after a security advisory: SEC-ADV-2026-031 fixed one string-built SQL query in the shop package; find every sibling occurrence the advisory author missed, list them in report/variants.md as `variant = path | function` lines and fix them with bound parameters while legitimate results stay the same. check.py probes every query function with honest input and injection payloads.",
+  "category": "security",
+  "max_iterations": 40,
+  "fixture": "fixtures/vuln-variants",
+  "prompt_file": "prompts/vuln-variant-analysis-sqli.md",
+  "assert": {
+    "tool_order": ["read_file", "run_terminal_command"],
+    "tool_invoked": [ { "name": "run_terminal_command", "args_regex": "check\\.py" } ],
+    "needle_in_file": { "path": "report/variants.md", "regex": "^variant[[:space:]]*=[[:space:]]*[^|]+[|][[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$" },
+    "needles_in_file": [
+      { "path": "report/variants.md", "regex": "^variant[[:space:]]*=", "min_count": 1 }
+    ],
+    "file_unchanged": [
+      "check.py",
+      "seed.py",
+      "shop/seed.py",
+      "shop/db.py",
+      "shop/offers.py",
+      "cli.py",
+      "SECURITY.md",
+      "CHANGELOG.md",
+      "README.md"
+    ],
+    "build_cmd": "python3 check.py",
+    "enforce_max_iterations": true,
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The report lists exactly the seven unfixed siblings - orders_for_customer and orders_between in shop/orders.py, search_customers and customers_in_region in shop/customers.py, products_in_category in shop/inventory.py, reviews_by_customer in shop/reviews.py and top_customers_by_region in shop/reports.py - and none of the bound-parameter look-ups, the placeholder-only f-string in customers_by_ids, the allow-listed fragment in orders_in_status or the already fixed find_offer; every sibling uses bound parameters, legitimate queries (including names with apostrophes such as O'Brien) return the same rows, injection payloads return nothing, and the gate, the seed data, the advisory files, cli.py and shop/offers.py are untouched."
+    ]
+  }
+}

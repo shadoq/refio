@@ -1,0 +1,29 @@
+{
+  "id": "tb-distro-pkg-pin",
+  "mode": "AGENT",
+  "description": "Terminal-Bench style package policy audit: decide for each of the 40 snapshot lines in packages.txt whether the version is installable under the 4 apt pin stanzas (origin, codename, component, version glob 5.0.*) and write report/allowed.txt plus report/denied-count.txt; the gate re-applies the pins to the snapshot and compares exactly.",
+  "category": "terminal-bench",
+  "max_iterations": 20,
+  "fixture": "fixtures/tb-pkg-policy",
+  "prompt_file": "prompts/tb-distro-pkg-pin.md",
+  "assert": {
+    "needle_in_file": {
+      "path": "report/allowed.txt",
+      "regex": "origin="
+    },
+    "file_unchanged": [
+      "checks.py",
+      "README.md",
+      "docs/policy.md",
+      "etc/apt/preferences.d/pinning",
+      "packages.txt"
+    ],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "allowed.txt holds exactly the 31 installable versions (exact case-sensitive pin matching, 5.0.* glob semantics, sorted, correct header) and denied-count.txt the count of the 9 non-installable lines, with the snapshot, the pinning file, the docs and the gate untouched."
+    ]
+  }
+}

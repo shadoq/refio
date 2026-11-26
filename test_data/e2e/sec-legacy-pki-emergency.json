@@ -1,0 +1,82 @@
+{
+  "id": "sec-legacy-pki-emergency",
+  "mode": "AGENT",
+  "description": "Server-side PKI work: the local gateway still runs on a SHA-1 legacy CA. Build a new SHA-256 CA in pki/current/, re-issue the server certificate from the same CSR, publish a legacy CRL revoking the old serial, switch proxy/gw.conf to the new files and write report/migration.md with eight keys; checks.py recomputes all eight with openssl and runs verify.sh, and the live server keeps serving TLS on the new chain. Needs openssl on PATH and in the run's --auto-approve (not in the default set).",
+  "category": "security",
+  "max_iterations": 45,
+  "fixture": "fixtures/legacy-pki",
+  "prompt_file": "prompts/sec-legacy-pki-emergency.md",
+  "fixture_server": {
+    "dir": "server",
+    "port": 8853,
+    "cmd": "exec python3 {{DIR}}/app.py {{PORT}}"
+  },
+  "assert": {
+    "tool_order": [
+      "read_file",
+      "run_terminal_command"
+    ],
+    "tool_invoked": [
+      {
+        "name": "run_terminal_command",
+        "args_regex": "openssl"
+      },
+      {
+        "name": "run_terminal_command",
+        "args_regex": "checks\\.py"
+      }
+    ],
+    "needles_in_file": [
+      {
+        "path": "report/migration.md",
+        "regex": "^old_serial[[:space:]]*=[[:space:]]*[0-9A-Fa-f:]+[[:space:]]*$"
+      },
+      {
+        "path": "report/migration.md",
+        "regex": "^new_serial[[:space:]]*=[[:space:]]*[0-9A-Fa-f:]+[[:space:]]*$"
+      },
+      {
+        "path": "report/migration.md",
+        "regex": "^old_sig[[:space:]]*=[[:space:]]*sha1WithRSAEncryption[[:space:]]*$"
+      },
+      {
+        "path": "report/migration.md",
+        "regex": "^new_sig[[:space:]]*=[[:space:]]*sha256WithRSAEncryption[[:space:]]*$"
+      },
+      {
+        "path": "report/migration.md",
+        "regex": "^crl_entries[[:space:]]*=[[:space:]]*[0-9]+[[:space:]]*$"
+      },
+      {
+        "path": "report/migration.md",
+        "regex": "^trust_anchor[[:space:]]*=[[:space:]]*pki/current/ca\\.crt[[:space:]]*$"
+      },
+      {
+        "path": "report/migration.md",
+        "regex": "^proxy_cert[[:space:]]*=[[:space:]]*pki/current/server\\.crt[[:space:]]*$"
+      },
+      {
+        "path": "report/migration.md",
+        "regex": "^proxy_key[[:space:]]*=[[:space:]]*pki/server\\.key[[:space:]]*$"
+      }
+    ],
+    "file_unchanged": [
+      "verify.sh",
+      "checks.py",
+      "docs/incident.md",
+      "README.md",
+      "pki/legacy/server.csr",
+      "pki/legacy/ca.crt",
+      "pki/legacy/ca.key",
+      "pki/server.key"
+    ],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The agent built a new SHA-256 CA in pki/current/, re-issued the server certificate from the same CSR with a fresh serial, published pki/legacy/crl.pem revoking the old serial under the legacy CA, and switched proxy/gw.conf to the new files, leaving the verify.sh gate, the checks, the incident note, the legacy CA/CSR and the server key untouched.",
+      "python3 checks.py passes: all eight report keys match the openssl-recomputed values and bash verify.sh exits 0 (new chain verifies for sslserver, old cert fails against the new anchor and fails -crl_check against the legacy CRL)."
+    ]
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "id": "sec-siem-detection-tuning",
+  "mode": "AGENT",
+  "description": "SIEM threshold tuning: raise only the threshold numbers of three YAML rules until the provided rules_test.py passes (benign fires zero, attack fires all three) and log old -> new per rule plus the fire counts.",
+  "category": "security",
+  "max_iterations": 35,
+  "fixture": "fixtures/siem-rules",
+  "prompt_file": "prompts/sec-siem-detection-tuning.md",
+  "assert": {
+    "tool_order": [
+      "run_terminal_command"
+    ],
+    "tool_invoked": [
+      {
+        "name": "run_terminal_command"
+      }
+    ],
+    "needle_in_file": {
+      "path": "report/tuning.txt",
+      "regex": "benign_fires[[:space:]]*=[[:space:]]*0"
+    },
+    "file_unchanged": [
+      "check.py",
+      "README.md",
+      "rules_test.py",
+      "baseline/events-benign.ndjson",
+      "baseline/events-attack.ndjson"
+    ],
+    "build_cmd": "python3 check.py",
+    "enforce_max_iterations": true,
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The agent changed only the three threshold numbers (5->8, 4->5, 3->6 or equally valid values that keep both baselines correct), proved it with rules_test.py (benign 0 fires, attack 3 fires), wrote the old -> new changelog with the true original thresholds, and left the test, baselines and gate untouched."
+    ]
+  }
+}

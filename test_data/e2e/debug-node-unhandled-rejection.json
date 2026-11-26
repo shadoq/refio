@@ -1,0 +1,31 @@
+{
+  "id": "debug-node-unhandled-rejection",
+  "mode": "AGENT",
+  "description": "Debug a Node 20 job worker that dies every few minutes with an unhandled rejection after a deploy: a fire-and-forget refresh round nobody catches, a Promise.all that hides which job failed, a retry helper that never gives up, and a log line that claims success. Fix the root causes in src/ and prove it with node check.js.",
+  "category": "debugging",
+  "max_iterations": 40,
+  "fixture": "fixtures/node-crash",
+  "prompt_file": "prompts/debug-node-unhandled-rejection.md",
+  "assert": {
+    "tool_invoked": [ { "name": "run_terminal_command" } ],
+    "needle_in_file": { "path": "src/refresh.js", "regex": "refresh failed" },
+    "needles_in_file": [
+      { "path": "src/refresh.js", "regex": "process[.]on[[:space:]]*[[]unhandledRejection", "absent": true }
+    ],
+    "file_unchanged": [
+      "check.js",
+      "logs/app.log",
+      "docs/incident/INC-2141.md",
+      "README.md",
+      "package.json"
+    ],
+    "build_cmd": "node check.js",
+    "enforce_max_iterations": true,
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The defect chain in src/ is fixed at the root cause - refreshAll reports each failing item with its id and the original error message instead of letting a rejection escape through the fire-and-forget round, the retry helper gives up after the configured attempts and rethrows, and the success log only appears when the round really succeeded - with the gate, the incident doc, the log and the README untouched and node check.js fully green."
+    ]
+  }
+}

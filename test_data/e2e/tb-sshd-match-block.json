@@ -1,0 +1,28 @@
+{
+  "id": "tb-sshd-match-block",
+  "mode": "AGENT",
+  "description": "Terminal-Bench style sshd hardening: block the contractor user spike from SSH entirely by adding a global DenyUsers spike to etc/ssh/sshd_config while changing nothing else; the gate parses the config with sshd first-obtained-value and Match semantics and verifies every other user keeps exactly the previous effective settings (SHA-256 digests).",
+  "category": "terminal-bench",
+  "max_iterations": 20,
+  "fixture": "fixtures/tb-sshd-match",
+  "prompt_file": "prompts/tb-sshd-match-block.md",
+  "assert": {
+    "needle_in_file": {
+      "path": "etc/ssh/sshd_config",
+      "regex": "DenyUsers[[:space:]]+spike"
+    },
+    "file_unchanged": [
+      "checks.py",
+      "README.md",
+      "etc/passwd",
+      "etc/group"
+    ],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "etc/ssh/sshd_config gained a global DenyUsers spike that applies to every connection; spike is denied while root, dana, lee and ruz keep byte-identical effective settings, the Match Group contractors block stays and passwd/group/README/gate are untouched."
+    ]
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "id": "linux-shell-evidence-hunt",
+  "mode": "AGENT",
+  "description": "Linux forensics: answer twelve evidence questions about a captured server file system (sshd drop-in, rogue cron entry, leaked token, extra ssh key, hidden file, permissions, log statistics) by digging with the shell, and write report/evidence.txt; check.py re-derives every answer from the tree.",
+  "category": "linux-ops",
+  "max_iterations": 45,
+  "fixture": "fixtures/evidence-hunt",
+  "prompt_file": "prompts/linux-shell-evidence-hunt.md",
+  "assert": {
+    "tool_order": [
+      "run_terminal_command"
+    ],
+    "tool_invoked": [
+      {
+        "name": "run_terminal_command"
+      }
+    ],
+    "needle_in_file": {
+      "path": "report/evidence.txt",
+      "regex": "ssh_root_login[[:space:]]*="
+    },
+    "file_unchanged": [
+      "check.py",
+      "README.md",
+      "etc/ssh/sshd_config.d/50-backup-access.conf",
+      "etc/cron.d/vendor-sync",
+      "etc/web/legacy-gateway.conf",
+      "var/log/auth.log",
+      "var/log/app/application.log",
+      "srv/app/src/main.py",
+      "home/bob/.ssh/authorized_keys"
+    ],
+    "file_absent": [
+      "report/evidence.txt.bak"
+    ],
+    "build_cmd": "python3 check.py",
+    "enforce_max_iterations": true,
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The agent derived all twelve answers from the tree itself (configs, logs, permissions, symlink) without being fooled by the opt/vendor decoys, wrote them as key = value lines in report/evidence.txt, and left check.py and every input file byte-identical."
+    ]
+  }
+}

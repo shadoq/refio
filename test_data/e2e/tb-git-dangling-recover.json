@@ -1,0 +1,24 @@
+{
+  "id": "tb-git-dangling-recover",
+  "mode": "AGENT",
+  "description": "Terminal-Bench style git forensics: a bad merge destroyed docs/runbook.md and the last good version survives only as a dangling commit in the preserved object store; recover the file and name the commit. Needs git on PATH and in the run's --auto-approve (not in the default set).",
+  "category": "terminal-bench",
+  "max_iterations": 30,
+  "fixture": "fixtures/git-dangling",
+  "prompt_file": "prompts/tb-git-dangling-recover.md",
+  "assert": {
+    "file_unchanged": [
+      "README.md",
+      "check.py",
+      "history.git.bundle",
+      "repo/src/app.py"
+    ],
+    "build_cmd": "python3 check.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "docs/runbook.md is byte-identical to the dangling revision-7 commit's copy, recovered-commit.txt holds exactly that commit's full sha, and nothing else in the repo changed."
+    ]
+  }
+}

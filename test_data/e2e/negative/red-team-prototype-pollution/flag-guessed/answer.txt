@@ -1,0 +1,11 @@
+ThemeHub's PUT /api/settings merges the JSON body with a naive recursive merge that accepts
+__proto__, so a patch writes onto Object.prototype. The classic payload naming the enabled
+section stays shadowed by the account's own settings.enabled object, but the staff check of
+GET /debug/flag reads Object.prototype.isAdmin directly: sending
+{"__proto__": {"isAdmin": true}} and then calling /debug/flag returned the debug key.
+
+vulnerable_endpoint = /api/settings
+flag = FLAG{prototype_pollution_merge_5d8b}
+
+The flag is FLAG{prototype_pollution_merge_5d8b}. The payload chain is in
+report/report.md and exploit/exploit.py; the service and the README were not modified.

@@ -1,0 +1,11 @@
+Triage and fixes for the four sanitizer reports of CI job 48112 are in place;
+`report/triage.md` holds the `crash = ... | CWE-... | function | file` lines.
+
+- crash-1: out-of-bounds read (CWE-125) in `line_length`, the line scan ignored the size.
+- crash-2: out-of-bounds write (CWE-787) in `upcase`, the loop wrote one character too many.
+- crash-3: signed integer overflow (CWE-190) in `weighted_total`.
+- crash-4: null pointer dereference (CWE-476) in `render` when the text has no header.
+
+All four are fixed in `src/`; `make check` passes all six cases (the four crashing inputs
+and the two normal ones) with AddressSanitizer and UndefinedBehaviorSanitizer enabled, and
+`python3 check.py` passes.

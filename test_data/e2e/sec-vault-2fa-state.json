@@ -1,0 +1,34 @@
+{
+  "id": "sec-vault-2fa-state",
+  "mode": "AGENT",
+  "description": "Server-side security: the local KeyVault login state machine keys its sessions by username and carries the verified flag across logins, so a second login with just the password skips the 2FA step (session reset flaw). Reproduce the skip on the live server, re-key the state per session token with relogin invalidation, make the provided suite pass and report the state keys. Needs http_request against the live fixture server.",
+  "category": "security",
+  "max_iterations": 35,
+  "fixture": "fixtures/vault-2fa",
+  "prompt_file": "prompts/sec-vault-2fa-state.md",
+  "fixture_server": { "dir": "server", "port": 8848, "cmd": "exec python3 {{DIR}}/app.py {{PORT}}" },
+  "assert": {
+    "tool_order": ["http_request", "run_terminal_command"],
+    "tool_invoked": [
+      { "name": "http_request" },
+      { "name": "run_terminal_command", "args_regex": "test_2fa" }
+    ],
+    "needle_in_file": { "path": "report/fix.md", "regex": "^state_key_before[[:space:]]*=[[:space:]]*\\S" },
+    "needles_in_file": [
+      { "path": "report/fix.md", "regex": "^state_key_after[[:space:]]*=[[:space:]]*\\S" },
+      { "path": "report/fix.md", "regex": "^sessions_invalidated[[:space:]]*=[[:space:]]*yes[[:space:]]*$" }
+    ],
+    "file_unchanged": [
+      "tests/test_2fa.py",
+      "README.md"
+    ],
+    "build_cmd": "python3 tests/test_2fa.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The agent demonstrated on the live server that a second login for the demo account reaches GET /vault without a new verify step, then re-keyed LOGIN_STATE in server/app.py by session token so every fresh login starts pending, old sessions of the user are invalidated, and the happy path (login, verify, vault) still works for every account.",
+      "python3 tests/test_2fa.py passes all 14 checks, report/fix.md carries state_key_before, state_key_after and sessions_invalidated = yes, and the test suite and README are untouched."
+    ]
+  }
+}

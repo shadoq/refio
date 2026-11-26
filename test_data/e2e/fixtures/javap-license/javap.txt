@@ -1,0 +1,446 @@
+Compiled from "LicenseManager.java"
+public final class com.acme.lic.LicenseManager {
+  private static final int MOD = 1000003;
+
+  private static final int SEED = 20979;
+
+  private static final int N = 14;
+
+  private static final int M = 12;
+
+  private static final byte[] KEY;
+
+  private static final java.lang.String[] S;
+
+  private static final int[] PERM;
+
+  private static final int[] PRIMES;
+
+  private static int MAGIC;
+
+  private static boolean TRIAL_OPEN;
+
+  private static boolean DESK_OPEN;
+
+  private com.acme.lic.LicenseManager();
+    Code:
+       0: aload_0
+       1: invokespecial #1                  // Method java/lang/Object."<init>":()V
+       4: return
+
+  static boolean isPrime(int);
+    Code:
+       0: iconst_2
+       1: istore_1
+       2: iload_1
+       3: iload_1
+       4: imul
+       5: iload_0
+       6: if_icmpgt     23
+       9: iload_0
+      10: iload_1
+      11: irem
+      12: ifne          17
+      15: iconst_0
+      16: ireturn
+      17: iinc          1, 1
+      20: goto          2
+      23: iconst_1
+      24: ireturn
+
+  static java.lang.String dec(int);
+    Code:
+       0: invokestatic  #7                  // Method java/util/Base64.getDecoder:()Ljava/util/Base64$Decoder;
+       3: getstatic     #13                 // Field S:[Ljava/lang/String;
+       6: iload_0
+       7: aaload
+       8: invokevirtual #19                 // Method java/util/Base64$Decoder.decode:(Ljava/lang/String;)[B
+      11: astore_1
+      12: iconst_0
+      13: istore_2
+      14: iload_2
+      15: aload_1
+      16: arraylength
+      17: if_icmpge     44
+      20: aload_1
+      21: iload_2
+      22: aload_1
+      23: iload_2
+      24: baload
+      25: getstatic     #25                 // Field KEY:[B
+      28: iload_2
+      29: getstatic     #25                 // Field KEY:[B
+      32: arraylength
+      33: irem
+      34: baload
+      35: ixor
+      36: i2b
+      37: bastore
+      38: iinc          2, 1
+      41: goto          14
+      44: new           #29                 // class java/lang/String
+      47: dup
+      48: aload_1
+      49: getstatic     #31                 // Field java/nio/charset/StandardCharsets.UTF_8:Ljava/nio/charset/Charset;
+      52: invokespecial #37                 // Method java/lang/String."<init>":([BLjava/nio/charset/Charset;)V
+      55: areturn
+
+  static char[] permute(java.lang.String);
+    Code:
+       0: bipush        12
+       2: newarray       char
+       4: astore_1
+       5: aload_0
+       6: ldc           #40                 // String -
+       8: ldc           #42                 // String
+      10: invokevirtual #44                 // Method java/lang/String.replace:(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Ljava/lang/String;
+      13: astore_2
+      14: iconst_0
+      15: istore_3
+      16: iload_3
+      17: bipush        12
+      19: if_icmpge     40
+      22: aload_1
+      23: iload_3
+      24: aload_2
+      25: getstatic     #48                 // Field PERM:[I
+      28: iload_3
+      29: iaload
+      30: invokevirtual #52                 // Method java/lang/String.charAt:(I)C
+      33: castore
+      34: iinc          3, 1
+      37: goto          16
+      40: aload_1
+      41: areturn
+
+  static long checksum(char[]);
+    Code:
+       0: getstatic     #56                 // Field MAGIC:I
+       3: i2l
+       4: lstore_1
+       5: iconst_0
+       6: istore_3
+       7: iload_3
+       8: aload_0
+       9: arraylength
+      10: if_icmpge     37
+      13: lload_1
+      14: aload_0
+      15: iload_3
+      16: caload
+      17: i2l
+      18: getstatic     #60                 // Field PRIMES:[I
+      21: iload_3
+      22: iaload
+      23: i2l
+      24: lmul
+      25: ladd
+      26: ldc2_w        #63                 // long 1000003l
+      29: lrem
+      30: lstore_1
+      31: iinc          3, 1
+      34: goto          7
+      37: lload_1
+      38: lreturn
+
+  static int tierOf(char);
+    Code:
+       0: iconst_3
+       1: invokestatic  #65                 // Method dec:(I)Ljava/lang/String;
+       4: iload_0
+       5: invokevirtual #69                 // Method java/lang/String.indexOf:(I)I
+       8: ireturn
+
+  public static java.lang.String tierName(int);
+    Code:
+       0: iload_0
+       1: iflt          9
+       4: iload_0
+       5: iconst_2
+       6: if_icmple     12
+       9: ldc           #73                 // String UNKNOWN
+      11: areturn
+      12: iconst_4
+      13: invokestatic  #65                 // Method dec:(I)Ljava/lang/String;
+      16: ldc           #75                 // String ,
+      18: invokevirtual #77                 // Method java/lang/String.split:(Ljava/lang/String;)[Ljava/lang/String;
+      21: iload_0
+      22: aaload
+      23: areturn
+
+  public static boolean verify(java.lang.String, java.lang.String);
+    Code:
+       0: aload_0
+       1: ifnull        13
+       4: aload_0
+       5: invokevirtual #81                 // Method java/lang/String.length:()I
+       8: bipush        14
+      10: if_icmpeq     15
+      13: iconst_0
+      14: ireturn
+      15: aload_0
+      16: iconst_4
+      17: invokevirtual #52                 // Method java/lang/String.charAt:(I)C
+      20: bipush        45
+      22: if_icmpne     36
+      25: aload_0
+      26: bipush        9
+      28: invokevirtual #52                 // Method java/lang/String.charAt:(I)C
+      31: bipush        45
+      33: if_icmpeq     38
+      36: iconst_0
+      37: ireturn
+      38: aload_1
+      39: ldc           #40                 // String -
+      41: iconst_m1
+      42: invokevirtual #85                 // Method java/lang/String.split:(Ljava/lang/String;I)[Ljava/lang/String;
+      45: astore_2
+      46: aload_2
+      47: arraylength
+      48: iconst_3
+      49: if_icmpeq     54
+      52: iconst_0
+      53: ireturn
+      54: aload_2
+      55: iconst_0
+      56: aaload
+      57: invokevirtual #81                 // Method java/lang/String.length:()I
+      60: iconst_1
+      61: if_icmpne     86
+      64: aload_2
+      65: iconst_1
+      66: aaload
+      67: invokevirtual #81                 // Method java/lang/String.length:()I
+      70: bipush        6
+      72: if_icmpne     86
+      75: aload_2
+      76: iconst_2
+      77: aaload
+      78: invokevirtual #81                 // Method java/lang/String.length:()I
+      81: bipush        7
+      83: if_icmpeq     88
+      86: iconst_0
+      87: ireturn
+      88: aload_2
+      89: iconst_0
+      90: aaload
+      91: iconst_0
+      92: invokevirtual #52                 // Method java/lang/String.charAt:(I)C
+      95: invokestatic  #88                 // Method tierOf:(C)I
+      98: istore_3
+      99: iload_3
+     100: ifge          105
+     103: iconst_0
+     104: ireturn
+     105: aload_0
+     106: invokestatic  #92                 // Method permute:(Ljava/lang/String;)[C
+     109: astore        4
+     111: new           #29                 // class java/lang/String
+     114: dup
+     115: aload         4
+     117: iconst_0
+     118: bipush        6
+     120: invokespecial #96                 // Method java/lang/String."<init>":([CII)V
+     123: aload_2
+     124: iconst_1
+     125: aaload
+     126: invokevirtual #99                 // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     129: ifne          134
+     132: iconst_0
+     133: ireturn
+     134: aload         4
+     136: invokestatic  #103                // Method checksum:([C)J
+     139: lstore        5
+     141: iload_3
+     142: ifne          168
+     145: getstatic     #107                // Field TRIAL_OPEN:Z
+     148: ifne          153
+     151: iconst_0
+     152: ireturn
+     153: lload         5
+     155: ldc2_w        #111                // long 11l
+     158: ladd
+     159: ldc2_w        #63                 // long 1000003l
+     162: lrem
+     163: lstore        7
+     165: goto          200
+     168: iload_3
+     169: iconst_1
+     170: if_icmpne     196
+     173: getstatic     #113                // Field DESK_OPEN:Z
+     176: ifne          181
+     179: iconst_0
+     180: ireturn
+     181: lload         5
+     183: ldc2_w        #116                // long 29l
+     186: ladd
+     187: ldc2_w        #63                 // long 1000003l
+     190: lrem
+     191: lstore        7
+     193: goto          200
+     196: lload         5
+     198: lstore        7
+     200: ldc           #118                // String %07d
+     202: iconst_1
+     203: anewarray     #2                  // class java/lang/Object
+     206: dup
+     207: iconst_0
+     208: lload         7
+     210: invokestatic  #120                // Method java/lang/Long.valueOf:(J)Ljava/lang/Long;
+     213: aastore
+     214: invokestatic  #126                // Method java/lang/String.format:(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;
+     217: aload_2
+     218: iconst_2
+     219: aaload
+     220: invokevirtual #99                 // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     223: ireturn
+
+  public static void main(java.lang.String[]);
+    Code:
+       0: aload_0
+       1: arraylength
+       2: iconst_2
+       3: if_icmpeq     18
+       6: getstatic     #130                // Field java/lang/System.err:Ljava/io/PrintStream;
+       9: ldc           #136                // String usage: LicenseManager <device-id> <licence-key>
+      11: invokevirtual #138                // Method java/io/PrintStream.println:(Ljava/lang/String;)V
+      14: iconst_2
+      15: invokestatic  #144                // Method java/lang/System.exit:(I)V
+      18: getstatic     #148                // Field java/lang/System.out:Ljava/io/PrintStream;
+      21: aload_0
+      22: iconst_0
+      23: aaload
+      24: aload_0
+      25: iconst_1
+      26: aaload
+      27: invokestatic  #151                // Method verify:(Ljava/lang/String;Ljava/lang/String;)Z
+      30: ifeq          40
+      33: iconst_1
+      34: invokestatic  #65                 // Method dec:(I)Ljava/lang/String;
+      37: goto          44
+      40: iconst_2
+      41: invokestatic  #65                 // Method dec:(I)Ljava/lang/String;
+      44: invokevirtual #138                // Method java/io/PrintStream.println:(Ljava/lang/String;)V
+      47: return
+
+  static {};
+    Code:
+       0: bipush        6
+       2: newarray       byte
+       4: putstatic     #25                 // Field KEY:[B
+       7: iconst_5
+       8: anewarray     #29                 // class java/lang/String
+      11: putstatic     #13                 // Field S:[Ljava/lang/String;
+      14: bipush        12
+      16: newarray       int
+      18: putstatic     #48                 // Field PERM:[I
+      21: bipush        12
+      23: newarray       int
+      25: putstatic     #60                 // Field PRIMES:[I
+      28: iconst_0
+      29: istore_0
+      30: iload_0
+      31: getstatic     #25                 // Field KEY:[B
+      34: arraylength
+      35: if_icmpge     64
+      38: getstatic     #25                 // Field KEY:[B
+      41: iload_0
+      42: sipush        20979
+      45: iconst_4
+      46: iload_0
+      47: imul
+      48: iushr
+      49: bipush        90
+      51: iconst_3
+      52: iload_0
+      53: imul
+      54: iadd
+      55: ixor
+      56: i2b
+      57: bastore
+      58: iinc          0, 1
+      61: goto          30
+      64: getstatic     #13                 // Field S:[Ljava/lang/String;
+      67: iconst_0
+      68: ldc           #155                // String 6CFcA0slwCEcVFZbnQ==
+      70: aastore
+      71: getstatic     #13                 // Field S:[Ljava/lang/String;
+      74: iconst_1
+      75: ldc           #157                // String 5QtyIyg67GJ+LQ==
+      77: aastore
+      78: getstatic     #13                 // Field S:[Ljava/lang/String;
+      81: iconst_2
+      82: ldc           #159                // String +wd7IyU97AY=
+      84: aastore
+      85: getstatic     #13                 // Field S:[Ljava/lang/String;
+      88: iconst_3
+      89: ldc           #161                // String /QZi
+      91: aastore
+      92: getstatic     #13                 // Field S:[Ljava/lang/String;
+      95: iconst_4
+      96: ldc           #163                // String /RB4JypF7QdiLTIm+W5iIzQ/7BA=
+      98: aastore
+      99: iconst_0
+     100: istore_0
+     101: iload_0
+     102: bipush        12
+     104: if_icmpge     126
+     107: getstatic     #48                 // Field PERM:[I
+     110: iload_0
+     111: iload_0
+     112: iconst_5
+     113: imul
+     114: iconst_3
+     115: iadd
+     116: bipush        12
+     118: irem
+     119: iastore
+     120: iinc          0, 1
+     123: goto          101
+     126: iconst_2
+     127: istore_0
+     128: iconst_0
+     129: istore_1
+     130: iload_1
+     131: bipush        12
+     133: if_icmpge     164
+     136: iload_0
+     137: invokestatic  #165                // Method isPrime:(I)Z
+     140: ifne          149
+     143: iinc          0, 1
+     146: goto          136
+     149: getstatic     #60                 // Field PRIMES:[I
+     152: iload_1
+     153: iload_0
+     154: iastore
+     155: iinc          0, 1
+     158: iinc          1, 1
+     161: goto          130
+     164: iconst_0
+     165: invokestatic  #65                 // Method dec:(I)Ljava/lang/String;
+     168: invokevirtual #169                // Method java/lang/String.hashCode:()I
+     171: sipush        31295
+     174: ixor
+     175: ldc           #172                // int 8388607
+     177: iand
+     178: putstatic     #56                 // Field MAGIC:I
+     181: getstatic     #56                 // Field MAGIC:I
+     184: iconst_1
+     185: iand
+     186: ifne          193
+     189: iconst_1
+     190: goto          194
+     193: iconst_0
+     194: putstatic     #107                // Field TRIAL_OPEN:Z
+     197: getstatic     #56                 // Field MAGIC:I
+     200: bipush        7
+     202: idiv
+     203: iconst_3
+     204: irem
+     205: ifne          212
+     208: iconst_1
+     209: goto          213
+     212: iconst_0
+     213: putstatic     #113                // Field DESK_OPEN:Z
+     216: return
+}

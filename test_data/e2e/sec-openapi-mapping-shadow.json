@@ -1,0 +1,35 @@
+{
+  "id": "sec-openapi-mapping-shadow",
+  "mode": "AGENT",
+  "description": "Server-side security: the local UserDir router registers its /{path} catch-all BEFORE the documented /api/v2/users route, so first-match routing shadows the contract endpoint behind the catch-all 404 page. Reproduce on the live server, reorder the routing so the documented endpoint serves while unknown paths keep the catch-all, make the provided API suite pass and report the shadowed endpoint. Needs http_request against the live fixture server.",
+  "category": "security",
+  "max_iterations": 35,
+  "fixture": "fixtures/openapi-shadow",
+  "prompt_file": "prompts/sec-openapi-mapping-shadow.md",
+  "fixture_server": { "dir": "server", "port": 8847, "cmd": "exec python3 {{DIR}}/app.py {{PORT}}" },
+  "assert": {
+    "tool_order": ["http_request", "run_terminal_command"],
+    "tool_invoked": [
+      { "name": "http_request" },
+      { "name": "run_terminal_command", "args_regex": "api_test" }
+    ],
+    "needle_in_file": { "path": "report/shadow.md", "regex": "^shadowed_endpoint[[:space:]]*=[[:space:]]*/api/v2/users[[:space:]]*$" },
+    "needles_in_file": [
+      { "path": "report/shadow.md", "regex": "^catchall_position[[:space:]]*=[[:space:]]*first[[:space:]]*$" },
+      { "path": "report/shadow.md", "regex": "^fixed_by[[:space:]]*=[[:space:]]*\\S" }
+    ],
+    "file_unchanged": [
+      "server/openapi.json",
+      "tests/api_test.py",
+      "README.md"
+    ],
+    "build_cmd": "python3 tests/api_test.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The agent showed on the live server that GET /api/v2/users returns the catch-all 404 despite being documented, then reordered ROUTES in server/app.py so the exact routes are matched before the /{path} catch-all: the user list serves with its dept filter, unknown paths keep the catch-all 404, and openapi.json is served unchanged.",
+      "python3 tests/api_test.py passes all 7 checks, report/shadow.md carries shadowed_endpoint = /api/v2/users, catchall_position = first and a fixed_by line, and the contract, the test suite and the README are untouched."
+    ]
+  }
+}

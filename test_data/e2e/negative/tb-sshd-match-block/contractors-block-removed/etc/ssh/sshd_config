@@ -1,0 +1,36 @@
+# edgegate bastion - /etc/ssh/sshd_config
+# Global section: applies to every connection.
+
+Port 22
+AddressFamily any
+Protocol 2
+
+HostKey /etc/ssh/ssh_host_rsa_key
+HostKey /etc/ssh/ssh_host_ecdsa_key
+HostKey /etc/ssh/ssh_host_ed25519_key
+
+LoginGraceTime 60
+PermitRootLogin prohibit-password
+StrictModes yes
+MaxAuthTries 4
+MaxSessions 10
+
+PubkeyAuthentication yes
+AuthorizedKeysFile .ssh/authorized_keys
+HostbasedAuthentication no
+IgnoreRhosts yes
+
+# Offboarding 2026-11: spike must not access this host at all.
+DenyUsers spike
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+
+X11Forwarding no
+PrintMotd no
+AllowTcpForwarding no
+ClientAliveInterval 120
+ClientAliveCountMax 3
+UsePAM yes
+
+AcceptEnv LANG LC_*
+Subsystem sftp /usr/lib/openssh/sftp-server

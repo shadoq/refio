@@ -1,0 +1,42 @@
+{
+  "id": "tb-gid-inventory",
+  "mode": "AGENT",
+  "description": "Terminal-Bench style sysadmin inventory: count /sbin/nologin accounts in etc/passwd, list their deduplicated sorted primary groups from etc/group, and find the files under srv/ with mode exactly 0750; the gate re-derives all three from the tree. Note: chmod is not in the default --auto-approve set (this task needs no chmod, it is a read-only inventory).",
+  "category": "terminal-bench",
+  "max_iterations": 20,
+  "fixture": "fixtures/tb-gid",
+  "prompt_file": "prompts/tb-gid-inventory.md",
+  "assert": {
+    "needle_in_file": {
+      "path": "report/inventory.txt",
+      "regex": "nologin_count[[:space:]]*="
+    },
+    "file_unchanged": [
+      "checks.py",
+      "README.md",
+      "etc/passwd",
+      "etc/group",
+      "srv/deploy.sh",
+      "srv/runbook.md",
+      "srv/manifest.yml",
+      "srv/audit-policy.conf",
+      "srv/mirror.sh",
+      "srv/daily-sync.sh",
+      "srv/weekly-archive.sh",
+      "srv/internal/keys.md",
+      "srv/internal/runjob.sh",
+      "srv/internal/README.txt",
+      "srv/public/index.html",
+      "srv/public/robots.txt",
+      "srv/queue/drain.sh",
+      "srv/queue/purge.sh"
+    ],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "nologin_count counts only /sbin/nologin shells, groups_with_nologin is the deduplicated sorted primary-group list and files_group_only lists exactly the srv files with mode 0750; passwd, group, the srv tree and the gate are untouched."
+    ]
+  }
+}

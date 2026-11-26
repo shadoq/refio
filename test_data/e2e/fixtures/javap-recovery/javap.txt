@@ -1,0 +1,233 @@
+Compiled from "InterestCalculator.java"
+public class InterestCalculator {
+  private static final long TIER1 = 100000l;
+
+  private static final long TIER2 = 1000000l;
+
+  private static final long TIER3 = 10000000l;
+
+  private InterestCalculator();
+    Code:
+       0: aload_0
+       1: invokespecial #1                  // Method java/lang/Object."<init>":()V
+       4: return
+
+  public static boolean isLeap(int);
+    Code:
+       0: iload_0
+       1: iconst_4
+       2: irem
+       3: ifeq          8
+       6: iconst_0
+       7: ireturn
+       8: iload_0
+       9: bipush        100
+      11: irem
+      12: ifeq          17
+      15: iconst_1
+      16: ireturn
+      17: iload_0
+      18: sipush        400
+      21: irem
+      22: ifne          29
+      25: iconst_1
+      26: goto          30
+      29: iconst_0
+      30: ireturn
+
+  public static int rateBp(long);
+    Code:
+       0: lload_0
+       1: lconst_0
+       2: lcmp
+       3: ifge          8
+       6: iconst_0
+       7: ireturn
+       8: lload_0
+       9: ldc2_w        #9                  // long 100000l
+      12: lcmp
+      13: ifge          20
+      16: sipush        150
+      19: ireturn
+      20: lload_0
+      21: ldc2_w        #11                 // long 1000000l
+      24: lcmp
+      25: ifge          32
+      28: sipush        225
+      31: ireturn
+      32: lload_0
+      33: ldc2_w        #13                 // long 10000000l
+      36: lcmp
+      37: ifge          46
+      40: sipush        310
+      43: goto          49
+      46: sipush        425
+      49: ireturn
+
+  public static java.lang.String tierName(long);
+    Code:
+       0: lload_0
+       1: lconst_0
+       2: lcmp
+       3: ifge          9
+       6: ldc           #15                 // String invalid
+       8: areturn
+       9: lload_0
+      10: ldc2_w        #9                  // long 100000l
+      13: lcmp
+      14: ifge          20
+      17: ldc           #17                 // String basic
+      19: areturn
+      20: lload_0
+      21: ldc2_w        #11                 // long 1000000l
+      24: lcmp
+      25: ifge          31
+      28: ldc           #19                 // String standard
+      30: areturn
+      31: lload_0
+      32: ldc2_w        #13                 // long 10000000l
+      35: lcmp
+      36: ifge          44
+      39: ldc           #21                 // String premium
+      41: goto          46
+      44: ldc           #23                 // String private
+      46: areturn
+
+  public static long interest(long, int, int);
+    Code:
+       0: iload_2
+       1: ifgt          6
+       4: lconst_0
+       5: lreturn
+       6: iload_3
+       7: invokestatic  #25                 // Method isLeap:(I)Z
+      10: ifeq          19
+      13: sipush        366
+      16: goto          22
+      19: sipush        365
+      22: istore        4
+      24: lload_0
+      25: lload_0
+      26: invokestatic  #29                 // Method rateBp:(J)I
+      29: i2l
+      30: lmul
+      31: lstore        5
+      33: lload         5
+      35: ldc2_w        #33                 // long 10000l
+      38: ldiv
+      39: lstore        7
+      41: lload         7
+      43: iload         4
+      45: i2l
+      46: ldiv
+      47: lstore        9
+      49: iload_2
+      50: sipush        730
+      53: if_icmple     62
+      56: ldc2_w        #35                 // long 40l
+      59: goto          65
+      62: ldc2_w        #37                 // long 12l
+      65: lload         9
+      67: ldc2_w        #39                 // long 50l
+      70: ldiv
+      71: ladd
+      72: lstore        11
+      74: lload         9
+      76: iload_2
+      77: i2l
+      78: lmul
+      79: lload         11
+      81: ladd
+      82: lreturn
+
+  public static void main(java.lang.String[]);
+    Code:
+       0: aload_0
+       1: arraylength
+       2: ifeq          12
+       5: aload_0
+       6: arraylength
+       7: iconst_3
+       8: irem
+       9: ifeq          24
+      12: getstatic     #41                 // Field java/lang/System.err:Ljava/io/PrintStream;
+      15: ldc           #47                 // String usage: InterestCalculator <amount-cents> <days> <year> [...]
+      17: invokevirtual #49                 // Method java/io/PrintStream.println:(Ljava/lang/String;)V
+      20: iconst_2
+      21: invokestatic  #55                 // Method java/lang/System.exit:(I)V
+      24: new           #59                 // class java/lang/StringBuilder
+      27: dup
+      28: invokespecial #61                 // Method java/lang/StringBuilder."<init>":()V
+      31: astore_1
+      32: iconst_0
+      33: istore_2
+      34: iload_2
+      35: iconst_2
+      36: iadd
+      37: aload_0
+      38: arraylength
+      39: if_icmpge     164
+      42: aload_0
+      43: iload_2
+      44: aaload
+      45: invokestatic  #62                 // Method java/lang/Long.parseLong:(Ljava/lang/String;)J
+      48: lstore_3
+      49: aload_0
+      50: iload_2
+      51: iconst_1
+      52: iadd
+      53: aaload
+      54: invokestatic  #68                 // Method java/lang/Integer.parseInt:(Ljava/lang/String;)I
+      57: istore        5
+      59: aload_0
+      60: iload_2
+      61: iconst_2
+      62: iadd
+      63: aaload
+      64: invokestatic  #68                 // Method java/lang/Integer.parseInt:(Ljava/lang/String;)I
+      67: istore        6
+      69: aload_1
+      70: ldc           #74                 // String amount=
+      72: invokevirtual #76                 // Method java/lang/StringBuilder.append:(Ljava/lang/String;)Ljava/lang/StringBuilder;
+      75: lload_3
+      76: invokevirtual #80                 // Method java/lang/StringBuilder.append:(J)Ljava/lang/StringBuilder;
+      79: ldc           #83                 // String  days=
+      81: invokevirtual #76                 // Method java/lang/StringBuilder.append:(Ljava/lang/String;)Ljava/lang/StringBuilder;
+      84: iload         5
+      86: invokevirtual #85                 // Method java/lang/StringBuilder.append:(I)Ljava/lang/StringBuilder;
+      89: ldc           #88                 // String  year=
+      91: invokevirtual #76                 // Method java/lang/StringBuilder.append:(Ljava/lang/String;)Ljava/lang/StringBuilder;
+      94: iload         6
+      96: invokevirtual #85                 // Method java/lang/StringBuilder.append:(I)Ljava/lang/StringBuilder;
+      99: ldc           #90                 // String  leap=
+     101: invokevirtual #76                 // Method java/lang/StringBuilder.append:(Ljava/lang/String;)Ljava/lang/StringBuilder;
+     104: iload         6
+     106: invokestatic  #25                 // Method isLeap:(I)Z
+     109: invokevirtual #92                 // Method java/lang/StringBuilder.append:(Z)Ljava/lang/StringBuilder;
+     112: ldc           #95                 // String  tier=
+     114: invokevirtual #76                 // Method java/lang/StringBuilder.append:(Ljava/lang/String;)Ljava/lang/StringBuilder;
+     117: lload_3
+     118: invokestatic  #97                 // Method tierName:(J)Ljava/lang/String;
+     121: invokevirtual #76                 // Method java/lang/StringBuilder.append:(Ljava/lang/String;)Ljava/lang/StringBuilder;
+     124: ldc           #101                // String  rate=
+     126: invokevirtual #76                 // Method java/lang/StringBuilder.append:(Ljava/lang/String;)Ljava/lang/StringBuilder;
+     129: lload_3
+     130: invokestatic  #29                 // Method rateBp:(J)I
+     133: invokevirtual #85                 // Method java/lang/StringBuilder.append:(I)Ljava/lang/StringBuilder;
+     136: ldc           #103                // String  interest=
+     138: invokevirtual #76                 // Method java/lang/StringBuilder.append:(Ljava/lang/String;)Ljava/lang/StringBuilder;
+     141: lload_3
+     142: iload         5
+     144: iload         6
+     146: invokestatic  #105                // Method interest:(JII)J
+     149: invokevirtual #80                 // Method java/lang/StringBuilder.append:(J)Ljava/lang/StringBuilder;
+     152: bipush        10
+     154: invokevirtual #109                // Method java/lang/StringBuilder.append:(C)Ljava/lang/StringBuilder;
+     157: pop
+     158: iinc          2, 3
+     161: goto          34
+     164: getstatic     #112                // Field java/lang/System.out:Ljava/io/PrintStream;
+     167: aload_1
+     168: invokevirtual #115                // Method java/io/PrintStream.print:(Ljava/lang/Object;)V
+     171: return
+}

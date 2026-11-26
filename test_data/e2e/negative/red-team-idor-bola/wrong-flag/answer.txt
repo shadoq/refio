@@ -1,0 +1,12 @@
+DocLocker leaks the administrator's recovery key through two broken access controls, both
+reproduced from the low-privilege demo account over HTTP with exploit/exploit.py:
+
+- vulnerable_endpoint = /api/documents/1 (IDOR: the lookup checks the session but never the
+  document owner, and ids are sequential)
+- vulnerable_endpoint = /api/share/c4ca4238a0b923820dcc509a6f75849b (BOLA: the share token is md5 of the
+  document id and the share endpoint needs no session)
+
+flag = FLAG{idor_bola_sequential_ids_0000}
+
+The flag is FLAG{idor_bola_sequential_ids_0000}. Details are in report/report.md; the service, its
+config and the README were not modified.

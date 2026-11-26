@@ -1,0 +1,52 @@
+{
+  "id": "multi-agent-linux-incident-response",
+  "mode": "AGENT",
+  "description": "Three-agent incident response on a stand-in compromised host: a triager (PLAN) rebuilds the intrusion timeline from the evidence, a responder (depends_on triager) executes the runbook containment in order, and a reviewer (PLAN, depends_on responder) re-checks the host and reports residual risk.",
+  "category": "orchestration",
+  "max_iterations": 60,
+  "fixture": "fixtures/ma-incident",
+  "multi_agent": "multi-agent/ma-incident.yaml",
+  "assert": {
+    "agent_order": [
+      "triager",
+      "responder",
+      "reviewer"
+    ],
+    "needles_in_file": [
+      {
+        "path": "report/timeline.md",
+        "regex": "^first_access_time = "
+      },
+      {
+        "path": "report/timeline.md",
+        "regex": "^attacker_ip = "
+      },
+      {
+        "path": "report/actions.md",
+        "regex": "^action = 1 \\| "
+      },
+      {
+        "path": "report/review.md",
+        "regex": "^evidence_preserved = yes$"
+      }
+    ],
+    "file_unchanged": [
+      "runbook.md",
+      "README.md",
+      "verify.py",
+      "var/log/auth.log",
+      "etc/ssh/sshd_config.policy",
+      "etc/cron.d/backup-check",
+      ".refio/agents/triager.md",
+      ".refio/agents/responder.md",
+      ".refio/agents/reviewer.md"
+    ],
+    "build_cmd": "python3 verify.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The triager derived the first access time, the attacker IP and the persistence count from var/log/auth.log; the responder performed the five runbook steps in order (rogue cron removed, root spool entry deleted, backdoor account locked and its key removed, implant quarantined with sha256 manifest, ssh config restored to the policy) without over-containment; the reviewer confirmed residual risk and evidence preservation - and none of the three touched the gate, the runbook, the logs or the profiles."
+    ]
+  }
+}

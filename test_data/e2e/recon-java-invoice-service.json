@@ -1,0 +1,53 @@
+{
+  "id": "recon-java-invoice-service",
+  "mode": "AGENT",
+  "description": "Reconnaissance of a Java invoice service: four real weaknesses in the source next to safe look-alikes, and a black-box staging instance whose version, undocumented page, backup listing and pre-fix traversal only probing can establish.",
+  "category": "security-recon",
+  "max_iterations": 45,
+  "fixture": "fixtures/recon-java",
+  "prompt_file": "prompts/recon-java-invoice-service.md",
+  "fixture_server": {
+    "dir": "staging",
+    "port": 8801,
+    "cmd": "exec bash {{DIR}}/staging/run.sh {{PORT}}"
+  },
+  "assert": {
+    "tool_order": [
+      "read_file",
+      "http_request",
+      "create_new_file"
+    ],
+    "tool_invoked": [
+      {
+        "name": "http_request"
+      }
+    ],
+    "needle_in_file": {
+      "path": "report/recon.md",
+      "regex": "passive_finding[[:space:]]*="
+    },
+    "file_unchanged": [
+      "./README.md",
+      "./check.py",
+      "./pom.xml",
+      "docs/threat-model.md",
+      "src/CHANGELOG.md",
+      "src/main/java/com/acme/invoice/AttachmentStore.java",
+      "src/main/java/com/acme/invoice/Db.java",
+      "src/main/java/com/acme/invoice/Invoice.java",
+      "src/main/java/com/acme/invoice/InvoiceRender.java",
+      "src/main/java/com/acme/invoice/Main.java",
+      "src/main/java/com/acme/invoice/SessionCookie.java",
+      "src/main/java/com/acme/invoice/Settings.java",
+      "src/main/java/com/acme/invoice/XmlInvoiceReader.java"
+    ],
+    "build_cmd": "python3 check.py",
+    "enforce_max_iterations": true,
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The agent read the Java source, reported exactly the four planted weaknesses with the CWE identifiers from docs/threat-model.md and without accusing the safe look-alikes, probed the live staging instance with http_request to learn its version, instance id, undocumented page, backup listing and the signing key leaked by the pre-fix traversal, and changed nothing in the project except the report."
+    ]
+  }
+}

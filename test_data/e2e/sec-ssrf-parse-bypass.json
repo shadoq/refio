@@ -1,0 +1,34 @@
+{
+  "id": "sec-ssrf-parse-bypass",
+  "mode": "AGENT",
+  "description": "Server-side security: the local LinkFetch URL fetcher checks its hostname allowlist only on the first hop, so a redirect inside api.internal pivots the fetch onto the blocked link-local metadata host and a userinfo authority can mislead a naive parse. Reproduce the bypass on the live server, fix the per-hop validation, make the provided integration suite pass and report the vulnerable path. Needs http_request against the live fixture server.",
+  "category": "security",
+  "max_iterations": 35,
+  "fixture": "fixtures/ssrf-parse",
+  "prompt_file": "prompts/sec-ssrf-parse-bypass.md",
+  "fixture_server": { "dir": "server", "port": 8846, "cmd": "exec python3 {{DIR}}/app.py {{PORT}}" },
+  "assert": {
+    "tool_order": ["http_request", "run_terminal_command"],
+    "tool_invoked": [
+      { "name": "http_request" },
+      { "name": "run_terminal_command", "args_regex": "integration_test" }
+    ],
+    "needle_in_file": { "path": "report/fix.md", "regex": "Fetcher\\.fetch" },
+    "needles_in_file": [
+      { "path": "report/fix.md", "regex": "server/app\\.py" },
+      { "path": "report/fix.md", "regex": "[Rr]oot cause" }
+    ],
+    "file_unchanged": [
+      "tests/integration_test.py",
+      "README.md"
+    ],
+    "build_cmd": "python3 tests/integration_test.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The agent demonstrated on the live server that the api.internal redirect and the userinfo spelling both reach the blocked metadata host, then fixed Fetcher.fetch in server/app.py so the allowlist is evaluated on every hop (redirect targets included) and a multi-@ authority is rejected, while legitimate api.internal and metadata.internal fetches keep working.",
+      "python3 tests/integration_test.py passes all 8 checks, report/fix.md names Fetcher.fetch in server/app.py and the root cause (the check ran only on the initial URL, not on each connection opened), and the test suite and README are untouched."
+    ]
+  }
+}

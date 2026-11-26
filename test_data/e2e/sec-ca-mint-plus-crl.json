@@ -1,0 +1,60 @@
+{
+  "id": "sec-ca-mint-plus-crl",
+  "mode": "AGENT",
+  "description": "Server-side PKI work on the local TLS gateway: the admin-console client certificate (CN=audit) was compromised; mint a new CA-signed client certificate for CN=auditor, revoke the compromised one by publishing crl/crl.pem, and write report/pki.md with new_cert_serial, revoked_serial and crl_path. The offline gate checks.py re-derives everything from the files with openssl. Needs openssl on PATH and in the run's --auto-approve (not in the default set).",
+  "category": "security",
+  "max_iterations": 40,
+  "fixture": "fixtures/ca-mint-crl",
+  "prompt_file": "prompts/sec-ca-mint-plus-crl.md",
+  "fixture_server": {
+    "dir": "server",
+    "port": 8851,
+    "cmd": "exec python3 {{DIR}}/app.py {{PORT}}"
+  },
+  "assert": {
+    "tool_order": [
+      "read_file",
+      "run_terminal_command"
+    ],
+    "tool_invoked": [
+      {
+        "name": "run_terminal_command",
+        "args_regex": "openssl"
+      },
+      {
+        "name": "run_terminal_command",
+        "args_regex": "checks\\.py"
+      }
+    ],
+    "needles_in_file": [
+      {
+        "path": "report/pki.md",
+        "regex": "^new_cert_serial[[:space:]]*=[[:space:]]*[0-9A-Fa-f:]+[[:space:]]*$"
+      },
+      {
+        "path": "report/pki.md",
+        "regex": "^revoked_serial[[:space:]]*=[[:space:]]*[0-9A-Fa-f:]+[[:space:]]*$"
+      },
+      {
+        "path": "report/pki.md",
+        "regex": "^crl_path[[:space:]]*=[[:space:]]*crl/crl\\.pem[[:space:]]*$"
+      }
+    ],
+    "file_unchanged": [
+      "checks.py",
+      "docs/incident.md",
+      "README.md",
+      "pki/ca.crt",
+      "pki/ca.key"
+    ],
+    "file_absent": [],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The agent minted a fresh client certificate for CN=auditor signed by the existing DemoCorp CA (clientAuth EKU, key kept alongside), published crl/crl.pem listing exactly the compromised audit serial, and left the CA, the gate, the incident note and the README untouched.",
+      "python3 checks.py passes: the new certificate verifies against pki/ca.crt, the CRL verifies against the CA and lists exactly the compromised serial, and report/pki.md's new_cert_serial, revoked_serial and crl_path match the re-derived values."
+    ]
+  }
+}

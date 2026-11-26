@@ -1,0 +1,33 @@
+{
+  "id": "linux-shell-robust-script",
+  "mode": "AGENT",
+  "description": "Shell robustness: fix backup.sh so it survives spaces, tabs, newlines, glob characters, unicode and leading-dash file names, implements the documented exit codes and manifest contract, skips FIFOs, warns about files that vanish mid-run, traps its temp dir on EXIT and stays idempotent; check.py drives it against generated trees and failure modes.",
+  "category": "linux-ops",
+  "max_iterations": 45,
+  "fixture": "fixtures/robust-backup",
+  "prompt_file": "prompts/linux-shell-robust-script.md",
+  "assert": {
+    "tool_order": [
+      "run_terminal_command"
+    ],
+    "tool_invoked": [
+      {
+        "name": "run_terminal_command"
+      }
+    ],
+    "file_unchanged": [
+      "check.py",
+      "README.md",
+      "docs/backup-spec.md",
+      "tests/cases/make_cases.sh"
+    ],
+    "build_cmd": "python3 check.py",
+    "enforce_max_iterations": true,
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "backup.sh was rewritten to satisfy docs/backup-spec.md for real (quoting, find -print0, safe rm/cp with --, manifest, exit codes 0/1/2, trap on EXIT), passes check.py on the tricky trees and failure modes, and nothing except backup.sh changed."
+    ]
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "id": "recon-python-notes-api",
+  "mode": "AGENT",
+  "description": "Reconnaissance of a Python notes service: four real weaknesses in the source next to safe look-alikes, and a black-box staging instance whose version, undocumented page, backup listing and pre-fix traversal only probing can establish.",
+  "category": "security-recon",
+  "max_iterations": 45,
+  "fixture": "fixtures/recon-python",
+  "prompt_file": "prompts/recon-python-notes-api.md",
+  "fixture_server": {
+    "dir": "staging",
+    "port": 8802,
+    "cmd": "exec bash {{DIR}}/staging/run.sh {{PORT}}"
+  },
+  "assert": {
+    "tool_order": [
+      "read_file",
+      "http_request",
+      "create_new_file"
+    ],
+    "tool_invoked": [
+      {
+        "name": "http_request"
+      }
+    ],
+    "needle_in_file": {
+      "path": "report/recon.md",
+      "regex": "passive_finding[[:space:]]*="
+    },
+    "file_unchanged": [
+      "./README.md",
+      "./check.py",
+      "docs/threat-model.md",
+      "src/notes_api/CHANGELOG.md",
+      "src/notes_api/VERSION",
+      "src/notes_api/__init__.py",
+      "src/notes_api/app.py",
+      "src/notes_api/attachments.py",
+      "src/notes_api/auth.py",
+      "src/notes_api/config.py",
+      "src/notes_api/db.py",
+      "src/notes_api/export.py",
+      "src/notes_api/tokens.py",
+      "src/notes_api/views.py"
+    ],
+    "build_cmd": "python3 check.py",
+    "enforce_max_iterations": true,
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The agent read the Python source, reported exactly the four planted weaknesses with the CWE identifiers from docs/threat-model.md and without accusing the safe look-alikes, probed the live staging instance with http_request to learn its version, instance id, undocumented page, backup listing and the deploy token leaked by the pre-fix traversal, and changed nothing in the project except the report."
+    ]
+  }
+}

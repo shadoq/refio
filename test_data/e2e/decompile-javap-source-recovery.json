@@ -1,0 +1,26 @@
+{
+  "id": "decompile-javap-source-recovery",
+  "mode": "AGENT",
+  "description": "Source recovery from JVM bytecode: read the javap listing of InterestCalculator.class, name the three places where the shipped decompiler output is wrong, and write a Java reconstruction whose behaviour matches the class exactly, bugs included. Needs java (a JDK 17 or newer, with the jdk.compiler module) on PATH for the gate to recompile and diff the recovered source.",
+  "category": "reversing",
+  "max_iterations": 40,
+  "fixture": "fixtures/javap-recovery",
+  "prompt_file": "prompts/decompile-javap-source-recovery.md",
+  "assert": {
+    "file_unchanged": [
+      "InterestCalculator.class",
+      "javap.txt",
+      "decompiled/InterestCalculator.java",
+      "README.md",
+      "check.py"
+    ],
+    "build_cmd": "python3 check.py",
+    "enforce_max_iterations": true,
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The agent worked from javap.txt, identified the three decompiler mistakes (the inverted tier boundary comparison, the integer division turned into floating-point rounding, and the ternary with the wrong precedence) at their real line numbers in decompiled/InterestCalculator.java, and wrote src/InterestCalculator.java that compiles and reproduces the shipped class's output byte for byte on the gate's input grid without fixing any of the class's quirks; the class, javap.txt, the decompiled file, README.md and check.py are unmodified."
+    ]
+  }
+}

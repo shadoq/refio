@@ -1,0 +1,37 @@
+{
+  "id": "sec-zigbee-sniff",
+  "mode": "AGENT",
+  "description": "ZigBee capture review: count frames per channel, the distinct PAN id each channel's network uses, and total rejoin requests (cluster 0x0034 to the 0xfffd join address) across both ndjson captures.",
+  "category": "security",
+  "max_iterations": 30,
+  "fixture": "fixtures/zigbee-sniff",
+  "prompt_file": "prompts/sec-zigbee-sniff.md",
+  "assert": {
+    "tool_order": [
+      "run_terminal_command"
+    ],
+    "tool_invoked": [
+      {
+        "name": "run_terminal_command"
+      }
+    ],
+    "needle_in_file": {
+      "path": "report/zigbee.txt",
+      "regex": "frames_ch11[[:space:]]*=[[:space:]]*120"
+    },
+    "file_unchanged": [
+      "check.py",
+      "README.md",
+      "captures/channel11.ndjson",
+      "captures/channel15.ndjson"
+    ],
+    "build_cmd": "python3 check.py",
+    "enforce_max_iterations": true,
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The agent counted both captures correctly (channel 11: 120 frames, PAN 0x1a2b; channel 15: 96 frames, PAN 0x3c4d; 5 rejoin requests in total), did not treat the first JSON line as a header, and left both captures and the gate untouched."
+    ]
+  }
+}

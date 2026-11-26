@@ -1,0 +1,37 @@
+{
+  "id": "sec-pcap-baseline",
+  "mode": "AGENT",
+  "description": "Traffic baseline from a flow export: count sessions, the 4444 exfil pattern, DNS and HTTPS volume and the top talker from the ndjson, cross-check the overlapping numbers against the gateway app log, and write an eight key baseline report.",
+  "category": "security",
+  "max_iterations": 35,
+  "fixture": "fixtures/pcap-baseline",
+  "prompt_file": "prompts/sec-pcap-baseline.md",
+  "assert": {
+    "tool_order": [
+      "run_terminal_command"
+    ],
+    "tool_invoked": [
+      {
+        "name": "run_terminal_command"
+      }
+    ],
+    "needle_in_file": {
+      "path": "report/baseline.txt",
+      "regex": "exfil_sessions[[:space:]]*=[[:space:]]*40"
+    },
+    "file_unchanged": [
+      "check.py",
+      "README.md",
+      "capture/traffic.pcap.ndjson",
+      "capture/app.log"
+    ],
+    "build_cmd": "python3 check.py",
+    "enforce_max_iterations": true,
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The agent derived all eight numbers from the ndjson flow export (187 sessions, 40 to port 4444 for 666349 bytes, 48 DNS, 72 HTTPS, 7 unique sources, top talker 10.0.7.77 with 666349 bytes), confirmed the overlapping numbers against app.log, and left both capture files and the gate untouched."
+    ]
+  }
+}

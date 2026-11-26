@@ -1,0 +1,25 @@
+{
+  "id": "decompile-javap-obfuscated-license",
+  "mode": "AGENT",
+  "description": "Reverse-engineer a Java 17 licence check from its javap listing: recover the XOR string decryptor, the computed magic constant, the device permutation and the prime-weighted checksum, and report the key accepted for one device id plus the licence class the branch structure really accepts, as key = value lines verified by a gate with its own reference implementation.",
+  "category": "reversing",
+  "max_iterations": 40,
+  "fixture": "fixtures/javap-license",
+  "prompt_file": "prompts/decompile-javap-obfuscated-license.md",
+  "assert": {
+    "file_unchanged": [
+      "README.md",
+      "com/acme/lic/LicenseManager.class",
+      "javap.txt",
+      "check.py"
+    ],
+    "build_cmd": "python3 check.py",
+    "enforce_max_iterations": true,
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The agent read javap.txt (not a decompiler guess), recovered the XOR key used by the string decryptor, the magic constant computed in the static initialiser, the device permutation and the prime-weighted checksum modulo 1000003, worked out that only the server tier branch is open in this build, and wrote report/analysis.md with the five key = value lines, including a key_for_device that the class itself accepts for 7f3a-9c21-5e04; the class file, javap.txt, README.md and check.py are unmodified."
+    ]
+  }
+}

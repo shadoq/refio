@@ -1,0 +1,61 @@
+CI job 48112 (corpus run), input tests/cases/crash-2.txt
+build: g++ -std=c++17 -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1
+exit status 1
+
+==PID==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x50200000003b at pc 0x55f103f95e31 bp 0x7ffd6d9b4ff0 sp 0x7ffd6d9b4fe8
+WRITE of size 1 at 0x50200000003b thread T0
+    #0 0x55f103f95e30 in textlib::upcase(char*, char const*, unsigned long) src/format.cpp:7
+    #1 0x55f103f99233 in textlib::render(std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&) src/report.cpp:41
+    #2 0x55f103f99f8d in textlib::analyze(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) src/report.cpp:51
+    #3 0x55f103fa39aa in main tests/run_tests.cpp:57
+    #4 0x7fcd4f866ca7  (/lib/x86_64-linux-gnu/libc.so.6+0x29ca7) (BuildId: 5e5b51f4c39af9ac589408c1dc432ba390a273cc)
+    #5 0x7fcd4f866d64 in __libc_start_main (/lib/x86_64-linux-gnu/libc.so.6+0x29d64) (BuildId: 5e5b51f4c39af9ac589408c1dc432ba390a273cc)
+    #6 0x55f103f93670 in _start (build/run_tests+0x20670) (BuildId: df7bd6bef661f4e82e5f362c412fa5bf3996b65b)
+
+0x50200000003b is located 0 bytes after 11-byte region [0x502000000030,0x50200000003b)
+allocated by thread T0 here:
+    #0 0x7fcd504be778 in operator new(unsigned long) ../../../../src/libsanitizer/asan/asan_new_delete.cpp:95
+    #1 0x55f103f9b3a8 in std::__new_allocator<char>::allocate(unsigned long, void const*) /usr/include/c++/14/bits/new_allocator.h:151
+    #2 0x55f103f9b3a8 in std::allocator_traits<std::allocator<char> >::allocate(std::allocator<char>&, unsigned long) /usr/include/c++/14/bits/alloc_traits.h:515
+    #3 0x55f103f9b3a8 in std::_Vector_base<char, std::allocator<char> >::_M_allocate(unsigned long) /usr/include/c++/14/bits/stl_vector.h:380
+    #4 0x55f103f9b3a8 in std::_Vector_base<char, std::allocator<char> >::_M_create_storage(unsigned long) /usr/include/c++/14/bits/stl_vector.h:398
+    #5 0x55f103f9b3a8 in std::_Vector_base<char, std::allocator<char> >::_Vector_base(unsigned long, std::allocator<char> const&) /usr/include/c++/14/bits/stl_vector.h:334
+    #6 0x55f103f9b3a8 in std::vector<char, std::allocator<char> >::vector(unsigned long, std::allocator<char> const&) /usr/include/c++/14/bits/stl_vector.h:557
+    #7 0x55f103f98fba in textlib::render(std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&) src/report.cpp:40
+    #8 0x55f103f99f8d in textlib::analyze(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) src/report.cpp:51
+    #9 0x55f103fa39aa in main tests/run_tests.cpp:57
+    #10 0x7fcd4f866ca7  (/lib/x86_64-linux-gnu/libc.so.6+0x29ca7) (BuildId: 5e5b51f4c39af9ac589408c1dc432ba390a273cc)
+
+SUMMARY: AddressSanitizer: heap-buffer-overflow src/format.cpp:7 in textlib::upcase(char*, char const*, unsigned long)
+Shadow bytes around the buggy address:
+  0x501ffffffd80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x501ffffffe00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x501ffffffe80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x501fffffff00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x501fffffff80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+=>0x502000000000: fa fa fd fa fa fa 00[03]fa fa fa fa fa fa fa fa
+  0x502000000080: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+  0x502000000100: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+  0x502000000180: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+  0x502000000200: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+  0x502000000280: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+Shadow byte legend (one shadow byte represents 8 application bytes):
+  Addressable:           00
+  Partially addressable: 01 02 03 04 05 06 07 
+  Heap left redzone:       fa
+  Freed heap region:       fd
+  Stack left redzone:      f1
+  Stack mid redzone:       f2
+  Stack right redzone:     f3
+  Stack after return:      f5
+  Stack use after scope:   f8
+  Global redzone:          f9
+  Global init order:       f6
+  Poisoned by user:        f7
+  Container overflow:      fc
+  Array cookie:            ac
+  Intra object redzone:    bb
+  ASan internal:           fe
+  Left alloca redzone:     ca
+  Right alloca redzone:    cb
+==PID==ABORTING

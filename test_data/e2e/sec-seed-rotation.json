@@ -1,0 +1,52 @@
+{
+  "id": "sec-seed-rotation",
+  "mode": "AGENT",
+  "description": "Server-side security: five exposed secrets are embedded across server/app.py (2), config/seeds.json (2) and the token table of db/seed.sqlite (1) in the local TokenGate gateway. Rotate all five with fresh values while keeping the app bootable, retire every old value from the tree, and write sha256-prefix digest lines per location; the provided offline suite scans the tree, imports the app and checks the report digests.",
+  "category": "security",
+  "max_iterations": 40,
+  "fixture": "fixtures/seed-rotation",
+  "prompt_file": "prompts/sec-seed-rotation.md",
+  "fixture_server": {
+    "dir": "server",
+    "port": 8850,
+    "cmd": "exec python3 {{DIR}}/app.py {{PORT}}"
+  },
+  "assert": {
+    "tool_order": [
+      "read_file",
+      "run_terminal_command"
+    ],
+    "tool_invoked": [
+      {
+        "name": "run_terminal_command",
+        "args_regex": "rotation_test"
+      }
+    ],
+    "needle_in_file": {
+      "path": "report/rotation.txt",
+      "regex": "^app\\.py:SESSION_PEPPER:[[:space:]]*[0-9a-f]{12}[[:space:]]*$"
+    },
+    "needles_in_file": [
+      {
+        "path": "report/rotation.txt",
+        "regex": "^seeds\\.json:WEBHOOK_HMAC_KEY:[[:space:]]*[0-9a-f]{12}[[:space:]]*$"
+      },
+      {
+        "path": "report/rotation.txt",
+        "regex": "^seed\\.sqlite:legacy-backend-token:[[:space:]]*[0-9a-f]{12}[[:space:]]*$"
+      }
+    ],
+    "file_unchanged": [
+      "tests/rotation_test.py",
+      "README.md"
+    ],
+    "build_cmd": "python3 tests/rotation_test.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "All five secrets were rotated with fresh distinct values in server/app.py, config/seeds.json and db/seed.sqlite, the retired values are absent from the whole tree, and the app still boots.",
+      "python3 tests/rotation_test.py passes, report/rotation.txt carries the five location lines with correct 12-hex sha256 prefixes of the new values, and the test suite and README are untouched."
+    ]
+  }
+}

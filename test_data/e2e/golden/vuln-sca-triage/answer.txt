@@ -1,0 +1,10 @@
+Triage of the DepScan export of 2026-10-19 is in `report/triage.md`, and `package.json` is prepared.
+
+- 3 true positives: `query-parse` (SCA-1012), `tabular-csv` (SCA-1007) and `redact-fields`
+  (SCA-1018). The lockfile installs each at a vulnerable version and `src/` imports them.
+- 3 false positives: one is pinned to the fixed version through `overrides`, one is a
+  dev dependency of the test helpers, one is declared but no longer imported under `src/`.
+- `package.json`: the three true positives are bumped to the first fixed version
+  (`^1.10.3`, `^2.3.4`, `^0.9.0`). Nothing else changed; CI refreshes the lockfile.
+
+`python3 check.py` passes.

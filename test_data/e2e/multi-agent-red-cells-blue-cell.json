@@ -1,0 +1,53 @@
+{
+  "id": "multi-agent-red-cells-blue-cell",
+  "mode": "AGENT",
+  "description": "Fan-in red/blue exercise on a live local notes service: two attacker cells (web-cell: IDOR plus reflected XSS; infra-cell: exposed /metrics and /debug/env config leak) work in parallel, then a blue-cell defender (depends_on both) patches the service so both attack paths are closed while legitimate traffic still passes attack_check.py.",
+  "category": "orchestration",
+  "max_iterations": 60,
+  "fixture": "fixtures/ma-cells",
+  "multi_agent": "multi-agent/ma-cells.yaml",
+  "fixture_server": {
+    "dir": "server",
+    "port": 8821,
+    "cmd": "exec python3 {{DIR}}/app.py {{PORT}}"
+  },
+  "assert": {
+    "agent_order": [
+      "web-cell",
+      "infra-cell",
+      "blue-cell"
+    ],
+    "needles_in_file": [
+      {
+        "path": "attack/web.md",
+        "regex": "^web_finding = /api/notes/[0-9]+ \\| "
+      },
+      {
+        "path": "attack/web.md",
+        "regex": "^web_finding = /api/render \\| "
+      },
+      {
+        "path": "attack/infra.md",
+        "regex": "^infra_finding = /(debug/env|metrics) \\| "
+      },
+      {
+        "path": "report/fixes.md",
+        "regex": "^fixed = "
+      }
+    ],
+    "file_unchanged": [
+      "attack_check.py",
+      "README.md",
+      ".refio/agents/web-cell.md",
+      ".refio/agents/infra-cell.md",
+      ".refio/agents/blue-cell.md"
+    ],
+    "build_cmd": "python3 attack_check.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The web-cell demonstrated the IDOR on GET /api/notes/2 and the reflected XSS on POST /api/render and recorded both as web_finding lines; the infra-cell demonstrated the /metrics and /debug/env exposure and recorded infra_finding lines; the blue-cell patched the service so the foreign note, /debug/env and /metrics are refused and the reflection is escaped while login, the note list, the own note and plain renders still work - and nobody touched the gate or the profiles."
+    ]
+  }
+}

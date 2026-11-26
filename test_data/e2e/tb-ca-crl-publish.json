@@ -1,0 +1,35 @@
+{
+  "id": "tb-ca-crl-publish",
+  "mode": "AGENT",
+  "description": "Terminal-Bench style PKI ops: revoke exactly the 4 client certificates named in docs/incident.md by publishing crl/crl.pem signed by the fixture root CA, and write report/top-users.txt with each revoked user and the first 16 hex chars of the SHA-256 of that certificate's DER encoding; the gate re-checks everything with openssl (CRL parse and signature, crl_check on all 6 certificates, hashes). Needs openssl on PATH and in the run's --auto-approve (not in the default set).",
+  "category": "terminal-bench",
+  "max_iterations": 30,
+  "fixture": "fixtures/tb-ca-crl",
+  "prompt_file": "prompts/tb-ca-crl-publish.md",
+  "assert": {
+    "needle_in_file": {
+      "path": "report/top-users.txt",
+      "regex": "[0-9a-f]{16}"
+    },
+    "file_unchanged": [
+      "checks.py",
+      "README.md",
+      "docs/incident.md",
+      "ca/ca.key",
+      "ca/ca.crt",
+      "certs/alice.pem",
+      "certs/bob.pem",
+      "certs/carol.pem",
+      "certs/dave.pem",
+      "certs/erin.pem",
+      "certs/frank.pem"
+    ],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "crl/crl.pem parses, is signed by the root CA, revokes exactly the 4 incident serials (the 2 other certificates still verify with -crl_check) and report/top-users.txt lists each revoked user with the first 16 hex chars of the SHA-256 of that certificate DER, with the CA, the certificates, the incident report and the gate untouched."
+    ]
+  }
+}

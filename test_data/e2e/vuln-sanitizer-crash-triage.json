@@ -1,0 +1,47 @@
+{
+  "id": "vuln-sanitizer-crash-triage",
+  "mode": "AGENT",
+  "description": "Sanitizer crash triage: four AddressSanitizer / UndefinedBehaviorSanitizer reports (out-of-bounds read, out-of-bounds write, signed integer overflow, null pointer dereference) from a CI corpus job are stored in reports/. Name the CWE, the root cause function and the file for each in report/triage.md as `crash = crash-N | CWE-n | <function> | <file>` lines and fix the four defects; check.py hashes the lines against the reviewed triage and runs `make check` (g++ -std=c++17 -fsanitize=address,undefined) on the crashing and the normal inputs. Needs g++ and make on PATH (g++ is only reached through make, which is auto-approved).",
+  "category": "security",
+  "max_iterations": 45,
+  "fixture": "fixtures/sanitizer-crash",
+  "prompt_file": "prompts/vuln-sanitizer-crash-triage.md",
+  "assert": {
+    "tool_order": ["read_file", "run_terminal_command"],
+    "tool_invoked": [ { "name": "run_terminal_command", "args_regex": "check\\.py" } ],
+    "needle_in_file": { "path": "report/triage.md", "regex": "^crash[[:space:]]*=[[:space:]]*crash-[0-9]+[[:space:]]*[|][[:space:]]*CWE-[0-9]+[[:space:]]*[|]" },
+    "file_unchanged": [
+      "check.py",
+      "Makefile",
+      "README.md",
+      "src/textlib.h",
+      "tests/run_tests.cpp",
+      "tests/cases/ok-1.txt",
+      "tests/cases/ok-1.expected",
+      "tests/cases/ok-2.txt",
+      "tests/cases/ok-2.expected",
+      "tests/cases/crash-1.txt",
+      "tests/cases/crash-1.expected",
+      "tests/cases/crash-2.txt",
+      "tests/cases/crash-2.expected",
+      "tests/cases/crash-3.txt",
+      "tests/cases/crash-3.expected",
+      "tests/cases/crash-4.txt",
+      "tests/cases/crash-4.expected",
+      "reports/crash-1.txt",
+      "reports/crash-2.txt",
+      "reports/crash-3.txt",
+      "reports/crash-4.txt"
+    ],
+    "file_absent": [ "core", "build/run_tests" ],
+    "build_cmd": "python3 check.py",
+    "enforce_max_iterations": true,
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The four report lines name CWE-125 in line_length (src/lines.cpp), CWE-787 in upcase (src/format.cpp), CWE-190 in weighted_total (src/stats.cpp) and CWE-476 in render (src/report.cpp), each backed by a short explanation of the root cause.",
+      "The four defects are fixed in src/ without changing behaviour for valid input; make check passes all six cases under the sanitizers and the Makefile, the tests, the reports and the gate are untouched."
+    ]
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "id": "vuln-sca-triage",
+  "mode": "AGENT",
+  "description": "Dependency-scan triage: the weekly SCA export of a Node service was produced from a stale manifest, so only some of its findings are real. Decide for every finding whether the vulnerable version is actually installed for production and loaded by the service, write report/triage.md as `finding = <id> | true_positive | <reason>` or `finding = <id> | false_positive | <reason>` lines and bump the true positives that are direct dependencies to the first fixed version. check.py re-derives every verdict from package-lock.json, the overrides and the imports under src/. Needs only python3; npm is not required.",
+  "category": "security",
+  "max_iterations": 40,
+  "fixture": "fixtures/sca-triage",
+  "prompt_file": "prompts/vuln-sca-triage.md",
+  "assert": {
+    "tool_order": ["read_file", "run_terminal_command"],
+    "tool_invoked": [ { "name": "run_terminal_command", "args_regex": "check\\.py" } ],
+    "needle_in_file": { "path": "report/triage.md", "regex": "^finding[[:space:]]*=[[:space:]]*SCA-[0-9]+[[:space:]]*[|][[:space:]]*(true|false)_positive" },
+    "file_unchanged": [
+      "check.py",
+      "package-lock.json",
+      "scan/report.json",
+      "scan/README.md",
+      "README.md",
+      "CHANGELOG.md",
+      "config/default.json",
+      "src/index.js",
+      "src/config.js",
+      "src/http/router.js",
+      "src/http/params.js",
+      "src/export/csv.js",
+      "src/export/stream.js",
+      "src/export/redact.js",
+      "src/format/labels.js",
+      "test/helpers/dom.js",
+      "test/params.test.js",
+      "tools/check-style.js"
+    ],
+    "build_cmd": "python3 check.py",
+    "enforce_max_iterations": true,
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The report triages all six scan findings with evidence: true positives are the packages the lockfile installs at a vulnerable version and src/ imports; false positives are the one pinned by overrides, the dev-only one and the one src/ never imports.",
+      "package.json bumps only the three true positives to the first fixed version; the lockfile, the scan export, the sources and the gate are untouched."
+    ]
+  }
+}

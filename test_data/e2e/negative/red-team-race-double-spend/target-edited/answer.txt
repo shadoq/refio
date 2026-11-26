@@ -1,0 +1,11 @@
+GiftCard can be over-redeemed through a race on POST /api/redeem: the handler checks the
+balance, sleeps 150 ms for the issuer round trip, and only then writes the new balance, so
+concurrent requests all pass the check. exploit/exploit.py (threads and urllib) ran from
+the terminal and took the card from 40 points to a negative balance; /api/state then
+carried the issuer notice.
+
+final_balance = -200
+flag = FLAG{race_condition_double_spend_9c21}
+
+The flag is FLAG{race_condition_double_spend_9c21}. The window is described in
+report/report.md; the service and the README were not modified.

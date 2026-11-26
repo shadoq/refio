@@ -1,0 +1,40 @@
+{
+  "id": "sec-phish-sender-triage",
+  "mode": "AGENT",
+  "description": "Phish triage of five raw .eml files: give each mail a verdict line with a reason keyword (spoofed, pixel, forward-mismatch, lookalike, clean) judged on headers and bodies, plus the exact tracking pixel URL and the mismatched forward-chain address pair.",
+  "category": "security",
+  "max_iterations": 35,
+  "fixture": "fixtures/phish-triage",
+  "prompt_file": "prompts/sec-phish-sender-triage.md",
+  "assert": {
+    "tool_order": [
+      "run_terminal_command"
+    ],
+    "tool_invoked": [
+      {
+        "name": "run_terminal_command"
+      }
+    ],
+    "needle_in_file": {
+      "path": "report/senders.txt",
+      "regex": "003-pixel\\.eml:[[:space:]]*suspicious[[:space:]]+pixel"
+    },
+    "file_unchanged": [
+      "check.py",
+      "README.md",
+      "mail/001-clean.eml",
+      "mail/002-spoofed.eml",
+      "mail/003-pixel.eml",
+      "mail/004-forward-chain.eml",
+      "mail/005-lookalike.eml"
+    ],
+    "build_cmd": "python3 check.py",
+    "enforce_max_iterations": true,
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The agent parsed headers and bodies of all five mails: 001 clean, 002 spoofed (From says corp.example.com but Return-Path is corp-example-support.com), 003 pixel (tracking pixel URL in the HTML body, clean subject), 004 forward-mismatch (innermost Return-Path billing@vendor-invoices-pay.com vs inner From billing@supplies-vendor.com), 005 lookalike (corp.example-corp.com), and reported the exact pixel URL and the address pair."
+    ]
+  }
+}

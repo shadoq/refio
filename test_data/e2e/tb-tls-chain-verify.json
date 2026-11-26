@@ -1,0 +1,32 @@
+{
+  "id": "tb-tls-chain-verify",
+  "mode": "AGENT",
+  "description": "Terminal-Bench style PKI drill: verify three server certificates (good chain, wrong host for api.internal, self-signed) against the root + intermediate in certs/ with hostname checking, and write report/tls-report.txt with the true openssl result keyword, SAN, CN and issuer CN per certificate; the gate re-runs openssl and compares every field. Needs openssl on PATH and in the run's --auto-approve (not in the default set).",
+  "category": "terminal-bench",
+  "max_iterations": 25,
+  "fixture": "fixtures/tb-tls-chain",
+  "prompt_file": "prompts/tb-tls-chain-verify.md",
+  "assert": {
+    "needle_in_file": {
+      "path": "report/tls-report.txt",
+      "regex": "cert: server-good"
+    },
+    "file_unchanged": [
+      "checks.py",
+      "README.md",
+      "docs/runbook.md",
+      "certs/root.pem",
+      "certs/intermediate.pem",
+      "certs/server-good.pem",
+      "certs/server-wrong-host.pem",
+      "certs/server-unsigned.pem"
+    ],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "Every leaf has a report block whose result keyword, SAN list, CN and issuer CN match what openssl verify (chain + hostname api.internal) and x509 -text actually report against the certs/ bundle, and nothing under certs/, the docs or the gate changed."
+    ]
+  }
+}

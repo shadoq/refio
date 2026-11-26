@@ -1,0 +1,12 @@
+vaultd recv()s up to 512 bytes into a 64-byte stack buffer in handle_client, so an overlong
+message overwrites the saved return address. exploit/exploit.py sent 152 bytes of padding
+followed by the little-endian address of win() from the banner and half-closed the socket,
+which made handle_client return into the recovery routine.
+
+win_address = 0x402501
+return_address_offset = 152
+flag = FLAG{stack_overflow_ret2win_0000}
+
+The flag is FLAG{stack_overflow_ret2win_0000}. The offset was measured against the
+running build and is explained in report/report.md; the daemon source, start.sh and the
+README were not modified.

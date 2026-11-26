@@ -1,0 +1,86 @@
+# ember project notes
+
+Owner: the ember team.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes kept for the record; nothing actionable here.
+Some routine notes 
+
+--
+status: reviewed 2026-11-25

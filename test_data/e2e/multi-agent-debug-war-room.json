@@ -1,0 +1,51 @@
+{
+  "id": "multi-agent-debug-war-room",
+  "mode": "AGENT",
+  "description": "Three-agent debug war room on a Python package with a real defect: a reproducer writes a regression test that fails on the current code, a fixer (depends_on reproducer, cannot edit tests) fixes business_days_between per docs/contract.md, and a reviewer (PLAN, depends_on fixer) confirms and names the root cause; verify.py replays the test against a compressed pristine copy of the buggy source.",
+  "category": "orchestration",
+  "max_iterations": 60,
+  "fixture": "fixtures/ma-debug",
+  "multi_agent": "multi-agent/ma-debug.yaml",
+  "assert": {
+    "agent_order": [
+      "reproducer",
+      "fixer",
+      "reviewer"
+    ],
+    "needles_in_file": [
+      {
+        "path": "tests/test_regression.py",
+        "regex": "business_days_between"
+      },
+      {
+        "path": "report/repro.md",
+        "regex": "^failing_input = "
+      },
+      {
+        "path": "report/review.md",
+        "regex": "^verdict = approved$"
+      },
+      {
+        "path": "report/review.md",
+        "regex": "^root_cause = business_days_between$"
+      }
+    ],
+    "file_unchanged": [
+      "README.md",
+      "docs/contract.md",
+      "verify.py",
+      "pagerank/__init__.py",
+      "tests/test_utils.py",
+      ".refio/agents/reproducer.md",
+      ".refio/agents/fixer.md",
+      ".refio/agents/reviewer.md"
+    ],
+    "build_cmd": "python3 verify.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The reproducer wrote tests/test_regression.py with cases that fail on the pristine code and documented them as failing_input lines; the fixer corrected business_days_between to count Mon-Fri days over the inclusive range without touching any test; the reviewer approved with the root cause named - and nobody touched the gate, the contract or the pre-existing suite."
+    ]
+  }
+}

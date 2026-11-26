@@ -1,0 +1,42 @@
+{
+  "id": "linux-process-triage-live",
+  "mode": "AGENT",
+  "description": "Live Linux triage on this very host: a runaway worker (a metrics-exporter look-alike burning CPU), a legitimate sibling with a one-character-different name and an unknown listener on an undocumented port are real processes visible through /proc; identify them, SIGTERM the runaway only, and write report/triage.md. Needs kill in the run's --auto-approve (not in the default set); ps likewise, or use python3 os.kill / read /proc directly.",
+  "category": "linux-ops",
+  "max_iterations": 45,
+  "fixture": "fixtures/process-triage",
+  "prompt_file": "prompts/linux-process-triage-live.md",
+  "fixture_server": {
+    "dir": "staging",
+    "port": 8841,
+    "cmd": "exec bash {{DIR}}/staging/run.sh {{PORT}}"
+  },
+  "assert": {
+    "tool_order": [
+      "run_terminal_command"
+    ],
+    "tool_invoked": [
+      {
+        "name": "run_terminal_command",
+        "args_regex": "/proc|ps\\b"
+      }
+    ],
+    "needle_in_file": {
+      "path": "report/triage.md",
+      "regex": "runaway_name[[:space:]]*="
+    },
+    "file_unchanged": [
+      "check.py",
+      "README.md",
+      "var/run/process-snapshot.txt"
+    ],
+    "build_cmd": "python3 check.py",
+    "enforce_max_iterations": true,
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The agent read the live /proc table (not the stale snapshot), identified the runaway metrics-exporter-repl and the unknown listener, stopped exactly the runaway with a graceful SIGTERM while leaving the legitimate sibling and the listener alive, and wrote the six runbook lines in report/triage.md."
+    ]
+  }
+}

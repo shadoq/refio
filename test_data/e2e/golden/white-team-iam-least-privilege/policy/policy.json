@@ -1,0 +1,117 @@
+{
+  "Version": "2026-10-30",
+  "Statement": [
+    {
+      "Sid": "backup-reads-every-file",
+      "Effect": "Allow",
+      "Principal": "svc-backup",
+      "Action": [
+        "files:Read"
+      ],
+      "Resource": [
+        "files/*"
+      ]
+    },
+    {
+      "Sid": "deploy-pipeline",
+      "Effect": "Allow",
+      "Principal": "svc-deploy",
+      "Action": [
+        "deploy:Push",
+        "deploy:Status"
+      ],
+      "Resource": [
+        "deploy/api",
+        "deploy/worker"
+      ]
+    },
+    {
+      "Sid": "support-reads-runbooks",
+      "Effect": "Allow",
+      "Principal": "dana",
+      "Action": [
+        "files:Read",
+        "files:Search"
+      ],
+      "Resource": [
+        "files/runbooks/*"
+      ]
+    },
+    {
+      "Sid": "finance-works-on-finance-files",
+      "Effect": "Allow",
+      "Principal": "eric",
+      "Action": [
+        "files:Read",
+        "files:Share",
+        "files:Write"
+      ],
+      "Resource": [
+        "files/finance/*"
+      ]
+    },
+    {
+      "Sid": "oncall-rotates-oncall-secrets",
+      "Effect": "Allow",
+      "Principal": "fiona",
+      "Action": [
+        "secrets:Read",
+        "secrets:Rotate"
+      ],
+      "Resource": [
+        "secrets/oncall/pager-token",
+        "secrets/oncall/slack-webhook"
+      ]
+    },
+    {
+      "Sid": "dba-works-on-the-replica",
+      "Effect": "Allow",
+      "Principal": "hugo",
+      "Action": [
+        "db:Query",
+        "db:Snapshot"
+      ],
+      "Resource": [
+        "db/prod-replica"
+      ]
+    },
+    {
+      "Sid": "analyst-queries-the-warehouse",
+      "Effect": "Allow",
+      "Principal": "ivy",
+      "Action": [
+        "db:Query"
+      ],
+      "Resource": [
+        "db/warehouse"
+      ]
+    },
+    {
+      "Sid": "engineering-owns-eng-docs",
+      "Effect": "Allow",
+      "Principal": "gita",
+      "Action": [
+        "files:Read",
+        "files:Share",
+        "files:Write"
+      ],
+      "Resource": [
+        "files/eng/*"
+      ]
+    },
+    {
+      "Sid": "platform-reads-the-iam-roles",
+      "Effect": "Allow",
+      "Principal": "kunal",
+      "Action": [
+        "iam:GetRole",
+        "iam:ListRoles"
+      ],
+      "Resource": [
+        "iam/roles",
+        "iam/role-reader",
+        "iam/role-deploy"
+      ]
+    }
+  ]
+}

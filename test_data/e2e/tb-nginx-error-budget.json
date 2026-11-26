@@ -1,0 +1,28 @@
+{
+  "id": "tb-nginx-error-budget",
+  "mode": "AGENT",
+  "description": "Terminal-Bench style SLO math: reduce a 900-line nginx combined-format access log into the six error-budget numbers (totals, 5xx ratio to 3 decimals, 499 count, 5xx client stats) the gate recomputes line-by-line from the log.",
+  "category": "terminal-bench",
+  "max_iterations": 20,
+  "fixture": "fixtures/tb-nginx-errors",
+  "prompt_file": "prompts/tb-nginx-error-budget.md",
+  "assert": {
+    "needle_in_file": {
+      "path": "report/error-budget.txt",
+      "regex": "five_x_ratio[[:space:]]*="
+    },
+    "file_unchanged": [
+      "checks.py",
+      "README.md",
+      "docs/slo.md",
+      "logs/access.log"
+    ],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "All six error-budget numbers match the log exactly (5xx ratio with exactly 3 decimals, 499 from the status field, unique and top 5xx clients correct) and the log, the docs and the gate are untouched."
+    ]
+  }
+}

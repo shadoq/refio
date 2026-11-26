@@ -1,0 +1,22 @@
+{
+  "id": "ab-os-file-orchestration",
+  "mode": "AGENT",
+  "description": "AgentBench OS style file-system task: tidy the shared drive in work/ by carrying out eight plain-English instructions (domain replacement in text files only, gzip snapshots of phased-out CSVs, backup inventory then truncation, a review footer in every notes.md, and INDEX/COUNT/MANIFEST summaries). The grader replays the instructions on a pristine copy it carries and compares the whole tree.",
+  "category": "agentbench-os",
+  "max_iterations": 45,
+  "fixture": "fixtures/ab-os",
+  "prompt_file": "prompts/ab-os-file-orchestration.md",
+  "assert": {
+    "file_unchanged": [
+      "README.md",
+      "evaluate.py"
+    ],
+    "build_cmd": "python3 evaluate.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "All eight instructions are carried out exactly (domain replaced only in text files, old CSVs snapshotted as individual .gz files, BACKUPS.txt recording the pre-truncation sizes before the .bak files are emptied, the exact footer appended to every notes.md) and INDEX.md, COUNT.txt and MANIFEST.txt match the values recomputed from a pristine copy; evaluate.py, README.md and everything outside work/ stay untouched."
+    ]
+  }
+}

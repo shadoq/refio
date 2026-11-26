@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""notes service - deliberately vulnerable reference build."""
+import json
+import os
+import sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8821
+DEBUG_ENV = {"NOTES_SECRET": "FLAG{cells_fanin_both_paths_71c4}", "NODE_ENV": "production", "DB_HOST": "db.local"}
+NOTES = {
+    1: {"owner": "alice", "text": "shared ops note - the secret is in the debug env: FLAG{cells_fanin_both_paths_71c4}"},
+    2: {"owner": "bob", "text": "bob private note"},
+    3: {"owner": "alice", "text": "alice second note"},
+}
+
+
+class Handler(BaseHTTPRequestHandler):
+    def _send(self, code, body, ctype="application/json"):
+        data = body.encode() if isinstance(body, str) else body
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        path = self.path.split("?", 1)[0]
+        if path == "/":
+            self._send(200, "<h1>notes</h1><p>endpoints: /login, /api/notes, /api/notes/&lt;id&gt;, /metrics, /debug/env</p>", "text/html")
+            return
+        if path == "/login":
+            self._send(200, json.dumps({"ok": True, "user": "alice"}))
+            return
+        if path == "/api/notes":
+            self._send(200, json.dumps([{"id": i, "owner": n["owner"]} for i, n in NOTES.items()]))
+            return
+        if path.startswith("/api/notes/"):
+            try:
+                nid = int(path.rsplit("/", 1)[1])
+            except ValueError:
+                self._send(404, json.dumps({"error": "not found"}))
+                return
+            note = NOTES.get(nid)
+            if note:
+                # IDOR: any authenticated user can read any note by id
+                self._send(200, json.dumps({"id": nid, "owner": note["owner"], "text": note["text"]}))
+            else:
+                self._send(404, json.dumps({"error": "not found"}))
+            return
+        if path == "/metrics":
+            # exposed internal telemetry
+            self._send(200, "\n".join(f"# HELP {k} gauge" for k in DEBUG_ENV) + "\n")
+            return
+        if path == "/debug/env":
+            # debug endpoint left enabled: leaks the process environment
+            self._send(200, json.dumps(DEBUG_ENV))
+            return
+        self._send(404, json.dumps({"error": "not found"}))
+
+    def do_POST(self):
+        path = self.path.split("?", 1)[0]
+        if path == "/api/render":
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length) or b"{}")
+            # reflected XSS: the message is echoed back unescaped
+            self._send(200, "<html><body>hello " + str(body.get("name", "")) + "</body></html>", "text/html")
+            return
+        self._send(404, json.dumps({"error": "not found"}))
+
+    def log_message(self, *a):
+        pass
+
+
+if __name__ == "__main__":
+    srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    srv.serve_forever()

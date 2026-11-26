@@ -1,0 +1,65 @@
+{
+  "id": "white-team-iam-least-privilege",
+  "mode": "AGENT",
+  "description": "White-team IAM review: the policy in force grants *:* to two service accounts, files:* and secrets:Read to a whole group, and a temporary db:*/files:* statement to a reporting account. Rebuild policy/policy.json as least privilege from 30 days of access logs (one Allow statement per principal, only the actions and resources each one used), find the credential whose night-time burst of never-used actions came from an unknown source, cut it off, and write report/iam-review.md. check.py replays the logged access through the project's own evaluator: legitimate use still works, privileged probes and the burst are denied.",
+  "category": "security",
+  "max_iterations": 45,
+  "fixture": "fixtures/iam-review",
+  "prompt_file": "prompts/white-team-iam-least-privilege.md",
+  "assert": {
+    "tool_order": ["read_file", "run_terminal_command"],
+    "tool_invoked": [ { "name": "run_terminal_command", "args_regex": "check\\.py" } ],
+    "needles_in_file": [
+      { "path": "report/iam-review.md", "regex": "^flagged_principal[[:space:]]*=[[:space:]]*[^[:space:]=]+[[:space:]]*$", "min_count": 1, "max_count": 1 },
+      { "path": "report/iam-review.md", "regex": "^flagged_reason[[:space:]]*=[[:space:]]*[^[:space:]].{19,}[[:space:]]*$", "min_count": 1, "max_count": 1 },
+      { "path": "report/iam-review.md", "regex": "^statements[[:space:]]*=[[:space:]]*[0-9]+[[:space:]]*$", "min_count": 1, "max_count": 1 }
+    ],
+    "file_unchanged": [
+      "check.py",
+      "README.md",
+      "src/iam/__init__.py",
+      "src/iam/evaluator.py",
+      "policy/groups.json",
+      "docs/actions.md",
+      "docs/policy-format.md",
+      "logs/access-2026-10-01.jsonl",
+      "logs/access-2026-10-02.jsonl",
+      "logs/access-2026-10-03.jsonl",
+      "logs/access-2026-10-04.jsonl",
+      "logs/access-2026-10-05.jsonl",
+      "logs/access-2026-10-06.jsonl",
+      "logs/access-2026-10-07.jsonl",
+      "logs/access-2026-10-08.jsonl",
+      "logs/access-2026-10-09.jsonl",
+      "logs/access-2026-10-10.jsonl",
+      "logs/access-2026-10-11.jsonl",
+      "logs/access-2026-10-12.jsonl",
+      "logs/access-2026-10-13.jsonl",
+      "logs/access-2026-10-14.jsonl",
+      "logs/access-2026-10-15.jsonl",
+      "logs/access-2026-10-16.jsonl",
+      "logs/access-2026-10-17.jsonl",
+      "logs/access-2026-10-18.jsonl",
+      "logs/access-2026-10-19.jsonl",
+      "logs/access-2026-10-20.jsonl",
+      "logs/access-2026-10-21.jsonl",
+      "logs/access-2026-10-22.jsonl",
+      "logs/access-2026-10-23.jsonl",
+      "logs/access-2026-10-24.jsonl",
+      "logs/access-2026-10-25.jsonl",
+      "logs/access-2026-10-26.jsonl",
+      "logs/access-2026-10-27.jsonl",
+      "logs/access-2026-10-28.jsonl",
+      "logs/access-2026-10-29.jsonl",
+      "logs/access-2026-10-30.jsonl"
+    ],
+    "build_cmd": "python3 check.py",
+    "enforce_max_iterations": true,
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "policy/policy.json is rebuilt from the logs with one Allow statement per principal that keeps access, exact principal names, only the actions and resources each principal was granted in the logs, and no statement for svc-report or one limited to db:Query and db:Insert on db/reporting; report/iam-review.md names svc-report as flagged_principal with a reason that cites its night-time burst of never-used actions from source 10.42.9.77, and statements equals the number of statements in the policy; the evaluator, the gate, the groups, the docs and the logs are untouched."
+    ]
+  }
+}

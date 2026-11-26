@@ -1,0 +1,36 @@
+{
+  "id": "sec-mitm-timing-triage",
+  "mode": "AGENT",
+  "description": "TLS timing triage: split the 300-row handshake csv into the never-resuming slow peer and the rest, compute both median durations, and give the fixed verdict phrase when the attack median exceeds 1.5x normal with a resumed=no share above 80 percent.",
+  "category": "security",
+  "max_iterations": 30,
+  "fixture": "fixtures/mitm-timing",
+  "prompt_file": "prompts/sec-mitm-timing-triage.md",
+  "assert": {
+    "tool_order": [
+      "run_terminal_command"
+    ],
+    "tool_invoked": [
+      {
+        "name": "run_terminal_command"
+      }
+    ],
+    "needle_in_file": {
+      "path": "report/timing.txt",
+      "regex": "verdict[[:space:]]*=[[:space:]]*interception[[:space:]]+suspected"
+    },
+    "file_unchanged": [
+      "check.py",
+      "README.md",
+      "logs/tls-handshakes.csv"
+    ],
+    "build_cmd": "python3 check.py",
+    "enforce_max_iterations": true,
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The agent identified 10.0.9.55 as the attack-pattern peer (median 156.45 ms versus 55.25 ms normal, 2.83x, resumed=no on every session), reported both medians and the verdict line interception suspected, and left the csv and the gate untouched."
+    ]
+  }
+}

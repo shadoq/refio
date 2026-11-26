@@ -1,0 +1,59 @@
+CI job 48112 (corpus run), input tests/cases/crash-1.txt
+build: g++ -std=c++17 -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1
+exit status 1
+
+==PID==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x50300000023f at pc 0x55d9ec31c7b4 bp 0x7ffc7edac030 sp 0x7ffc7edac028
+READ of size 1 at 0x50300000023f thread T0
+    #0 0x55d9ec31c7b3 in textlib::line_length(char const*, unsigned long) src/lines.cpp:7
+    #1 0x55d9ec31ca84 in textlib::split_lines[abi:cxx11](std::vector<char, std::allocator<char> > const&) src/lines.cpp:18
+    #2 0x55d9ec322ef9 in textlib::analyze(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) src/report.cpp:51
+    #3 0x55d9ec32c9aa in main tests/run_tests.cpp:57
+    #4 0x7f7bd011bca7  (/lib/x86_64-linux-gnu/libc.so.6+0x29ca7) (BuildId: 5e5b51f4c39af9ac589408c1dc432ba390a273cc)
+    #5 0x7f7bd011bd64 in __libc_start_main (/lib/x86_64-linux-gnu/libc.so.6+0x29d64) (BuildId: 5e5b51f4c39af9ac589408c1dc432ba390a273cc)
+    #6 0x55d9ec31c670 in _start (build/run_tests+0x20670) (BuildId: df7bd6bef661f4e82e5f362c412fa5bf3996b65b)
+
+0x50300000023f is located 0 bytes after 31-byte region [0x503000000220,0x50300000023f)
+allocated by thread T0 here:
+    #0 0x7f7bd0d73778 in operator new(unsigned long) ../../../../src/libsanitizer/asan/asan_new_delete.cpp:95
+    #1 0x55d9ec32499d in std::__new_allocator<char>::allocate(unsigned long, void const*) /usr/include/c++/14/bits/new_allocator.h:151
+    #2 0x55d9ec32499d in std::allocator_traits<std::allocator<char> >::allocate(std::allocator<char>&, unsigned long) /usr/include/c++/14/bits/alloc_traits.h:515
+    #3 0x55d9ec32499d in std::_Vector_base<char, std::allocator<char> >::_M_allocate(unsigned long) /usr/include/c++/14/bits/stl_vector.h:380
+    #4 0x55d9ec32499d in void std::vector<char, std::allocator<char> >::_M_range_initialize<__gnu_cxx::__normal_iterator<char const*, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > >(__gnu_cxx::__normal_iterator<char const*, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, __gnu_cxx::__normal_iterator<char const*, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::forward_iterator_tag) /usr/include/c++/14/bits/stl_vector.h:1694
+    #5 0x55d9ec322e80 in std::vector<char, std::allocator<char> >::vector<__gnu_cxx::__normal_iterator<char const*, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, void>(__gnu_cxx::__normal_iterator<char const*, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, __gnu_cxx::__normal_iterator<char const*, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<char> const&) /usr/include/c++/14/bits/stl_vector.h:711
+    #6 0x55d9ec322e80 in textlib::analyze(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) src/report.cpp:50
+    #7 0x55d9ec32c9aa in main tests/run_tests.cpp:57
+    #8 0x7f7bd011bca7  (/lib/x86_64-linux-gnu/libc.so.6+0x29ca7) (BuildId: 5e5b51f4c39af9ac589408c1dc432ba390a273cc)
+
+SUMMARY: AddressSanitizer: heap-buffer-overflow src/lines.cpp:7 in textlib::line_length(char const*, unsigned long)
+Shadow bytes around the buggy address:
+  0x502fffffff80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x503000000000: fa fa 00 00 00 fa fa fa 00 00 00 07 fa fa fd fd
+  0x503000000080: fd fd fa fa fd fd fd fd fa fa fd fd fd fd fa fa
+  0x503000000100: 00 00 00 07 fa fa 00 00 00 00 fa fa fd fd fd fd
+  0x503000000180: fa fa fd fd fd fd fa fa fd fd fd fd fa fa fd fd
+=>0x503000000200: fd fa fa fa 00 00 00[07]fa fa fd fd fd fd fa fa
+  0x503000000280: 00 00 01 fa fa fa fa fa fa fa fa fa fa fa fa fa
+  0x503000000300: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+  0x503000000380: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+  0x503000000400: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+  0x503000000480: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+Shadow byte legend (one shadow byte represents 8 application bytes):
+  Addressable:           00
+  Partially addressable: 01 02 03 04 05 06 07 
+  Heap left redzone:       fa
+  Freed heap region:       fd
+  Stack left redzone:      f1
+  Stack mid redzone:       f2
+  Stack right redzone:     f3
+  Stack after return:      f5
+  Stack use after scope:   f8
+  Global redzone:          f9
+  Global init order:       f6
+  Poisoned by user:        f7
+  Container overflow:      fc
+  Array cookie:            ac
+  Intra object redzone:    bb
+  ASan internal:           fe
+  Left alloca redzone:     ca
+  Right alloca redzone:    cb
+==PID==ABORTING

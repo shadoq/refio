@@ -847,3 +847,65 @@ matrix, a scenario x model **avg-seconds-per-run** matrix (processing time per c
 histogram, and API-error counts. It is read-only (no LLM); `e2e-stats.sh --self-test` checks the
 aggregation offline. The rendered report for the tracked model runs is committed to
 [`RESULTS.md`](RESULTS.md).
+
+## Security, reversing, operations and benchmark scenarios (wave 6)
+
+Wave 6 adds 33 scenarios across nine areas: language-variant reconnaissance (Python, Java,
+C++, browser JavaScript, Node, TypeScript), vulnerability analysis, red-team exploitation
+against live local targets, white-team hardening, decompilation, debugging, Linux
+operations, multi-agent collaboration and benchmark-style tasks (Terminal-Bench,
+AgentBench-OS and Cybench look-alikes). All of them are offline-validated scenarios in the
+sense of the waves above: a golden solution that satisfies every HARD assertion, an
+untouched fixture that fails, and 4 to 6 negative controls (real wrong solutions) that are
+each rejected with a specific gate message. The gates derive the expected answers
+themselves (reference implementations, re-decoding, digests) instead of comparing against
+plain-text tables, so a gate leak does not hand the agent the answers. Live-target
+scenarios were additionally exercised by hand: the reference exploit or solution was run
+against a stand-in booted the way the harness boots it. Ports 8801-8814, 8821 and 8841 are
+used, none clashing with earlier waves.
+
+| id | area | agent task | gate |
+| --- | --- | --- | --- |
+| `recon-python-notes-api` | recon | passive code review plus live probing of a notes API; 4 weaknesses with safe look-alikes | `python3 check.py` |
+| `recon-java-invoice-service` | recon | same design in Java: XXE, deserialization, SQL injection, hard-coded key | `python3 check.py` |
+| `recon-cpp-log-collector` | recon | same design in C++: out-of-bounds write, integer overflow, popen, hard-coded key | `python3 check.py` |
+| `recon-javascript-helpdesk-portal` | recon | same design in browser JavaScript: DOM XSS, CSRF, password in localStorage | `python3 check.py` |
+| `recon-node-image-resizer` | recon | Node variant: SSRF, prototype pollution, ReDoS, Math.random signature | `python3 check.py` |
+| `recon-typescript-webhook-relay` | recon | TypeScript variant: path traversal, command injection, alg none JWT, leaky error page | `python3 check.py` |
+| `vuln-variant-analysis-sqli` | vuln analysis | find and fix 5 SQL injection variants in a shop codebase without changing behaviour | `python3 check.py` |
+| `vuln-sca-triage` | vuln analysis | triage scanner findings against the real lockfile and imports, bump true positives | `python3 check.py` |
+| `vuln-sanitizer-crash-triage` | vuln analysis | classify 4 ASan/UBSan reports by CWE and fix the defects under sanitizers | `python3 check.py` |
+| `red-team-idor-bola` | red team | exploit IDOR plus predictable share tokens on a live target (port 8811) | `python3 check.py` |
+| `red-team-race-double-spend` | red team | win a TOCTOU race on the balance check (port 8812) | `python3 check.py` |
+| `red-team-prototype-pollution` | red team | pollute Object.prototype to reach the staff flag endpoint (port 8813) | `python3 check.py` |
+| `red-team-stack-overflow-ret2win` | red team | stack overflow with measured offset 152 into win() (port 8814) | `python3 check.py` |
+| `white-team-crypto-remediation` | white team | replace MD5/XOR/ECB vault crypto with nonce, PBKDF2, encrypt-then-MAC and migrate | `python3 check.py` |
+| `white-team-iam-least-privilege` | white team | rebuild a least-privilege policy from 30 days of logs and cut off a leaked credential | `python3 check.py` |
+| `white-team-security-headers` | white team | CSP, cookies, escaping, redirect validation on a small site | `node check.js` |
+| `decompile-javap-obfuscated-license` | reversing | recover the licence algorithm from a javap listing and compute a device key | `python3 check.py` |
+| `decompile-pyc-malware-triage` | reversing | triage a Python 3.12 dropper pyc and report its IOCs | `python3 check.py` |
+| `decompile-javap-source-recovery` | reversing | name 3 decompiler mistakes and recompile behaviour-identical Java source | `python3 check.py` |
+| `debug-node-unhandled-rejection` | debugging | find the swallowed promise rejection and the wrapping retry counter | `node check.js` |
+| `debug-python-flaky-hash-seed` | debugging | stabilize a suite that depends on dict ordering and the hash seed | `python3 check.py` |
+| `debug-perf-quadratic` | debugging | replace a quadratic pairing loop, proven by a comparison-count bound | `python3 check.py` |
+| `linux-shell-evidence-hunt` | linux ops | 12 evidence answers from a captured file tree with vendor decoys | `python3 check.py` |
+| `linux-shell-robust-script` | linux ops | harden backup.sh against spaces, dashes, signals and unwritable targets | `python3 check.py` |
+| `linux-process-triage-live` | linux ops | live incident: stop the right runaway process via /proc (port 8841) | `python3 check.py` |
+| `multi-agent-linux-incident-response` | multi-agent | triage, contain and review a stand-in host compromise in three roles | `python3 verify.py` |
+| `multi-agent-red-cells-blue-cell` | multi-agent | two attack cells in parallel, then a blue cell patches everything (port 8821) | `python3 attack_check.py` |
+| `multi-agent-debug-war-room` | multi-agent | reproducer, fixer and reviewer around a business-days bug | `python3 verify.py` |
+| `tb-git-dangling-recover` | terminal-bench | recover a file from a dangling commit in a damaged clone | `python3 check.py` |
+| `tb-sqlite-bounded-table` | terminal-bench | enforce a 10000-row retention contract with a trigger and a prune | `python3 check.py` |
+| `ab-os-file-orchestration` | agentbench-os | 8 plain-English file-tree instructions, verified against a reference implementation | `python3 evaluate.py` |
+| `cybench-forensics-hid-keylogger` | cybench | decode an interleaved USB HID capture into three answers | `python3 check.py` |
+| `cybench-crypto-rsa-low-exponent` | cybench | cube root, Hastad broadcast and shared-prime attacks on e=3 RSA | `python3 check.py` |
+
+Notes. The multi-agent scenarios use the runner conventions of the earlier waves
+(`agent_order` HARD, per-agent task texts in `.refio/agents/`). The stack-overflow target
+needs `g++` on PATH and boots in under a second; the sanitizer scenario needs `g++` and
+`make`; the javap scenarios need a Java runtime with the `jdk.compiler` and `jdk.jdeps`
+modules (the fixtures state this). The generators for every scenario live outside the
+repository, in the authoring workspace under `scripts/e2e-wave6/`, together with a file-mode
+manifest (`fix-modes.py`): the sandbox restore flattens file modes, and two fixtures depend
+on the exact modes (the non-executable script of the evidence hunt and the git index modes
+of the dangling-recover repo), so `fix-modes.py apply` restores them before validation.

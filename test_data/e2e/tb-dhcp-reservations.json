@@ -1,0 +1,28 @@
+{
+  "id": "tb-dhcp-reservations",
+  "mode": "AGENT",
+  "description": "Terminal-Bench style config audit: turn a site dhcpd.conf (7 host reservations with fixed-prefix6 /64s, a group pool and a shared-network pool) into the six inventory numbers the gate re-derives from the file with ipaddress arithmetic.",
+  "category": "terminal-bench",
+  "max_iterations": 20,
+  "fixture": "fixtures/tb-dhcp",
+  "prompt_file": "prompts/tb-dhcp-reservations.md",
+  "assert": {
+    "needle_in_file": {
+      "path": "report/dhcp-inventory.txt",
+      "regex": "host_count[[:space:]]*="
+    },
+    "file_unchanged": [
+      "checks.py",
+      "README.md",
+      "docs/network.md",
+      "etc/dhcp/dhcpd.conf"
+    ],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "All six inventory numbers match the dhcpd.conf (commented-out blocks excluded, both range endpoints counted) and the configuration, the docs and the gate are untouched."
+    ]
+  }
+}

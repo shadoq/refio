@@ -1,0 +1,37 @@
+{
+  "id": "sec-sudoers-typo-triage",
+  "mode": "AGENT",
+  "description": "Sudo policy triage: the deploy drop-in grants NOPASSWD: ALL while the approved ticket asks for one systemctl restart command as the deploy user; fix the drop-in to match the ticket exactly and write a five key triage report.",
+  "category": "security",
+  "max_iterations": 30,
+  "fixture": "fixtures/sudoers-typo",
+  "prompt_file": "prompts/sec-sudoers-typo-triage.md",
+  "assert": {
+    "tool_order": [
+      "run_terminal_command"
+    ],
+    "tool_invoked": [
+      {
+        "name": "run_terminal_command"
+      }
+    ],
+    "needle_in_file": {
+      "path": "report/triage.txt",
+      "regex": "legacy_untouched[[:space:]]*=[[:space:]]*yes"
+    },
+    "file_unchanged": [
+      "check.py",
+      "README.md",
+      "docs/intent.md",
+      "etc/sudoers"
+    ],
+    "build_cmd": "python3 check.py",
+    "enforce_max_iterations": true,
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The agent corrected etc/sudoers.d/deploy to the single approved rule from docs/intent.md (removing the NOPASSWD: ALL typo), left etc/sudoers byte-identical, and wrote the five required key = value lines in report/triage.txt."
+    ]
+  }
+}

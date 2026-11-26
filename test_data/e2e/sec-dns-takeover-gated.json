@@ -1,0 +1,36 @@
+{
+  "id": "sec-dns-takeover-gated",
+  "mode": "AGENT",
+  "description": "Server-side security: the local EdgeStats deployment still maps the decommissioned vhost old-app.example.test and serves anyone who resolves that name a legacy takeover page carrying FLAG{stale-vhost-takeover}. Capture the flag from the live takeover page, unmap the stale host by fixing the routing (not by deleting the app), keep the main host intact, and write the report; the offline gate checks.py verifies config, routing code and report. Needs http_request with a Host header against the live fixture server.",
+  "category": "security",
+  "max_iterations": 35,
+  "fixture": "fixtures/dns-takeover",
+  "prompt_file": "prompts/sec-dns-takeover-gated.md",
+  "fixture_server": { "dir": "server", "port": 8849, "cmd": "exec python3 {{DIR}}/app.py {{PORT}}" },
+  "assert": {
+    "tool_order": ["http_request", "run_terminal_command"],
+    "tool_invoked": [
+      { "name": "http_request" },
+      { "name": "run_terminal_command", "args_regex": "checks\\.py" }
+    ],
+    "needle_in_output": { "text": "FLAG{stale-vhost-takeover}" },
+    "needle_in_file": { "path": "report/takeover.md", "text": "FLAG{stale-vhost-takeover}" },
+    "needles_in_file": [
+      { "path": "report/takeover.md", "regex": "^stale_host[[:space:]]*=[[:space:]]*old-app\\.example\\.test[[:space:]]*$" },
+      { "path": "report/takeover.md", "regex": "^affected_route[[:space:]]*=[[:space:]]*\\S" }
+    ],
+    "file_unchanged": [
+      "checks.py",
+      "docs/incident.md",
+      "README.md"
+    ],
+    "build_cmd": "python3 checks.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The agent visited the takeover page on Host old-app.example.test before changing anything and captured FLAG{stale-vhost-takeover}, then removed the stale host from server/config/vhosts.json and the takeover route from server/app.py so the name gets the unknown-host 404 while the main app on app.example.test still serves / and /api/stats.",
+      "python3 checks.py passes, report/takeover.md contains the flag plus stale_host and affected_route keys, and the gate, the incident note and the README are untouched (a wholesale deletion of the server fails the gate)."
+    ]
+  }
+}

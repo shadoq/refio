@@ -1,0 +1,24 @@
+{
+  "id": "tb-sqlite-bounded-table",
+  "mode": "AGENT",
+  "description": "Terminal-Bench style database task: enforce the events retention contract (at most 10000 rows, the newest by id) inside data/events.db with an INSERT trigger and a prune_events() routine, plus a reproducible migrate.py. The gate recomputes everything by inserting 20000 rows and checking the other tables. Only python3 is assumed (no sqlite3 CLI).",
+  "category": "terminal-bench",
+  "max_iterations": 30,
+  "fixture": "fixtures/sqlite-events",
+  "prompt_file": "prompts/tb-sqlite-bounded-table.md",
+  "assert": {
+    "file_unchanged": [
+      "README.md",
+      "check.py",
+      "docs/retention.md",
+      "docs/queries.md"
+    ],
+    "build_cmd": "python3 check.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The events table is capped at 10000 newest rows by a database trigger and prune_events(), the reference tables, their rows and the documented indexes are untouched, and migrate.py reproduces the migration."
+    ]
+  }
+}

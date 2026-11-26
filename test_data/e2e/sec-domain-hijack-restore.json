@@ -1,0 +1,61 @@
+{
+  "id": "sec-domain-hijack-restore",
+  "mode": "AGENT",
+  "description": "Server-side security: the local gateway's interception layer hijacks Host api.example.test, serving an attacker page without the backend's security headers while the real backend runs behind /internal in the same process and the proxy copy strips its headers. Remove the interception, restore the backend's exact X-Content-Type-Options, X-Frame-Options and Strict-Transport-Security values on the proxied and direct routes, keep the unknown-host 404, and write report/restore.md; the provided live gate tests/restore_test.py boots the gateway itself and asserts the restored behaviour.",
+  "category": "security",
+  "max_iterations": 35,
+  "fixture": "fixtures/domain-hijack",
+  "prompt_file": "prompts/sec-domain-hijack-restore.md",
+  "fixture_server": {
+    "dir": "server",
+    "port": 8852,
+    "cmd": "exec python3 {{DIR}}/app.py {{PORT}}"
+  },
+  "assert": {
+    "tool_order": [
+      "http_request",
+      "run_terminal_command"
+    ],
+    "tool_invoked": [
+      {
+        "name": "http_request"
+      },
+      {
+        "name": "run_terminal_command",
+        "args_regex": "restore_test"
+      }
+    ],
+    "needles_in_file": [
+      {
+        "path": "report/restore.md",
+        "regex": "^intercepted_host[[:space:]]*=[[:space:]]*api\\.example\\.test[[:space:]]*$"
+      },
+      {
+        "path": "report/restore.md",
+        "regex": "^stripped_headers_count[[:space:]]*=[[:space:]]*3[[:space:]]*$"
+      },
+      {
+        "path": "report/restore.md",
+        "regex": "^proxy_rule[[:space:]]*=[[:space:]]*\\S"
+      },
+      {
+        "path": "server/app.py",
+        "regex": "hijacker[ -]wins[ -]7f3d",
+        "absent": true
+      }
+    ],
+    "file_unchanged": [
+      "tests/restore_test.py",
+      "docs/incident.md",
+      "README.md"
+    ],
+    "build_cmd": "python3 tests/restore_test.py",
+    "no_context_overflow": true
+  },
+  "judge": {
+    "criteria": [
+      "The agent removed the interception layer (and the attacker page with its marker) from server/app.py and stopped dropping the backend's security headers, so Host api.example.test reaches the ExampleAPI backend on the proxied public routes and under /internal with X-Content-Type-Options: nosniff, X-Frame-Options: DENY and Strict-Transport-Security: max-age=31536000; includeSubDomains, and unknown hosts still get the proxy's 404.",
+      "python3 tests/restore_test.py passes, report/restore.md carries intercepted_host, stripped_headers_count = 3 and proxy_rule, and the gate, the incident note and the README are untouched."
+    ]
+  }
+}
