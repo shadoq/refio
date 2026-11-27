@@ -34,6 +34,21 @@ class TurnLLMCallerTest {
     }
 
     @Test
+    fun `a model known to reason gets the thinking the user chose`() {
+        // qwen3.8:27b, gemini-2.5-pro and gpt-5-mini reason but carry no separate thinking flag;
+        // gating on that flag alone left the thinking setting doing nothing for them.
+        assertEquals(true, caller.resolveThinkingEnabled("ollama", "qwen3.8:27b", requested = true))
+        assertEquals(true, caller.resolveThinkingEnabled("gemini", "gemini-2.5-pro", requested = true))
+        assertEquals(true, caller.resolveThinkingEnabled("openai", "gpt-5-mini", requested = true))
+    }
+
+    @Test
+    fun `a model known not to reason never gets thinking, and thinking off stays off`() {
+        assertEquals(false, caller.resolveThinkingEnabled("openai", "gpt-4o", requested = true))
+        assertEquals(false, caller.resolveThinkingEnabled("ollama", "qwen3.8:27b", requested = false))
+    }
+
+    @Test
     fun `should keep json response format for remote providers`() {
         assertEquals(
             mapOf("type" to "json_object"),

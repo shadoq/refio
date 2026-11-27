@@ -64,6 +64,11 @@ class AnthropicAdapter(
         // Claude 5 family); matched anywhere so Bedrock-prefixed ids are covered too.
         private val ADAPTIVE_THINKING_MODEL =
             Regex("claude-(opus-4-[7-9]|opus-5|sonnet-5|haiku-5|fable-|mythos-)")
+
+        // The subset that thinks even when the request says nothing about it. Their thinking
+        // text comes back empty unless `display: summarized` is requested.
+        private val THINKS_BY_DEFAULT_MODEL =
+            Regex("claude-(opus-5|sonnet-5|haiku-5|fable-|mythos-)")
     }
 
     // Get timeout from ConfigService
@@ -305,10 +310,21 @@ class AnthropicAdapter(
             // the rest stay off when nothing is sent.
             val offEffort = ModelDefinitions.getDefinition("anthropic", model)?.reasoningOffEffort
                 ?: return emptyMap()
-            return mapOf("output_config" to mapOf("effort" to offEffort.toEffortString()!!))
+            val offParams = mapOf("output_config" to mapOf("effort" to offEffort.toEffortString()!!))
+            // They still think at that level, so ask for readable summaries or the stream stays silent.
+            if (THINKS_BY_DEFAULT_MODEL.containsMatchIn(model)) {
+                return mapOf("thinking" to mapOf("type" to "adaptive", "display" to "summarized")) + offParams
+            }
+            return offParams
         }
         if (ADAPTIVE_THINKING_MODEL.containsMatchIn(model)) {
-            return mapOf("output_config" to mapOf("effort" to effort.toEffortString()!!))
+            val effortParams = mapOf("output_config" to mapOf("effort" to effort.toEffortString()!!))
+            // Only for models already thinking: on Opus 4.7/4.8 this block would switch thinking on,
+            // and the thinking blocks it returns are not replayed on the next tool-use turn.
+            if (THINKS_BY_DEFAULT_MODEL.containsMatchIn(model)) {
+                return mapOf("thinking" to mapOf("type" to "adaptive", "display" to "summarized")) + effortParams
+            }
+            return effortParams
         }
         val budget = when (effort) {
             ReasoningEffort.HIGH -> 12288

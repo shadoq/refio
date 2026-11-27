@@ -38,8 +38,19 @@ data class StreamChunk(
      * On such a chunk [delta] is typically empty — the model is emitting a structured tool call,
      * not text. Consumers use this to render a progressive "building <tool>(<args>)" indicator.
      */
-    val toolCallProgress: ToolCallProgress? = null
-)
+    val toolCallProgress: ToolCallProgress? = null,
+    /**
+     * Present only on chunks that carry a reasoning delta: the tail (at most
+     * [THINKING_PREVIEW_CHARS]) of the model's thinking so far in this response. Lets the UI show
+     * that the model is reasoning instead of a silent stream. A tail rather than the full text,
+     * because thinking can run to hundreds of thousands of characters and arrives in tiny deltas.
+     */
+    val thinkingPreview: String? = null
+) {
+    companion object {
+        const val THINKING_PREVIEW_CHARS = 600
+    }
+}
 
 /**
  * Snapshot of a native tool call being assembled during streaming.

@@ -102,6 +102,10 @@ data class ModelDefinition(
     // Effort sent in place of "thinking OFF" for models that think anyway unless told otherwise
     // but accept a level (e.g. Opus 5.5, Sonnet 5, kimi-k3). null = no mapping for this model.
     val reasoningOffEffort: ReasoningEffort? = null,
+    // Provider's own lowest effort value, sent for thinking OFF when it is not one of
+    // low/medium/high (OpenAI: "none" on gpt-5.5, "minimal" on gpt-5, "medium" on gpt-5.5-pro).
+    // null = the adapter's own fallback.
+    val lowestReasoningEffort: String? = null,
 
     // Provider-specific
     val endpointType: ApiEndpointType = ApiEndpointType.CHAT_COMPLETIONS,  // API endpoint to use (CHAT_COMPLETIONS, RESPONSES, etc.)

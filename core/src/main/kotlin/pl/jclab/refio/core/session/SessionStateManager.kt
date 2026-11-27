@@ -83,6 +83,28 @@ class SessionStateManager {
         _toolCallProgress.value = progress
     }
 
+    // Transient tail of the model's reasoning while it thinks before (or between) visible output.
+    // Non-null only while thinking deltas stream; cleared once answer text starts, the stream
+    // completes, or the turn ends. UI renders a "💭 <tail>" indicator.
+    private val _liveThinking = MutableStateFlow<String?>(null)
+    val liveThinking: StateFlow<String?> = _liveThinking.asStateFlow()
+
+    fun setLiveThinking(preview: String?) {
+        _liveThinking.value = preview
+    }
+
+    /**
+     * Shows the model's reasoning while it thinks, and hides it as soon as the response moves on
+     * to answer text, a tool call, or ends.
+     */
+    fun trackLiveThinking(chunk: pl.jclab.refio.core.api.StreamChunk) {
+        when {
+            chunk.isComplete || chunk.delta.isNotBlank() || chunk.toolCallProgress != null ->
+                _liveThinking.value = null
+            chunk.thinkingPreview != null -> _liveThinking.value = chunk.thinkingPreview
+        }
+    }
+
     fun setActiveSession(session: Session?) {
         val previousId = _activeSession.value?.id
         _activeSession.value = session
@@ -92,6 +114,7 @@ class SessionStateManager {
         // (auto-naming, token bumps) don't flicker the live "⚙ building" indicator off.
         if (session?.id != previousId) {
             _toolCallProgress.value = null
+            _liveThinking.value = null
         }
     }
 

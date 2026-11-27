@@ -277,6 +277,8 @@ class GeminiAdapter(
         logPrefix: String
     ): LLMResponse {
         var httpStatus: Int? = null
+        // Set once the error answer has been written to the API log, so the catch-all below does not log it again.
+        var httpErrorLogged = false
         val url = "$baseUrl${GENERATE_PATH.format(model)}"
         try {
             logger.info { "$logPrefix Request start: endpoint=$url, body=${SecureLogger.redactAndTruncate(requestJson)}" }
@@ -296,19 +298,20 @@ class GeminiAdapter(
 
             if (httpStatus !in 200..299) {
                 val latencyMs = (System.currentTimeMillis() - startTime).toInt()
+                val errorMessage = "Gemini API error (HTTP $httpStatus): $responseJson"
                 logger.apiError(
                     provider = provider,
                     model = model,
                     endpoint = url,
                     requestJson = requestJson,
                     httpStatus = httpStatus,
-                    error = Exception("Gemini API error (HTTP $httpStatus)"),
+                    error = Exception(errorMessage),
                     latencyMs = latencyMs,
                     taskId = taskId,
                     subtaskId = subtaskId,
                     source = source
                 )
-                val errorMessage = "Gemini API error (HTTP $httpStatus): $responseJson"
+                httpErrorLogged = true
                 if ((requestBody["tools"] as? List<*>)?.isNotEmpty() == true &&
                     isToolsNotSupportedError(httpStatus, errorMessage)
                 ) {
@@ -380,19 +383,21 @@ class GeminiAdapter(
         } catch (e: ToolsNotSupportedException) {
             throw e
         } catch (e: Exception) {
-            val latencyMs = (System.currentTimeMillis() - startTime).toInt()
-            logger.apiError(
-                provider = provider,
-                model = model,
-                endpoint = url,
-                requestJson = requestJson,
-                httpStatus = httpStatus,
-                error = e,
-                latencyMs = latencyMs,
-                taskId = taskId,
-                subtaskId = subtaskId,
-                source = source
-            )
+            if (!httpErrorLogged) {
+                val latencyMs = (System.currentTimeMillis() - startTime).toInt()
+                logger.apiError(
+                    provider = provider,
+                    model = model,
+                    endpoint = url,
+                    requestJson = requestJson,
+                    httpStatus = httpStatus,
+                    error = e,
+                    latencyMs = latencyMs,
+                    taskId = taskId,
+                    subtaskId = subtaskId,
+                    source = source
+                )
+            }
             throw LLMErrorMapper.fromThrowable(provider, model, timeoutMs, e)
         }
     }
@@ -429,6 +434,8 @@ class GeminiAdapter(
         val contentBuilder = StringBuilder()
         val functionCallParts = mutableListOf<Map<String, Any?>>()
         var httpStatus: Int? = null
+        // Set once the error answer has been written to the API log, so the catch-all below does not log it again.
+        var httpErrorLogged = false
         var finalFinishReason: String? = null
         var finalUsage: LLMUsage? = null
 
@@ -456,6 +463,7 @@ class GeminiAdapter(
                         subtaskId = subtaskId,
                         source = source
                     )
+                    httpErrorLogged = true
                     val errorMessage = "Gemini streaming error (HTTP $httpStatus): $errorBody"
                     if ((requestBody["tools"] as? List<*>)?.isNotEmpty() == true &&
                         isToolsNotSupportedError(httpStatus ?: 500, errorMessage)
@@ -613,19 +621,21 @@ class GeminiAdapter(
             )
             throw e
         } catch (e: Exception) {
-            val latencyMs = (System.currentTimeMillis() - startTime).toInt()
-            logger.apiError(
-                provider = provider,
-                model = model,
-                endpoint = url,
-                requestJson = requestJson,
-                httpStatus = httpStatus,
-                error = e,
-                latencyMs = latencyMs,
-                taskId = taskId,
-                subtaskId = subtaskId,
-                source = source
-            )
+            if (!httpErrorLogged) {
+                val latencyMs = (System.currentTimeMillis() - startTime).toInt()
+                logger.apiError(
+                    provider = provider,
+                    model = model,
+                    endpoint = url,
+                    requestJson = requestJson,
+                    httpStatus = httpStatus,
+                    error = e,
+                    latencyMs = latencyMs,
+                    taskId = taskId,
+                    subtaskId = subtaskId,
+                    source = source
+                )
+            }
             throw LLMErrorMapper.fromThrowable(provider, model, timeoutMs, e)
         }
     }

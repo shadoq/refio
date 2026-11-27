@@ -181,8 +181,9 @@ class TurnLLMCaller(
      *
      * Some models advertised by upstream APIs (notably non-reasoning OpenAI Chat Completions
      * variants) reject the `thinking` parameter with HTTP 400 `Unknown parameter: 'thinking'`.
-     * We treat [ModelDefinition.supportsThinking] as authoritative: when the registry knows
-     * the model and says it can't think, we silently force `thinking = false`.
+     * A known model that neither reasons nor thinks ([ModelDefinition.supportsReasoning] and
+     * [ModelDefinition.supportsThinking] both false) gets `thinking = false`. Either flag is
+     * enough to keep it: most reasoning models carry only `supportsReasoning`.
      *
      * Unknown models (no registry entry) pass through unchanged so locally-installed Ollama
      * / LM Studio / generic-OpenAI models keep working without per-id whitelisting.
@@ -190,9 +191,9 @@ class TurnLLMCaller(
     fun resolveThinkingEnabled(provider: String, model: String, requested: Boolean): Boolean {
         if (!requested) return false
         val definition = ModelDefinitions.getDefinition(provider, model)
-        if (definition != null && !definition.supportsThinking) {
+        if (definition != null && !definition.supportsThinking && !definition.supportsReasoning) {
             logger.info {
-                "[CALL_LLM] Disabling thinking for $provider/$model — model definition declares supportsThinking=false"
+                "[CALL_LLM] Disabling thinking for $provider/$model - model definition declares no reasoning"
             }
             return false
         }

@@ -15,15 +15,30 @@ import kotlin.test.assertTrue
 class AnthropicThinkingParamsTest {
 
     @Test
-    fun `adaptive model gets the effort level instead of a thinking budget it would reject`() {
-        val params = AnthropicAdapter(model = "claude-opus-5-5").thinkingParams(ReasoningEffort.LOW)
+    fun `model that thinks by default gets the effort level and asks for readable thinking summaries`() {
+        // These models omit thinking text unless asked, so the UI would show a silent pause instead
+        // of the reasoning; no thinking budget either, they reject it.
+        val models = listOf(
+            "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5", "claude-sonnet-5", "claude-haiku-5-5",
+            "claude-fable-5-2", "claude-mythos-5",
+        )
+        for (model in models) {
+            val params = AnthropicAdapter(model = model).thinkingParams(ReasoningEffort.HIGH)
 
-        assertEquals(mapOf("output_config" to mapOf("effort" to "low")), params)
+            assertEquals(
+                mapOf(
+                    "thinking" to mapOf("type" to "adaptive", "display" to "summarized"),
+                    "output_config" to mapOf("effort" to "high"),
+                ),
+                params,
+                "model $model",
+            )
+        }
     }
 
     @Test
-    fun `haiku 5_5 is steered by effort like the rest of the claude 5 family, not by a budget`() {
-        val params = AnthropicAdapter(model = "claude-haiku-5-5").thinkingParams(ReasoningEffort.LOW)
+    fun `opus 4_8 gets only the effort level, so a thinking mode it does not run today is not switched on`() {
+        val params = AnthropicAdapter(model = "claude-opus-4-8").thinkingParams(ReasoningEffort.LOW)
 
         assertEquals(mapOf("output_config" to mapOf("effort" to "low")), params)
     }
@@ -37,12 +52,26 @@ class AnthropicThinkingParamsTest {
     }
 
     @Test
-    fun `claude 5 models with reasoning off run at low effort instead of their costlier default`() {
-        // Each of them thinks unless told otherwise; left alone they run at high (medium on Opus 5.5).
-        for (model in listOf("claude-sonnet-5", "claude-sonnet-5-5", "claude-opus-5")) {
+    fun `claude 5 models with reasoning off run at low effort and still show what they think`() {
+        // Each of them thinks unless told otherwise; left alone they run at high (medium on Opus 5.5
+        // and Haiku 5.5). Their thinking text is omitted by default, so an unbounded default shows
+        // up in the UI as a long silent stream.
+        val models = listOf(
+            "claude-sonnet-5", "claude-sonnet-5-5", "claude-opus-5", "claude-haiku-5-5",
+            "claude-fable-5", "claude-fable-5-1", "claude-fable-5-2", "claude-mythos-5",
+        )
+        for (model in models) {
             val params = AnthropicAdapter(model = model).thinkingParams(ReasoningEffort.OFF)
 
-            assertEquals(mapOf("output_config" to mapOf("effort" to "low")), params, "model $model")
+            // They still think at low effort, so without readable summaries the stream stays silent.
+            assertEquals(
+                mapOf(
+                    "thinking" to mapOf("type" to "adaptive", "display" to "summarized"),
+                    "output_config" to mapOf("effort" to "low"),
+                ),
+                params,
+                "model $model",
+            )
         }
     }
 

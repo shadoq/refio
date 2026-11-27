@@ -367,6 +367,7 @@ class LLMClient(
             // single complete() call; the adapter remains the source of truth for the final calls.
             val toolArgsByIndex = linkedMapOf<Int, StringBuilder>()
             val toolNameByIndex = linkedMapOf<Int, String>()
+            val thinkingBuilder = StringBuilder()
 
             val streamCallback: ((pl.jclab.refio.core.llm.StreamChunk) -> Unit)? = if (stream) { llmChunk ->
                 contentBuilder.append(llmChunk.delta)
@@ -410,6 +411,12 @@ class LLMClient(
                     )
                 }
 
+                val thinkingPreview = llmChunk.thinking?.takeIf { it.isNotEmpty() }?.let { t ->
+                    thinkingBuilder.append(t)
+                    val from = (thinkingBuilder.length - StreamChunk.THINKING_PREVIEW_CHARS).coerceAtLeast(0)
+                    thinkingBuilder.substring(from)
+                }
+
                 // Convert to API StreamChunk and call user callback
                 onChunk?.invoke(StreamChunk(
                     delta = llmChunk.delta,
@@ -418,7 +425,8 @@ class LLMClient(
                     source = source,
                     usage = llmChunk.usage,
                     cost = chunkCost,
-                    toolCallProgress = toolCallProgress
+                    toolCallProgress = toolCallProgress,
+                    thinkingPreview = thinkingPreview
                 ))
 
                 // Capture final usage/finishReason

@@ -178,6 +178,7 @@ object ModelDefinitions {
                 "top_p",
                 "temperature"
             ),
+            lowestReasoningEffort = "none",
             active = true
         ),
 
@@ -330,6 +331,7 @@ object ModelDefinitions {
                 "top_p",
                 "temperature"
             ),
+            lowestReasoningEffort = "none",
             active = true
         ),
 
@@ -509,6 +511,7 @@ object ModelDefinitions {
             removeParams = listOf(
                 "temperature"
             ),
+            lowestReasoningEffort = "none",
             active = true
         ),
         //
@@ -543,6 +546,7 @@ object ModelDefinitions {
             removeParams = listOf(
                 "temperature"
             ),
+            lowestReasoningEffort = "medium",
             active = true
         ),
         //
@@ -1070,6 +1074,7 @@ object ModelDefinitions {
             removeParams = listOf(
                 "temperature"
             ),
+            lowestReasoningEffort = "minimal",
             active = true
         ),
         "gpt-5-mini" to ModelDefinition(
@@ -1967,6 +1972,7 @@ object ModelDefinitions {
             supportsFunctionCalling = true,
             supportsThinking = true,
             removeParams = listOf("temperature"),
+            reasoningOffEffort = ReasoningEffort.LOW,
             active = true
         ),
         // Fable 5.1 (models.dev, 2026-11-20): thinking depth is set by effort only.
@@ -1992,6 +1998,7 @@ object ModelDefinitions {
             supportsFunctionCalling = true,
             supportsThinking = true,
             removeParams = listOf("temperature"),
+            reasoningOffEffort = ReasoningEffort.LOW,
             active = true
         ),
         "claude-fable-5" to ModelDefinition(
@@ -2016,6 +2023,7 @@ object ModelDefinitions {
             supportsFunctionCalling = true,
             supportsThinking = true,
             removeParams = listOf("temperature"),
+            reasoningOffEffort = ReasoningEffort.LOW,
             active = true
         ),
         // Thinks by default at high effort; thinking OFF maps to the lowest effort.
@@ -2092,6 +2100,7 @@ object ModelDefinitions {
             supportsFunctionCalling = true,
             supportsThinking = true,
             removeParams = listOf("temperature"),
+            reasoningOffEffort = ReasoningEffort.LOW,
             active = true
         ),
         "claude-opus-4-7" to ModelDefinition(
@@ -2360,7 +2369,7 @@ object ModelDefinitions {
             active = true
         ),
 
-        // Haiku 5.5 (models.dev, 2026-11-20): thinks only when asked, depth set by effort.
+        // Haiku 5.5 (models.dev, 2026-11-20): thinks by default at medium effort; thinking OFF maps to the lowest effort.
         // Above 100K input tokens Anthropic bills 5x; these are the short-context prices.
         "claude-haiku-5-5" to ModelDefinition(
             id = "claude-haiku-5-5",
@@ -2384,6 +2393,7 @@ object ModelDefinitions {
             supportsFunctionCalling = true,
             supportsThinking = true,
             removeParams = listOf("temperature"),
+            reasoningOffEffort = ReasoningEffort.LOW,
             active = true
         ),
 

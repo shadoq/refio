@@ -252,6 +252,8 @@ class LLMRetryHandler(
         // what actually recovers the call.
         if (pl.jclab.refio.core.errors.NativeToolTemplateError.matches(e)) return false
 
+        if (pl.jclab.refio.core.errors.TransientErrorClassifier.isGeminiOverloaded(e)) return false
+
         // Always retry rate limits and timeouts (typed)
         if (e is RefioError.LLMRateLimit) return true
         if (e is RefioError.LLMTimeout) return true

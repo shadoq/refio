@@ -39,4 +39,16 @@ class TransientErrorClassifierTest {
         // A stray 3-digit number not anchored to an http/code/status marker must not trip the matcher.
         assertFalse(TransientErrorClassifier.isTransient(RuntimeException("generated 500 lines of output")))
     }
+
+    @Test
+    fun `a Gemini model out of capacity is not worth retrying, a 503 elsewhere still is`() {
+        val geminiBusy = LLMErrorMapper.fromHttpStatus(
+            "gemini", "gemini-3.8-flash", 503,
+            """Gemini streaming error (HTTP 503): {"error":{"code":503,"message":"This model is currently experiencing high demand.","status":"UNAVAILABLE"}}""",
+        )
+        assertFalse(TransientErrorClassifier.isTransient(geminiBusy))
+
+        val ollamaBusy = LLMErrorMapper.fromHttpStatus("ollama", "qwen3.5:9b", 503, "Ollama API error (HTTP 503): service unavailable")
+        assertTrue(TransientErrorClassifier.isTransient(ollamaBusy))
+    }
 }

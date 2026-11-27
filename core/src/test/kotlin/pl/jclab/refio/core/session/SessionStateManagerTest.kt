@@ -7,6 +7,7 @@ import pl.jclab.refio.api.models.Message
 import pl.jclab.refio.api.models.Session
 import pl.jclab.refio.api.models.TaskMode
 import pl.jclab.refio.api.models.TaskStatus
+import pl.jclab.refio.core.api.StreamChunk
 import pl.jclab.refio.core.api.ToolCallProgress
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -141,5 +142,44 @@ class SessionStateManagerTest {
         manager.setActiveSession(session.copy(tokensIn = 42, updatedAt = 99L))
 
         assertEquals("grep_search", manager.toolCallProgress.value?.name)
+    }
+    // The thinking indicator exists to fill the silent gap before an answer. It must follow the
+    // reasoning while it streams, then get out of the way once the model starts answering or
+    // calling a tool, and never linger after the response ends.
+    @Test
+    fun `live thinking follows reasoning and hides once the answer, a tool call or the end arrives`() {
+        val manager = SessionStateManager()
+        fun chunk(delta: String = "", thinking: String? = null, tool: ToolCallProgress? = null, complete: Boolean = false) =
+            StreamChunk(delta = delta, accumulated = delta, isComplete = complete, toolCallProgress = tool, thinkingPreview = thinking)
+
+        manager.trackLiveThinking(chunk(thinking = "Let me check the"))
+        manager.trackLiveThinking(chunk(thinking = "Let me check the file first"))
+        assertEquals("Let me check the file first", manager.liveThinking.value)
+
+        manager.trackLiveThinking(chunk(delta = "Here is"))
+        assertNull(manager.liveThinking.value, "answer text replaces the thinking indicator")
+
+        manager.trackLiveThinking(chunk(thinking = "Now the tool"))
+        manager.trackLiveThinking(chunk(tool = ToolCallProgress(index = 0, name = "read_file", accumulatedArguments = "{")))
+        assertNull(manager.liveThinking.value, "a tool call being built replaces the thinking indicator")
+
+        manager.trackLiveThinking(chunk(thinking = "Still thinking"))
+        manager.trackLiveThinking(chunk(complete = true))
+        assertNull(manager.liveThinking.value, "nothing lingers after the response ends")
+    }
+
+    @Test
+    fun `switching to a different session clears stale live thinking`() {
+        val manager = SessionStateManager()
+        val first = Session(
+            id = "session-1", name = "First", mode = TaskMode.AGENT, status = TaskStatus.RUNNING,
+            createdAt = 1L, updatedAt = 1L, executionMode = ExecutionMode.INTERACTIVE
+        )
+        manager.setActiveSession(first)
+        manager.setLiveThinking("half a thought")
+
+        manager.setActiveSession(first.copy(id = "session-2"))
+
+        assertNull(manager.liveThinking.value)
     }
 }

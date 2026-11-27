@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.2.3] - 2026-11-27
+
 ### Added
 
 - Refio as an agent in JetBrains AI Assistant and Zed: `refio --acp` speaks the Agent Client Protocol (v1) over stdin/stdout. The IDE starts it for the open project; it reports tool calls with file diffs, asks for approval in the IDE (allow once, always allow the tool, reject the call, reject and stop), honours the IDE's stop button and switches between Agent, Plan and Chat. The plugin action **Tools > Register Refio in AI Assistant** adds it to `~/.jetbrains/acp.json` without touching other agents.

@@ -93,6 +93,15 @@ object TuiChatView {
             }
         }
 
+        // While the model reasons before answering, show the newest words of its thinking.
+        state.liveThinking?.let { preview ->
+            val maxChars = (width - 14).coerceAtLeast(10)
+            val oneLine = preview.replace(Regex("\\s+"), " ").trim()
+            val tail = if (oneLine.length > maxChars) glyphs.ellipsis + oneLine.takeLast(maxChars) else oneLine
+            lines += ""
+            lines += theme.style("Thinking:", fg = ThemeColor.INFO) + " " + theme.style(tail, fg = ThemeColor.DIM)
+        }
+
         // While the model streams a native tool call's arguments, show which tool is coming.
         state.toolCallProgress?.let { progress ->
             val args = TextFit.truncateEnd(progress.accumulatedArguments.replace('\n', ' '), (width - 20).coerceAtLeast(10), glyphs.ellipsis)

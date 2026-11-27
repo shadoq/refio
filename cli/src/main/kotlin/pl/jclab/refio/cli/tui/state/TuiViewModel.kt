@@ -191,6 +191,7 @@ class TuiViewModel(
         _contextMaxTokens.map { Unit },
         _contextWindowSource.map { Unit },
         sessionStateManager.toolCallProgress.map { Unit },
+        sessionStateManager.liveThinking.map { Unit },
     )
 
     @OptIn(kotlinx.coroutines.FlowPreview::class)
@@ -241,6 +242,7 @@ class TuiViewModel(
         messages = chat._messages.value,
         isStreaming = chat._isStreaming.value,
         toolCallProgress = sessionStateManager.toolCallProgress.value,
+        liveThinking = sessionStateManager.liveThinking.value,
         inputBuffer = chat._inputBuffer.value,
         cursorPosition = chat._cursorPosition.value,
         scrollOffset = chat._scrollOffset.value,

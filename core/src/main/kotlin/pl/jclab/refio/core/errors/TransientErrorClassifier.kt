@@ -23,6 +23,15 @@ object TransientErrorClassifier {
      * "Anthropic API error (HTTP 500)", "error code: 520", "status=503" while ignoring
      * unrelated 3-digit numbers elsewhere in the message.
      */
+    /**
+     * Google answers 503 when a Gemini model is out of capacity ("experiencing high demand"), and
+     * such a spell lasts many minutes. Retrying only keeps the user waiting for a call that fails
+     * anyway, so the error is shown at once and they can switch model.
+     */
+    fun isGeminiOverloaded(throwable: Throwable): Boolean =
+        throwable is RefioError.LLMError && throwable.provider == "gemini" &&
+            throwable.message.orEmpty().contains("(HTTP 503)")
+
     fun hasTransientHttpStatus(message: String): Boolean =
         HTTP_STATUS_REGEX.findAll(message)
             .mapNotNull { it.groupValues[1].toIntOrNull() }
@@ -35,6 +44,7 @@ object TransientErrorClassifier {
      * reject those before consulting this classifier.
      */
     fun isTransient(throwable: Throwable): Boolean {
+        if (isGeminiOverloaded(throwable)) return false
         val m = throwable.message?.lowercase() ?: return false
         return when {
             m.contains("rate limit") || m.contains("too many requests") -> true

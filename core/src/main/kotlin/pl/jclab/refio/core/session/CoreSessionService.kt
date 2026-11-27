@@ -220,6 +220,7 @@ class CoreSessionService(
             // completion chunk, but a STOP/cancel or an error throws before that chunk arrives.
             // Clear it here so a "⚙ building <tool>" never outlives the turn that produced it.
             stateManager.setToolCallProgress(null)
+            stateManager.setLiveThinking(null)
         }
     }
 
@@ -273,6 +274,7 @@ class CoreSessionService(
 
                             // Surface progressive native tool-call building to the UI.
                             chunk.toolCallProgress?.let { stateManager.setToolCallProgress(it) }
+                            stateManager.trackLiveThinking(chunk)
 
                             val filteredContent = streamFilter.filter(
                                 delta = chunk.delta,
@@ -690,7 +692,10 @@ class CoreSessionService(
             ),
             stream = stream,
             onChunk = if (stream) {
-                { chunk -> listener.onStreamChunk(chunk.accumulated) }
+                { chunk ->
+                    stateManager.trackLiveThinking(chunk)
+                    listener.onStreamChunk(chunk.accumulated)
+                }
             } else null,
         )
         listener.onStreamComplete(response.output)

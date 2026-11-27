@@ -354,6 +354,8 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
     private val busyIndicatorLabel: JLabel
     private val toolCallProgressLabel: JLabel
     private val toolCallProgressPanel: JPanel
+    private val liveThinkingLabel: JLabel
+    private val liveThinkingPanel: JPanel
     private val busyIndicatorFrames = arrayOf("|", " ")
     private var busyIndicatorFrame = 0
     private var busyIndicatorTimer: Timer? = null
@@ -481,9 +483,24 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
             add(toolCallProgressLabel)
         }
 
+        // Transient "model is reasoning" indicator. Visible only while sessionManager.liveThinking is
+        // non-null, i.e. while thinking deltas stream before the answer text or a tool call starts.
+        liveThinkingLabel = JLabel("").apply {
+            font = LCATheme.smallFont.deriveFont(Font.ITALIC)
+            foreground = LCATheme.descriptionForeground
+        }
+        liveThinkingPanel = JBPanel<JBPanel<*>>().apply {
+            layout = FlowLayout(FlowLayout.LEFT, 6, 0)
+            border = LCATheme.paddedBorder(2, 8)
+            isOpaque = false
+            isVisible = false
+            add(liveThinkingLabel)
+        }
+
         val busyAndToolCallPanel = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             isOpaque = false
+            add(liveThinkingPanel)
             add(toolCallProgressPanel)
             add(busyIndicatorPanel)
         }
@@ -551,6 +568,14 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
             sessionManager.toolCallProgress.collect { progress ->
                 SwingUtilities.invokeLater {
                     updateToolCallProgress(progress)
+                }
+            }
+        }
+
+        cs.launch {
+            sessionManager.liveThinking.collect { preview ->
+                SwingUtilities.invokeLater {
+                    updateLiveThinking(preview)
                 }
             }
         }
@@ -650,6 +675,24 @@ class ChatView(private val project: Project) : JBPanel<ChatView>(BorderLayout())
 
         busyIndicatorPanel.revalidate()
         busyIndicatorPanel.repaint()
+    }
+
+    @Suppress("MagicNumber")
+    private fun updateLiveThinking(preview: String?) {
+        if (preview == null) {
+            liveThinkingLabel.text = ""
+            liveThinkingPanel.isVisible = false
+        } else {
+            // One line, newest words last: the label must not grow the panel or wrap.
+            val oneLine = preview.replace(Regex("\\s+"), " ").trim()
+            val tail = if (oneLine.length > 100) "…" + oneLine.takeLast(100) else oneLine
+            liveThinkingLabel.text = "Thinking: $tail"
+            liveThinkingLabel.toolTipText = preview
+            liveThinkingPanel.isVisible = true
+        }
+
+        liveThinkingPanel.revalidate()
+        liveThinkingPanel.repaint()
     }
 
     @Suppress("MagicNumber")

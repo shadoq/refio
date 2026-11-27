@@ -64,6 +64,23 @@ class OpenAIAdapter(
         const val DEFAULT_BASE_URL = "https://api.openai.com/v1"
         const val CHAT_ENDPOINT = "/chat/completions"
         const val MODELS_ENDPOINT = "/models"
+
+        // OpenAI reasoning effort values, lowest first.
+        private val EFFORT_ORDER = listOf("none", "minimal", "low", "medium", "high", "xhigh", "max")
+
+        // Set once OpenAI refuses reasoning summaries for this account (an organization that is not
+        // verified gets HTTP 400), so later requests stop asking for them.
+        @Volatile
+        private var reasoningSummaryRejected = false
+
+        internal fun resetReasoningSummaryRejection() {
+            reasoningSummaryRejected = false
+        }
+
+        private fun isReasoningSummaryRejection(e: Throwable): Boolean {
+            val message = generateSequence(e) { it.cause }.mapNotNull { it.message }.joinToString(" ").lowercase()
+            return "summar" in message && ("verif" in message || "reasoning.summary" in message || "unsupported" in message)
+        }
     }
 
     private val timeoutMs: Long
@@ -189,33 +206,14 @@ class OpenAIAdapter(
             }
         }
 
-        // Add reasoning parameter for reasoning models based on thinking flag
-        // thinking: Boolean or String (low/medium/high)
-        // - false (Boolean) → effort: "low"
-        // - true (Boolean) → effort: "medium"
-        // - "low"/"medium"/"high" (String) → effort: thinking
-        val thinking = transformed.remove("thinking")
-        if (thinking != null) {
-            val effort = when (thinking) {
-                is Boolean -> when (thinking) {
-                    false -> "low"
-                    true -> "medium"
-                }
-                is String -> {
-                    when (thinking.lowercase()) {
-                        "low", "medium", "high" -> thinking.lowercase()
-                        else -> throw IllegalArgumentException(
-                            "OpenAI reasoning effort must be one of [low, medium, high], got: '$thinking'"
-                        )
-                    }
-                }
-                else -> throw IllegalArgumentException(
-                    "OpenAI reasoning 'thinking' must be Boolean or String, got: ${thinking.javaClass.simpleName}"
-                )
+        // Chat Completions spells the effort `reasoning_effort`; the Responses API nests it. OpenAI keeps
+        // the reasoning itself hidden, so a thinking model is also asked for a summary to show live.
+        transformed.remove("reasoning_effort")?.let { effort ->
+            transformed["reasoning"] = if (effort != "none" && !reasoningSummaryRejected) {
+                mapOf("effort" to effort, "summary" to "auto")
+            } else {
+                mapOf("effort" to effort)
             }
-
-            transformed["reasoning"] = mapOf("effort" to effort)
-            logger.info { "[OPENAI] Set reasoning effort to: $effort (thinking=$thinking)" }
         }
 
         return transformed
@@ -525,28 +523,12 @@ class OpenAIAdapter(
             baseParams["response_format"] = mapOf("type" to "json_object")
         }
 
-        // Add thinking parameter for reasoning models (will be transformed to reasoning.effort for Responses API)
-        // thinking can be Boolean (false/true) or String (low/medium/high)
-        val thinking = kwargs["thinking"]
-        if (thinking != null) {
-            baseParams["thinking"] = thinking
-
-            if (isReasoningModel) {
-                val effortDisplay = when (thinking) {
-                    is Boolean -> when (thinking) {
-                        false -> "low (fast)"
-                        true -> "medium (balanced)"
-                    }
-                    is String -> when (thinking.lowercase()) {
-                        "low" -> "low (fast)"
-                        "medium" -> "medium (balanced)"
-                        "high" -> "high (thorough)"
-                        else -> "medium (balanced, default)"
-                    }
-                    else -> "medium (balanced, default)"
-                }
-                logger.info { "[OPENAI] Using $model - reasoning effort: $effortDisplay" }
-            }
+        // Reasoning effort, only for models that reason. Sent as Chat Completions `reasoning_effort`;
+        // transformRequestToResponses moves it to `reasoning.effort` for the Responses API.
+        if (isReasoningModel) {
+            val effort = reasoningEffortFor(kwargs["thinking"], definition)
+            baseParams["reasoning_effort"] = effort
+            logger.info { "[OPENAI] Using $model - reasoning effort: $effort (thinking=${kwargs["thinking"]})" }
         }
 
         // Add native tools if requested and model supports function calling
@@ -583,10 +565,24 @@ class OpenAIAdapter(
 
         val startTime = System.currentTimeMillis()
 
-            return if (streaming && onStreamChunk != null) {
-                executeStreaming(apiKeyToUse, requestBody, requestJson, startTime, onStreamChunk, definition, logPrefix)
-            } else {
-                executeStandard(apiKeyToUse, requestBody, requestJson, startTime, definition, logPrefix)
+            return try {
+                if (streaming && onStreamChunk != null) {
+                    executeStreaming(apiKeyToUse, requestBody, requestJson, startTime, onStreamChunk, definition, logPrefix)
+                } else {
+                    executeStandard(apiKeyToUse, requestBody, requestJson, startTime, definition, logPrefix)
+                }
+            } catch (e: Exception) {
+                val reasoning = requestBody["reasoning"] as? Map<*, *>
+                if (e is CancellationException || reasoning?.containsKey("summary") != true || !isReasoningSummaryRejection(e)) throw e
+                reasoningSummaryRejected = true
+                logger.warn { "$logPrefix OpenAI refused reasoning summaries for this account - retrying without them" }
+                val retryBody = requestBody + ("reasoning" to reasoning.filterKeys { it != "summary" })
+                val retryJson = gson.toJson(retryBody)
+                if (streaming && onStreamChunk != null) {
+                    executeStreaming(apiKeyToUse, retryBody, retryJson, startTime, onStreamChunk, definition, logPrefix)
+                } else {
+                    executeStandard(apiKeyToUse, retryBody, retryJson, startTime, definition, logPrefix)
+                }
             }
         } catch (e: CancellationException) {
             // Stream aborted by a guardrail (see core/llm/streaming/) — must propagate
@@ -596,6 +592,34 @@ class OpenAIAdapter(
             throw e
         } catch (e: Exception) {
             throw LLMErrorMapper.fromThrowable(provider, model, timeoutMs, e)
+        }
+    }
+
+    /**
+     * Effort for the `thinking` kwarg. Reasoning OFF arrives as no kwarg; OpenAI reasoning models
+     * would then reason at their own default, so OFF sends the model's lowest accepted level
+     * ([pl.jclab.refio.core.llm.ModelDefinition.lowestReasoningEffort], "low" when unknown).
+     */
+    internal fun reasoningEffortFor(
+        thinking: Any?,
+        definition: pl.jclab.refio.core.llm.ModelDefinition?,
+    ): String {
+        val lowest = definition?.lowestReasoningEffort ?: "low"
+        // A chosen level below the model's floor would be rejected with a 400; run at the floor.
+        fun atLeastLowest(effort: String) =
+            if (EFFORT_ORDER.indexOf(effort) < EFFORT_ORDER.indexOf(lowest)) lowest else effort
+        return when (thinking) {
+            null -> lowest
+            is Boolean -> if (thinking) atLeastLowest("medium") else lowest
+            is String -> when (thinking.lowercase()) {
+                "low", "medium", "high" -> atLeastLowest(thinking.lowercase())
+                else -> throw IllegalArgumentException(
+                    "OpenAI reasoning effort must be one of [low, medium, high], got: '$thinking'"
+                )
+            }
+            else -> throw IllegalArgumentException(
+                "OpenAI reasoning 'thinking' must be Boolean or String, got: ${thinking.javaClass.simpleName}"
+            )
         }
     }
 
@@ -1248,6 +1272,15 @@ class OpenAIAdapter(
                                     contentBuilder.append(deltaText)
                                     totalTokensEstimate += countApproxTokens(deltaText)
                                     onStreamChunk(StreamChunk(delta = deltaText, finishReason = null))
+                                }
+                            }
+
+                            // Reasoning summary (asked for via reasoning.summary) or raw reasoning text.
+                            "response.reasoning_summary_text.delta",
+                            "response.reasoning_text.delta" -> {
+                                val thought = eventData["delta"] as? String
+                                if (!thought.isNullOrEmpty()) {
+                                    onStreamChunk(StreamChunk(delta = "", thinking = thought))
                                 }
                             }
 

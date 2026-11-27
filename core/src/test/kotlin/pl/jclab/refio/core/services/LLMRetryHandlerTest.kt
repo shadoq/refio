@@ -322,6 +322,48 @@ class LLMRetryHandlerTest {
 
             assertEquals(0, retryHandler.getStats().totalRetries)
         }
+
+        @Test
+        fun `a Gemini model Google reports as overloaded fails at once instead of retrying for minutes`() = runTest {
+            // Google's "high demand" 503 lasted ~13 minutes in a live IDE session; retrying through
+            // the whole retry window only kept the user waiting for a turn that failed anyway.
+            coEvery { llmClient.complete(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } throws
+                LLMErrorMapper.fromHttpStatus(
+                    "gemini", "gemini-3.8-flash", 503,
+                    """Gemini streaming error (HTTP 503): {"error":{"code":503,"message":"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.","status":"UNAVAILABLE"}}""",
+                )
+
+            assertFailsWith<RefioError.LLMError> {
+                retryHandler.callWithRetry(
+                    provider = "gemini",
+                    model = "gemini-3.8-flash",
+                    messages = testMessages,
+                    taskId = "task-1",
+                    source = "test",
+                    retryBudgetMs = 600_000,
+                )
+            }
+
+            coVerify(exactly = 1) { llmClient.complete(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) }
+        }
+
+        @Test
+        fun `a 503 from another provider is still retried`() = runTest {
+            coEvery { llmClient.complete(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } throws
+                LLMErrorMapper.fromHttpStatus("ollama", "qwen3.5:9b", 503, "Ollama API error (HTTP 503): service unavailable") andThen
+                successResponse()
+
+            val response = retryHandler.callWithRetry(
+                provider = "ollama",
+                model = "qwen3.5:9b",
+                messages = testMessages,
+                taskId = "task-1",
+                source = "test",
+                baseDelayMs = 1,
+            )
+
+            assertEquals("response", response.content)
+        }
     }
 
     @Nested
